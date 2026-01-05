@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+members = ["monocoque-core", "monocoque-zmtp"]
+default-members = ["monocoque-core", "monocoque-zmtp"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Monocoque Contributors"]
+repository = ""
+rust-version = "1.75"
+
+[workspace.dependencies]
+bytes = "1.5"
+compio = { version = "0.10", features = ["runtime", "macros", "time"] }
+flume = "0.11"
+futures = "0.3"
+async-trait = "0.1"
+thiserror = "1"
+hashbrown = "0.14"
+smallvec = "1.11"
+uuid = { version = "1", features = ["v4"] }
+zmq = "0.10"
+
+[profile.dev]
+debug = 2
+
+[profile.release]
+opt-level = 3
+debug = 0
+codegen-units = 1
+lto = "fat"
+panic = "abort"
+strip = "symbols"

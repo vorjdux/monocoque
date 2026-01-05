@@ -1,0 +1,44 @@
+[package]
+name = "monocoque-zmtp"
+version = "0.1.0"
+edition = "2021"
+
+[[example]]
+name = "router_dealer_basic"
+path = "../examples/router_dealer_basic.rs"
+
+# Integration tests with libzmq
+[[test]]
+name = "interop_pair"
+path = "../tests/interop_pair.rs"
+required-features = ["runtime"]
+
+[[test]]
+name = "interop_router"
+path = "../tests/interop_router.rs"
+required-features = ["runtime"]
+
+[[test]]
+name = "interop_pubsub"
+path = "../tests/interop_pubsub.rs"
+required-features = ["runtime"]
+
+[[test]]
+name = "interop_load_balance"
+path = "../tests/interop_load_balance.rs"
+required-features = ["runtime"]
+
+[dependencies]
+bytes = "1.5"
+thiserror = "1.0"
+flume = "0.11"
+monocoque-core = { path = "../monocoque-core" }
+compio = { version = "0.10", features = ["runtime", "macros", "time"], optional = true }
+
+[features]
+runtime = ["compio"]
+
+[dev-dependencies]
+compio = { version = "0.10", features = ["runtime", "macros"] }
+futures = "0.3"
+zmq = { workspace = true }

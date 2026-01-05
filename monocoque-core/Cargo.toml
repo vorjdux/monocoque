@@ -1,0 +1,16 @@
+[package]
+name = "monocoque-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bytes.workspace = true
+compio.workspace = true
+flume.workspace = true
+futures.workspace = true
+async-trait.workspace = true
+hashbrown.workspace = true
+smallvec.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
