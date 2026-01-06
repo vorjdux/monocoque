@@ -316,7 +316,7 @@ Implementation progress:
 -   🚧 libzmq interop verification
 -   🚧 Stress testing (reconnection churn)
 
-**What remains**:
+**Future Work**:
 
 -   Integration tests against real libzmq peers
 -   Reconnect stability validation

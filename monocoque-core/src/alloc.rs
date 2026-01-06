@@ -118,6 +118,7 @@ impl SlabMut {
     /// - `ptr` is inside `page`
     /// - `len <= cap`
     /// - After this call, no mutable access exists
+    #[must_use] 
     pub fn freeze(self) -> Bytes {
         let base = self.page.ptr.as_ptr();
         let offset = unsafe { self.ptr.as_ptr().offset_from(base) } as usize;
@@ -132,16 +133,16 @@ impl SlabMut {
     }
 }
 
-/// Zero-copy IoBuf wrapper for Bytes.
+/// Zero-copy `IoBuf` wrapper for Bytes.
 ///
 /// This enables passing Bytes directly to compio write operations
-/// without the .to_vec() memcpy that violates blueprint zero-copy guarantees.
+/// without the .`to_vec()` memcpy that violates blueprint zero-copy guarantees.
 ///
-/// SAFETY: Bytes is immutable and refcounted, so it's safe to expose as IoBuf.
+/// SAFETY: Bytes is immutable and refcounted, so it's safe to expose as `IoBuf`.
 pub struct IoBytes(Bytes);
 
 impl IoBytes {
-    pub fn new(bytes: Bytes) -> Self {
+    pub const fn new(bytes: Bytes) -> Self {
         Self(bytes)
     }
 }
@@ -188,8 +189,15 @@ pub struct IoArena {
     offset: usize,
 }
 
+impl Default for IoArena {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IoArena {
-    pub fn new() -> Self {
+    #[must_use] 
+    pub const fn new() -> Self {
         Self {
             current: None,
             offset: PAGE_SIZE, // force alloc on first use
@@ -201,7 +209,7 @@ impl IoArena {
     /// This guarantees:
     /// - Stable memory address
     /// - No reallocation
-    /// - No aliasing with other SlabMut
+    /// - No aliasing with other `SlabMut`
     pub fn alloc_mut(&mut self, size: usize) -> SlabMut {
         debug_assert!(size <= PAGE_SIZE);
 

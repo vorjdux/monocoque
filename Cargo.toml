@@ -7,8 +7,8 @@ default-members = ["monocoque"]
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-authors = ["Monocoque Contributors"]
-repository = ""
+authors = ["Matheus Santos <vorj.dux@gmail.com>"]
+repository = "https://github.com/vorjdux/monocoque"
 rust-version = "1.75"
 
 [workspace.dependencies]
@@ -20,7 +20,6 @@ async-trait = "0.1"
 thiserror = "1"
 hashbrown = "0.14"
 smallvec = "1.11"
-uuid = { version = "1", features = ["v4"] }
 zmq = "0.10"
 
 [profile.dev]

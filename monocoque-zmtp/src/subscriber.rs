@@ -1,7 +1,7 @@
 use crate::{integrated_actor::ZmtpIntegratedActor, session::SocketType};
 /// SUB (Subscriber) socket implementation
 ///
-/// Architecture: Application → SubSocket → ZmtpIntegratedActor → SocketActor → TcpStream
+/// Architecture: Application → `SubSocket` → `ZmtpIntegratedActor` → `SocketActor` → `TcpStream`
 ///
 /// SUB sockets receive messages from PUB sockets based on subscriptions.
 use bytes::Bytes;
@@ -17,23 +17,24 @@ use monocoque_core::{
 /// Messages are received based on active subscriptions.
 pub struct SubSocket {
     app_rx: Receiver<Vec<Bytes>>,
+    app_tx: Sender<Vec<Bytes>>,
     socket_cmd_tx: Sender<UserCmd>,
 }
 
 impl SubSocket {
-    /// Create a new SUB socket from a TcpStream
+    /// Create a new SUB socket from a `TcpStream`
     ///
     /// This spawns:
-    /// 1. SocketActor task for I/O
+    /// 1. `SocketActor` task for I/O
     /// 2. Integration task bridging socket events → ZMTP session
-    pub fn new(tcp_stream: TcpStream) -> Self {
+    pub async fn new(tcp_stream: TcpStream) -> Self {
         // Create channels for socket actor communication
         let (socket_event_tx, socket_event_rx) = unbounded();
         let (socket_cmd_tx, socket_cmd_rx) = unbounded();
 
         // Create channels for application communication
-        let (app_tx, app_rx_for_integrated) = unbounded();
-        let (_app_tx_unused, app_rx) = unbounded();
+        let (app_tx, app_rx_for_integrated) = unbounded(); // User sends subscriptions TO integrated
+        let (integrated_tx, app_rx) = unbounded(); // Integrated sends messages TO user
 
         // Create socket actor
         let io_arena = IoArena::new();
@@ -41,7 +42,7 @@ impl SubSocket {
 
         // Create ZmtpIntegratedActor
         let mut integrated_actor =
-            ZmtpIntegratedActor::new(SocketType::Sub, app_tx, app_rx_for_integrated);
+            ZmtpIntegratedActor::new(SocketType::Sub, integrated_tx, app_rx_for_integrated);
 
         // Send initial greeting
         let greeting = integrated_actor.local_greeting();
@@ -52,44 +53,54 @@ impl SubSocket {
 
         // Spawn integration task
         let _handle = compio::runtime::spawn(async move {
-            loop {
-                // Process socket events (incoming bytes → frames → multipart)
-                if let Ok(event) = socket_event_rx.try_recv() {
-                    match event {
-                        SocketEvent::Connected => {
-                            // Connection established
-                        }
-                        SocketEvent::ReceivedBytes(bytes) => {
-                            // Feed bytes into ZMTP session
-                            let frames = integrated_actor.on_bytes(bytes);
+            use futures::{select, FutureExt};
 
-                            // Send frames back to socket
-                            for frame in frames {
-                                let _ = socket_cmd_tx_clone.send(UserCmd::SendBytes(frame));
+            loop {
+                select! {
+                    // Wait for socket events
+                    event = socket_event_rx.recv_async().fuse() => {
+                        match event {
+                            Ok(SocketEvent::Connected) => {
+                                // Connection established
+                            }
+                            Ok(SocketEvent::ReceivedBytes(bytes)) => {
+                                // Feed bytes into ZMTP session
+                                let frames = integrated_actor.on_bytes(bytes);
+
+                                // Send frames back to socket
+                                for frame in frames {
+                                    let _ = socket_cmd_tx_clone.send(UserCmd::SendBytes(frame));
+                                }
+                            }
+                            Ok(SocketEvent::Disconnected) | Err(_) => {
+                                break;
                             }
                         }
-                        SocketEvent::Disconnected => {
-                            break;
+                    }
+                    // Wait for outgoing messages from application (subscriptions)
+                    msg = integrated_actor.user_rx.recv_async().fuse() => {
+                        match msg {
+                            Ok(multipart) => {
+                                let frames = integrated_actor.encode_outgoing_message(multipart);
+                                for frame in frames {
+                                    let _ = socket_cmd_tx_clone.send(UserCmd::SendBytes(frame));
+                                }
+                            }
+                            Err(_) => {
+                                break;
+                            }
                         }
                     }
                 }
-
-                // Process outgoing messages
-                let outgoing_frames = integrated_actor.process_events().await;
-                for frame in outgoing_frames {
-                    let _ = socket_cmd_tx_clone.send(UserCmd::SendBytes(frame));
-                }
-
-                // Small yield to prevent busy-waiting
-                compio::time::sleep(std::time::Duration::from_micros(100)).await;
             }
         });
 
         // Spawn SocketActor
         let _ = compio::runtime::spawn(socket_actor.run());
 
-        SubSocket {
+        Self {
             app_rx,
+            app_tx,
             socket_cmd_tx,
         }
     }
@@ -98,28 +109,24 @@ impl SubSocket {
     ///
     /// Empty topic subscribes to all messages.
     ///
-    /// Note: This sends a SUBSCRIBE command frame through the socket.
-    pub async fn subscribe(&self, topic: &[u8]) -> Result<(), flume::SendError<UserCmd>> {
+    /// Note: This sends a SUBSCRIBE command frame through the integration layer.
+    pub async fn subscribe(&self, topic: &[u8]) -> Result<(), flume::SendError<Vec<Bytes>>> {
         // Create SUBSCRIBE command frame (command type 0x01 + topic)
         let mut cmd = Vec::with_capacity(1 + topic.len());
         cmd.push(0x01); // SUBSCRIBE command
         cmd.extend_from_slice(topic);
 
-        self.socket_cmd_tx
-            .send_async(UserCmd::SendBytes(Bytes::from(cmd)))
-            .await
+        self.app_tx.send_async(vec![Bytes::from(cmd)]).await
     }
 
     /// Unsubscribe from messages matching the given topic prefix
-    pub async fn unsubscribe(&self, topic: &[u8]) -> Result<(), flume::SendError<UserCmd>> {
+    pub async fn unsubscribe(&self, topic: &[u8]) -> Result<(), flume::SendError<Vec<Bytes>>> {
         // Create UNSUBSCRIBE command frame (command type 0x00 + topic)
         let mut cmd = Vec::with_capacity(1 + topic.len());
         cmd.push(0x00); // UNSUBSCRIBE command
         cmd.extend_from_slice(topic);
 
-        self.socket_cmd_tx
-            .send_async(UserCmd::SendBytes(Bytes::from(cmd)))
-            .await
+        self.app_tx.send_async(vec![Bytes::from(cmd)]).await
     }
 
     /// Receive a multipart message that matches active subscriptions

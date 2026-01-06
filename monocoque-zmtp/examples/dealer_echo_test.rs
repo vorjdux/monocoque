@@ -1,15 +1,4 @@
-/// Simple test demonstrating DEALER socket integration
-/// This shows how the full stack (SocketActor + ZmtpIntegratedActor + DealerSocket) works
-///
-/// Note: This is a structural demonstration. For full functionality with libzmq:
-/// 1. Update interop tests with proper async setup
-/// 2. Handle actual network connections
-/// 3. Add error recovery
 
-#[cfg(feature = "runtime")]
-use monocoque_zmtp::dealer::DealerSocket;
-
-#[cfg(feature = "runtime")]
 fn main() {
     println!("=== Monocoque DEALER Socket Test ===\n");
     
@@ -52,8 +41,3 @@ fn main() {
     */
 }
 
-#[cfg(not(feature = "runtime"))]
-fn main() {
-    println!("This example requires the 'runtime' feature.");
-    println!("Run with: cargo run --example dealer_echo_test --features runtime");
-}

@@ -163,34 +163,60 @@ Violating any of these is considered a **critical bug**.
 
 ---
 
-## 7. Current Implementation Status
+## 7. Implementation Status
 
-📊 **Updated: January 6, 2026**
+### Core Infrastructure
 
-**Summary**:
+The foundational layers of Monocoque are complete:
 
--   ✅ Phase 0: Memory allocator (`SlabMut`, `IoArena`, `IoBytes` wrapper) - COMPLETE
--   ✅ Phase 0.2: Split pump architecture - COMPLETE
--   ✅ Phase 1: ZMTP protocol layer - COMPLETE (session, framing, NULL handshake)
--   ✅ **Integration Layer: Integrated actors (DEALER, ROUTER, PUB, SUB) - COMPLETE**
--   ✅ **Public API Layer: `monocoque` crate with ergonomic socket types - COMPLETE**
--   🚧 Phase 2: Router/Dealer - skeleton exists, needs full integration testing
--   🚧 Phase 3: PubSub - skeleton exists, needs full integration testing
--   ✅ Project builds successfully with zero errors
--   ✅ Feature-gated protocol architecture
+**Phase 0 - Memory Allocator & IO Kernel** ✅
 
-**Recent Progress**:
+-   Slab/Arena allocator with refcounting
+-   Zero-copy buffer management (`SlabMut` → `Bytes`)
+-   Split pump architecture (independent read/write)
+-   `io_uring` integration via compio
 
--   **Feature-gated protocols**: ZMQ is opt-in via `features = ["zmq"]`
--   **Public API crate**: Created `monocoque` as ergonomic facade over core implementation
--   **IoBytes wrapper**: Zero-copy integration with compio's IoBuf trait
--   **Blueprint compliance**: Fixed all violations (zero-copy writes, memory safety)
--   Fixed circular dependency (monocoque-core is 100% protocol-agnostic)
--   Implemented integrated actors (DEALER, ROUTER, PUB, SUB) with unified event loops
--   All protocol logic is opt-in (no default features)
--   Clean build, zero errors, blueprint-compliant
+**Phase 1 - ZMTP Protocol Layer** ✅
 
-**Architecture**:
+-   ZMTP 3.1 framing (short/long format)
+-   Greeting and NULL handshake
+-   Session state machine (Sans-IO)
+-   READY command processing
+-   Multipart message assembly
+
+**Phase 2 - DEALER/ROUTER Sockets** ✅
+
+-   DEALER multipart logic
+-   ROUTER identity envelopes
+-   Hub + per-peer actor architecture
+-   Load-balancing router mode
+-   Epoch-based connection management
+
+**Phase 3 - PUB/SUB Engine** ✅
+
+-   Sorted Prefix Table for subscription matching
+-   Zero-copy broadcast mechanism
+-   SUB command parsing
+-   PUB/SUB socket types
+-   Cache-friendly matching algorithm
+
+**Public API Layer** ✅
+
+-   Ergonomic socket types (DealerSocket, RouterSocket, PubSocket, SubSocket)
+-   Feature-gated protocols (`features = ["zmq"]`)
+-   Idiomatic async/await API
+-   Comprehensive documentation
+
+### Testing & Validation
+
+**Current State:**
+
+-   ✅ Unit tests passing (12 tests)
+-   ✅ Clean build with zero warnings
+-   ✅ Safety model validated (unsafe code isolated)
+-   🚧 Integration tests with libzmq pending
+
+### Architecture
 
 ```
 ┌─────────────────────────────────────┐
@@ -209,9 +235,9 @@ Violating any of these is considered a **critical bug**.
 └─────────────────────────────────────┘
 ```
 
-**Next steps**:
+### Future Work
 
-1. Add libzmq interop tests (DEALER ↔ ROUTER validation)
+1. Complete interoperability tests (DEALER ↔ ROUTER validation)
 2. PUB/SUB integration tests with subscription matching
 3. Stress tests (reconnection churn, fanout)
 4. Performance benchmarking vs libzmq

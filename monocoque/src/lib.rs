@@ -6,7 +6,7 @@
 //!
 //! Monocoque is structured as a **messaging kernel** with clean layering:
 //!
-//! - **`monocoque-core`**: Lock-free allocators, io_uring proactor, SPSC queues
+//! - **`monocoque-core`**: Lock-free allocators, `io_uring` proactor, SPSC queues
 //! - **Protocol crates**: Pure state machines (sans-IO)
 //! - **`monocoque`**: Public API surface (this crate)
 //!
@@ -14,7 +14,7 @@
 //!
 //! Each protocol is gated behind a feature flag to avoid loading unused code:
 //!
-//! - **`zmq`** - ZeroMQ (ZMTP 3.x) implementation
+//! - **`zmq`** - `ZeroMQ` (ZMTP 3.x) implementation
 //!
 //! ```toml
 //! [dependencies]
@@ -23,7 +23,7 @@
 //!
 //! ## Quick Start
 //!
-//! ### ZeroMQ DEALER Socket (Client)
+//! ### `ZeroMQ` DEALER Socket (Client)
 //!
 //! ```rust,no_run
 //! # #[cfg(feature = "zmq")]
@@ -46,7 +46,7 @@
 //! # }
 //! ```
 //!
-//! ### ZeroMQ ROUTER Socket (Server)
+//! ### `ZeroMQ` ROUTER Socket (Server)
 //!
 //! ```rust,no_run
 //! # #[cfg(feature = "zmq")]
@@ -68,7 +68,7 @@
 //! ## Performance
 //!
 //! - **Zero-copy**: Uses `bytes::Bytes` for refcounted message buffers
-//! - **io_uring**: Native Linux async I/O (via `compio`)
+//! - **`io_uring`**: Native Linux async I/O (via `compio`)
 //! - **Lock-free**: SPSC queues, no shared mutable state in hot paths
 //! - **Sans-IO**: Protocol logic is pure, testable, and runtime-agnostic
 //!
@@ -80,6 +80,10 @@
 
 #![warn(missing_docs)]
 #![warn(clippy::all)]
+// Allow some pedantic patterns
+#![allow(clippy::module_name_repetitions)]
+#![allow(clippy::must_use_candidate)]
+#![allow(clippy::needless_pass_by_value)]
 
 // Re-export core types
 pub use bytes::Bytes;

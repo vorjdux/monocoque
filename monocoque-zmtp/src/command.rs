@@ -29,12 +29,12 @@ impl<'a> ZmtpCommand<'a> {
 /// Input is the ZMTP frame payload (NOT including flags/size header).
 ///
 /// Returns an owned struct with borrowed slices pointing into `payload`.
-pub fn parse_command(payload: &Bytes) -> Result<ZmtpCommand<'_>, ZmtpError> {
+pub fn parse_command(payload: &Bytes) -> crate::codec::Result<ZmtpCommand<'_>> {
     let mut i = 0;
     let b = payload.as_ref();
 
     // Need at least 1 byte for name_len
-    if b.len() < 1 {
+    if b.is_empty() {
         return Err(ZmtpError::Protocol);
     }
 

@@ -1,6 +1,6 @@
-//! ZeroMQ protocol implementation.
+//! `ZeroMQ` protocol implementation.
 //!
-//! This module provides high-performance ZeroMQ-compatible sockets built on io_uring.
+//! This module provides high-performance ZeroMQ-compatible sockets built on `io_uring`.
 //!
 //! # Socket Types
 //!
@@ -49,7 +49,9 @@ use std::io;
 
 // Re-export internal socket types
 use monocoque_zmtp::dealer::DealerSocket as InternalDealer;
+use monocoque_zmtp::publisher::PubSocket as InternalPub;
 use monocoque_zmtp::router::RouterSocket as InternalRouter;
+use monocoque_zmtp::subscriber::SubSocket as InternalSub;
 
 /// A DEALER socket for asynchronous request-reply patterns.
 ///
@@ -60,7 +62,7 @@ use monocoque_zmtp::router::RouterSocket as InternalRouter;
 /// - Async RPC clients
 /// - Worker pools
 ///
-/// ## ZeroMQ Compatibility
+/// ## `ZeroMQ` Compatibility
 ///
 /// Compatible with `zmq::DEALER` and `zmq::ROUTER` sockets from libzmq.
 ///
@@ -89,7 +91,7 @@ pub struct DealerSocket {
 }
 
 impl DealerSocket {
-    /// Connect to a ZeroMQ peer and create a DEALER socket.
+    /// Connect to a `ZeroMQ` peer and create a DEALER socket.
     ///
     /// This is the recommended way to create a DEALER socket. It handles
     /// TCP connection and ZMTP handshake automatically.
@@ -97,6 +99,12 @@ impl DealerSocket {
     /// # Arguments
     ///
     /// * `addr` - Socket address to connect to (e.g., `"127.0.0.1:5555"`)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The TCP connection fails (network unreachable, connection refused, etc.)
+    /// - DNS resolution fails for the provided address
     ///
     /// # Example
     ///
@@ -141,6 +149,10 @@ impl DealerSocket {
     ///
     /// Messages are sent asynchronously - this returns immediately after
     /// queuing the message for transmission.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying connection is closed or broken.
     ///
     /// # Example
     ///
@@ -192,13 +204,13 @@ impl DealerSocket {
 /// - Brokers and proxies
 /// - Stateful connection tracking
 ///
-/// ## ZeroMQ Compatibility
+/// ## `ZeroMQ` Compatibility
 ///
 /// Compatible with `zmq::ROUTER` and `zmq::DEALER` sockets from libzmq.
 ///
 /// ## Message Format
 ///
-/// **Incoming**: `[identity, delimiter, ...user_frames]`  
+/// **Incoming**: `[identity, delimiter, ...user_frames]`\
 /// **Outgoing**: `[identity, delimiter, ...user_frames]` (routes to peer with that identity)
 ///
 /// ## Example
@@ -233,6 +245,13 @@ impl RouterSocket {
     /// A tuple of `(listener, socket)` where:
     /// - `listener` can be used to accept additional connections
     /// - `socket` is ready to send/receive with the first peer
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The address is already in use
+    /// - Permission denied (e.g., binding to privileged port without root)
+    /// - Invalid address format
     ///
     /// # Example
     ///
@@ -292,6 +311,10 @@ impl RouterSocket {
     /// The first frame must be the peer identity to route to.
     /// Messages are sent asynchronously.
     ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying connection is closed or broken.
+    ///
     /// # Example
     ///
     /// ```rust,no_run
@@ -338,7 +361,161 @@ impl RouterSocket {
     }
 }
 
-/// Convenient imports for ZeroMQ protocol.
+/// A PUB socket for broadcasting messages.
+///
+/// PUB sockets broadcast messages to all connected SUB peers.
+/// They're used for:
+///
+/// - Event broadcasting
+/// - One-to-many messaging
+/// - Topic-based distribution
+///
+/// ## `ZeroMQ` Compatibility
+///
+/// Compatible with `zmq::PUB` and `zmq::SUB` sockets from libzmq.
+///
+/// ## Example
+///
+/// ```rust,no_run
+/// use monocoque::zmq::PubSocket;
+/// use bytes::Bytes;
+///
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let (listener, mut socket) = PubSocket::bind("127.0.0.1:5555").await?;
+///
+/// // Broadcast messages
+/// socket.send(vec![
+///     Bytes::from("topic"),
+///     Bytes::from("data"),
+/// ]).await?;
+/// # Ok(())
+/// # }
+/// ```
+pub struct PubSocket {
+    inner: InternalPub,
+}
+
+impl PubSocket {
+    /// Bind to an address and accept the first subscriber.
+    ///
+    /// # Returns
+    ///
+    /// A tuple of `(listener, socket)` where:
+    /// - `listener` can be used to accept additional subscribers
+    /// - `socket` is ready to broadcast to the first subscriber
+    pub async fn bind(
+        addr: impl compio::net::ToSocketAddrsAsync,
+    ) -> io::Result<(TcpListener, Self)> {
+        let listener = TcpListener::bind(addr).await?;
+        let (stream, _) = listener.accept().await?;
+        let socket = Self::from_stream(stream).await;
+        Ok((listener, socket))
+    }
+
+    /// Create a PUB socket from an existing TCP stream.
+    pub async fn from_stream(stream: TcpStream) -> Self {
+        Self {
+            inner: InternalPub::new(stream).await,
+        }
+    }
+
+    /// Broadcast a multipart message to all subscribers.
+    ///
+    /// The first frame is typically used as a topic for filtering.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying connection is closed or broken.
+    pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
+        self.inner
+            .send(msg)
+            .await
+            .map_err(|e| io::Error::new(io::ErrorKind::BrokenPipe, e))
+    }
+}
+
+/// A SUB socket for receiving filtered messages.
+///
+/// SUB sockets connect to PUB peers and filter messages by topic prefix.
+/// They're used for:
+///
+/// - Event subscriptions
+/// - Topic-based message filtering
+/// - Many-to-one aggregation
+///
+/// ## `ZeroMQ` Compatibility
+///
+/// Compatible with `zmq::SUB` and `zmq::PUB` sockets from libzmq.
+///
+/// ## Example
+///
+/// ```rust,no_run
+/// use monocoque::zmq::SubSocket;
+///
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let mut socket = SubSocket::connect("127.0.0.1:5555").await?;
+///
+/// // Subscribe to topic
+/// socket.subscribe(b"topic").await?;
+///
+/// // Receive filtered messages
+/// while let Some(msg) = socket.recv().await {
+///     println!("Received: {:?}", msg);
+/// }
+/// # Ok(())
+/// # }
+/// ```
+pub struct SubSocket {
+    inner: InternalSub,
+}
+
+impl SubSocket {
+    /// Connect to a PUB peer and create a SUB socket.
+    pub async fn connect(addr: impl compio::net::ToSocketAddrsAsync) -> io::Result<Self> {
+        let stream = TcpStream::connect(addr).await?;
+        Ok(Self::from_stream(stream).await)
+    }
+
+    /// Create a SUB socket from an existing TCP stream.
+    pub async fn from_stream(stream: TcpStream) -> Self {
+        Self {
+            inner: InternalSub::new(stream).await,
+        }
+    }
+
+    /// Subscribe to messages matching the given topic prefix.
+    ///
+    /// Empty topic subscribes to all messages.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the subscription command cannot be sent
+    /// (e.g., connection closed).
+    pub async fn subscribe(&self, topic: &[u8]) -> io::Result<()> {
+        self.inner
+            .subscribe(topic)
+            .await
+            .map_err(|e| io::Error::new(io::ErrorKind::BrokenPipe, e))
+    }
+
+    /// Unsubscribe from messages matching the given topic prefix.
+    pub async fn unsubscribe(&self, topic: &[u8]) -> io::Result<()> {
+        self.inner
+            .unsubscribe(topic)
+            .await
+            .map_err(|e| io::Error::new(io::ErrorKind::BrokenPipe, e))
+    }
+
+    /// Receive a multipart message.
+    ///
+    /// Only messages matching subscribed topics will be received.
+    /// Returns `None` if the connection is closed.
+    pub async fn recv(&mut self) -> Option<Vec<Bytes>> {
+        self.inner.recv().await.ok()
+    }
+}
+
+/// Convenient imports for `ZeroMQ` protocol.
 ///
 /// # Example
 ///
@@ -350,6 +527,6 @@ impl RouterSocket {
 /// // - Bytes for zero-copy messages
 /// ```
 pub mod prelude {
-    pub use super::{DealerSocket, RouterSocket};
+    pub use super::{DealerSocket, PubSocket, RouterSocket, SubSocket};
     pub use bytes::Bytes;
 }

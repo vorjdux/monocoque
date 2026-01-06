@@ -41,6 +41,7 @@ pub struct NullMechanism {
 }
 
 impl NullMechanism {
+    #[must_use]
     pub fn new(role: Role, local_socket_type: SocketType) -> Self {
         // Policy: send READY eagerly for both client and server.
         // If you later want strict ordering, keep state machine but gate `NeedSendReady`.
@@ -70,7 +71,7 @@ impl NullMechanism {
         self.pending_out = Some(framed);
     }
 
-    fn parse_ready_props(payload: &Bytes) -> Result<(SocketType, Option<Bytes>), ZmtpError> {
+    fn parse_ready_props(payload: &Bytes) -> crate::codec::Result<(SocketType, Option<Bytes>)> {
         // READY command frame body format (per ZMTP/37-ish):
         // [name_len: u8]["READY"] then properties repeated:
         //   [prop_name_len: u8][prop_name bytes][prop_value_len: u32 BE][prop_value bytes]
@@ -132,7 +133,7 @@ impl NullMechanism {
 }
 
 impl Mechanism for NullMechanism {
-    fn on_inbound(&mut self, frame: &ZmtpFrame) -> Result<(), ZmtpError> {
+    fn on_inbound(&mut self, frame: &ZmtpFrame) -> crate::codec::Result<()> {
         require_command(frame)?;
 
         if self.state != NullState::NeedRecvReady {
@@ -169,17 +170,17 @@ impl Mechanism for NullMechanism {
 // --- SocketType helpers ---
 // Keep this in session.rs if you prefer; placed here for convenience.
 impl SocketType {
-    pub fn from_wire(b: &Bytes) -> Result<SocketType, ZmtpError> {
+    pub fn from_wire(b: &Bytes) -> crate::codec::Result<Self> {
         match b.as_ref() {
-            b"PAIR" => Ok(SocketType::Pair),
-            b"DEALER" => Ok(SocketType::Dealer),
-            b"ROUTER" => Ok(SocketType::Router),
-            b"PUB" => Ok(SocketType::Pub),
-            b"SUB" => Ok(SocketType::Sub),
-            b"REQ" => Ok(SocketType::Req),
-            b"REP" => Ok(SocketType::Rep),
-            b"PUSH" => Ok(SocketType::Push),
-            b"PULL" => Ok(SocketType::Pull),
+            b"PAIR" => Ok(Self::Pair),
+            b"DEALER" => Ok(Self::Dealer),
+            b"ROUTER" => Ok(Self::Router),
+            b"PUB" => Ok(Self::Pub),
+            b"SUB" => Ok(Self::Sub),
+            b"REQ" => Ok(Self::Req),
+            b"REP" => Ok(Self::Rep),
+            b"PUSH" => Ok(Self::Push),
+            b"PULL" => Ok(Self::Pull),
             _ => Err(ZmtpError::Protocol),
         }
     }

@@ -1,12 +1,15 @@
 use crate::codec::ZmtpFrame;
 use bytes::Bytes;
+use thiserror::Error;
 
-/// Errors produced by MultipartBuffer
-#[derive(Debug)]
+/// Errors produced by `MultipartBuffer`
+#[derive(Debug, Error)]
 pub enum MultipartError {
     /// Message exceeded configured frame count
+    #[error("Message exceeded maximum frame count")]
     TooManyFrames,
     /// Message exceeded configured byte size
+    #[error("Message exceeded maximum byte size")]
     TooLarge,
 }
 
@@ -15,7 +18,7 @@ pub enum MultipartError {
 /// Invariants:
 /// - Frames are appended in-order
 /// - A message completes when `MORE == false`
-/// - Limits are enforced eagerly to prevent DoS
+/// - Limits are enforced eagerly to prevent `DoS`
 ///
 /// This type is **NOT** thread-safe by design.
 /// It is owned by a single Actor read-loop.
@@ -32,9 +35,9 @@ impl MultipartBuffer {
     /// Create a new buffer with limits.
     ///
     /// Example safe defaults:
-    /// - max_frames = 128
-    /// - max_bytes  = 8 * 1024 * 1024 (8 MiB)
-    pub fn new(max_frames: usize, max_bytes: usize) -> Self {
+    /// - `max_frames` = 128
+    /// - `max_bytes`  = 8 * 1024 * 1024 (8 MiB)
+    pub const fn new(max_frames: usize, max_bytes: usize) -> Self {
         Self {
             frames: Vec::new(),
             frame_count: 0,

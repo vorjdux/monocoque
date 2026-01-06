@@ -1,11 +1,11 @@
-//! Backpressure: BytePermits
+//! Backpressure: `BytePermits`
 //!
 //! Byte-based flow control for write pumps.
 //!
 //! Design principle:
 //! - Backpressure scales with **bytes**, not message count
 //! - One giant message should not starve other connections
-//! - Pluggable: NoOp (default) → Semaphore → dynamic policy
+//! - Pluggable: `NoOp` (default) → Semaphore → dynamic policy
 //!
 //! Usage:
 //! ```rust,ignore
@@ -36,7 +36,7 @@ pub struct Permit {
 }
 
 impl Permit {
-    pub(crate) fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self { _private: () }
     }
 }

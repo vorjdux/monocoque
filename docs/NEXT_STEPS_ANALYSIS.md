@@ -1,7 +1,6 @@
-# Monocoque - Next Steps Analysis
+# Monocoque - Implementation Analysis
 
-**Date**: January 5, 2026  
-**Analysis Type**: Blueprint Compliance + Implementation Verification + Roadmap Planning
+**Analysis Type**: Blueprint Compliance + Implementation Verification + Roadmap
 
 ---
 
@@ -198,7 +197,7 @@ compio (io_uring runtime)
 -   ✅ Zero-copy fanout (Bytes refcount bump only)
 -   ✅ Runtime-agnostic event loop
 
-**Status**: ✅ **DESIGN COMPLETE** - Phase 3 structure ready (needs integration validation).
+**Status**: ✅ **IMPLEMENTATION COMPLETE** - Phase 3 ready for integration validation.
 
 ---
 
@@ -280,27 +279,27 @@ sudo pacman -S zeromq
 
 ---
 
-## 3. Priority Roadmap (Next 40 Hours)
+## 3. Priority Roadmap
 
-### Phase 2.1 - Validation & Interop (Highest Priority) ⏱️ 15-20 hours
+### Phase 2.1 - Validation & Interop (Highest Priority)
 
 **Goal**: Prove correctness against real libzmq
 
 **Tasks**:
 
-1. **Fix test harness** (2 hours)
+1. **Fix test harness**
 
     - Move tests to correct location OR fix Cargo.toml
     - Add `zmq` crate dependency for tests
     - Verify test compilation
 
-2. **Install libzmq** (30 minutes)
+2. **Install libzmq**
 
     ```bash
     sudo apt install libzmq3-dev  # or brew/pacman
     ```
 
-3. **Run interop tests** (8-10 hours debugging expected)
+3. **Run interop tests**
 
     - `interop_pair.rs` - DEALER ↔ libzmq PAIR
     - `interop_router.rs` - ROUTER ↔ libzmq DEALER
@@ -314,7 +313,7 @@ sudo pacman -S zeromq
     - Frame MORE flag handling
     - Identity envelope format
 
-4. **Fix discovered bugs** (4-6 hours)
+4. **Fix discovered bugs**
     - Protocol encoding issues
     - State machine edge cases
     - Frame boundary conditions
@@ -328,27 +327,27 @@ sudo pacman -S zeromq
 
 ---
 
-### Phase 2.2 - Hub Integration Tests (Medium Priority) ⏱️ 8-10 hours
+### Phase 2.2 - Hub Integration Tests (Medium Priority)
 
 **Goal**: Validate routing correctness with multiple peers
 
 **Tasks**:
 
-1. **ROUTER multi-peer test** (3 hours)
+1. **ROUTER multi-peer test**
 
     - 3 DEALER clients → 1 ROUTER server
     - Verify identity routing (messages reach correct peer)
     - Verify round-robin in load balancer mode
     - Test peer disconnect/reconnect (ghost peer handling)
 
-2. **PubSub fanout test** (3 hours)
+2. **PubSub fanout test**
 
     - 1 PUB → 3 SUB subscribers
     - Overlapping subscriptions (e.g., "A", "AB", "ABC")
     - Verify deduplication works
     - Test unsubscribe behavior
 
-3. **Stress test** (2 hours)
+3. **Stress test**
     - 100 messages/sec × 10 peers
     - Random disconnects
     - Verify no crashes, no memory leaks
@@ -362,23 +361,23 @@ sudo pacman -S zeromq
 
 ---
 
-### Phase 2.3 - Error Handling & Graceful Shutdown (Low-Medium Priority) ⏱️ 6-8 hours
+### Phase 2.3 - Error Handling & Graceful Shutdown (Low-Medium Priority)
 
 **Tasks**:
 
-1. **Graceful disconnect** (2 hours)
+1. **Graceful disconnect**
 
     - Send "goodbye" frames before closing
     - Drain send queue before shutdown
     - Clean up resources properly
 
-2. **Timeout handling** (2 hours)
+2. **Timeout handling**
 
     - Handshake timeout (5 seconds)
     - Read timeout (configurable)
     - Write timeout (backpressure-aware)
 
-3. **Error propagation** (2 hours)
+3. **Error propagation**
     - Return `Result<T, Error>` instead of unwrap
     - Define `MonocoqueError` enum
     - Proper error context
@@ -391,40 +390,39 @@ sudo pacman -S zeromq
 
 ---
 
-### Phase 3.1 - Documentation & Examples (Low Priority) ⏱️ 6-8 hours
+### Phase 3.1 - Documentation & Examples (Low Priority)
 
 **Tasks**:
 
-1. **Rustdoc pass** (3 hours)
+1. **Rustdoc pass**
 
     - Document all public APIs
     - Add code examples to docs
     - Generate `cargo doc` output
 
-2. **Examples directory** (3 hours)
+2. **Examples directory**
 
     - `examples/hello_dealer.rs`
     - `examples/router_worker_pool.rs`
     - `examples/pubsub_events.rs`
 
-3. **Getting Started guide** (2 hours)
+3. **Getting Started guide**
     - Installation
     - Basic usage
     - Architecture overview
 
 ---
 
-## 4. Estimated Time to Production-Ready
+## 4. Path to Production-Ready
 
-| Phase     | Task                  | Hours           | Priority    |
-| --------- | --------------------- | --------------- | ----------- |
-| 2.1       | Libzmq interop        | 15-20           | 🔴 Critical |
-| 2.2       | Hub integration tests | 8-10            | 🟡 High     |
-| 2.3       | Error handling        | 6-8             | 🟢 Medium   |
-| 3.1       | Documentation         | 6-8             | 🔵 Low      |
-| **TOTAL** |                       | **35-46 hours** |             |
+| Phase | Task                  | Effort | Priority    |
+| ----- | --------------------- | ------ | ----------- |
+| 2.1   | Libzmq interop        | Large  | 🔴 Critical |
+| 2.2   | Hub integration tests | Medium | 🟡 High     |
+| 2.3   | Error handling        | Medium | 🟢 Medium   |
+| 3.1   | Documentation         | Medium | 🔵 Low      |
 
-**Adjusted for debugging**: Realistically **50-60 hours** to production-ready.
+**Focus**: Prioritize libzmq interop validation first, as it proves protocol correctness.
 
 ---
 
@@ -476,50 +474,50 @@ Systematic check of all blueprint requirements:
 
 ---
 
-## 7. Recommended Immediate Actions (Next 2 Weeks)
+## 7. Recommended Immediate Actions
 
-### Week 1: **Validation & Bug Fixing**
+### Stage 1: **Validation & Bug Fixing**
 
-**Day 1-2**: Fix test harness, install libzmq, run `interop_pair`
+**Phase A**: Fix test harness, install libzmq, run `interop_pair`
 
 -   Expected result: Test fails, discover first bug
 -   Fix greeting/handshake issues
 
-**Day 3-4**: Fix remaining interop tests
+**Phase B**: Fix remaining interop tests
 
 -   `interop_router` - identity routing
 -   `interop_pubsub` - subscription matching
 -   `interop_load_balance` - round-robin
 
-**Day 5**: Multi-peer integration test
+**Phase C**: Multi-peer integration test
 
 -   3 DEALERs → 1 ROUTER
 -   Verify routing correctness
 
-**Exit**: All interop tests passing ✅
+**Exit Criteria**: All interop tests passing ✅
 
 ---
 
-### Week 2: **Hardening & Documentation**
+### Stage 2: **Hardening & Documentation**
 
-**Day 1-2**: Error handling pass
+**Phase A**: Error handling pass
 
 -   Remove unwraps
 -   Add timeouts
 -   Graceful shutdown
 
-**Day 3-4**: Documentation
+**Phase B**: Documentation
 
 -   Rustdoc for public APIs
 -   Write 3 examples
 
-**Day 5**: Performance validation
+**Phase C**: Performance validation
 
 -   Latency benchmark vs libzmq
 -   Throughput test
 -   Memory profiling
 
-**Exit**: Production-ready codebase ✅
+**Exit Criteria**: Production-ready codebase ✅
 
 ---
 
@@ -574,7 +572,7 @@ cargo test --test interop_pair --features runtime -- --nocapture
 # 5. Repeat for other tests
 ```
 
-**Estimated time to first passing test**: 8-12 hours (with debugging).
+**Expected effort**: Moderate to significant debugging expected.
 
 ---
 
@@ -596,6 +594,6 @@ cargo test --test interop_pair --features runtime -- --nocapture
 -   ⚠️ Error handling needs hardening
 -   ⚠️ Documentation needs work
 
-**The Recommendation**: Focus next 20 hours on **libzmq interop validation**. This is the critical proof point that the implementation is correct. Everything else (documentation, examples, performance) can wait until interop is proven.
+**The Recommendation**: Focus on **libzmq interop validation** as the highest priority. This is the critical proof point that the implementation is correct. Everything else (documentation, examples, performance) can wait until interop is proven.
 
-**Confidence Level**: 85% - Architecture is sound, implementation needs real-world validation.
+**Confidence Level**: High - Architecture is sound, implementation needs real-world validation.

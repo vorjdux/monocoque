@@ -20,12 +20,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (stream, _addr) = listener.accept().await.unwrap();
         println!("[SERVER] Connection accepted");
         
-        let _socket = RouterSocket::new(stream);
+        let _socket = RouterSocket::from_stream(stream).await;
         println!("[SERVER] Socket created");
         
         // Give time for handshake
         for i in 1..=10 {
-            println!("[SERVER] Handshake progress... {}s", i);
+            println!("[SERVER] Handshake progress... {i}s");
             compio::time::sleep(Duration::from_millis(500)).await;
         }
         
@@ -40,19 +40,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let stream = TcpStream::connect("127.0.0.1:5571").await?;
     println!("[CLIENT] Connected");
     
-    let _socket = DealerSocket::new(stream);
+    let _socket = DealerSocket::from_stream(stream).await;
     println!("[CLIENT] Socket created");
     
     // Give time for handshake
     for i in 1..=10 {
-        println!("[CLIENT] Handshake progress... {}s", i);
+        println!("[CLIENT] Handshake progress... {i}s");
         compio::time::sleep(Duration::from_millis(500)).await;
     }
     
     println!("[CLIENT] Done");
     
     // Wait for server
-    server_task.await.unwrap();
+    server_task.await;
 
     println!("\n✅ Handshake test completed (both sides stayed connected)");
     Ok(())

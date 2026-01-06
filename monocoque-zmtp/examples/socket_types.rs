@@ -2,7 +2,6 @@
 ///
 /// Shows all four socket types (DEALER, ROUTER, PUB, SUB) with the same integration pattern
 
-#[cfg(feature = "runtime")]
 fn main() {
     println!("=== Monocoque Socket Types ===\n");
     
@@ -51,8 +50,3 @@ fn main() {
     println!("4. Performance benchmarks");
 }
 
-#[cfg(not(feature = "runtime"))]
-fn main() {
-    println!("This example requires the 'runtime' feature.");
-    println!("Run with: cargo run --example socket_types --features runtime");
-}

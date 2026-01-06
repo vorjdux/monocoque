@@ -24,7 +24,7 @@ pub trait Mechanism: Send {
     /// Returns:
     /// - Ok(()) for accepted frames
     /// - Err for protocol/handshake violation
-    fn on_inbound(&mut self, frame: &ZmtpFrame) -> Result<(), ZmtpError>;
+    fn on_inbound(&mut self, frame: &ZmtpFrame) -> crate::codec::Result<()>;
 
     /// Poll next outbound bytes to send (already framed bytes).
     ///
@@ -58,13 +58,13 @@ pub enum MechanismKind {
 }
 
 impl MechanismKind {
-    pub fn new_null() -> Self {
+    pub const fn new_null() -> Self {
         Self::Null
     }
 
     pub fn build(self, role: Role, local_socket_type: SocketType) -> Box<dyn Mechanism> {
         match self {
-            MechanismKind::Null => Box::new(crate::mechanism::null::NullMechanism::new(
+            Self::Null => Box::new(crate::mechanism::null::NullMechanism::new(
                 role,
                 local_socket_type,
             )),
@@ -75,7 +75,7 @@ impl MechanismKind {
 /// Helper: in handshake, any non-command data frame is a violation.
 /// (libzmq will drop you silently if you violate.)
 #[inline]
-pub fn require_command(frame: &ZmtpFrame) -> Result<(), ZmtpError> {
+pub const fn require_command(frame: &ZmtpFrame) -> crate::codec::Result<()> {
     if frame.is_command() {
         Ok(())
     } else {

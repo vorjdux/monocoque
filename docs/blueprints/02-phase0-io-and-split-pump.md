@@ -224,7 +224,7 @@ This is why **Split Pump** is not optional.
 
 ## 10. Phase 0 Exit Criteria
 
-**Status**: ✅ COMPLETE (January 2026)
+**Status**: ✅ **COMPLETE**
 
 Phase 0 implementation satisfies all criteria:
 
@@ -242,4 +242,4 @@ Phase 0 implementation satisfies all criteria:
 -   Both satisfy compio's ownership-passing IO requirements
 -   Split pump architecture validated through integration tests
 
-The architecture not only achieves all criteria but does so with formal safety guarantees.
+The architecture achieves all criteria with formal safety guarantees.

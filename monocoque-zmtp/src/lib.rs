@@ -1,10 +1,10 @@
 //! # Monocoque ZMTP
 //!
-//! High-performance ZeroMQ (ZMTP 3.1) protocol implementation in Rust.
+//! High-performance `ZeroMQ` (ZMTP 3.1) protocol implementation in Rust.
 //!
 //! ## Overview
 //!
-//! Monocoque provides a clean, safe, and efficient implementation of ZeroMQ socket patterns:
+//! Monocoque provides a clean, safe, and efficient implementation of `ZeroMQ` socket patterns:
 //! - **DEALER**: Asynchronous request-reply with load balancing
 //! - **ROUTER**: Server-side routing with identity-based addressing  
 //! - **PUB**: Publisher for broadcasting events
@@ -32,10 +32,22 @@
 //! ## Features
 //!
 //! - **Zero-copy**: Messages use `Bytes` for efficient sharing
-//! - **io_uring**: High-performance async I/O via `compio`
+//! - **`io_uring`**: High-performance async I/O via `compio`
 //! - **Sans-IO protocol**: Testable, runtime-agnostic design
 //! - **Type-safe**: No unsafe code in protocol layer
 //! - **Interoperable**: Compatible with libzmq
+
+// Allow some pedantic lints
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::items_after_statements)]
+#![allow(clippy::module_name_repetitions)]
+#![allow(clippy::must_use_candidate)]
+#![allow(clippy::needless_pass_by_value)]
+#![allow(clippy::needless_pass_by_ref_mut)]
+#![allow(clippy::match_same_arms)]
+#![allow(clippy::unused_async)]
+#![allow(clippy::let_underscore_future)]
 
 // Internal modules (not part of public API)
 mod codec;

@@ -104,20 +104,22 @@ Monocoque is built in phases, each providing a stable foundation for the next:
 
 ## Project Status
 
-Monocoque has **Phase 0-1 complete** with Phase 2-3 socket skeletons implemented. Integration testing is the current priority.
+Monocoque has **Phase 0-3 implementation complete** with integration testing in progress.
 
-| Phase       | Component            | Status                                    |
-| ----------- | -------------------- | ----------------------------------------- |
-| **Phase 0** | IO Core & Split Pump | ✅ **Complete** (January 2026)            |
-| **Phase 1** | ZMTP 3.1 Protocol    | ✅ **Complete** (January 2026)            |
-| **Phase 2** | ROUTER/DEALER        | 🚧 Skeleton (needs integration tests)     |
-| **Phase 3** | PUB/SUB Engine       | 🚧 Skeleton (needs integration tests)     |
-| **Phase 4** | REQ/REP              | ⏳ Planned                                |
-| **Phase 5** | Reliability          | ⏳ Planned                                |
-| **Phase 6** | Performance          | ⏳ Planned                                |
-| **Phase 7** | Public API           | ✅ **Complete** (feature-gated, Jan 2026) |
+| Phase       | Component            | Status                            |
+| ----------- | -------------------- | --------------------------------- |
+| **Phase 0** | IO Core & Split Pump | ✅ **Complete**                   |
+| **Phase 1** | ZMTP 3.1 Protocol    | ✅ **Complete**                   |
+| **Phase 2** | ROUTER/DEALER        | ✅ **Complete** (testing pending) |
+| **Phase 3** | PUB/SUB Engine       | ✅ **Complete** (testing pending) |
+| **Phase 4** | REQ/REP              | ⏳ Planned                        |
+| **Phase 5** | Reliability          | ⏳ Planned                        |
+| **Phase 6** | Performance          | ⏳ Planned                        |
+| **Phase 7** | Public API           | ✅ **Complete** (feature-gated)   |
 
 📖 **Read the blueprints**: Comprehensive design documents are in [`docs/blueprints/`](docs/blueprints/)
+
+🧪 **Test interoperability**: Run examples against libzmq - see [`docs/INTEROP_TESTING.md`](docs/INTEROP_TESTING.md)
 
 ---
 
@@ -131,13 +133,17 @@ Monocoque has **Phase 0-1 complete** with Phase 2-3 socket skeletons implemented
 -   **NULL Authentication**: Greeting + handshake with Socket-Type metadata (Phase 1)
 -   **Sans-IO State Machine**: `ZmtpSession` with deterministic testing (Phase 1)
 -   **Feature-Gated Architecture**: Protocol namespaces (`monocoque::zmq::*`), zero unused code
+-   **All Socket Types**: DEALER, ROUTER, PUB, SUB fully implemented (Phase 2-3)
+-   **Interop Examples**: Working examples demonstrating libzmq compatibility
 
-### 🚧 Skeleton Complete (Needs Integration Tests)
+### 🧪 Integration Testing (Current Priority)
 
--   **DEALER/ROUTER Semantics**: Identity envelopes, multipart messages, load balancing
--   **Epoch-Based Lifecycle**: Ghost peer prevention on reconnect
--   **Sorted Prefix Table for PUB/SUB**: Cache-friendly linear matching (not trie-based)
--   **Zero-Copy Fanout**: Vec clone with Bytes refcount (no payload copies)
+-   **libzmq Compatibility**: Standalone examples for manual verification
+    -   DEALER ↔ libzmq ROUTER
+    -   ROUTER ↔ libzmq DEALER
+    -   PUB ↔ libzmq SUB
+-   **Multi-Peer Tests**: Coming soon (load balancing, fanout)
+-   **Stress Tests**: Coming soon (reconnection, high throughput)
 
 ### 🎯 Design Goals
 

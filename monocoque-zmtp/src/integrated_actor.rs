@@ -1,8 +1,8 @@
 //! ZMTP Integrated Actor
 //!
 //! This module provides the integration layer that composes:
-//! - monocoque-core's protocol-agnostic SocketActor (IO primitive)
-//! - monocoque-zmtp's ZmtpSession (protocol state machine)
+//! - monocoque-core's protocol-agnostic `SocketActor` (IO primitive)
+//! - monocoque-zmtp's `ZmtpSession` (protocol state machine)
 //! - Hub connections (Router/PubSub)
 //!
 //! # Architecture
@@ -21,14 +21,14 @@
 //!
 //! This layer follows the blueprint's strict separation of concerns:
 //!
-//! 1. **Protocol-agnostic core**: SocketActor knows nothing about ZMTP
-//! 2. **Protocol layer**: ZmtpSession handles framing, handshake, commands
-//! 3. **Integration layer**: ZmtpIntegratedActor composes them via events
+//! 1. **Protocol-agnostic core**: `SocketActor` knows nothing about ZMTP
+//! 2. **Protocol layer**: `ZmtpSession` handles framing, handshake, commands
+//! 3. **Integration layer**: `ZmtpIntegratedActor` composes them via events
 //! 4. **No circular dependencies**: Core never imports protocol layers
 //!
 //! # Responsibilities
 //!
-//! - Forward raw bytes to ZmtpSession
+//! - Forward raw bytes to `ZmtpSession`
 //! - Assemble ZMTP frames into multipart messages
 //! - Strip/inject ROUTER envelopes
 //! - Parse SUB/UNSUB commands
@@ -82,7 +82,7 @@ pub enum PeerCmd {
     Close,
 }
 
-/// Events for PubSub Hub
+/// Events for `PubSub` Hub
 #[derive(Debug)]
 pub enum PubSubEvent {
     PeerUp {
@@ -111,7 +111,7 @@ pub enum RouterCmd {
     Close,
 }
 
-/// Commands from PubSub Hub
+/// Commands from `PubSub` Hub
 #[derive(Debug)]
 pub enum PubSubCmd {
     Publish(Vec<Bytes>),
@@ -132,11 +132,11 @@ pub enum PubSubCmd {
 ///
 /// # Responsibilities
 ///
-/// 1. **Byte-to-Frame**: Forward bytes to ZmtpSession, receive frames
+/// 1. **Byte-to-Frame**: Forward bytes to `ZmtpSession`, receive frames
 /// 2. **Multipart Assembly**: Collect frames into complete messages
 /// 3. **Envelope Handling**: Strip ROUTER envelopes, inject on send
 /// 4. **Command Parsing**: Decode SUB/UNSUB from payload
-/// 5. **Hub Registration**: Connect to Router or PubSub hubs
+/// 5. **Hub Registration**: Connect to Router or `PubSub` hubs
 /// 6. **Bidirectional Flow**: Hub commands → ZMTP frames
 ///
 /// # Lifecycle
@@ -177,16 +177,16 @@ pub struct ZmtpIntegratedActor {
     /// Optional Router Hub connection
     router_hub: Option<Sender<HubEvent>>,
 
-    /// Optional PubSub Hub connection
+    /// Optional `PubSub` Hub connection
     pubsub_hub: Option<Sender<PubSubEvent>>,
 
     /// Commands from hub to this peer
     peer_rx: Option<Receiver<PeerCmd>>,
 
-    /// Sender for routing PeerCmd to the socket (for hub registration)
+    /// Sender for routing `PeerCmd` to the socket (for hub registration)
     peer_cmd_tx: Sender<PeerCmd>,
 
-    /// Outbound frame queue (to be sent to SocketActor)
+    /// Outbound frame queue (to be sent to `SocketActor`)
     write_queue: Vec<Bytes>,
 }
 
@@ -198,10 +198,9 @@ impl ZmtpIntegratedActor {
         user_rx: Receiver<Vec<Bytes>>,
     ) -> Self {
         // Use channel sender/receiver count as unique ID
-        let tx_id = format!("{:p}-{}", &user_tx as *const _, user_tx.sender_count());
-        let rx_id = format!("{:p}-{}", &user_rx as *const _, user_rx.receiver_count());
-        eprintln!("[ZmtpIntegratedActor::new {:?}] TX ID: {}, RX ID: {}",
-                 socket_type, tx_id, rx_id);
+        let tx_id = format!("{:p}-{}", &raw const user_tx, user_tx.sender_count());
+        let rx_id = format!("{:p}-{}", &raw const user_rx, user_rx.receiver_count());
+        eprintln!("[ZmtpIntegratedActor::new {socket_type:?}] TX ID: {tx_id}, RX ID: {rx_id}");
         let (peer_cmd_tx, peer_cmd_rx) = flume::unbounded();
         
         Self {
@@ -226,7 +225,7 @@ impl ZmtpIntegratedActor {
     /// - User messages → ZMTP frames
     /// - Hub commands → ZMTP frames
     ///
-    /// Returns frames to be sent via SocketActor.
+    /// Returns frames to be sent via `SocketActor`.
     ///
     /// Call this method repeatedly in your async runtime.
     pub async fn process_events(&mut self) -> Vec<Bytes> {
@@ -290,7 +289,7 @@ impl ZmtpIntegratedActor {
     /// Handles DEALER and ROUTER semantics:
     /// - DEALER: multipart → frames with MORE flags
     /// - ROUTER: strip envelope, route body
-    fn encode_outgoing_message(&mut self, parts: Vec<Bytes>) -> Vec<Bytes> {
+    pub fn encode_outgoing_message(&mut self, parts: Vec<Bytes>) -> Vec<Bytes> {
         use crate::utils::encode_frame;
 
         if parts.is_empty() {
@@ -304,7 +303,7 @@ impl ZmtpIntegratedActor {
                 // DEALER: straightforward multipart
                 let last_idx = parts.len() - 1;
                 for (idx, part) in parts.into_iter().enumerate() {
-                    let flags = if idx < last_idx { 0x01 } else { 0x00 };
+                    let flags = u8::from(idx < last_idx);
                     frames.push(encode_frame(flags, &part));
                 }
             }
@@ -316,7 +315,7 @@ impl ZmtpIntegratedActor {
                     let body = &parts[2..];
                     let last_idx = body.len() - 1;
                     for (idx, part) in body.iter().enumerate() {
-                        let flags = if idx < last_idx { 0x01 } else { 0x00 };
+                        let flags = u8::from(idx < last_idx);
                         frames.push(encode_frame(flags, part));
                     }
                 }
@@ -326,7 +325,7 @@ impl ZmtpIntegratedActor {
                 // PUB: send as-is
                 let last_idx = parts.len() - 1;
                 for (idx, part) in parts.into_iter().enumerate() {
-                    let flags = if idx < last_idx { 0x01 } else { 0x00 };
+                    let flags = u8::from(idx < last_idx);
                     frames.push(encode_frame(flags, &part));
                 }
             }
@@ -335,7 +334,7 @@ impl ZmtpIntegratedActor {
                 // Default: send multipart
                 let last_idx = parts.len() - 1;
                 for (idx, part) in parts.into_iter().enumerate() {
-                    let flags = if idx < last_idx { 0x01 } else { 0x00 };
+                    let flags = u8::from(idx < last_idx);
                     frames.push(encode_frame(flags, &part));
                 }
             }
@@ -350,7 +349,7 @@ impl ZmtpIntegratedActor {
         self.peer_rx = Some(peer_rx);
     }
 
-    /// Attach PubSub hub for PUB/SUB sockets.
+    /// Attach `PubSub` hub for PUB/SUB sockets.
     pub fn attach_pubsub(&mut self, hub_tx: Sender<PubSubEvent>, peer_rx: Receiver<PeerCmd>) {
         self.pubsub_hub = Some(hub_tx);
         self.peer_rx = Some(peer_rx);
@@ -482,7 +481,7 @@ impl ZmtpIntegratedActor {
         // Notify PubSub hub
         if let Some(hub) = &self.pubsub_hub {
             let _ = hub.send(PubSubEvent::PeerUp {
-                routing_id: rid.clone(),
+                routing_id: rid,
                 epoch: self.epoch,
                 tx: self.peer_cmd_tx.clone(),
             });
@@ -526,7 +525,7 @@ impl ZmtpIntegratedActor {
 
             // Send to application
             match self.user_tx.send(msg) {
-                Ok(_) => eprintln!("[INTEGRATED {:?}] Successfully sent message to app", self.socket_type),
+                Ok(()) => eprintln!("[INTEGRATED {:?}] Successfully sent message to app", self.socket_type),
                 Err(e) => eprintln!("[INTEGRATED {:?}] Failed to send message to app: {:?}", self.socket_type, e),
             }
         }

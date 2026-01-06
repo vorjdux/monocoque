@@ -9,7 +9,7 @@ use compio::net::{TcpListener, TcpStream};
 /// - DEALER receives the response
 ///
 /// This validates the complete ZMTP implementation including handshake and messaging.
-use monocoque_zmtp::{DealerSocket, RouterSocket};
+use monocoque::zmq::{DealerSocket, RouterSocket};
 use std::time::Duration;
 
 #[compio::main]
@@ -22,8 +22,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .duration_since(std::time::UNIX_EPOCH)?
             .as_millis()
             % 10000) as u16;
-    let addr = format!("127.0.0.1:{}", port);
-    println!("[INFO] Using address: {}\n", addr);
+    let addr = format!("127.0.0.1:{port}");
+    println!("[INFO] Using address: {addr}\n");
 
     let addr_clone = addr.clone();
 
@@ -48,21 +48,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn router_server(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
-    println!("[ROUTER] Binding to {}", addr);
+    println!("[ROUTER] Binding to {addr}");
     let listener = TcpListener::bind(addr).await?;
 
     println!("[ROUTER] Waiting for connection...");
     let (stream, addr) = listener.accept().await?;
-    println!("[ROUTER] Client connected from {}", addr);
+    println!("[ROUTER] Client connected from {addr}");
 
-    let socket = RouterSocket::new(stream).await;
+    let mut socket = RouterSocket::from_stream(stream).await;
 
     // Wait for handshake to complete
-    compio::time::sleep(Duration::from_millis(300)).await;
+    compio::time::sleep(Duration::from_millis(500)).await;
 
     // Receive request
     println!("[ROUTER] Waiting for request...");
-    let request = socket.recv().await?;
+    let request = socket.recv().await.ok_or("Connection closed")?;
 
     println!("[ROUTER] Received {} frames:", request.len());
     for (i, frame) in request.iter().enumerate() {
@@ -98,19 +98,19 @@ async fn router_server(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     // Wait longer for DEALER to receive and process reply
     println!("[ROUTER] Waiting for DEALER to process reply...");
-    compio::time::sleep(Duration::from_secs(2)).await;
+    compio::time::sleep(Duration::from_secs(3)).await;
     Ok(())
 }
 
 async fn dealer_client(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
-    println!("[DEALER] Connecting to {}", addr);
+    println!("[DEALER] Connecting to {addr}");
     let stream = TcpStream::connect(addr).await?;
     println!("[DEALER] Connected!");
 
-    let socket = DealerSocket::new(stream).await;
+    let mut socket = DealerSocket::from_stream(stream).await;
 
     // Wait for handshake to complete
-    compio::time::sleep(Duration::from_millis(300)).await;
+    compio::time::sleep(Duration::from_millis(500)).await;
 
     // Send request
     let request = vec![Bytes::from("Hello from DEALER!")];
@@ -120,7 +120,7 @@ async fn dealer_client(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     // Receive reply
     println!("[DEALER] Waiting for reply...");
-    let reply = socket.recv().await?;
+    let reply = socket.recv().await.ok_or("Connection closed")?;
 
     println!("[DEALER] Received {} frames:", reply.len());
     for (i, frame) in reply.iter().enumerate() {

@@ -3,6 +3,15 @@ name = "monocoque-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Protocol-agnostic messaging kernel with io_uring-based I/O"
+keywords = ["messaging", "io_uring", "async", "zeromq", "kernel"]
+categories = ["network-programming", "asynchronous"]
+homepage = "https://github.com/vorjdux/monocoque"
+documentation = "https://docs.rs/monocoque-core"
+readme = "../README.md"
 
 [dependencies]
 bytes.workspace = true
@@ -12,5 +21,4 @@ futures.workspace = true
 async-trait.workspace = true
 hashbrown.workspace = true
 smallvec.workspace = true
-uuid.workspace = true
 thiserror.workspace = true

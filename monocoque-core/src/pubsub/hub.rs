@@ -1,14 +1,14 @@
 //! PUB/SUB Hub (Phase 3)
 //!
 //! Responsibilities:
-//! - Maintain a stable mapping from RoutingID -> PeerKey (compact u64).
+//! - Maintain a stable mapping from `RoutingID` -> `PeerKey` (compact u64).
 //! - Track active peers with an Epoch to avoid ghost-peer races.
-//! - Apply SUB / UNSUB commands to the SubscriptionIndex.
+//! - Apply SUB / UNSUB commands to the `SubscriptionIndex`.
 //! - Fan out published messages to matching peers (zero-copy via Bytes).
 //!
 //! Concurrency model:
 //! - Single-threaded async task.
-//! - Uses flume::select! for runtime-agnostic multiplexing.
+//! - Uses `flume::select`! for runtime-agnostic multiplexing.
 //! - No locks on the hot publish path.
 
 use crate::pubsub::index::{PeerKey, SubscriptionIndex};
@@ -18,7 +18,7 @@ use bytes::Bytes;
 use flume::{Receiver, Sender};
 use hashbrown::HashMap;
 
-/// Commands from application to PubSub Hub
+/// Commands from application to `PubSub` Hub
 #[derive(Debug)]
 pub enum PubSubCmd {
     /// Publish a message (frame 0 is topic)
@@ -29,7 +29,7 @@ pub enum PubSubCmd {
 
 /// Events coming from peer actors (SUB sockets).
 ///
-/// These are emitted by SocketActor when:
+/// These are emitted by `SocketActor` when:
 /// - handshake completes
 /// - connection closes
 /// - SUB / UNSUB commands are parsed
@@ -62,13 +62,13 @@ pub struct PubSubHub {
     /// Subscription index (topic -> peers)
     index: SubscriptionIndex,
 
-    /// Stable mapping: RoutingID -> PeerKey
+    /// Stable mapping: `RoutingID` -> `PeerKey`
     rid_to_key: HashMap<Bytes, PeerKey>,
 
     /// Reverse mapping for cleanup/debug
     key_to_rid: HashMap<PeerKey, Bytes>,
 
-    /// Active peers: PeerKey -> (epoch, sender)
+    /// Active peers: `PeerKey` -> (epoch, sender)
     peers: HashMap<PeerKey, (u64, Sender<PeerCmd>)>,
 
     /// Monotonic key generator
@@ -82,6 +82,7 @@ pub struct PubSubHub {
 }
 
 impl PubSubHub {
+    #[must_use] 
     pub fn new(hub_rx: Receiver<PubSubEvent>, user_tx_rx: Receiver<PubSubCmd>) -> Self {
         Self {
             index: SubscriptionIndex::new(),
@@ -174,7 +175,7 @@ impl PubSubHub {
             PubSubCmd::Publish(parts) => self.publish(parts),
             PubSubCmd::Close => {
                 // Broadcast close to all peers
-                for (_, (_, tx)) in self.peers.iter() {
+                for (_, (_, tx)) in &self.peers {
                     let _ = tx.send(PeerCmd::Close);
                 }
             }

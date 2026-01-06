@@ -1,8 +1,8 @@
 //! Basic integration test demonstrating the composition pattern.
 //!
 //! This test validates the architectural design by showing how:
-//! - ZmtpSession handles protocol state
-//! - ZmtpIntegratedActor composes session + routing
+//! - `ZmtpSession` handles protocol state
+//! - `ZmtpIntegratedActor` composes session + routing
 //! - No circular dependencies exist
 //! - Events flow correctly between layers
 

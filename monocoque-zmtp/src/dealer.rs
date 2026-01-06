@@ -7,7 +7,7 @@
 //! - **Bidirectional**: Can both send and receive multipart messages
 //! - **Load Balanced**: When multiple DEALER sockets connect to a ROUTER, messages are distributed fairly
 //! - **Asynchronous**: Non-blocking send and receive operations
-//! - **Multipart**: Full support for ZeroMQ multipart messages
+//! - **Multipart**: Full support for `ZeroMQ` multipart messages
 //!
 //! ## Usage Example
 //!
@@ -35,7 +35,7 @@
 //!
 //! ## Protocol Details
 //!
-//! DEALER implements the ZeroMQ DEALER socket pattern:
+//! DEALER implements the `ZeroMQ` DEALER socket pattern:
 //! - Messages are sent as-is (no envelope modification)
 //! - Compatible with ROUTER and REP sockets
 //! - Fair queuing when multiple DEALERs connect to one ROUTER
@@ -116,93 +116,101 @@ impl DealerSocket {
             user_rx, // integrated receives outgoing messages FROM app
         );
 
-        // Send initial greeting
+        // Send initial greeting before spawning tasks
         let greeting = integrated_actor.local_greeting();
         let _ = socket_cmd_tx.send(UserCmd::SendBytes(greeting));
 
+        // Spawn SocketActor first so it's ready to process the greeting
+        eprintln!("[DEALER] About to spawn SocketActor");
+        let socket_handle = compio::runtime::spawn(socket_actor.run());
+        eprintln!("[DEALER] SocketActor spawned");
+
+        // Small delay to allow SocketActor pumps to initialize
+        // TODO: Replace with proper synchronization mechanism (e.g., oneshot channel)
+        compio::time::sleep(std::time::Duration::from_millis(1)).await;
+
         // Spawn the integration task
-        let socket_cmd_tx_clone = socket_cmd_tx.clone();
+        let _socket_cmd_tx_clone = socket_cmd_tx.clone();
         eprintln!("[DEALER] About to spawn integration task");
         let integration_handle = compio::runtime::spawn(async move {
             use std::io::Write;
             let _ = std::io::stderr().write_all(b"[DEALER TASK] Integration task started!\n");
             let _ = std::io::stderr().flush();
+
             // This task bridges SocketActor events to ZmtpIntegratedActor
             let mut handshake_complete = false;
+            use futures::{select, FutureExt};
 
             loop {
-                // Process socket events
-                if let Ok(event) = socket_event_rx.try_recv() {
-                    match event {
-                        SocketEvent::Connected => {
-                            // Connection established, greeting already sent
-                        }
-                        SocketEvent::ReceivedBytes(bytes) => {
-                            // Feed bytes into ZMTP session
-                            let session_events = integrated_actor.session.on_bytes(bytes);
+                select! {
+                    // Wait for socket events (bytes from network)
+                    event = socket_event_rx.recv_async().fuse() => {
+                        match event {
+                            Ok(SocketEvent::Connected) => {
+                                // Connection established, greeting already sent
+                            }
+                            Ok(SocketEvent::ReceivedBytes(bytes)) => {
+                                // Feed bytes into ZMTP session
+                                let session_events = integrated_actor.session.on_bytes(bytes);
 
-                            for event in session_events {
-                                match event {
-                                    crate::session::SessionEvent::SendBytes(data) => {
-                                        let _ = socket_cmd_tx.send(UserCmd::SendBytes(data));
-                                    }
-                                    crate::session::SessionEvent::HandshakeComplete {
-                                        peer_identity,
-                                        peer_socket_type: _,
-                                    } => {
-                                        integrated_actor.handle_handshake_complete(peer_identity);
-                                        handshake_complete = true;
-                                        // READY command already sent by Session
-                                    }
-                                    crate::session::SessionEvent::Frame(frame) => {
-                                        if handshake_complete {
-                                            eprintln!("[DEALER TASK] Received frame from peer, passing to integrated_actor");
-                                            integrated_actor.handle_frame(frame);
+                                for event in session_events {
+                                    match event {
+                                        crate::session::SessionEvent::SendBytes(data) => {
+                                            let _ = socket_cmd_tx.send(UserCmd::SendBytes(data));
                                         }
-                                    }
-                                    crate::session::SessionEvent::Error(_e) => {
-                                        eprintln!("[DEALER TASK] Session error, exiting");
-                                        break;
+                                        crate::session::SessionEvent::HandshakeComplete {
+                                            peer_identity,
+                                            peer_socket_type: _,
+                                        } => {
+                                            integrated_actor.handle_handshake_complete(peer_identity);
+                                            handshake_complete = true;
+                                            // READY command already sent by Session
+                                        }
+                                        crate::session::SessionEvent::Frame(frame) => {
+                                            if handshake_complete {
+                                                eprintln!("[DEALER TASK] Received frame from peer, passing to integrated_actor");
+                                                integrated_actor.handle_frame(frame);
+                                            }
+                                        }
+                                        crate::session::SessionEvent::Error(_e) => {
+                                            eprintln!("[DEALER TASK] Session error, exiting");
+                                            break;
+                                        }
                                     }
                                 }
                             }
+                            Ok(SocketEvent::Disconnected) | Err(_) => {
+                                eprintln!("[DEALER TASK] Socket disconnected, exiting");
+                                break;
+                            }
                         }
-                        SocketEvent::Disconnected => {
-                            eprintln!("[DEALER TASK] Socket disconnected, exiting");
-                            break;
+                    }
+                    // Wait for outgoing messages from application
+                    msg = integrated_actor.user_rx.recv_async().fuse() => {
+                        match msg {
+                            Ok(multipart) => {
+                                eprintln!("[DEALER TASK] Got {} frames from user_rx", multipart.len());
+                                let frames = integrated_actor.encode_outgoing_message(multipart);
+                                for frame in frames {
+                                    eprintln!("[DEALER TASK] Sending {} bytes to SocketActor", frame.len());
+                                    let _ = socket_cmd_tx.send(UserCmd::SendBytes(frame));
+                                }
+                            }
+                            Err(_) => {
+                                // Channel closed
+                                break;
+                            }
                         }
                     }
                 }
-
-                // Process outgoing messages
-                let outgoing_frames = integrated_actor.process_events().await;
-                if !outgoing_frames.is_empty() {
-                    eprintln!(
-                        "[DEALER TASK] Got {} outgoing frames from process_events()",
-                        outgoing_frames.len()
-                    );
-                }
-                for frame in outgoing_frames {
-                    eprintln!("[DEALER TASK] Sending {} bytes to SocketActor", frame.len());
-                    let _ = socket_cmd_tx.send(UserCmd::SendBytes(frame));
-                }
-
-                // Small yield to prevent busy-waiting
-                compio::time::sleep(std::time::Duration::from_micros(100)).await;
             }
 
             eprintln!("[DEALER TASK] Integration task exited!");
         });
 
-        // Spawn SocketActor
-        eprintln!("[DEALER] About to spawn SocketActor");
-        let socket_handle = compio::runtime::spawn(socket_actor.run());
-        eprintln!("[DEALER] SocketActor spawned, returning socket");
+        eprintln!("[DEALER] Returning socket");
 
-        // Yield to allow spawned tasks to start
-        compio::time::sleep(std::time::Duration::from_micros(1)).await;
-
-        DealerSocket {
+        Self {
             app_tx: user_tx,
             app_rx,
             _task_handles: (integration_handle, socket_handle),
@@ -236,7 +244,7 @@ impl DealerSocket {
         let result = self.app_tx.send_async(parts).await;
         eprintln!(
             "[DEALER send()] Channel send result: {:?}",
-            result.as_ref().map(|_| "OK")
+            result.as_ref().map(|()| "OK")
         );
         result
     }
@@ -268,7 +276,6 @@ impl DealerSocket {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn test_dealer_creation() {

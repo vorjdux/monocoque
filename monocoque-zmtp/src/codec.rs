@@ -17,6 +17,9 @@ pub enum ZmtpError {
     Protocol,
 }
 
+/// Result type alias for ZMTP operations
+pub type Result<T> = std::result::Result<T, ZmtpError>;
+
 /// A decoded ZMTP frame
 #[derive(Debug, Clone)]
 pub struct ZmtpFrame {
@@ -26,12 +29,12 @@ pub struct ZmtpFrame {
 
 impl ZmtpFrame {
     #[inline]
-    pub fn more(&self) -> bool {
+    pub const fn more(&self) -> bool {
         (self.flags & 0x01) != 0
     }
 
     #[inline]
-    pub fn is_command(&self) -> bool {
+    pub const fn is_command(&self) -> bool {
         (self.flags & 0x04) != 0
     }
 }
@@ -42,7 +45,7 @@ impl ZmtpFrame {
 /// - Entire frame present → zero-copy slice
 ///
 /// Slow path:
-/// - Fragmented frame → reassemble into BytesMut
+/// - Fragmented frame → reassemble into `BytesMut`
 pub struct ZmtpDecoder {
     // Fragmentation state
     pending_flags: Option<u8>,
@@ -51,6 +54,7 @@ pub struct ZmtpDecoder {
 }
 
 impl ZmtpDecoder {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             pending_flags: None,
@@ -65,7 +69,7 @@ impl ZmtpDecoder {
     /// - Ok(Some(frame)) → frame decoded
     /// - Ok(None) → need more data
     /// - Err → protocol violation
-    pub fn decode(&mut self, src: &mut Bytes) -> Result<Option<ZmtpFrame>, ZmtpError> {
+    pub fn decode(&mut self, src: &mut Bytes) -> Result<Option<ZmtpFrame>> {
         // === Reassembly mode ===
         if let Some(flags) = self.pending_flags {
             let needed = self.expected_body_len - self.staging.len();
@@ -142,7 +146,7 @@ impl ZmtpDecoder {
 
 impl ZmtpFrame {
     /// Create a data frame
-    pub fn data(payload: Bytes, more: bool) -> Self {
+    pub const fn data(payload: Bytes, more: bool) -> Self {
         let mut flags = 0;
         if more {
             flags |= 0x01; // MORE
@@ -154,7 +158,7 @@ impl ZmtpFrame {
     }
 
     /// Create a command frame
-    pub fn command(payload: Bytes) -> Self {
+    pub const fn command(payload: Bytes) -> Self {
         let mut flags = 0x04; // COMMAND
         if payload.len() > 255 {
             flags |= 0x02; // LONG

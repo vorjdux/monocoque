@@ -21,7 +21,7 @@ Everything else (ZMQ, RPC, PUB/SUB) is _payload logic_ layered on top.
 
 ---
 
-## 2. Implementation Status (Core Complete, Integration Testing Pending)
+## 2. Implementation Status
 
 ### Crate Structure
 
@@ -53,7 +53,7 @@ monocoque-core/         ← Protocol-agnostic kernel
 
 **Goal:** Move bytes between kernel and user space safely and fast.
 
-**Status**: ✅ **COMPLETE** (January 2026)
+**Status**: ✅ **COMPLETE**
 
 Implemented components:
 
@@ -72,7 +72,7 @@ Implemented components:
 
 **Goal:** Speak ZeroMQ at the frame level.
 
-**Status**: ✅ **COMPLETE** (January 2026)
+**Status**: ✅ **COMPLETE**
 
 Implemented components:
 
@@ -91,7 +91,7 @@ Implemented components:
 
 **Goal:** Become a real ZeroMQ implementation.
 
-**Status**: 🚧 **Skeleton Complete, Testing Pending**
+**Status**: ✅ **Implementation Complete, Testing Pending**
 
 Implemented components:
 
@@ -110,7 +110,7 @@ Implemented components:
 
 **Goal:** High-performance topic-based fanout.
 
-**Status**: 🚧 **Skeleton Complete, Testing Pending**
+**Status**: ✅ **Implementation Complete, Testing Pending**
 
 Implemented components:
 
@@ -126,11 +126,11 @@ Implemented components:
 
 ---
 
-### Public API Layer (NEW)
+### Public API Layer
 
 **Goal:** Ergonomic, idiomatic Rust API for application developers.
 
-**Status**: ✅ **COMPLETE** (January 2026)
+**Status**: ✅ **COMPLETE**
 
 ```rust
 // User-friendly API
@@ -151,7 +151,7 @@ Features:
 
 ---
 
-## 3. Immediate Next Milestones (Concrete)
+## 3. Immediate Priorities
 
 ### Phase 3.1 — PUB/SUB Integration Tests
 

@@ -1,8 +1,8 @@
 //! ROUTER Hub (Phase 2.1)
 //!
 //! Goals:
-//! - Runtime-agnostic async loop (flume::select!, no tokio)
-//! - Strict types: RouterCmd has envelope, PeerCmd is body-only
+//! - Runtime-agnostic async loop (`flume::select`!, no tokio)
+//! - Strict types: `RouterCmd` has envelope, `PeerCmd` is body-only
 //! - Envelope normalization:
 //!     inbound (actor->user) is normalized elsewhere to [ID, Empty, Body...]
 //!     outbound (user->hub) accepts [ID, (Empty), Body...] in Standard mode
@@ -71,6 +71,7 @@ pub struct RouterHub {
 }
 
 impl RouterHub {
+    #[must_use] 
     pub fn new(
         hub_rx: Receiver<HubEvent>,
         user_tx_rx: Receiver<RouterCmd>,

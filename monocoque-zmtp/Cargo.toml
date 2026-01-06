@@ -1,41 +1,25 @@
 [package]
 name = "monocoque-zmtp"
-version = "0.1.0"
-edition = "2021"
-
-[[example]]
-name = "router_dealer_basic"
-path = "../examples/router_dealer_basic.rs"
-
-# Integration tests with libzmq
-[[test]]
-name = "interop_pair"
-path = "../tests/interop_pair.rs"
-required-features = ["runtime"]
-
-[[test]]
-name = "interop_router"
-path = "../tests/interop_router.rs"
-required-features = ["runtime"]
-
-[[test]]
-name = "interop_pubsub"
-path = "../tests/interop_pubsub.rs"
-required-features = ["runtime"]
-
-[[test]]
-name = "interop_load_balance"
-path = "../tests/interop_load_balance.rs"
-required-features = ["runtime"]
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "ZMTP 3.1 protocol implementation for Monocoque"
+keywords = ["zmq", "zeromq", "zmtp", "messaging", "protocol"]
+categories = ["network-programming"]
+homepage = "https://github.com/vorjdux/monocoque"
+documentation = "https://docs.rs/monocoque-zmtp"
+readme = "../README.md"
 
 [dependencies]
-bytes = "1.5"
-thiserror = "1.0"
-flume = "0.11"
-monocoque-core = { path = "../monocoque-core" }
-compio = { version = "0.10", features = ["runtime", "macros", "time"] }
+bytes.workspace = true
+thiserror.workspace = true
+flume.workspace = true
+futures.workspace = true
+compio.workspace = true
+monocoque-core = { version = "0.1.0", path = "../monocoque-core" }
 
 [dev-dependencies]
-compio = { version = "0.10", features = ["runtime", "macros"] }
-futures = "0.3"
-zmq = { workspace = true }
+zmq.workspace = true

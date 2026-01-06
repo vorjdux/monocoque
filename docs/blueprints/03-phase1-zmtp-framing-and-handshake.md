@@ -248,7 +248,7 @@ This proves:
 
 ## 9. Phase 1 Exit Criteria
 
-**Status**: ✅ COMPLETE (January 2026)
+**Status**: ✅ **COMPLETE**
 
 Implementation satisfies all criteria:
 
@@ -257,7 +257,7 @@ Implementation satisfies all criteria:
 -   ✅ READY metadata correct (Socket-Type + optional Identity)
 -   ✅ Sans-IO session purity preserved (ZmtpSession is runtime-agnostic)
 -   ✅ No unsafe protocol shortcuts (100% safe Rust)
--   🚧 libzmq interop verified (integration tests pending)
+-   🚧 libzmq interop verification (integration tests pending)
 
 **Implemented Components**:
 
@@ -267,7 +267,7 @@ Implementation satisfies all criteria:
 -   NULL mechanism - handshake with READY command
 -   Identity ownership - `Bytes::copy_from_slice` prevents dangling references
 
-**Next**: Full interop testing against real libzmq peers
+**Future Work**: Full interop testing against real libzmq peers
 
 ---
 

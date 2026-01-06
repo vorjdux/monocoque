@@ -3,10 +3,10 @@
 //! One actor == one TCP connection.
 //!
 //! Responsibilities:
-//! - Own the socket (AsyncRead + AsyncWrite)
+//! - Own the socket (`AsyncRead` + `AsyncWrite`)
 //! - Drive read + write pumps (split-pump design)
 //! - Move bytes between kernel and application
-//! - Emit lifecycle events (PeerUp / PeerDown)
+//! - Emit lifecycle events (`PeerUp` / `PeerDown`)
 //! - Never contain routing logic (delegated to hubs)
 //! - Never contain protocol logic (delegated to protocol layer above)
 //!
@@ -64,7 +64,7 @@ impl<S> SocketActor<S>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    pub fn new(
+    pub const fn new(
         stream: S,
         event_tx: Sender<SocketEvent>,
         cmd_rx: Receiver<UserCmd>,
@@ -81,8 +81,8 @@ where
     /// Run the actor event loop (split pump design).
     ///
     /// This implements the core split-pump pattern from blueprint 02:
-    /// - Read pump: kernel → application (via event_tx)
-    /// - Write pump: application → kernel (via cmd_rx)
+    /// - Read pump: kernel → application (via `event_tx`)
+    /// - Write pump: application → kernel (via `cmd_rx`)
     /// - No shared mutable state between pumps
     /// - Ownership-based flow control
     pub async fn run(mut self) {
@@ -92,14 +92,19 @@ where
         // Notify application that connection is ready
         let _ = self.event_tx.send(SocketEvent::Connected);
 
-        let mut write_queue: Vec<Bytes> = Vec::new();
-
         // === INITIAL WRITE DRAIN ===
-        // Process any queued writes (like greetings) before first read
+        // Process any queued writes (like greetings) before entering main loop
         // This prevents deadlock where both sides wait to receive before sending
         while let Ok(cmd) = self.cmd_rx.try_recv() {
             match cmd {
-                UserCmd::SendBytes(b) => write_queue.push(b),
+                UserCmd::SendBytes(b) => {
+                    let io_buf = IoBytes::new(b);
+                    let BufResult(write_res, _) = self.stream.write_all(io_buf).await;
+                    if write_res.is_err() {
+                        let _ = self.event_tx.send(SocketEvent::Disconnected);
+                        return;
+                    }
+                }
                 UserCmd::Close => {
                     let _ = self.event_tx.send(SocketEvent::Disconnected);
                     return;
@@ -107,67 +112,61 @@ where
             }
         }
 
-        // Flush initial writes immediately (zero-copy via IoBytes wrapper)
-        for buf in write_queue.drain(..) {
-            let io_buf = IoBytes::new(buf);
-            let BufResult(write_res, _) = (&mut self.stream).write_all(io_buf).await;
-            if write_res.is_err() {
-                let _ = self.event_tx.send(SocketEvent::Disconnected);
-                return;
-            }
-        }
+        // Main loop: use futures::select! to wait efficiently on multiple sources
+        use futures::{select, FutureExt};
 
-        // Main loop: check writes, flush them, then try reading (with brief timeout)
         loop {
-            // === WRITE PUMP (non-blocking check) ===
-            while let Ok(cmd) = self.cmd_rx.try_recv() {
-                match cmd {
-                    UserCmd::SendBytes(b) => write_queue.push(b),
-                    UserCmd::Close => {
-                        let _ = self.event_tx.send(SocketEvent::Disconnected);
-                        return;
+            select! {
+                // Process incoming commands (writes and close)
+                cmd = self.cmd_rx.recv_async().fuse() => {
+                    match cmd {
+                        Ok(UserCmd::SendBytes(b)) => {
+                            // Flush immediately for low latency
+                            eprintln!("[SocketActor] Writing {} bytes to network", b.len());
+                            let io_buf = IoBytes::new(b);
+                            let BufResult(write_res, _) = self.stream.write_all(io_buf).await;
+                            if write_res.is_err() {
+                                eprintln!("[SocketActor] Write error, exiting");
+                                let _ = self.event_tx.send(SocketEvent::Disconnected);
+                                return;
+                            }
+                        }
+                        Ok(UserCmd::Close) => {
+                            let _ = self.event_tx.send(SocketEvent::Disconnected);
+                            return;
+                        }
+                        Err(_) => {
+                            // Channel closed
+                            let _ = self.event_tx.send(SocketEvent::Disconnected);
+                            return;
+                        }
+                    }
+                }
+                // Read from socket
+                read_result = async {
+                    let slab: SlabMut = self.arena.alloc_mut(8192);
+                    let BufResult(res, slab) = self.stream.read(slab).await;
+                    (res, slab)
+                }.fuse() => {
+                    match read_result {
+                        (Ok(0), _) => {
+                            eprintln!("[SocketActor] EOF - connection closed");
+                            let _ = self.event_tx.send(SocketEvent::Disconnected);
+                            break;
+                        }
+                        (Err(e), _) => {
+                            eprintln!("[SocketActor] Read error: {e:?}");
+                            let _ = self.event_tx.send(SocketEvent::Disconnected);
+                            break;
+                        }
+                        (Ok(n), slab) => {
+                            eprintln!("[SocketActor] Read {n} bytes from network");
+                            let bytes = slab.freeze();
+                            let _ = self.event_tx.send(SocketEvent::ReceivedBytes(bytes));
+                        }
                     }
                 }
             }
-
-            // Flush pending writes (zero-copy via IoBytes wrapper)
-            for buf in write_queue.drain(..) {
-                eprintln!("[SocketActor] Writing {} bytes to network", buf.len());
-                let io_buf = IoBytes::new(buf);
-                let BufResult(write_res, _) = (&mut self.stream).write_all(io_buf).await;
-                if write_res.is_err() {
-                    eprintln!("[SocketActor] Write error, exiting");
-                    let _ = self.event_tx.send(SocketEvent::Disconnected);
-                    return;
-                }
-            }
-
-            // === READ PUMP ===
-            let slab: SlabMut = self.arena.alloc_mut(8192);
-            let BufResult(read_res, slab) = (&mut self.stream).read(slab).await;
-
-            match read_res {
-                Ok(0) => {
-                    eprintln!("[SocketActor] EOF - connection closed");
-                    // EOF
-                    let _ = self.event_tx.send(SocketEvent::Disconnected);
-                    break;
-                }
-                Err(e) => {
-                    eprintln!("[SocketActor] Read error: {:?}", e);
-                    let _ = self.event_tx.send(SocketEvent::Disconnected);
-                    break;
-                }
-                Ok(n) => {
-                    eprintln!("[SocketActor] Read {} bytes from network", n);
-                    let bytes = slab.freeze();
-                    let _ = self.event_tx.send(SocketEvent::ReceivedBytes(bytes));
-                }
-            }
-
-            // Brief yield to allow write commands to arrive
-            // This prevents read() from monopolizing the loop
-            compio::time::sleep(std::time::Duration::from_micros(1)).await;
         }
     }
 }

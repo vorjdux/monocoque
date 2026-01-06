@@ -1,8 +1,8 @@
 //! Complete end-to-end example: PAIR socket pattern
 //!
 //! This demonstrates the full Monocoque stack:
-//! 1. SocketActor (protocol-agnostic IO)
-//! 2. ZmtpIntegratedActor (ZMTP integration layer)
+//! 1. `SocketActor` (protocol-agnostic IO)
+//! 2. `ZmtpIntegratedActor` (ZMTP integration layer)
 //! 3. Message flow: bytes → frames → multipart → application
 //!
 //! This example creates a simple echo server that works with libzmq PAIR sockets.
@@ -14,7 +14,6 @@ use monocoque_zmtp::{
     integrated_actor::ZmtpIntegratedActor,
     session::SocketType,
 };
-use std::time::Duration;
 
 /// Represents a complete PAIR socket using Monocoque
 struct MonocoquePairSocket {
@@ -31,9 +30,9 @@ impl MonocoquePairSocket {
         let (recv_tx, _recv_rx) = unbounded();
 
         // Create the integrated actor
-        let mut actor = ZmtpIntegratedActor::new(
+        let actor = ZmtpIntegratedActor::new(
             SocketType::Pair,
-            recv_tx.clone(),
+            recv_tx,
             send_rx,
         );
 
@@ -47,7 +46,7 @@ impl MonocoquePairSocket {
         // 4. Poll actor.process_events() for outgoing messages
         
         // For now, this demonstrates the API structure
-        MonocoquePairSocket {
+        Self {
             send_tx,
             recv_rx: _recv_rx,
         }

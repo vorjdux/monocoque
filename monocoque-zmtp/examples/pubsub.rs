@@ -3,7 +3,6 @@
 /// Demonstrates PUB (publisher) and SUB (subscriber) pattern
 /// This is a common pattern for event distribution
 
-#[cfg(feature = "runtime")]
 fn main() {
     use monocoque_zmtp::publisher::PubSocket;
     use monocoque_zmtp::subscriber::SubSocket;
@@ -22,9 +21,9 @@ fn main() {
             
             println!("[Publisher] Waiting for subscribers...");
             let (stream, addr) = listener.accept().await.unwrap();
-            println!("[Publisher] Subscriber connected from {}", addr);
+            println!("[Publisher] Subscriber connected from {addr}");
             
-            let mut pub_socket = PubSocket::new(stream);
+            let pub_socket = PubSocket::new(stream).await;
             
             // Give subscriber time to set up
             compio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -39,7 +38,7 @@ fn main() {
             ];
             
             for (topic, body) in messages {
-                println!("[Publisher] Publishing: {} -> {}", topic, body);
+                println!("[Publisher] Publishing: {topic} -> {body}");
                 
                 pub_socket.send(vec![
                     Bytes::from(topic),
@@ -63,7 +62,7 @@ fn main() {
             let stream = compio::net::TcpStream::connect("127.0.0.1:9001").await.unwrap();
             println!("[Subscriber] Connected!");
             
-            let sub_socket = SubSocket::new(stream);
+            let sub_socket = SubSocket::new(stream).await;
             
             // Subscribe only to weather updates
             println!("[Subscriber] Subscribing to 'weather.' topic");
@@ -76,7 +75,7 @@ fn main() {
                 let topic = String::from_utf8_lossy(&msg[0]);
                 let body = String::from_utf8_lossy(&msg[1]);
                 
-                println!("[Subscriber] Received: {} -> {}", topic, body);
+                println!("[Subscriber] Received: {topic} -> {body}");
                 count += 1;
             }
             
@@ -93,10 +92,4 @@ fn main() {
     println!("- SUB socket filtering messages by topic prefix");
     println!("- Subscribe/unsubscribe API");
     println!("- One-to-many communication pattern");
-}
-
-#[cfg(not(feature = "runtime"))]
-fn main() {
-    println!("This example requires the 'runtime' feature.");
-    println!("Run with: cargo run --example pubsub --features runtime");
 }

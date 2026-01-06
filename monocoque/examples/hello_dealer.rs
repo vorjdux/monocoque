@@ -19,7 +19,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let stream = TcpStream::connect("127.0.0.1:5555").await?;
     
     // Create DEALER socket
-    let socket = DealerSocket::new(stream);
+    let mut socket = DealerSocket::from_stream(stream).await;
     
     println!("Connected! Sending message...");
     
@@ -29,13 +29,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Message sent. Waiting for response...");
     
     // Receive response
-    let response = socket.recv().await?;
+    let response = socket.recv().await.ok_or("Connection closed")?;
     
     println!("Received response: {} frames", response.len());
     for (i, frame) in response.iter().enumerate() {
         println!("  Frame {}: {} bytes", i, frame.len());
         if let Ok(s) = std::str::from_utf8(frame) {
-            println!("    Content: {}", s);
+            println!("    Content: {s}");
         }
     }
     

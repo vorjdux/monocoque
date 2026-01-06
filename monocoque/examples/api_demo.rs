@@ -1,9 +1,3 @@
-/// API Examples - Demonstrating the clean public API
-///
-/// This example shows all socket types using the new organized API.
-
-use monocoque::zmq::prelude::*;
-use compio::net::TcpStream;
 
 #[compio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

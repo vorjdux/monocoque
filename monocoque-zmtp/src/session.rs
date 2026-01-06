@@ -3,7 +3,7 @@ use crate::greeting::ZmtpGreeting;
 use bytes::{Bytes, BytesMut};
 
 /// Supported ZMQ socket types (no heap allocation)
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SocketType {
     Pair,
     Dealer,
@@ -17,17 +17,18 @@ pub enum SocketType {
 }
 
 impl SocketType {
-    pub fn as_str(&self) -> &'static str {
+    #[must_use] 
+    pub const fn as_str(&self) -> &'static str {
         match self {
-            SocketType::Pair => "PAIR",
-            SocketType::Dealer => "DEALER",
-            SocketType::Router => "ROUTER",
-            SocketType::Pub => "PUB",
-            SocketType::Sub => "SUB",
-            SocketType::Req => "REQ",
-            SocketType::Rep => "REP",
-            SocketType::Push => "PUSH",
-            SocketType::Pull => "PULL",
+            Self::Pair => "PAIR",
+            Self::Dealer => "DEALER",
+            Self::Router => "ROUTER",
+            Self::Pub => "PUB",
+            Self::Sub => "SUB",
+            Self::Req => "REQ",
+            Self::Rep => "REP",
+            Self::Push => "PUSH",
+            Self::Pull => "PULL",
         }
     }
 }
@@ -71,6 +72,7 @@ pub struct ZmtpSession {
 }
 
 impl ZmtpSession {
+    #[must_use] 
     pub fn new(local_socket_type: SocketType) -> Self {
         Self {
             state: State::Greeting {
@@ -84,7 +86,7 @@ impl ZmtpSession {
     ///
     /// # Compatibility
     ///
-    /// Sends ZMTP 3.0 greeting for maximum backward compatibility with ZeroMQ 4.1+.
+    /// Sends ZMTP 3.0 greeting for maximum backward compatibility with `ZeroMQ` 4.1+.
     /// The implementation accepts any ZMTP 3.x version from peers, ensuring
     /// compatibility with all modern ZMQ versions (4.1, 4.2, 4.3, 4.4).
     pub fn local_greeting(&self) -> Bytes {

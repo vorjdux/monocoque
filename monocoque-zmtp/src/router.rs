@@ -1,7 +1,7 @@
 use crate::{integrated_actor::ZmtpIntegratedActor, session::SocketType};
 /// ROUTER socket implementation
 ///
-/// Architecture: Application → RouterSocket → ZmtpIntegratedActor → SocketActor → TcpStream
+/// Architecture: Application → `RouterSocket` → `ZmtpIntegratedActor` → `SocketActor` → `TcpStream`
 ///
 /// ROUTER sockets receive messages with identity envelopes (first frame is sender identity)
 /// and can route replies back to specific peers using that identity.
@@ -24,7 +24,7 @@ pub struct RouterSocket {
 }
 
 impl RouterSocket {
-    /// Create a new ROUTER socket from a TcpStream.
+    /// Create a new ROUTER socket from a `TcpStream`.
     ///
     /// **Internal API**: For public-facing ergonomics, use `monocoque::RouterSocket::bind()`.
     ///
@@ -49,98 +49,97 @@ impl RouterSocket {
             user_rx, // integrated receives outgoing messages FROM app
         );
 
-        // Send initial greeting
+        // Send initial greeting before spawning tasks
         let greeting = integrated_actor.local_greeting();
         let _ = socket_cmd_tx.send(UserCmd::SendBytes(greeting));
 
+        // Spawn SocketActor first
+        let socket_handle = compio::runtime::spawn(socket_actor.run());
+
+        // Small delay to allow SocketActor pumps to initialize
+        // TODO: Replace with proper synchronization mechanism
+        compio::time::sleep(std::time::Duration::from_millis(1)).await;
+
         // Spawn integration task
-        let socket_cmd_tx_clone = socket_cmd_tx.clone();
+        let _socket_cmd_tx_clone = socket_cmd_tx.clone();
         let integration_handle = compio::runtime::spawn(async move {
-            let rx_id_in_task = integrated_actor.user_rx.len() as usize
+            let rx_id_in_task = integrated_actor.user_rx.len()
                 + std::ptr::addr_of!(integrated_actor.user_rx) as usize;
             eprintln!(
-                "[ROUTER TASK] Inside task - integrated_actor.user_rx channel ID: {}",
-                rx_id_in_task
+                "[ROUTER TASK] Inside task - integrated_actor.user_rx channel ID: {rx_id_in_task}"
             );
             eprintln!("[ROUTER TASK] Integration task started! integrated_actor.user_rx receiver_count={}", 
                          integrated_actor.user_rx.receiver_count());
+
             let mut handshake_complete = false;
-            let mut iteration = 0u64;
+            use futures::{select, FutureExt};
 
             loop {
-                iteration += 1;
-                if iteration % 10000 == 0 {
-                    eprintln!("[ROUTER TASK] Integration loop iteration {}", iteration);
-                }
+                select! {
+                    // Wait for socket events (bytes from network)
+                    event = socket_event_rx.recv_async().fuse() => {
+                        match event {
+                            Ok(SocketEvent::Connected) => {
+                                // Connection established
+                            }
+                            Ok(SocketEvent::ReceivedBytes(bytes)) => {
+                                // Feed bytes into ZMTP session
+                                let session_events = integrated_actor.session.on_bytes(bytes);
 
-                // Process socket events
-                if let Ok(event) = socket_event_rx.try_recv() {
-                    match event {
-                        SocketEvent::Connected => {
-                            // Connection established
-                        }
-                        SocketEvent::ReceivedBytes(bytes) => {
-                            // Feed bytes into ZMTP session
-                            let session_events = integrated_actor.session.on_bytes(bytes);
-
-                            for event in session_events {
-                                match event {
-                                    crate::session::SessionEvent::SendBytes(data) => {
-                                        let _ = socket_cmd_tx.send(UserCmd::SendBytes(data));
-                                    }
-                                    crate::session::SessionEvent::HandshakeComplete {
-                                        peer_identity,
-                                        peer_socket_type: _,
-                                    } => {
-                                        integrated_actor.handle_handshake_complete(peer_identity);
-                                        handshake_complete = true;
-                                        // READY command already sent by Session
-                                    }
-                                    crate::session::SessionEvent::Frame(frame) => {
-                                        if handshake_complete {
-                                            eprintln!("[ROUTER TASK] Received frame from peer, passing to integrated_actor");
-                                            integrated_actor.handle_frame(frame);
+                                for event in session_events {
+                                    match event {
+                                        crate::session::SessionEvent::SendBytes(data) => {
+                                            let _ = socket_cmd_tx.send(UserCmd::SendBytes(data));
                                         }
-                                    }
-                                    crate::session::SessionEvent::Error(_e) => {
-                                        break;
+                                        crate::session::SessionEvent::HandshakeComplete {
+                                            peer_identity,
+                                            peer_socket_type: _,
+                                        } => {
+                                            integrated_actor.handle_handshake_complete(peer_identity);
+                                            handshake_complete = true;
+                                            // READY command already sent by Session
+                                        }
+                                        crate::session::SessionEvent::Frame(frame) => {
+                                            if handshake_complete {
+                                                eprintln!("[ROUTER TASK] Received frame from peer, passing to integrated_actor");
+                                                integrated_actor.handle_frame(frame);
+                                            }
+                                        }
+                                        crate::session::SessionEvent::Error(_e) => {
+                                            break;
+                                        }
                                     }
                                 }
                             }
+                            Ok(SocketEvent::Disconnected) | Err(_) => {
+                                break;
+                            }
                         }
-                        SocketEvent::Disconnected => {
-                            break;
+                    }
+                    // Wait for outgoing messages from application
+                    msg = integrated_actor.user_rx.recv_async().fuse() => {
+                        match msg {
+                            Ok(multipart) => {
+                                eprintln!("[ROUTER TASK] Got {} frames from user_rx", multipart.len());
+                                let frames = integrated_actor.encode_outgoing_message(multipart);
+                                for frame in frames {
+                                    eprintln!("[ROUTER TASK] Sending {} bytes to SocketActor", frame.len());
+                                    let _ = socket_cmd_tx.send(UserCmd::SendBytes(frame));
+                                }
+                            }
+                            Err(_) => {
+                                // Channel closed
+                                break;
+                            }
                         }
                     }
                 }
-
-                // Process outgoing messages
-                let outgoing_frames = integrated_actor.process_events().await;
-                if !outgoing_frames.is_empty() {
-                    eprintln!(
-                        "[ROUTER TASK] Got {} outgoing frames from process_events()",
-                        outgoing_frames.len()
-                    );
-                }
-                for frame in outgoing_frames {
-                    eprintln!("[ROUTER TASK] Sending {} bytes to SocketActor", frame.len());
-                    let _ = socket_cmd_tx.send(UserCmd::SendBytes(frame));
-                }
-
-                // Small yield to prevent busy-waiting
-                compio::time::sleep(std::time::Duration::from_micros(100)).await;
             }
-    
+
             eprintln!("[ROUTER TASK] Integration task exited!");
         });
 
-        // Spawn SocketActor
-        let socket_handle = compio::runtime::spawn(socket_actor.run());
-
-        // Yield to allow spawned tasks to start
-        compio::time::sleep(std::time::Duration::from_micros(1)).await;
-
-        RouterSocket {
+        Self {
             app_tx: user_tx,
             app_rx,
             _task_handles: (integration_handle, socket_handle),
@@ -149,10 +148,10 @@ impl RouterSocket {
 
     /// Send a multipart message with identity routing
     ///
-    /// Format: [identity, ...message_frames]
+    /// Format: [identity, ...`message_frames`]
     /// The first frame must be the peer identity to route to.
     pub async fn send(&self, msg: Vec<Bytes>) -> Result<(), flume::SendError<Vec<Bytes>>> {
-        let tx_channel_id = self.app_tx.len() as usize + std::ptr::addr_of!(self.app_tx) as usize;
+        let tx_channel_id = self.app_tx.len() + std::ptr::addr_of!(self.app_tx) as usize;
         eprintln!(
             "[ROUTER send()] app_tx channel ID: {}, sender_count={}, queued before: {}",
             tx_channel_id,
@@ -163,14 +162,14 @@ impl RouterSocket {
         eprintln!(
             "[ROUTER send()] queued after: {}, result: {:?}",
             self.app_tx.len(),
-            result.as_ref().map(|_| "OK")
+            result.as_ref().map(|()| "OK")
         );
         result
     }
 
     /// Receive a multipart message with identity envelope
     ///
-    /// Format: [identity, ...message_frames]
+    /// Format: [identity, ...`message_frames`]
     /// The first frame is the sender's identity.
     pub async fn recv(&self) -> Result<Vec<Bytes>, flume::RecvError> {
         self.app_rx.recv_async().await

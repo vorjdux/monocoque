@@ -8,7 +8,7 @@ const SIGNATURE_HEAD: u8 = 0xFF;
 const SIGNATURE_TAIL: u8 = 0x7F;
 
 /// Supported security mechanisms
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mechanism {
     Null,
     Plain,
@@ -41,12 +41,12 @@ impl ZmtpGreeting {
     /// # Compatibility
     ///
     /// Accepts any ZMTP 3.x version (3.0, 3.1, etc.), ensuring compatibility with:
-    /// - ZeroMQ 4.1+ (ZMTP 3.0)
-    /// - ZeroMQ 4.2+ (ZMTP 3.1)
-    /// - ZeroMQ 4.3+ (ZMTP 3.1)
+    /// - `ZeroMQ` 4.1+ (ZMTP 3.0)
+    /// - `ZeroMQ` 4.2+ (ZMTP 3.1)
+    /// - `ZeroMQ` 4.3+ (ZMTP 3.1)
     ///
     /// This provides backward and forward compatibility across all modern ZMQ versions.
-    pub fn parse(src: &Bytes) -> Result<Self, ZmtpError> {
+    pub fn parse(src: &Bytes) -> crate::codec::Result<Self> {
         if src.len() < GREETING_SIZE {
             return Err(ZmtpError::Incomplete);
         }
@@ -79,7 +79,7 @@ impl ZmtpGreeting {
         // As-Server flag (bit 0)
         let as_server = (src[32] & 0x01) != 0;
 
-        Ok(ZmtpGreeting {
+        Ok(Self {
             mechanism,
             as_server,
         })

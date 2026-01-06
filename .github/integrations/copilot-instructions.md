@@ -2,7 +2,9 @@
 
 ## Project Overview
 
-Monocoque is a high-performance, Rust-native ZeroMQ-compatible messaging runtime built on `io_uring` (via `compio`). **Status**: Core implementation complete (Phase 0-1), socket types implemented (Phase 2-3 skeleton), integration testing pending. Comprehensive blueprints in `docs/blueprints/`.
+Monocoque is a high-performance, Rust-native ZeroMQ-compatible messaging runtime built on `io_uring` (via `compio`).
+
+Comprehensive blueprints in `docs/blueprints/`.
 
 ## Core Architecture (Read These First)
 
@@ -32,7 +34,7 @@ Violating these = critical bug. See blueprint 06 for formal proofs.
 
 ## Implementation Phases
 
-### Phase 0 - IO Core ✅ **COMPLETE** (January 2026)
+### Phase 0 - IO Core ✅ **COMPLETE**
 
 **Components**:
 
@@ -57,7 +59,7 @@ stream.write_all(io_buf).await;             // no memcpy!
 
 **Critical**: Vectored writes MUST handle partial writes (see blueprint 02 §6)
 
-### Phase 1 - ZMTP Protocol ✅ **COMPLETE** (January 2026)
+### Phase 1 - ZMTP Protocol ✅ **COMPLETE**
 
 **Components**:
 
@@ -69,7 +71,7 @@ stream.write_all(io_buf).await;             // no memcpy!
 
 **Pattern**: Pure state machine - `Bytes in → Events out` (no IO, no runtime) **Status**: Protocol layer complete, libzmq interop tests pending **Critical**: READY message MUST include `Socket-Type` metadata or libzmq silently drops peer
 
-### Phase 2 - Routing 🚧 **SKELETON COMPLETE** (January 2026)
+### Phase 2 - Routing ✅ **IMPLEMENTATION COMPLETE**
 
 **Components**:
 
@@ -83,7 +85,7 @@ stream.write_all(io_buf).await;             // no memcpy!
 
 **Pattern**: Three-layer separation - `SocketActor` (IO) → `Hub` (routing) → `User API` **Critical**: Strict type boundaries - `UserCmd` (with envelope) vs `PeerCmd` (body only)
 
-### Phase 3 - PUB/SUB 🚧 **SKELETON COMPLETE** (January 2026)
+### Phase 3 - PUB/SUB ✅ **IMPLEMENTATION COMPLETE**
 
 **Components**:
 
@@ -97,7 +99,7 @@ stream.write_all(io_buf).await;             // no memcpy!
 
 **Pattern**: Linear scan with early exit - cache-friendly, no per-message allocation **Data structure**: `Vec<Subscription>` sorted by prefix, `SmallVec<[PeerKey; 4]>` per prefix
 
-### Public API Layer ✅ **COMPLETE** (January 2026)
+### Public API Layer ✅ **COMPLETE**
 
 **Crate**: `monocoque` (ergonomic facade) **Features**:
 
@@ -177,7 +179,7 @@ monocoque = { features = ["zmq", "mqtt", "amqp"] }
 -   Protocol evolution without kernel changes
 -   `monocoque-core` is 100% protocol-agnostic
 
-### Recent Performance Optimizations (January 2026)
+### Performance Optimizations
 
 1. **IoBytes wrapper**: Eliminates `.to_vec()` memcpy on every write (~10-30% CPU reduction)
 2. **Single-clone optimization**: Router/PubSub hubs minimized clones (1 clone + 1 move vs 2 clones)
@@ -194,7 +196,7 @@ monocoque = { features = ["zmq", "mqtt", "amqp"] }
 
 ## Key Files & Dependencies
 
-**Current structure** (as of January 2026):
+**Current structure**:
 
 ```
 monocoque/              # Public API crate
@@ -209,10 +211,10 @@ monocoque-zmtp/         # ZMTP protocol implementation
 ├── src/
 │   ├── session.rs     # Sans-IO state machine (✅ complete)
 │   ├── codec.rs       # Frame encoder/decoder (✅ complete)
-│   ├── dealer.rs      # DEALER socket (✅ skeleton)
-│   ├── router.rs      # ROUTER socket (✅ skeleton)
-│   ├── publisher.rs   # PUB socket (✅ skeleton)
-│   ├── subscriber.rs  # SUB socket (✅ skeleton)
+│   ├── dealer.rs      # DEALER socket (✅ complete)
+│   ├── router.rs      # ROUTER socket (✅ complete)
+│   ├── publisher.rs   # PUB socket (✅ complete)
+│   ├── subscriber.rs  # SUB socket (✅ complete)
 │   ├── integrated_actor.rs  # Composition layer (✅ complete)
 │   └── multipart.rs   # Multipart buffer (✅ complete)
 
@@ -221,11 +223,11 @@ monocoque-core/         # Protocol-agnostic kernel
 │   ├── alloc.rs       # ONLY unsafe code (✅ complete)
 │   │                  # Contains: Page, SlabMut, IoBytes, IoArena
 │   ├── actor.rs       # SocketActor split pumps (✅ complete)
-│   ├── router.rs      # RouterHub (✅ skeleton)
+│   ├── router.rs      # RouterHub (✅ complete)
 │   ├── backpressure.rs # BytePermits trait (✅ complete)
 │   ├── error.rs       # Error types (✅ complete)
 │   └── pubsub/
-│       ├── hub.rs     # PubSubHub (✅ skeleton)
+│       ├── hub.rs     # PubSubHub (✅ complete)
 │       ├── index.rs   # SubscriptionIndex (✅ complete)
 │       └── mod.rs     # Module exports
 ```
@@ -256,13 +258,102 @@ Read blueprint 02 §7-8 for IO performance model.
 
 ## When in Doubt
 
-1. Check blueprints - they contain formal proofs and rationale (updated January 2026)
+1. Check blueprints - they contain formal proofs and rationale
 2. Prioritize safety over performance (but architecture provides both)
 3. Maintain Sans-IO purity for protocol logic
 4. Document any new `unsafe` with invariants (but prefer not adding)
 5. **Run tests after changes**: `cargo test --workspace --features zmq`
 6. **Check for blueprint violations**: All protocol code must be 100% safe Rust
+7. **Update CHANGELOG.md**: Always update after completing features or bugfixes (see below)
 
 **Current Priority**: Integration testing with libzmq to validate protocol correctness
 
 **Philosophy**: Performance through correct architecture, not through unsafe shortcuts.
+
+## CHANGELOG Maintenance (CRITICAL)
+
+**ALWAYS update `CHANGELOG.md` when completing work**. This is not optional.
+
+### When to Update CHANGELOG
+
+Update immediately after:
+
+-   ✅ Completing a new feature
+-   ✅ Fixing a bug
+-   ✅ Making API changes
+-   ✅ Performance improvements
+-   ✅ Safety/security fixes
+-   ✅ Documentation improvements
+-   ✅ Architectural changes
+
+### CHANGELOG Format (Keep a Changelog)
+
+All entries go under `[Unreleased]` section until publication:
+
+```markdown
+## [Unreleased]
+
+### Added
+
+-   New features, modules, or capabilities
+
+### Changed
+
+-   Changes to existing functionality
+
+### Fixed
+
+-   Bug fixes
+
+### Performance
+
+-   Performance improvements
+
+### Safety
+
+-   Memory safety improvements or fixes
+
+### Documentation
+
+-   Documentation updates
+```
+
+### Example Entries
+
+```markdown
+### Added
+
+-   Implemented DEALER socket with multipart message support
+-   Added `IoBytes` wrapper for zero-copy write operations
+
+### Fixed
+
+-   Fixed partial write handling in vectored IO
+-   Corrected ghost peer race condition in RouterHub
+
+### Performance
+
+-   Eliminated memcpy in write path (~10-30% CPU reduction)
+-   Optimized PUB/SUB fanout with Bytes refcounting
+
+### Safety
+
+-   Isolated all unsafe code to monocoque-core/src/alloc.rs
+-   Added epoch-based lifecycle to prevent use-after-free
+```
+
+### Workflow
+
+1. **Complete the work** (implement, test, verify)
+2. **Update CHANGELOG.md** immediately
+3. **Add entry under appropriate section** in `[Unreleased]`
+4. **Use clear, user-facing language** (not git commit messages)
+5. **Reference issue/PR if applicable** (e.g., "Fixes #123")
+
+### What NOT to Include
+
+❌ Internal refactoring (unless user-visible) ❌ Dependency updates (unless fixing bugs) ❌ Typo fixes in code comments ❌ Build/CI changes (unless affecting users)
+
+### Location
+
+`CHANGELOG.md` is at the workspace root. Always check it exists before updating.

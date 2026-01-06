@@ -63,47 +63,49 @@ pub type Result<T> = std::result::Result<T, MonocoqueError>;
 impl MonocoqueError {
     /// Create a protocol error with a message
     pub fn protocol(msg: impl Into<String>) -> Self {
-        MonocoqueError::Protocol(msg.into())
+        Self::Protocol(msg.into())
     }
     
     /// Create an invalid greeting error
     pub fn invalid_greeting(msg: impl Into<String>) -> Self {
-        MonocoqueError::InvalidGreeting(msg.into())
+        Self::InvalidGreeting(msg.into())
     }
     
     /// Create an invalid frame error
     pub fn invalid_frame(msg: impl Into<String>) -> Self {
-        MonocoqueError::InvalidFrame(msg.into())
+        Self::InvalidFrame(msg.into())
     }
     
     /// Create a peer disconnected error
     pub fn peer_disconnected(peer_id: impl Into<String>) -> Self {
-        MonocoqueError::PeerDisconnected(peer_id.into())
+        Self::PeerDisconnected(peer_id.into())
     }
     
     /// Check if this error is recoverable
+    #[must_use] 
     pub fn is_recoverable(&self) -> bool {
         match self {
-            MonocoqueError::Io(e) => match e.kind() {
+            Self::Io(e) => match e.kind() {
                 io::ErrorKind::Interrupted
                 | io::ErrorKind::WouldBlock
                 | io::ErrorKind::TimedOut => true,
                 _ => false,
             },
-            MonocoqueError::HandshakeTimeout(_)
-            | MonocoqueError::ChannelSend
-            | MonocoqueError::ChannelRecv => false,
+            Self::HandshakeTimeout(_)
+            | Self::ChannelSend
+            | Self::ChannelRecv => false,
             _ => false,
         }
     }
     
     /// Check if this is a connection error
-    pub fn is_connection_error(&self) -> bool {
+    #[must_use] 
+    pub const fn is_connection_error(&self) -> bool {
         matches!(
             self,
-            MonocoqueError::SocketClosed
-                | MonocoqueError::PeerDisconnected(_)
-                | MonocoqueError::HandshakeTimeout(_)
+            Self::SocketClosed
+                | Self::PeerDisconnected(_)
+                | Self::HandshakeTimeout(_)
         )
     }
 }

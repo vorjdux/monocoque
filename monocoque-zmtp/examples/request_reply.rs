@@ -3,7 +3,6 @@
 /// Demonstrates ROUTER (server) and DEALER (client) pattern
 /// This is a common pattern for RPC-style services
 
-#[cfg(feature = "runtime")]
 fn main() {
     use monocoque_zmtp::router::RouterSocket;
     use monocoque_zmtp::dealer::DealerSocket;
@@ -22,9 +21,9 @@ fn main() {
             
             println!("[Server] Waiting for clients...");
             let (stream, addr) = listener.accept().await.unwrap();
-            println!("[Server] Client connected from {}", addr);
+            println!("[Server] Client connected from {addr}");
             
-            let router = RouterSocket::new(stream);
+            let router = RouterSocket::new(stream).await;
             
             // Process 3 requests
             for i in 1..=3 {
@@ -38,13 +37,13 @@ fn main() {
                          String::from_utf8_lossy(client_id));
                 
                 // Send reply back to specific client
-                let reply = format!("Response #{}", i);
+                let reply = format!("Response #{i}");
                 router.send(vec![
                     client_id.clone(),
                     Bytes::from(reply),
                 ]).await.unwrap();
                 
-                println!("[Server] Sent response {}", i);
+                println!("[Server] Sent response {i}");
             }
             
             println!("[Server] Done processing requests");
@@ -61,12 +60,12 @@ fn main() {
             let stream = compio::net::TcpStream::connect("127.0.0.1:9000").await.unwrap();
             println!("[Client] Connected!");
             
-            let dealer = DealerSocket::new(stream);
+            let dealer = DealerSocket::new(stream).await;
             
             // Send 3 requests
             for i in 1..=3 {
-                let request = format!("Request #{}", i);
-                println!("[Client] Sending: {}", request);
+                let request = format!("Request #{i}");
+                println!("[Client] Sending: {request}");
                 
                 dealer.send(vec![Bytes::from(request)]).await.unwrap();
                 
@@ -91,10 +90,4 @@ fn main() {
     println!("- ROUTER routing replies back to specific clients");
     println!("- DEALER socket for client-side requests");
     println!("- Full duplex communication over single connection");
-}
-
-#[cfg(not(feature = "runtime"))]
-fn main() {
-    println!("This example requires the 'runtime' feature.");
-    println!("Run with: cargo run --example request_reply --features runtime");
 }

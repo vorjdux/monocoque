@@ -9,6 +9,14 @@
 //! - Error types (`error`)
 
 #![deny(unsafe_code)]
+// Allow some pedantic lints that are intentional in this crate
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::items_after_statements)]
+#![allow(clippy::module_name_repetitions)]
+#![allow(clippy::needless_pass_by_value)]
+#![allow(clippy::needless_pass_by_ref_mut)]
+#![allow(clippy::match_same_arms)]
 pub mod actor;
 pub mod alloc;
 pub mod backpressure;
