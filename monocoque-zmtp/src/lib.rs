@@ -49,27 +49,16 @@ mod utils;
 // Public protocol types
 pub mod session;
 
-// Socket implementations (runtime feature required)
-#[cfg(feature = "runtime")]
-mod dealer;
-#[cfg(feature = "runtime")]
-mod router;
-#[cfg(feature = "runtime")]
-mod publisher;
-#[cfg(feature = "runtime")]
-mod subscriber;
+// Socket implementations
+pub mod dealer;
+pub mod publisher;
+pub mod router;
+pub mod subscriber;
 
 // Re-export socket types for clean API
-#[cfg(feature = "runtime")]
 pub use dealer::DealerSocket;
-
-#[cfg(feature = "runtime")]
-pub use router::RouterSocket;
-
-#[cfg(feature = "runtime")]
 pub use publisher::PubSocket;
-
-#[cfg(feature = "runtime")]
+pub use router::RouterSocket;
 pub use subscriber::SubSocket;
 
 // Re-export commonly used types
@@ -80,9 +69,8 @@ pub use session::{SocketType, ZmtpSession};
 /// ```rust
 /// use monocoque_zmtp::prelude::*;
 /// ```
-#[cfg(feature = "runtime")]
 pub mod prelude {
-    pub use super::{DealerSocket, RouterSocket, PubSocket, SubSocket};
     pub use super::session::SocketType;
+    pub use super::{DealerSocket, PubSocket, RouterSocket, SubSocket};
     pub use bytes::Bytes;
 }

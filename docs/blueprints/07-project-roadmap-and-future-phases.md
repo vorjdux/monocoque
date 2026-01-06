@@ -21,22 +21,50 @@ Everything else (ZMQ, RPC, PUB/SUB) is _payload logic_ layered on top.
 
 ---
 
-## 2. Implementation Status (Partially Complete)
+## 2. Implementation Status (Core Complete, Integration Testing Pending)
+
+### Crate Structure
+
+**Monocoque uses a layered crate architecture**:
+
+```
+monocoque/              ← Public API (ergonomic socket types)
+├── DealerSocket
+├── RouterSocket
+├── PubSocket
+└── SubSocket
+
+monocoque-zmtp/         ← ZMTP protocol (opt-in via features)
+├── Session
+├── Framing
+├── Commands
+├── Integrated Actors
+└── (100% safe Rust)
+
+monocoque-core/         ← Protocol-agnostic kernel
+├── alloc/ (ONLY unsafe code)
+├── actor/ (Split pump IO)
+├── router/ (Identity routing)
+├── pubsub/ (Subscription index)
+└── (feature-gated, no protocols by default)
+```
 
 ### Phase 0 — Core Kernel
 
 **Goal:** Move bytes between kernel and user space safely and fast.
 
-Designed components:
+**Status**: ✅ **COMPLETE** (January 2026)
 
--   Slab / Arena allocator
--   Stable IO buffers (`SlabMut`)
--   `io_uring` / IOCP via `compio`
--   Split read/write pumps
--   Cancellation-safe vectored IO
--   Zero-copy `Bytes` pipeline
+Implemented components:
 
-Status: **Partially implemented** - `SlabMut` and `IoArena` complete, actor needs compio API fixes
+-   ✅ Slab / Arena allocator with refcounting
+-   ✅ Stable IO buffers (`SlabMut` with `IoBufMut`)
+-   ✅ **IoBytes wrapper** (zero-copy `Bytes` → `IoBuf`)
+-   ✅ `io_uring` via `compio`
+-   ✅ Split read/write pumps
+-   ✅ Cancellation-safe vectored IO
+-   ✅ Zero-copy `Bytes` pipeline
+-   ✅ Partial write handling
 
 ---
 
@@ -44,16 +72,18 @@ Status: **Partially implemented** - `SlabMut` and `IoArena` complete, actor need
 
 **Goal:** Speak ZeroMQ at the frame level.
 
-Designed components:
+**Status**: ✅ **COMPLETE** (January 2026)
 
--   ZMTP 3.1 framing (short/long)
--   Zero-copy fast path
--   Fragmented-frame slow path
--   Greeting + NULL handshake
--   Session state machine (Sans-IO)
--   Interop with libzmq (PAIR/DEALER)
+Implemented components:
 
-Status: **Design complete, awaiting implementation**
+-   ✅ ZMTP 3.1 framing (short/long)
+-   ✅ Zero-copy fast path
+-   ✅ Fragmented-frame decoder
+-   ✅ Greeting + NULL handshake
+-   ✅ Session state machine (Sans-IO)
+-   ✅ READY command with metadata
+-   ✅ Identity ownership (copy_from_slice)
+-   🚧 Interop with libzmq (tests pending)
 
 ---
 
@@ -61,17 +91,18 @@ Status: **Design complete, awaiting implementation**
 
 **Goal:** Become a real ZeroMQ implementation.
 
-Designed components:
+**Status**: 🚧 **Skeleton Complete, Testing Pending**
 
--   DEALER multipart logic
--   ROUTER identity envelopes
--   Hub + per-peer actors
--   Strict envelope normalization
--   Load-balancing router mode
--   Ghost-peer + epoch fixes
--   Runtime-agnostic hub (flume selector)
+Implemented components:
 
-Status: **Design complete, awaiting implementation**
+-   ✅ DEALER multipart logic
+-   ✅ ROUTER identity envelopes
+-   ✅ Hub + per-peer actors
+-   ✅ Strict type separation (`UserCmd` vs `PeerCmd`)
+-   ✅ Load-balancing router mode
+-   ✅ Epoch-based ghost-peer prevention
+-   ✅ Runtime-agnostic hub (flume)
+-   🚧 Full integration tests pending
 
 ---
 
@@ -79,22 +110,44 @@ Status: **Design complete, awaiting implementation**
 
 **Goal:** High-performance topic-based fanout.
 
-Designed components:
+**Status**: 🚧 **Skeleton Complete, Testing Pending**
 
--   Sorted Prefix Table (Trie-free)
--   Cache-friendly linear matching
--   `SmallVec` peer fanout
--   Epoch-safe subscription lifecycle
--   Zero-copy broadcast fanout
--   PubSub hub architecture
+Implemented components:
 
-Required for implementation:
+-   ✅ Sorted Prefix Table (linear scan)
+-   ✅ Cache-friendly matching algorithm
+-   ✅ `SmallVec<[PeerKey; 4]>` fanout
+-   ✅ Epoch-safe subscription lifecycle
+-   ✅ Zero-copy broadcast (Vec clone, Bytes refcount)
+-   ✅ PubSub hub architecture
+-   ✅ SUB command parsing
+-   ✅ PUB/SUB socket types
+-   🚧 Full integration tests pending
 
--   Integration tests
--   SUB command parsing in actor
--   PUB/SUB socket types
+---
 
-Status: **Design complete, awaiting implementation**
+### Public API Layer (NEW)
+
+**Goal:** Ergonomic, idiomatic Rust API for application developers.
+
+**Status**: ✅ **COMPLETE** (January 2026)
+
+```rust
+// User-friendly API
+use monocoque::zmq::DealerSocket;
+
+let mut socket = DealerSocket::connect("127.0.0.1:5555").await?;
+socket.send(vec![b"Hello".into()]).await?;
+let reply = socket.recv().await;
+```
+
+Features:
+
+-   ✅ Feature-gated protocols (`features = ["zmq"]`)
+-   ✅ Zero default features (explicit opt-in)
+-   ✅ Idiomatic async/await API
+-   ✅ Re-exports of `Bytes` for convenience
+-   ✅ Comprehensive documentation with examples
 
 ---
 

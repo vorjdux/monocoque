@@ -132,6 +132,53 @@ impl SlabMut {
     }
 }
 
+/// Zero-copy IoBuf wrapper for Bytes.
+///
+/// This enables passing Bytes directly to compio write operations
+/// without the .to_vec() memcpy that violates blueprint zero-copy guarantees.
+///
+/// SAFETY: Bytes is immutable and refcounted, so it's safe to expose as IoBuf.
+pub struct IoBytes(Bytes);
+
+impl IoBytes {
+    pub fn new(bytes: Bytes) -> Self {
+        Self(bytes)
+    }
+}
+
+impl From<Bytes> for IoBytes {
+    fn from(bytes: Bytes) -> Self {
+        Self(bytes)
+    }
+}
+
+impl From<IoBytes> for Bytes {
+    fn from(io_bytes: IoBytes) -> Self {
+        io_bytes.0
+    }
+}
+
+// SAFETY: IoBytes wraps Bytes which is:
+// - Immutable (no mutable aliasing)
+// - Refcounted (memory stays valid)
+// - Contiguous (valid pointer/len guarantees)
+unsafe impl compio::buf::IoBuf for IoBytes {
+    #[inline]
+    fn as_buf_ptr(&self) -> *const u8 {
+        self.0.as_ptr()
+    }
+
+    #[inline]
+    fn buf_len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[inline]
+    fn buf_capacity(&self) -> usize {
+        self.0.len()
+    }
+}
+
 /// Arena used by the IO thread.
 ///
 /// Not thread-safe by design.

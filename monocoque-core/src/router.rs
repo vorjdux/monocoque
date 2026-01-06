@@ -89,7 +89,7 @@ impl RouterHub {
     pub async fn run(mut self) {
         use futures::select;
         use futures::FutureExt;
-        
+
         loop {
             // Use futures::select! for runtime-agnostic multiplexing
             select! {
@@ -127,8 +127,9 @@ impl RouterHub {
                     }
                 }
 
-                self.peers.insert(routing_id.clone(), tx);
-                self.lb_list.push(routing_id);
+                // Move routing_id into lb_list, clone for peers map
+                self.lb_list.push(routing_id.clone());
+                self.peers.insert(routing_id, tx);
             }
 
             HubEvent::PeerDown { routing_id } => {

@@ -277,14 +277,28 @@ Phase 3 itself is **100% safe Rust**.
 
 ## 13. Phase 3 Exit Criteria
 
-Implementation will be complete when:
+**Status**: 🚧 **Skeleton Complete, Full Testing Pending**
 
--   [ ] PUB/SUB semantics correct
--   [ ] Subscription matching efficient
--   [ ] Ghost peer protection
--   [ ] Zero-copy fanout
--   [ ] No unsafe code added
--   [ ] Runtime-agnostic
+Implementation progress:
+
+-   ✅ PUB/SUB integrated actors implemented
+-   ✅ Subscription index (sorted prefix table)
+-   ✅ Linear scan matching with early exit
+-   ✅ Ghost peer protection (epoch model reused)
+-   ✅ Zero-copy fanout (`parts.clone()` = refcount bumps)
+-   ✅ No unsafe code added (100% safe Rust)
+-   ✅ Runtime-agnostic (flume channels)
+-   ✅ `SmallVec` optimization for peer lists
+-   🚧 Full integration tests (PUB → multiple SUBs)
+-   🚧 Subscription churn stress tests
+-   🚧 Fanout deduplication validation
+
+**What remains**:
+
+-   Integration tests with overlapping prefixes
+-   Subscribe/unsubscribe churn testing
+-   Fanout performance benchmarking
+-   Memory usage profiling with many subscriptions
 
 ---
 

@@ -65,15 +65,45 @@ SlabMut (mutable, kernel-owned during IO)
     | freeze(n)
     v
 Bytes (immutable, shareable, refcounted)
+    |
+    | IoBytes::new(bytes)
+    v
+IoBytes (IoBuf wrapper for compio writes)
 ```
 
-### 3.2 Key Types (Conceptual)
+### 3.2 Key Types (Implemented)
 
 -   `SlabPage`: owns the allocation (refcounted)
--   `SlabMut`: a view into a page (mutable)
+-   `SlabMut`: a view into a page (mutable, implements `IoBufMut`)
 -   `Bytes`: immutable view after IO completes
+-   `IoBytes`: zero-copy wrapper for `Bytes` implementing `IoBuf` (write path)
 
 This design specifically ensures **ecosystem-compatibility with `bytes`** while satisfying `io_uring` pointer stability.
+
+### 3.3 IoBytes: Zero-Copy Write Wrapper
+
+**Status**: ✅ Implemented in `monocoque-core/src/alloc.rs`
+
+The `IoBytes` wrapper solves a critical integration point:
+
+```rust
+pub struct IoBytes(Bytes);
+
+unsafe impl IoBuf for IoBytes {
+    fn as_buf_ptr(&self) -> *const u8 { self.0.as_ptr() }
+    fn buf_len(&self) -> usize { self.0.len() }
+    fn buf_capacity(&self) -> usize { self.0.len() }
+}
+```
+
+**Why this is safe**:
+
+-   `Bytes` is immutable and refcounted
+-   Pointer is stable (allocation never moves)
+-   No mutable aliasing possible
+-   Kernel only reads during write operations
+
+This eliminates the `.to_vec()` memcpy that would otherwise occur on every write.
 
 ---
 

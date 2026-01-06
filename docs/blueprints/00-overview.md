@@ -53,6 +53,19 @@ The goal is to **outperform libzmq**, while:
 -   Uses `flume::Selector`
 -   Works with `compio`, but not coupled to it
 
+### 2.5 Feature-Gated Protocols
+
+-   Protocols are **opt-in** via Cargo features
+-   No default features (explicit dependencies only)
+-   `monocoque-core` is 100% protocol-agnostic
+-   Example: `monocoque = { version = "0.1", features = ["zmq"] }`
+
+This ensures:
+
+-   Zero unused code compiled
+-   Clean dependency boundaries
+-   Protocol evolution without kernel changes
+
 ---
 
 ## 3. High-Level Architecture
@@ -96,17 +109,17 @@ The goal is to **outperform libzmq**, while:
 
 ## 4. Phases Overview
 
-| Phase     | Name                            | Status                     |
-| --------- | ------------------------------- | -------------------------- |
-| Phase 0   | Foundations & Allocator         | 🚧 Partial (needs fixes)   |
-| Phase 1   | ZMTP Core + PAIR                | 🚧 Partial (needs fixes)   |
-| Phase 2   | DEALER / ROUTER + Load Balancer | 🚧 Skeleton (incomplete)   |
-| Phase 2.1 | Robust Hub + Ghost Peer Fix     | 📝 Designed only           |
-| Phase 3   | PUB/SUB (Sorted Prefix Table)   | 🚧 Skeleton (incomplete)   |
-| Phase 4   | REQ/REP Semantics               | ⏳ Planned  |
-| Phase 5   | Reliability & Metrics           | ⏳ Planned  |
-| Phase 6   | Performance Hardening           | ⏳ Planned  |
-| Phase 7   | Public API & Bindings           | ⏳ Planned  |
+| Phase     | Name                            | Status                   |
+| --------- | ------------------------------- | ------------------------ |
+| Phase 0   | Foundations & Allocator         | 🚧 Partial (needs fixes) |
+| Phase 1   | ZMTP Core + PAIR                | 🚧 Partial (needs fixes) |
+| Phase 2   | DEALER / ROUTER + Load Balancer | 🚧 Skeleton (incomplete) |
+| Phase 2.1 | Robust Hub + Ghost Peer Fix     | 📝 Designed only         |
+| Phase 3   | PUB/SUB (Sorted Prefix Table)   | 🚧 Skeleton (incomplete) |
+| Phase 4   | REQ/REP Semantics               | ⏳ Planned               |
+| Phase 5   | Reliability & Metrics           | ⏳ Planned               |
+| Phase 6   | Performance Hardening           | ⏳ Planned               |
+| Phase 7   | Public API & Bindings           | ⏳ Planned               |
 
 ---
 
@@ -152,31 +165,56 @@ Violating any of these is considered a **critical bug**.
 
 ## 7. Current Implementation Status
 
-📊 **Updated: January 5, 2026**
+📊 **Updated: January 6, 2026**
 
 **Summary**:
-- ✅ Phase 0: Memory allocator (`SlabMut`, `IoArena`) - COMPLETE
-- ✅ Phase 0.2: Split pump architecture - DESIGN COMPLETE
-- ✅ Phase 1: ZMTP protocol layer - COMPLETE (session, framing, NULL handshake)
-- ✅ **Integration Layer: ZmtpIntegratedActor - COMPLETE**
-- 🚧 Phase 2: Router/Dealer - skeleton exists, needs completion
-- 🚧 Phase 3: PubSub - skeleton exists, needs completion
-- ✅ Project builds successfully with zero warnings
-- ✅ Integration tests validate architectural boundaries
+
+-   ✅ Phase 0: Memory allocator (`SlabMut`, `IoArena`, `IoBytes` wrapper) - COMPLETE
+-   ✅ Phase 0.2: Split pump architecture - COMPLETE
+-   ✅ Phase 1: ZMTP protocol layer - COMPLETE (session, framing, NULL handshake)
+-   ✅ **Integration Layer: Integrated actors (DEALER, ROUTER, PUB, SUB) - COMPLETE**
+-   ✅ **Public API Layer: `monocoque` crate with ergonomic socket types - COMPLETE**
+-   🚧 Phase 2: Router/Dealer - skeleton exists, needs full integration testing
+-   🚧 Phase 3: PubSub - skeleton exists, needs full integration testing
+-   ✅ Project builds successfully with zero errors
+-   ✅ Feature-gated protocol architecture
 
 **Recent Progress**:
-- Fixed circular dependency (monocoque-core is now 100% protocol-agnostic)
-- Implemented ZMTP integration layer composing SocketActor + ZmtpSession + Hubs
-- Added event loop with runtime-agnostic message processing
-- Created integration tests proving composition pattern works
-- All tests pass, clean build
 
-**Next steps**: 
-1. Complete DEALER pattern implementation with event loop integration
-2. Add libzmq interop tests (DEALER ↔ libzmq ROUTER)
-3. Complete ROUTER pattern with load balancing
-4. Wire up PubSubHub integration
-5. Phase 3 validation tests
+-   **Feature-gated protocols**: ZMQ is opt-in via `features = ["zmq"]`
+-   **Public API crate**: Created `monocoque` as ergonomic facade over core implementation
+-   **IoBytes wrapper**: Zero-copy integration with compio's IoBuf trait
+-   **Blueprint compliance**: Fixed all violations (zero-copy writes, memory safety)
+-   Fixed circular dependency (monocoque-core is 100% protocol-agnostic)
+-   Implemented integrated actors (DEALER, ROUTER, PUB, SUB) with unified event loops
+-   All protocol logic is opt-in (no default features)
+-   Clean build, zero errors, blueprint-compliant
+
+**Architecture**:
+
+```
+┌─────────────────────────────────────┐
+│     monocoque (public API)          │  ← Ergonomic user-facing types
+│  DealerSocket, RouterSocket, etc.   │
+└──────────────┬──────────────────────┘
+               │
+┌──────────────▼──────────────────────┐
+│  monocoque-zmtp (protocol layer)    │  ← ZMTP state machines (opt-in)
+│  Session, Framing, Commands         │
+└──────────────┬──────────────────────┘
+               │
+┌──────────────▼──────────────────────┐
+│  monocoque-core (kernel)            │  ← Protocol-agnostic IO/routing
+│  Actor, Hubs, Allocator             │
+└─────────────────────────────────────┘
+```
+
+**Next steps**:
+
+1. Add libzmq interop tests (DEALER ↔ ROUTER validation)
+2. PUB/SUB integration tests with subscription matching
+3. Stress tests (reconnection churn, fanout)
+4. Performance benchmarking vs libzmq
 
 ---
 

@@ -144,7 +144,7 @@ impl ZmtpSession {
                             // Note: In connect scenario, greeting is sent first by us
                             // In accept scenario, we send after receiving theirs
                             // events.push(SessionEvent::SendBytes(self.local_greeting()));
-                            
+
                             // Send READY command immediately after greeting exchange
                             use crate::utils::{build_ready, encode_frame, FLAG_COMMAND};
                             let socket_type_str = match self.local_socket_type {
@@ -183,8 +183,8 @@ impl ZmtpSession {
                             // Extract values before transitioning state
                             let peer_id = peer_identity.take();
                             let peer_st = peer_socket_type.unwrap_or(self.local_socket_type);
-                            
-                            // Create new decoder for Active state  
+
+                            // Create new decoder for Active state
                             let new_decoder = ZmtpDecoder::new();
                             let old_decoder = std::mem::replace(decoder, new_decoder);
 

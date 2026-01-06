@@ -98,7 +98,7 @@ impl PubSubHub {
     pub async fn run(mut self) {
         use futures::select;
         use futures::FutureExt;
-        
+
         loop {
             // Use futures::select! for runtime-agnostic multiplexing
             select! {
@@ -131,8 +131,9 @@ impl PubSubHub {
                 } else {
                     let k = self.next_key;
                     self.next_key += 1;
-                    self.rid_to_key.insert(routing_id.clone(), k);
+                    // Single clone for both bidirectional map inserts
                     self.key_to_rid.insert(k, routing_id.clone());
+                    self.rid_to_key.insert(routing_id, k);
                     k
                 };
 

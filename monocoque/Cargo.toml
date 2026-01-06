@@ -1,0 +1,33 @@
+[package]
+name = "monocoque"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "High-performance ZeroMQ-compatible messaging runtime built on io_uring"
+keywords = ["zeromq", "zmq", "messaging", "io_uring", "async"]
+categories = ["network-programming", "asynchronous"]
+
+[dependencies]
+# Internal implementation crates (not exposed)
+monocoque-core = { path = "../monocoque-core" }
+monocoque-zmtp = { path = "../monocoque-zmtp", optional = true }
+
+# Re-export dependencies for user convenience
+bytes = { workspace = true }
+compio = { workspace = true }
+
+[dev-dependencies]
+zmq = { workspace = true }
+
+[features]
+default = []
+
+# Protocol implementations (opt-in)
+zmq = ["dep:monocoque-zmtp"]
+
+# Future protocols
+# mqtt = ["dep:monocoque-mqtt"]
+# amqp = ["dep:monocoque-amqp"]

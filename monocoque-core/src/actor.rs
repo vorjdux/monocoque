@@ -13,7 +13,7 @@
 //! NOTE: This is a minimal primitive. ZMTP framing, session management,
 //! and multipart assembly happen in a higher layer that composes this actor.
 
-use crate::alloc::{IoArena, SlabMut};
+use crate::alloc::{IoArena, IoBytes, SlabMut};
 
 use bytes::Bytes;
 use flume::{Receiver, Sender};
@@ -87,8 +87,8 @@ where
     /// - Ownership-based flow control
     pub async fn run(mut self) {
         use compio::buf::BufResult;
-        use compio::io::{AsyncReadExt, AsyncWriteExt};
-        
+        use compio::io::AsyncWriteExt;
+
         // Notify application that connection is ready
         let _ = self.event_tx.send(SocketEvent::Connected);
 
@@ -106,11 +106,11 @@ where
                 }
             }
         }
-        
-        // Flush initial writes immediately
+
+        // Flush initial writes immediately (zero-copy via IoBytes wrapper)
         for buf in write_queue.drain(..) {
-            let buf_vec = buf.to_vec();
-            let BufResult(write_res, _) = (&mut self.stream).write_all(buf_vec).await;
+            let io_buf = IoBytes::new(buf);
+            let BufResult(write_res, _) = (&mut self.stream).write_all(io_buf).await;
             if write_res.is_err() {
                 let _ = self.event_tx.send(SocketEvent::Disconnected);
                 return;
@@ -130,11 +130,11 @@ where
                 }
             }
 
-            // Flush pending writes
+            // Flush pending writes (zero-copy via IoBytes wrapper)
             for buf in write_queue.drain(..) {
                 eprintln!("[SocketActor] Writing {} bytes to network", buf.len());
-                let buf_vec = buf.to_vec();
-                let BufResult(write_res, _) = (&mut self.stream).write_all(buf_vec).await;
+                let io_buf = IoBytes::new(buf);
+                let BufResult(write_res, _) = (&mut self.stream).write_all(io_buf).await;
                 if write_res.is_err() {
                     eprintln!("[SocketActor] Write error, exiting");
                     let _ = self.event_tx.send(SocketEvent::Disconnected);
@@ -145,7 +145,7 @@ where
             // === READ PUMP ===
             let slab: SlabMut = self.arena.alloc_mut(8192);
             let BufResult(read_res, slab) = (&mut self.stream).read(slab).await;
-            
+
             match read_res {
                 Ok(0) => {
                     eprintln!("[SocketActor] EOF - connection closed");
@@ -164,11 +164,10 @@ where
                     let _ = self.event_tx.send(SocketEvent::ReceivedBytes(bytes));
                 }
             }
-            
+
             // Brief yield to allow write commands to arrive
             // This prevents read() from monopolizing the loop
             compio::time::sleep(std::time::Duration::from_micros(1)).await;
         }
     }
 }
-

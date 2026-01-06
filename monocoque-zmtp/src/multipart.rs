@@ -51,7 +51,9 @@ impl MultipartBuffer {
     /// - `Ok(Some(Vec<Bytes>))` if a full message was assembled
     /// - `Err(MultipartError)` on protocol or resource violation
     pub fn push_frame(&mut self, frame: ZmtpFrame) -> Result<Option<Vec<Bytes>>, MultipartError> {
-        let payload = frame.payload.clone();
+        // Take ownership of payload instead of cloning (zero-copy optimization)
+        let has_more = frame.more();
+        let payload = frame.payload;
 
         // Enforce limits
         self.frame_count += 1;
@@ -68,7 +70,7 @@ impl MultipartBuffer {
 
         self.frames.push(payload);
 
-        if frame.more() {
+        if has_more {
             // Waiting for more frames
             Ok(None)
         } else {

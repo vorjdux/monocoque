@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["monocoque-core", "monocoque-zmtp"]
-default-members = ["monocoque-core", "monocoque-zmtp"]
+members = ["monocoque-core", "monocoque-zmtp", "monocoque"]
+default-members = ["monocoque"]
 
 [workspace.package]
 version = "0.1.0"

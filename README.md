@@ -35,14 +35,14 @@ In Formula 1, a monocoque chassis is:
 
 This directly parallels Monocoque's architecture:
 
-| F1 Monocoque Principle | Monocoque Runtime Implementation |
-| ---------------------- | -------------------------------- |
-| **Single-piece shell** | Unified ownership model - buffers flow through clean boundaries, no separate coordination layer needed |
-| **Load-bearing structure** | Each layer (IO → Protocol → Routing) is self-contained and correct by construction, not defensively checked |
-| **Carbon fiber strength** | Type system enforces correctness - `SlabMut` → `Bytes` transition is one-way, preventing use-after-free at compile time |
-| **Crash safety cell** | `unsafe` isolated to `alloc/` module - failure boundary is explicit and auditable |
-| **Minimal weight** | Zero-copy everywhere - `Bytes::clone()` bumps refcounts, never copies payloads |
-| **Predictable rigidity** | Sans-IO state machines are deterministic - same input always produces same output, enabling exhaustive testing |
+| F1 Monocoque Principle     | Monocoque Runtime Implementation                                                                                        |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| **Single-piece shell**     | Unified ownership model - buffers flow through clean boundaries, no separate coordination layer needed                  |
+| **Load-bearing structure** | Each layer (IO → Protocol → Routing) is self-contained and correct by construction, not defensively checked             |
+| **Carbon fiber strength**  | Type system enforces correctness - `SlabMut` → `Bytes` transition is one-way, preventing use-after-free at compile time |
+| **Crash safety cell**      | `unsafe` isolated to `alloc/` module - failure boundary is explicit and auditable                                       |
+| **Minimal weight**         | Zero-copy everywhere - `Bytes::clone()` bumps refcounts, never copies payloads                                          |
+| **Predictable rigidity**   | Sans-IO state machines are deterministic - same input always produces same output, enabling exhaustive testing          |
 
 Just as an F1 monocoque achieves safety through **structural correctness** rather than protective padding, this runtime achieves performance through **architectural correctness** rather than optimization tricks that compromise safety.
 
