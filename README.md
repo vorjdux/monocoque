@@ -1,8 +1,14 @@
+<div align="center">
+
+<img src="assets/monocoque-logo.png" alt="Monocoque Logo" width="600"/>
+
 # Monocoque
 
 > _A high-performance, Rust-native ZeroMQ-compatible messaging runtime built on `io_uring`_
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+</div>
 
 ---
 
