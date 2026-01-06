@@ -58,7 +58,7 @@ async fn router_server(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
     let socket = RouterSocket::new(stream).await;
 
     // Wait for handshake to complete
-    compio::time::sleep(Duration::from_millis(300)).await;
+    compio::time::sleep(Duration::from_millis(500)).await;
 
     // Receive request
     println!("[ROUTER] Waiting for request...");
@@ -98,7 +98,7 @@ async fn router_server(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     // Wait longer for DEALER to receive and process reply
     println!("[ROUTER] Waiting for DEALER to process reply...");
-    compio::time::sleep(Duration::from_secs(2)).await;
+    compio::time::sleep(Duration::from_secs(3)).await;
     Ok(())
 }
 
@@ -110,7 +110,7 @@ async fn dealer_client(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
     let socket = DealerSocket::new(stream).await;
 
     // Wait for handshake to complete
-    compio::time::sleep(Duration::from_millis(300)).await;
+    compio::time::sleep(Duration::from_millis(500)).await;
 
     // Send request
     let request = vec![Bytes::from("Hello from DEALER!")];
