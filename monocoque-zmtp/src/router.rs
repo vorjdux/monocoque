@@ -121,15 +121,16 @@ impl RouterSocket {
                         "[ROUTER TASK] Got {} outgoing frames from process_events()",
                         outgoing_frames.len()
                     );
-                    for frame in outgoing_frames {
-                        eprintln!("[ROUTER TASK] Sending {} bytes to SocketActor", frame.len());
-                        let _ = socket_cmd_tx.send(UserCmd::SendBytes(frame));
-                    }
+                }
+                for frame in outgoing_frames {
+                    eprintln!("[ROUTER TASK] Sending {} bytes to SocketActor", frame.len());
+                    let _ = socket_cmd_tx.send(UserCmd::SendBytes(frame));
                 }
 
-                // Small yield to prevent busy-waiting and allow other tasks to run
+                // Small yield to prevent busy-waiting
                 compio::time::sleep(std::time::Duration::from_micros(100)).await;
             }
+    
             eprintln!("[ROUTER TASK] Integration task exited!");
         });
 

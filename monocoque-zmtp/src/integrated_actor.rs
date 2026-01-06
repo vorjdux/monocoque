@@ -273,9 +273,6 @@ impl ZmtpIntegratedActor {
                     }
                 }
             }
-            Err(flume::TryRecvError::Empty) => {
-                // Silent - expected
-            }
             Err(flume::TryRecvError::Disconnected) => {
                 eprintln!("[INTEGRATED {:?}] WARNING: user_rx disconnected!", self.socket_type);
             }

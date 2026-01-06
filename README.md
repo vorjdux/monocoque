@@ -110,8 +110,8 @@ Monocoque has **Phase 0-1 complete** with Phase 2-3 socket skeletons implemented
 | ----------- | -------------------- | ----------------------------------------- |
 | **Phase 0** | IO Core & Split Pump | ✅ **Complete** (January 2026)            |
 | **Phase 1** | ZMTP 3.1 Protocol    | ✅ **Complete** (January 2026)            |
-| **Phase 2** | ROUTER/DEALER        | 🚧 Skeleton (needs integration tests)    |
-| **Phase 3** | PUB/SUB Engine       | 🚧 Skeleton (needs integration tests)    |
+| **Phase 2** | ROUTER/DEALER        | 🚧 Skeleton (needs integration tests)     |
+| **Phase 3** | PUB/SUB Engine       | 🚧 Skeleton (needs integration tests)     |
 | **Phase 4** | REQ/REP              | ⏳ Planned                                |
 | **Phase 5** | Reliability          | ⏳ Planned                                |
 | **Phase 6** | Performance          | ⏳ Planned                                |
@@ -197,13 +197,13 @@ use monocoque::zmq::DealerSocket;
 #[compio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut socket = DealerSocket::connect("127.0.0.1:5555").await?;
-    
+
     // Send multipart message
     socket.send(vec![b"Hello".into(), b"World".into()]).await?;
-    
+
     // Receive reply
     let reply = socket.recv().await?;
-    
+
     Ok(())
 }
 ```
