@@ -20,7 +20,7 @@
 //! #[compio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let stream = TcpStream::connect("127.0.0.1:5555").await?;
-//!     let socket = DealerSocket::new(stream);
+//!     let socket = DealerSocket::new(stream).await;
 //!     
 //!     socket.send(vec![Bytes::from("Hello!")]).await?;
 //!     let response = socket.recv().await?;
@@ -41,7 +41,7 @@
 mod codec;
 mod command;
 mod greeting;
-mod integrated_actor;
+pub mod integrated_actor; // Made public for integration tests
 mod mechanism;
 mod multipart;
 mod utils;

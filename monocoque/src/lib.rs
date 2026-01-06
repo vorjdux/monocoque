@@ -30,19 +30,13 @@
 //! use monocoque::zmq::prelude::*;
 //!
 //! # #[cfg(feature = "zmq")]
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! # #[compio::main]
+//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! // Connect to a ZeroMQ peer
 //! let mut socket = DealerSocket::connect("127.0.0.1:5555").await?;
 //!
 //! // Send a multipart message
-//! socket.send(vec![b"Hello".into(), b"World".into()]).await?;
-//!
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! // Connect to a ZeroMQ peer
-//! let mut socket = DealerSocket::connect("127.0.0.1:5555").await?;
-//!
-//! // Send a multipart message
-//! socket.send(vec![b"Hello".into(), b"World".into()]).await?;
+//! socket.send(vec![b"Hello".to_vec().into(), b"World".to_vec().into()]).await?;
 //!
 //! // Receive a reply
 //! if let Some(msg) = socket.recv().await {

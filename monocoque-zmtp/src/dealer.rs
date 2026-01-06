@@ -20,7 +20,7 @@
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     // Connect to ROUTER server
 //!     let stream = TcpStream::connect("127.0.0.1:5555").await?;
-//!     let socket = DealerSocket::new(stream);
+//!     let socket = DealerSocket::new(stream).await;
 //!     
 //!     // Send request
 //!     socket.send(vec![Bytes::from("Hello")]).await?;
@@ -73,7 +73,7 @@ use monocoque_core::{
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
-/// let socket = DealerSocket::new(stream);
+/// let socket = DealerSocket::new(stream).await;
 ///
 /// // Send a request
 /// socket.send(vec![Bytes::from("REQUEST")]).await?;
