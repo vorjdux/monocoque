@@ -6,6 +6,8 @@
 //!
 //! - [`DealerSocket`] - Asynchronous request-reply client (load-balanced)
 //! - [`RouterSocket`] - Identity-based routing server
+//! - [`ReqSocket`] - Synchronous request-reply client (strict alternation)
+//! - [`RepSocket`] - Synchronous reply server (stateful envelope tracking)
 //! - [`PubSocket`] - Publisher (broadcast to subscribers)
 //! - [`SubSocket`] - Subscriber (receive filtered messages)
 //!
@@ -46,15 +48,18 @@
 mod common;
 mod dealer;
 mod publisher;
+mod rep;
+mod req;
 mod router;
 mod subscriber;
 
 // Re-export socket types
 pub use dealer::DealerSocket;
 pub use publisher::PubSocket;
+pub use rep::RepSocket;
+pub use req::ReqSocket;
 pub use router::RouterSocket;
 pub use subscriber::SubSocket;
-
 
 /// Convenient imports for ZeroMQ protocol.
 ///
@@ -64,10 +69,10 @@ pub use subscriber::SubSocket;
 /// use monocoque::zmq::prelude::*;
 ///
 /// // Now you have:
-/// // - DealerSocket, RouterSocket, PubSocket, SubSocket
+/// // - DealerSocket, RouterSocket, ReqSocket, RepSocket, PubSocket, SubSocket
 /// // - Bytes for zero-copy messages
 /// ```
 pub mod prelude {
-    pub use super::{DealerSocket, PubSocket, RouterSocket, SubSocket};
+    pub use super::{DealerSocket, PubSocket, RepSocket, ReqSocket, RouterSocket, SubSocket};
     pub use bytes::Bytes;
 }

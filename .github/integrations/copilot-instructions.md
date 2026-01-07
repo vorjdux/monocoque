@@ -5,19 +5,22 @@
 ### NEVER Commit or Push Without Explicit Permission
 
 **YOU MUST NOT**:
-- ❌ Run `git commit` without the user explicitly asking "commit this" or "commit the changes"
-- ❌ Run `git push` without the user explicitly asking "push this" or "push to remote"
-- ❌ Commit and push in sequence automatically
-- ❌ Assume the user wants changes committed just because tests pass
+
+-   ❌ Run `git commit` without the user explicitly asking "commit this" or "commit the changes"
+-   ❌ Run `git push` without the user explicitly asking "push this" or "push to remote"
+-   ❌ Commit and push in sequence automatically
+-   ❌ Assume the user wants changes committed just because tests pass
 
 **ALWAYS**:
-- ✅ Complete the work and run tests
-- ✅ Show the user what changed (git status, file list, etc.)
-- ✅ **WAIT for explicit user instruction** to commit or push
-- ✅ If the user says "commit", only commit (don't push)
-- ✅ If the user says "push", commit first if needed, then push
+
+-   ✅ Complete the work and run tests
+-   ✅ Show the user what changed (git status, file list, etc.)
+-   ✅ **WAIT for explicit user instruction** to commit or push
+-   ✅ If the user says "commit", only commit (don't push)
+-   ✅ If the user says "push", commit first if needed, then push
 
 **Example of CORRECT workflow**:
+
 ```
 1. User: "refactor the zmq module"
 2. You: [make changes, run tests]

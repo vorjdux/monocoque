@@ -7,6 +7,8 @@
 //! Monocoque provides a clean, safe, and efficient implementation of `ZeroMQ` socket patterns:
 //! - **DEALER**: Asynchronous request-reply with load balancing
 //! - **ROUTER**: Server-side routing with identity-based addressing  
+//! - **REQ**: Synchronous request-reply client (strict alternation)
+//! - **REP**: Synchronous reply server (stateful envelope tracking)
 //! - **PUB**: Publisher for broadcasting events
 //! - **SUB**: Subscriber with topic-based filtering
 //!
@@ -53,6 +55,7 @@
 mod codec;
 mod command;
 mod greeting;
+mod handshake;
 pub mod integrated_actor; // Made public for integration tests
 mod mechanism;
 mod multipart;
@@ -64,12 +67,16 @@ pub mod session;
 // Socket implementations
 pub mod dealer;
 pub mod publisher;
+pub mod rep;
+pub mod req;
 pub mod router;
 pub mod subscriber;
 
 // Re-export socket types for clean API
 pub use dealer::DealerSocket;
 pub use publisher::PubSocket;
+pub use rep::RepSocket;
+pub use req::ReqSocket;
 pub use router::RouterSocket;
 pub use subscriber::SubSocket;
 
@@ -83,6 +90,6 @@ pub use session::{SocketType, ZmtpSession};
 /// ```
 pub mod prelude {
     pub use super::session::SocketType;
-    pub use super::{DealerSocket, PubSocket, RouterSocket, SubSocket};
+    pub use super::{DealerSocket, PubSocket, RepSocket, ReqSocket, RouterSocket, SubSocket};
     pub use bytes::Bytes;
 }

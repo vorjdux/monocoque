@@ -17,7 +17,7 @@ pub enum SocketType {
 }
 
 impl SocketType {
-    #[must_use] 
+    #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Pair => "PAIR",
@@ -72,11 +72,25 @@ pub struct ZmtpSession {
 }
 
 impl ZmtpSession {
-    #[must_use] 
+    #[must_use]
     pub fn new(local_socket_type: SocketType) -> Self {
         Self {
             state: State::Greeting {
                 buffer: BytesMut::with_capacity(64),
+            },
+            local_socket_type,
+        }
+    }
+
+    /// Create a session that's already past the handshake phase.
+    ///
+    /// Use this when handshake has been performed synchronously before
+    /// spawning the session actor.
+    #[must_use]
+    pub fn new_active(local_socket_type: SocketType) -> Self {
+        Self {
+            state: State::Active {
+                decoder: ZmtpDecoder::new(),
             },
             local_socket_type,
         }

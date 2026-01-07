@@ -8,28 +8,38 @@ fn main() {
     use monocoque_zmtp::dealer::DealerSocket;
     use bytes::Bytes;
     use std::thread;
+    use std::sync::mpsc;
 
     println!("=== Request-Reply Pattern ===\n");
     println!("Server: ROUTER socket (identity-based routing)");
     println!("Client: DEALER socket (anonymous identity)\n");
 
+    // Channel to communicate server address
+    let (addr_tx, addr_rx) = mpsc::channel();
+
     // Server thread
-    let server = thread::spawn(|| {
+    let server = thread::spawn(move || {
         compio::runtime::Runtime::new().unwrap().block_on(async {
-            println!("[Server] Starting on 127.0.0.1:9000...");
-            let listener = compio::net::TcpListener::bind("127.0.0.1:9000").await.unwrap();
+            // Bind to port 0 to get a random available port
+            let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            println!("[Server] Starting on {}...", addr);
+            
+            // Send address to client thread
+            addr_tx.send(addr).unwrap();
             
             println!("[Server] Waiting for clients...");
-            let (stream, addr) = listener.accept().await.unwrap();
-            println!("[Server] Client connected from {addr}");
+            let (stream, client_addr) = listener.accept().await.unwrap();
+            println!("[Server] Client connected from {}", client_addr);
             
             let router = RouterSocket::new(stream).await;
             
             // Process 3 requests
             for i in 1..=3 {
                 let request = router.recv().await.unwrap();
+                // ROUTER message format: [routing_id, empty_delimiter, ...message_frames...]
                 let client_id = &request[0];
-                let message = &request[1];
+                let message = &request[2]; // Skip empty delimiter at index 1
                 
                 println!("[Server] Request {}: {:?} from client {:?}", 
                          i,
@@ -50,14 +60,14 @@ fn main() {
         });
     });
 
-    // Give server time to start
-    std::thread::sleep(std::time::Duration::from_millis(100));
+    // Wait for server to start and get its address
+    let server_addr = addr_rx.recv().unwrap();
 
     // Client thread
-    let client = thread::spawn(|| {
+    let client = thread::spawn(move || {
         compio::runtime::Runtime::new().unwrap().block_on(async {
             println!("[Client] Connecting to server...");
-            let stream = compio::net::TcpStream::connect("127.0.0.1:9000").await.unwrap();
+            let stream = compio::net::TcpStream::connect(server_addr).await.unwrap();
             println!("[Client] Connected!");
             
             let dealer = DealerSocket::new(stream).await;

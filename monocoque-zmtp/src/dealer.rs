@@ -98,36 +98,39 @@ impl DealerSocket {
     /// **Internal API**: For public-facing ergonomics, use `monocoque::DealerSocket::connect()`.
     ///
     /// This spawns background tasks for I/O, protocol handling, and routing.
-    pub async fn new(stream: TcpStream) -> Self {
+    ///
+    /// Performs synchronous handshake before spawning tasks to eliminate race conditions.
+    pub async fn new(mut stream: TcpStream) -> Self {
+        use crate::handshake::perform_handshake;
+
+        // Perform synchronous handshake FIRST (before spawning any tasks)
+        let handshake_result = perform_handshake(&mut stream, SocketType::Dealer, None)
+            .await
+            .expect("Handshake failed");
+        let peer_identity = handshake_result.peer_identity;
+
         // Create channels
         let (socket_event_tx, socket_event_rx) = unbounded(); // SocketActor → integration
         let (socket_cmd_tx, socket_cmd_rx) = unbounded(); // integration → SocketActor
         let (app_tx, app_rx) = unbounded(); // integrated → application (for recv)
         let (user_tx, user_rx) = unbounded(); // application → integrated (for send)
 
-        // Create SocketActor
+        // Create SocketActor with post-handshake stream
         let arena = IoArena::new();
         let socket_actor = SocketActor::new(stream, socket_event_tx, socket_cmd_rx, arena);
 
-        // Create ZmtpIntegratedActor
-        let mut integrated_actor = ZmtpIntegratedActor::new(
+        // Create ZmtpIntegratedActor in Active state (handshake already complete)
+        let mut integrated_actor = ZmtpIntegratedActor::new_active(
             SocketType::Dealer,
             app_tx,  // integrated sends received messages TO app
             user_rx, // integrated receives outgoing messages FROM app
+            peer_identity,
         );
 
-        // Send initial greeting before spawning tasks
-        let greeting = integrated_actor.local_greeting();
-        let _ = socket_cmd_tx.send(UserCmd::SendBytes(greeting));
-
-        // Spawn SocketActor first so it's ready to process the greeting
+        // Spawn SocketActor
         eprintln!("[DEALER] About to spawn SocketActor");
         let socket_handle = compio::runtime::spawn(socket_actor.run());
         eprintln!("[DEALER] SocketActor spawned");
-
-        // Small delay to allow SocketActor pumps to initialize
-        // TODO: Replace with proper synchronization mechanism (e.g., oneshot channel)
-        compio::time::sleep(std::time::Duration::from_millis(1)).await;
 
         // Spawn the integration task
         let _socket_cmd_tx_clone = socket_cmd_tx.clone();
@@ -137,8 +140,7 @@ impl DealerSocket {
             let _ = std::io::stderr().write_all(b"[DEALER TASK] Integration task started!\n");
             let _ = std::io::stderr().flush();
 
-            // This task bridges SocketActor events to ZmtpIntegratedActor
-            let mut handshake_complete = false;
+            // Handshake already complete, session is in Active state
             use futures::{select, FutureExt};
 
             loop {
@@ -147,10 +149,10 @@ impl DealerSocket {
                     event = socket_event_rx.recv_async().fuse() => {
                         match event {
                             Ok(SocketEvent::Connected) => {
-                                // Connection established, greeting already sent
+                                // Connection established
                             }
                             Ok(SocketEvent::ReceivedBytes(bytes)) => {
-                                // Feed bytes into ZMTP session
+                                // Feed bytes into ZMTP session (only data frames now, no handshake)
                                 let session_events = integrated_actor.session.on_bytes(bytes);
 
                                 for event in session_events {
@@ -158,23 +160,16 @@ impl DealerSocket {
                                         crate::session::SessionEvent::SendBytes(data) => {
                                             let _ = socket_cmd_tx.send(UserCmd::SendBytes(data));
                                         }
-                                        crate::session::SessionEvent::HandshakeComplete {
-                                            peer_identity,
-                                            peer_socket_type: _,
-                                        } => {
-                                            integrated_actor.handle_handshake_complete(peer_identity);
-                                            handshake_complete = true;
-                                            // READY command already sent by Session
-                                        }
                                         crate::session::SessionEvent::Frame(frame) => {
-                                            if handshake_complete {
-                                                eprintln!("[DEALER TASK] Received frame from peer, passing to integrated_actor");
-                                                integrated_actor.handle_frame(frame);
-                                            }
+                                            eprintln!("[DEALER TASK] Received frame from peer, passing to integrated_actor");
+                                            integrated_actor.handle_frame(frame);
                                         }
                                         crate::session::SessionEvent::Error(_e) => {
                                             eprintln!("[DEALER TASK] Session error, exiting");
                                             break;
+                                        }
+                                        _ => {
+                                            // HandshakeComplete shouldn't happen since we're in Active state
                                         }
                                     }
                                 }

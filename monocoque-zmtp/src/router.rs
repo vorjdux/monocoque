@@ -29,7 +29,26 @@ impl RouterSocket {
     /// **Internal API**: For public-facing ergonomics, use `monocoque::RouterSocket::bind()`.
     ///
     /// This spawns I/O and integration tasks.
-    pub async fn new(tcp_stream: TcpStream) -> Self {
+    /// 
+    /// Performs synchronous handshake before spawning tasks to eliminate race conditions.
+    pub async fn new(mut tcp_stream: TcpStream) -> Self {
+        use crate::handshake::perform_handshake;
+
+        // Perform synchronous handshake FIRST (before spawning any tasks)
+        let handshake_result = perform_handshake(&mut tcp_stream, SocketType::Router, None)
+            .await
+            .expect("Handshake failed");
+        
+        // ROUTER: Generate routing ID if peer didn't provide one
+        let peer_identity = handshake_result.peer_identity.or_else(|| {
+            // Generate a unique ID based on connection (e.g., using TCP peer address)
+            // For now, use a simple counter-based approach
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static COUNTER: AtomicU64 = AtomicU64::new(1);
+            let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+            Some(Bytes::from(format!("peer-{}", id)))
+        });
+
         // Create channels for socket actor communication
         let (socket_event_tx, socket_event_rx) = unbounded();
         let (socket_cmd_tx, socket_cmd_rx) = unbounded();
@@ -38,27 +57,20 @@ impl RouterSocket {
         let (app_tx, app_rx) = unbounded(); // integrated → application (for recv)
         let (user_tx, user_rx) = unbounded(); // application → integrated (for send)
 
-        // Create socket actor
+        // Create socket actor with post-handshake stream
         let io_arena = IoArena::new();
         let socket_actor = SocketActor::new(tcp_stream, socket_event_tx, socket_cmd_rx, io_arena);
 
-        // Create ZmtpIntegratedActor
-        let mut integrated_actor = ZmtpIntegratedActor::new(
+        // Create ZmtpIntegratedActor in Active state (handshake already complete)
+        let mut integrated_actor = ZmtpIntegratedActor::new_active(
             SocketType::Router,
             app_tx,  // integrated sends received messages TO app
             user_rx, // integrated receives outgoing messages FROM app
+            peer_identity,
         );
 
-        // Send initial greeting before spawning tasks
-        let greeting = integrated_actor.local_greeting();
-        let _ = socket_cmd_tx.send(UserCmd::SendBytes(greeting));
-
-        // Spawn SocketActor first
+        // Spawn SocketActor
         let socket_handle = compio::runtime::spawn(socket_actor.run());
-
-        // Small delay to allow SocketActor pumps to initialize
-        // TODO: Replace with proper synchronization mechanism
-        compio::time::sleep(std::time::Duration::from_millis(1)).await;
 
         // Spawn integration task
         let _socket_cmd_tx_clone = socket_cmd_tx.clone();
@@ -71,7 +83,7 @@ impl RouterSocket {
             eprintln!("[ROUTER TASK] Integration task started! integrated_actor.user_rx receiver_count={}", 
                          integrated_actor.user_rx.receiver_count());
 
-            let mut handshake_complete = false;
+            // Handshake already complete, session is in Active state
             use futures::{select, FutureExt};
 
             loop {
@@ -83,7 +95,7 @@ impl RouterSocket {
                                 // Connection established
                             }
                             Ok(SocketEvent::ReceivedBytes(bytes)) => {
-                                // Feed bytes into ZMTP session
+                                // Feed bytes into ZMTP session (only data frames now, no handshake)
                                 let session_events = integrated_actor.session.on_bytes(bytes);
 
                                 for event in session_events {
@@ -91,22 +103,15 @@ impl RouterSocket {
                                         crate::session::SessionEvent::SendBytes(data) => {
                                             let _ = socket_cmd_tx.send(UserCmd::SendBytes(data));
                                         }
-                                        crate::session::SessionEvent::HandshakeComplete {
-                                            peer_identity,
-                                            peer_socket_type: _,
-                                        } => {
-                                            integrated_actor.handle_handshake_complete(peer_identity);
-                                            handshake_complete = true;
-                                            // READY command already sent by Session
-                                        }
                                         crate::session::SessionEvent::Frame(frame) => {
-                                            if handshake_complete {
-                                                eprintln!("[ROUTER TASK] Received frame from peer, passing to integrated_actor");
-                                                integrated_actor.handle_frame(frame);
-                                            }
+                                            eprintln!("[ROUTER TASK] Received frame from peer, passing to integrated_actor");
+                                            integrated_actor.handle_frame(frame);
                                         }
                                         crate::session::SessionEvent::Error(_e) => {
                                             break;
+                                        }
+                                        _ => {
+                                            // HandshakeComplete shouldn't happen since we're in Active state
                                         }
                                     }
                                 }

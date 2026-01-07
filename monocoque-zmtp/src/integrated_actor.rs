@@ -202,12 +202,44 @@ impl ZmtpIntegratedActor {
         let rx_id = format!("{:p}-{}", &raw const user_rx, user_rx.receiver_count());
         eprintln!("[ZmtpIntegratedActor::new {socket_type:?}] TX ID: {tx_id}, RX ID: {rx_id}");
         let (peer_cmd_tx, peer_cmd_rx) = flume::unbounded();
-        
+
         Self {
             session: ZmtpSession::new(socket_type),
             socket_type,
             epoch: EPOCH_COUNTER.fetch_add(1, Ordering::Relaxed),
             routing_id: None,
+            multipart: Vec::new(),
+            user_tx,
+            user_rx,
+            router_hub: None,
+            pubsub_hub: None,
+            peer_rx: Some(peer_cmd_rx),
+            peer_cmd_tx,
+            write_queue: Vec::new(),
+        }
+    }
+
+    /// Create a new ZMTP integrated actor with handshake already complete.
+    ///
+    /// Use this when handshake was performed synchronously before spawning tasks.
+    pub fn new_active(
+        socket_type: SocketType,
+        user_tx: Sender<Vec<Bytes>>,
+        user_rx: Receiver<Vec<Bytes>>,
+        peer_identity: Option<Bytes>,
+    ) -> Self {
+        let tx_id = format!("{:p}-{}", &raw const user_tx, user_tx.sender_count());
+        let rx_id = format!("{:p}-{}", &raw const user_rx, user_rx.receiver_count());
+        eprintln!(
+            "[ZmtpIntegratedActor::new_active {socket_type:?}] TX ID: {tx_id}, RX ID: {rx_id}"
+        );
+        let (peer_cmd_tx, peer_cmd_rx) = flume::unbounded();
+
+        Self {
+            session: ZmtpSession::new_active(socket_type),
+            socket_type,
+            epoch: EPOCH_COUNTER.fetch_add(1, Ordering::Relaxed),
+            routing_id: peer_identity,
             multipart: Vec::new(),
             user_tx,
             user_rx,
@@ -235,19 +267,28 @@ impl ZmtpIntegratedActor {
         let queued = self.user_rx.len();
         let rx_id = std::ptr::addr_of!(self.user_rx) as usize;
         if queued > 0 {
-            eprintln!("[INTEGRATED {:?}] user_rx ID={}, has {} items queued! Attempting to receive...", self.socket_type, rx_id, queued);
+            eprintln!(
+                "[INTEGRATED {:?}] user_rx ID={}, has {} items queued! Attempting to receive...",
+                self.socket_type, rx_id, queued
+            );
         } else {
             // Always print for ROUTER to see the ID even when empty
             if matches!(self.socket_type, crate::SocketType::Router) {
-                eprintln!("[INTEGRATED {:?}] user_rx ID={}, queued={}", self.socket_type, rx_id, queued);
+                eprintln!(
+                    "[INTEGRATED {:?}] user_rx ID={}, queued={}",
+                    self.socket_type, rx_id, queued
+                );
             }
         }
 
         // Check for user messages to send
         match self.user_rx.try_recv() {
             Ok(msg) => {
-                eprintln!("[INTEGRATED {:?}] SUCCESS via try_recv! Got {} frames", 
-                         self.socket_type, msg.len());
+                eprintln!(
+                    "[INTEGRATED {:?}] SUCCESS via try_recv! Got {} frames",
+                    self.socket_type,
+                    msg.len()
+                );
                 let frames = self.encode_outgoing_message(msg);
                 outgoing.extend(frames);
             }
@@ -256,15 +297,26 @@ impl ZmtpIntegratedActor {
                 if queued > 0 {
                     eprintln!("[INTEGRATED {:?}] try_recv returned Empty but {} items queued! Trying recv_async...", 
                              self.socket_type, queued);
-                    match compio::time::timeout(std::time::Duration::from_micros(10), self.user_rx.recv_async()).await {
+                    match compio::time::timeout(
+                        std::time::Duration::from_micros(10),
+                        self.user_rx.recv_async(),
+                    )
+                    .await
+                    {
                         Ok(Ok(msg)) => {
-                            eprintln!("[INTEGRATED {:?}] SUCCESS via recv_async! Got {} frames", 
-                                     self.socket_type, msg.len());
+                            eprintln!(
+                                "[INTEGRATED {:?}] SUCCESS via recv_async! Got {} frames",
+                                self.socket_type,
+                                msg.len()
+                            );
                             let frames = self.encode_outgoing_message(msg);
                             outgoing.extend(frames);
                         }
                         Ok(Err(_)) => {
-                            eprintln!("[INTEGRATED {:?}] recv_async: channel disconnected", self.socket_type);
+                            eprintln!(
+                                "[INTEGRATED {:?}] recv_async: channel disconnected",
+                                self.socket_type
+                            );
                         }
                         Err(_) => {
                             eprintln!("[INTEGRATED {:?}] recv_async: timeout", self.socket_type);
@@ -273,7 +325,10 @@ impl ZmtpIntegratedActor {
                 }
             }
             Err(flume::TryRecvError::Disconnected) => {
-                eprintln!("[INTEGRATED {:?}] WARNING: user_rx disconnected!", self.socket_type);
+                eprintln!(
+                    "[INTEGRATED {:?}] WARNING: user_rx disconnected!",
+                    self.socket_type
+                );
             }
         }
 
@@ -289,8 +344,11 @@ impl ZmtpIntegratedActor {
     /// Handles DEALER and ROUTER semantics:
     /// - DEALER: multipart → frames with MORE flags
     /// - ROUTER: strip envelope, route body
+    ///
+    /// Returns Vec<Bytes> where headers and bodies are interleaved.
+    /// This achieves zero-copy by never copying message bodies.
     pub fn encode_outgoing_message(&mut self, parts: Vec<Bytes>) -> Vec<Bytes> {
-        use crate::utils::encode_frame;
+        use crate::utils::encode_frame_header;
 
         if parts.is_empty() {
             return Vec::new();
@@ -304,7 +362,8 @@ impl ZmtpIntegratedActor {
                 let last_idx = parts.len() - 1;
                 for (idx, part) in parts.into_iter().enumerate() {
                     let flags = u8::from(idx < last_idx);
-                    frames.push(encode_frame(flags, &part));
+                    frames.push(encode_frame_header(flags, part.len()));
+                    frames.push(part);
                 }
             }
 
@@ -316,7 +375,8 @@ impl ZmtpIntegratedActor {
                     let last_idx = body.len() - 1;
                     for (idx, part) in body.iter().enumerate() {
                         let flags = u8::from(idx < last_idx);
-                        frames.push(encode_frame(flags, part));
+                        frames.push(encode_frame_header(flags, part.len()));
+                        frames.push(part.clone());
                     }
                 }
             }
@@ -326,7 +386,36 @@ impl ZmtpIntegratedActor {
                 let last_idx = parts.len() - 1;
                 for (idx, part) in parts.into_iter().enumerate() {
                     let flags = u8::from(idx < last_idx);
-                    frames.push(encode_frame(flags, &part));
+                    frames.push(encode_frame_header(flags, part.len()));
+                    frames.push(part);
+                }
+            }
+
+            SocketType::Req => {
+                // REQ: prepend empty delimiter before message
+                // Format: [Empty Delimiter][...message parts...]
+                let empty = Bytes::new();
+                frames.push(encode_frame_header(1, empty.len())); // Empty delimiter header with MORE flag
+                frames.push(empty); // Empty body
+                let last_idx = parts.len() - 1;
+                for (idx, part) in parts.into_iter().enumerate() {
+                    let flags = u8::from(idx < last_idx);
+                    frames.push(encode_frame_header(flags, part.len()));
+                    frames.push(part);
+                }
+            }
+
+            SocketType::Rep => {
+                // REP: prepend empty delimiter (mirroring REQ format)
+                // Format: [Empty Delimiter][...reply parts...]
+                let empty = Bytes::new();
+                frames.push(encode_frame_header(1, empty.len())); // Empty delimiter header with MORE flag
+                frames.push(empty); // Empty body
+                let last_idx = parts.len() - 1;
+                for (idx, part) in parts.into_iter().enumerate() {
+                    let flags = u8::from(idx < last_idx);
+                    frames.push(encode_frame_header(flags, part.len()));
+                    frames.push(part);
                 }
             }
 
@@ -335,7 +424,8 @@ impl ZmtpIntegratedActor {
                 let last_idx = parts.len() - 1;
                 for (idx, part) in parts.into_iter().enumerate() {
                     let flags = u8::from(idx < last_idx);
-                    frames.push(encode_frame(flags, &part));
+                    frames.push(encode_frame_header(flags, part.len()));
+                    frames.push(part);
                 }
             }
         }
@@ -465,8 +555,7 @@ impl ZmtpIntegratedActor {
     }
 
     pub(crate) fn handle_handshake_complete(&mut self, peer_identity: Option<Bytes>) {
-        let rid = peer_identity
-            .unwrap_or_else(|| Bytes::from(format!("anon-{}", self.epoch)));
+        let rid = peer_identity.unwrap_or_else(|| Bytes::from(format!("anon-{}", self.epoch)));
 
         self.routing_id = Some(rid.clone());
 
@@ -489,9 +578,13 @@ impl ZmtpIntegratedActor {
     }
 
     pub(crate) fn handle_frame(&mut self, frame: ZmtpFrame) {
-        eprintln!("[INTEGRATED {:?}] handle_frame called, is_command={}, has_more={}", 
-                  self.socket_type, frame.is_command(), frame.more());
-        
+        eprintln!(
+            "[INTEGRATED {:?}] handle_frame called, is_command={}, has_more={}",
+            self.socket_type,
+            frame.is_command(),
+            frame.more()
+        );
+
         // Handle commands (SUB/UNSUB)
         if frame.is_command() {
             self.handle_command(frame);
@@ -500,10 +593,13 @@ impl ZmtpIntegratedActor {
 
         // Check if MORE flag is set before consuming
         let has_more = frame.more();
-        
-        eprintln!("[INTEGRATED {:?}] Accumulating frame, current multipart count: {}", 
-                  self.socket_type, self.multipart.len());
-        
+
+        eprintln!(
+            "[INTEGRATED {:?}] Accumulating frame, current multipart count: {}",
+            self.socket_type,
+            self.multipart.len()
+        );
+
         // Accumulate multipart message
         self.multipart.push(frame.payload);
 
@@ -515,18 +611,39 @@ impl ZmtpIntegratedActor {
             if self.socket_type == SocketType::Router {
                 if let Some(rid) = &self.routing_id {
                     msg.insert(0, Bytes::new()); // Empty delimiter
-                    msg.insert(0, rid.clone());  // Routing ID
+                    msg.insert(0, rid.clone()); // Routing ID
+                }
+            }
+
+            // REQ/REP: strip empty delimiter frame
+            if matches!(self.socket_type, SocketType::Req | SocketType::Rep) {
+                // REQ/REP messages start with empty delimiter, strip it
+                if !msg.is_empty() && msg[0].is_empty() {
+                    eprintln!(
+                        "[INTEGRATED {:?}] Stripping empty delimiter from message",
+                        self.socket_type
+                    );
+                    msg.remove(0);
                 }
             }
 
             // DEBUG: Log received message
-            eprintln!("[INTEGRATED {:?}] Received message with {} frames, sending to app", 
-                     self.socket_type, msg.len());
+            eprintln!(
+                "[INTEGRATED {:?}] Received message with {} frames, sending to app",
+                self.socket_type,
+                msg.len()
+            );
 
             // Send to application
             match self.user_tx.send(msg) {
-                Ok(()) => eprintln!("[INTEGRATED {:?}] Successfully sent message to app", self.socket_type),
-                Err(e) => eprintln!("[INTEGRATED {:?}] Failed to send message to app: {:?}", self.socket_type, e),
+                Ok(()) => eprintln!(
+                    "[INTEGRATED {:?}] Successfully sent message to app",
+                    self.socket_type
+                ),
+                Err(e) => eprintln!(
+                    "[INTEGRATED {:?}] Failed to send message to app: {:?}",
+                    self.socket_type, e
+                ),
             }
         }
     }
@@ -534,10 +651,14 @@ impl ZmtpIntegratedActor {
     fn handle_command(&mut self, frame: ZmtpFrame) {
         // Parse command name
         let payload = frame.payload.as_ref();
-        
-        eprintln!("[INTEGRATED {:?}] Received command, payload len={}, first bytes={:?}", 
-                  self.socket_type, payload.len(), &payload[..payload.len().min(20)]);
-        
+
+        eprintln!(
+            "[INTEGRATED {:?}] Received command, payload len={}, first bytes={:?}",
+            self.socket_type,
+            payload.len(),
+            &payload[..payload.len().min(20)]
+        );
+
         if payload.is_empty() {
             return;
         }
@@ -559,7 +680,7 @@ impl ZmtpIntegratedActor {
                 });
             }
         } else if payload.starts_with(&[5]) && &payload[1..6] == b"UNSUB" {
-            // UNSUB command  
+            // UNSUB command
             let prefix = if payload.len() > 6 {
                 Bytes::copy_from_slice(&payload[6..])
             } else {
@@ -603,7 +724,7 @@ mod tests {
     fn creates_actor_with_epoch() {
         let (tx, _rx) = flume::unbounded();
         let (_user_tx, user_rx) = flume::unbounded();
-        
+
         let actor = ZmtpIntegratedActor::new(SocketType::Dealer, tx, user_rx);
         assert!(actor.epoch > 0);
         assert!(actor.routing_id.is_none());
@@ -613,9 +734,9 @@ mod tests {
     fn assembles_multipart_messages() {
         let (tx, rx) = flume::unbounded();
         let (_user_tx, user_rx) = flume::unbounded();
-        
+
         let mut actor = ZmtpIntegratedActor::new(SocketType::Dealer, tx, user_rx);
-        
+
         // Simulate frames
         let frame1 = ZmtpFrame {
             flags: 0x01, // MORE

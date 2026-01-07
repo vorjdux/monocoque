@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- Fix: Synchronous ZMTP handshake performed before spawning IO/integration tasks to eliminate handshake races for REQ/REP/DEALER/ROUTER.
+- Perf: Zero-copy framing on send path — frame headers are encoded separately and bodies are sent without memcpy (header+body interleaved), eliminating payload copies during normal data path.
+- Fix: Replaced copy-based `encode_frame` usage with `encode_frame_header` + interleaved bodies; retained `encode_frame` for small protocol commands.
+- Fix: Handshake uses stack buffers for fixed-size elements and a bounded allocation for READY body (one-time per connection).
+- Change: Added `ZmtpSession::new_active` and `ZmtpIntegratedActor::new_active` to create actors post-handshake.
+- Change: Dealer and Router now perform handshake synchronously and use `new_active` to avoid races.
+- Add: REQ/REP socket implementations (REQ/REP modules) with proper handshake integration and state machines for strict alternation.
+- Add: Interop examples for REQ/REP with libzmq and a simple REQ/REP demo; updated request_reply example to use randomized ports.
+- Docs: Updated progress and analysis docs to reflect implementation and interop test results.
+
+### Notes
+
+- All doc-tests pass. Integration/interop tests were executed in the development environment and validated against libzmq where applicable.
+- Next recommended steps: open a PR, run CI, and optionally add a vectored-write syscall path to submit header+body in a single ownership-passing operation.
+# Changelog
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
