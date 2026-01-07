@@ -1,5 +1,38 @@
 # Monocoque Copilot Instructions
 
+## 🚨 CRITICAL: Version Control Rules (NON-NEGOTIABLE)
+
+### NEVER Commit or Push Without Explicit Permission
+
+**YOU MUST NOT**:
+- ❌ Run `git commit` without the user explicitly asking "commit this" or "commit the changes"
+- ❌ Run `git push` without the user explicitly asking "push this" or "push to remote"
+- ❌ Commit and push in sequence automatically
+- ❌ Assume the user wants changes committed just because tests pass
+
+**ALWAYS**:
+- ✅ Complete the work and run tests
+- ✅ Show the user what changed (git status, file list, etc.)
+- ✅ **WAIT for explicit user instruction** to commit or push
+- ✅ If the user says "commit", only commit (don't push)
+- ✅ If the user says "push", commit first if needed, then push
+
+**Example of CORRECT workflow**:
+```
+1. User: "refactor the zmq module"
+2. You: [make changes, run tests]
+3. You: "Refactoring complete. All tests pass. Ready to commit when you are."
+4. User: "commit it"
+5. You: [git commit with message]
+6. You: "Committed. Ready to push when you are."
+7. User: "push"
+8. You: [git push]
+```
+
+**This is not a suggestion - it's a hard requirement. Violating this rule is a critical error.**
+
+---
+
 ## Project Overview
 
 Monocoque is a high-performance, Rust-native ZeroMQ-compatible messaging runtime built on `io_uring` (via `compio`).

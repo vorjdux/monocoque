@@ -95,6 +95,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 -   API guidelines compliance (`# Errors` sections, `#[must_use]` annotations)
 -   Timeless documentation (no hardcoded dates)
 
+### Changed
+
+-   **Refactored**: Split `monocoque/src/zmq/mod.rs` into separate files per socket type
+    -   Extracted common error conversion helper to `common.rs`
+    -   Split DealerSocket into `dealer.rs` (~140 lines)
+    -   Split RouterSocket into `router.rs` (~155 lines)
+    -   Split PubSocket into `publisher.rs` (~70 lines)
+    -   Split SubSocket into `subscriber.rs` (~90 lines)
+    -   Updated `mod.rs` to module re-exports and documentation (~60 lines)
+    -   Impact: Improved code organization, easier maintenance, reduced cognitive load (60-155 lines per file vs 450 lines monolithic file)
+    -   All public APIs remain unchanged, backward compatible
+    -   All interop tests passing
+
 ### Testing
 
 -   Integration tests with libzmq interoperability
