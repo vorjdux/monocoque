@@ -1,7 +1,6 @@
 /// Monocoque Error Types
 ///
 /// Comprehensive error handling for all Monocoque operations.
-
 use std::io;
 use thiserror::Error;
 
@@ -85,12 +84,12 @@ impl MonocoqueError {
     #[must_use] 
     pub fn is_recoverable(&self) -> bool {
         match self {
-            Self::Io(e) => match e.kind() {
+            Self::Io(e) => matches!(
+                e.kind(),
                 io::ErrorKind::Interrupted
-                | io::ErrorKind::WouldBlock
-                | io::ErrorKind::TimedOut => true,
-                _ => false,
-            },
+                    | io::ErrorKind::WouldBlock
+                    | io::ErrorKind::TimedOut
+            ),
             Self::HandshakeTimeout(_)
             | Self::ChannelSend
             | Self::ChannelRecv => false,

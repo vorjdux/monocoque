@@ -11,9 +11,10 @@ use bytes::Bytes;
 use monocoque_zmtp::rep::RepSocket;
 use std::thread;
 use std::time::Duration;
+use tracing::info;
 
 fn main() {
-    println!("=== Monocoque REP ↔ libzmq REQ Interop Test ===\n");
+    info!("=== Monocoque REP ↔ libzmq REQ Interop Test ===\n");
 
     // Spawn Monocoque REP server in background thread
     let server_handle = thread::spawn(|| {
@@ -21,21 +22,21 @@ fn main() {
             let listener = compio::net::TcpListener::bind("127.0.0.1:5562")
                 .await
                 .expect("Failed to bind");
-            println!("[Monocoque REP] Listening on tcp://127.0.0.1:5562");
+            info!("[Monocoque REP] Listening on tcp://127.0.0.1:5562");
 
             let (stream, _) = listener.accept().await.expect("Failed to accept");
-            let socket = RepSocket::new(stream).await;
-            println!("[Monocoque REP] Client connected\n");
+            let mut socket = RepSocket::new(stream).await.unwrap();
+            info!("[Monocoque REP] Client connected\n");
 
             // First request-reply cycle
             let request = socket.recv().await.expect("Failed to receive");
             if let Some(msg) = request {
-                println!("[Monocoque REP] Received request:");
+                info!("[Monocoque REP] Received request:");
                 for (i, frame) in msg.iter().enumerate() {
-                    println!("  Frame {}: {:?}", i, String::from_utf8_lossy(frame));
+                    info!("  Frame {}: {:?}", i, String::from_utf8_lossy(frame));
                 }
 
-                println!("[Monocoque REP] Sending reply");
+                info!("[Monocoque REP] Sending reply");
                 socket
                     .send(vec![Bytes::from_static(b"Reply from Monocoque REP")])
                     .await
@@ -45,12 +46,12 @@ fn main() {
             // Second request-reply cycle
             let request = socket.recv().await.expect("Failed to receive second request");
             if let Some(msg) = request {
-                println!("\n[Monocoque REP] Received second request:");
+                info!("\n[Monocoque REP] Received second request:");
                 for (i, frame) in msg.iter().enumerate() {
-                    println!("  Frame {}: {:?}", i, String::from_utf8_lossy(frame));
+                    info!("  Frame {}: {:?}", i, String::from_utf8_lossy(frame));
                 }
 
-                println!("[Monocoque REP] Sending second reply");
+                info!("[Monocoque REP] Sending second reply");
                 socket
                     .send(vec![Bytes::from_static(b"Second reply from Monocoque")])
                     .await
@@ -66,29 +67,29 @@ fn main() {
     thread::sleep(Duration::from_millis(50));
 
     // Run libzmq REQ client in main thread
-    println!("[libzmq REQ] Connecting to tcp://127.0.0.1:5562");
+    info!("[libzmq REQ] Connecting to tcp://127.0.0.1:5562");
     let ctx = zmq::Context::new();
     let req = ctx.socket(zmq::REQ).unwrap();
     req.connect("tcp://127.0.0.1:5562").unwrap();
-    println!("[libzmq REQ] Connected\n");
+    info!("[libzmq REQ] Connected\n");
 
     // First request-reply cycle
-    println!("[libzmq REQ] Sending first request");
+    info!("[libzmq REQ] Sending first request");
     req.send("Request from libzmq REQ", 0).unwrap();
 
     let reply = req.recv_bytes(0).unwrap();
-    println!("[libzmq REQ] Received reply: {:?}\n", String::from_utf8_lossy(&reply));
+    info!("[libzmq REQ] Received reply: {:?}\n", String::from_utf8_lossy(&reply));
 
     // Second request-reply cycle
-    println!("[libzmq REQ] Sending second request");
+    info!("[libzmq REQ] Sending second request");
     req.send("Second request from libzmq", 0).unwrap();
 
     let reply = req.recv_bytes(0).unwrap();
-    println!("[libzmq REQ] Received second reply: {:?}\n", String::from_utf8_lossy(&reply));
+    info!("[libzmq REQ] Received second reply: {:?}\n", String::from_utf8_lossy(&reply));
 
     drop(req);
 
     server_handle.join().unwrap();
 
-    println!("✅ REP interop test completed successfully!");
+    info!("✅ REP interop test completed successfully!");
 }

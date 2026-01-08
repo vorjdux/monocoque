@@ -20,6 +20,11 @@ flume.workspace = true
 futures.workspace = true
 compio.workspace = true
 monocoque-core = { version = "0.1.0", path = "../monocoque-core" }
+smallvec = "1.13"
+tracing = "0.1"
+socket2 = "0.5"
 
 [dev-dependencies]
 zmq.workspace = true
+criterion.workspace = true
+tokio.workspace = true

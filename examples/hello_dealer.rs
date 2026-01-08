@@ -10,10 +10,11 @@
 use bytes::Bytes;
 use monocoque::zmq::DealerSocket;
 use compio::net::TcpStream;
+use tracing::info;
 
 #[compio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("Connecting to tcp://127.0.0.1:5555...");
+    info!("Connecting to tcp://127.0.0.1:5555...");
     
     // Connect to server
     let stream = TcpStream::connect("127.0.0.1:5555").await?;
@@ -21,21 +22,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create DEALER socket
     let socket = DealerSocket::new(stream);
     
-    println!("Connected! Sending message...");
+    info!("Connected! Sending message...");
     
     // Send a simple message
     socket.send(vec![Bytes::from("Hello from Monocoque!")]).await?;
     
-    println!("Message sent. Waiting for response...");
+    info!("Message sent. Waiting for response...");
     
     // Receive response
     let response = socket.recv().await?;
     
-    println!("Received response: {} frames", response.len());
+    info!("Received response: {} frames", response.len());
     for (i, frame) in response.iter().enumerate() {
-        println!("  Frame {}: {} bytes", i, frame.len());
+        info!("  Frame {}: {} bytes", i, frame.len());
         if let Ok(s) = std::str::from_utf8(frame) {
-            println!("    Content: {}", s);
+            info!("    Content: {}", s);
         }
     }
     

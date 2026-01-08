@@ -16,13 +16,15 @@ fn test_router_explicit_routing() {
             let (stream, _) = listener.accept().await.unwrap();
             
             // Create ROUTER socket
-            let mut router = RouterSocket::from_stream(stream).await;
+            let mut router = RouterSocket::from_stream(stream).await.unwrap();
 
             // Receive message with identity envelope
             let msg = router.recv().await.unwrap();
-            println!("[Router] Received from: {:?}, body: {:?}", 
-                     std::str::from_utf8(&msg[0]).unwrap_or("???"),
-                     std::str::from_utf8(&msg[1]).unwrap_or("???"));
+            eprintln!(
+                "[Router] Received from: {:?}, body: {:?}",
+                std::str::from_utf8(&msg[0]).unwrap_or("???"),
+                std::str::from_utf8(&msg[1]).unwrap_or("???")
+            );
             
             // Verify identity and message
             assert_eq!(&msg[0][..], b"CLIENT_A");

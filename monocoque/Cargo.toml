@@ -26,8 +26,19 @@ required-features = ["zmq"]
 name = "hello_dealer"
 required-features = ["zmq"]
 
-[[example]]
-name = "pair_socket_complete"
+[[bench]]
+name = "throughput"
+harness = false
+required-features = ["zmq"]
+
+[[bench]]
+name = "latency"
+harness = false
+required-features = ["zmq"]
+
+[[bench]]
+name = "patterns"
+harness = false
 required-features = ["zmq"]
 
 [[example]]
@@ -84,11 +95,15 @@ monocoque-zmtp = { version = "0.1.0", path = "../monocoque-zmtp", optional = tru
 # Re-export dependencies for user convenience
 bytes = { workspace = true }
 compio = { workspace = true }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 zmq = { workspace = true }
 flume = { workspace = true }
 futures = { workspace = true }
+criterion = { workspace = true }
+tokio = { workspace = true }
 
 [features]
 default = []

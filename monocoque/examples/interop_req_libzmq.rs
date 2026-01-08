@@ -11,31 +11,32 @@ use bytes::Bytes;
 use monocoque_zmtp::req::ReqSocket;
 use std::thread;
 use std::time::Duration;
+use tracing::info;
 
 fn main() {
-    println!("=== Monocoque REQ ↔ libzmq REP Interop Test ===\n");
+    info!("=== Monocoque REQ ↔ libzmq REP Interop Test ===\n");
 
     // Spawn libzmq REP server in background thread
     let server_handle = thread::spawn(|| {
         let ctx = zmq::Context::new();
         let rep = ctx.socket(zmq::REP).unwrap();
         rep.bind("tcp://127.0.0.1:5561").unwrap();
-        println!("[libzmq REP] Listening on tcp://127.0.0.1:5561");
+        info!("[libzmq REP] Listening on tcp://127.0.0.1:5561");
 
         // Receive request
         let request = rep.recv_bytes(0).unwrap();
-        println!("[libzmq REP] Received request: {:?}", String::from_utf8_lossy(&request));
+        info!("[libzmq REP] Received request: {:?}", String::from_utf8_lossy(&request));
 
         // Send reply
         rep.send("Reply from libzmq REP", 0).unwrap();
-        println!("[libzmq REP] Sent reply\n");
+        info!("[libzmq REP] Sent reply\n");
 
         // Second round
         let request = rep.recv_bytes(0).unwrap();
-        println!("[libzmq REP] Received second request: {:?}", String::from_utf8_lossy(&request));
+        info!("[libzmq REP] Received second request: {:?}", String::from_utf8_lossy(&request));
 
         rep.send("Second reply from libzmq", 0).unwrap();
-        println!("[libzmq REP] Sent second reply\n");
+        info!("[libzmq REP] Sent second reply\n");
 
         // Keep server alive
         thread::sleep(Duration::from_millis(100));
@@ -46,42 +47,42 @@ fn main() {
 
     // Run Monocoque REQ client
     compio::runtime::Runtime::new().unwrap().block_on(async {
-        println!("[Monocoque REQ] Connecting to tcp://127.0.0.1:5561");
+        info!("[Monocoque REQ] Connecting to tcp://127.0.0.1:5561");
 
         let stream = compio::net::TcpStream::connect("127.0.0.1:5561")
             .await
             .expect("Failed to connect");
 
-        let socket = ReqSocket::new(stream).await;
-        println!("[Monocoque REQ] Connected\n");
+        let mut socket = ReqSocket::new(stream).await.unwrap();
+        info!("[Monocoque REQ] Connected\n");
 
         // First request-reply cycle
-        println!("[Monocoque REQ] Sending first request");
+        info!("[Monocoque REQ] Sending first request");
         socket
             .send(vec![Bytes::from_static(b"Request from Monocoque REQ")])
             .await
             .expect("Failed to send");
 
         let response = socket.recv().await.expect("Failed to receive");
-        println!("[Monocoque REQ] Received response:");
+        info!("[Monocoque REQ] Received response:");
         if let Some(msg) = response {
             for (i, frame) in msg.iter().enumerate() {
-                println!("  Frame {}: {:?}", i, String::from_utf8_lossy(frame));
+                info!("  Frame {}: {:?}", i, String::from_utf8_lossy(frame));
             }
         }
 
         // Second request-reply cycle
-        println!("\n[Monocoque REQ] Sending second request");
+        info!("\n[Monocoque REQ] Sending second request");
         socket
             .send(vec![Bytes::from_static(b"Second request")])
             .await
             .expect("Failed to send second request");
 
         let response = socket.recv().await.expect("Failed to receive second reply");
-        println!("[Monocoque REQ] Received second response:");
+        info!("[Monocoque REQ] Received second response:");
         if let Some(msg) = response {
             for (i, frame) in msg.iter().enumerate() {
-                println!("  Frame {}: {:?}", i, String::from_utf8_lossy(frame));
+                info!("  Frame {}: {:?}", i, String::from_utf8_lossy(frame));
             }
         }
 
@@ -90,5 +91,5 @@ fn main() {
 
     server_handle.join().unwrap();
 
-    println!("\n✅ REQ interop test completed successfully!");
+    info!("\n✅ REQ interop test completed successfully!");
 }

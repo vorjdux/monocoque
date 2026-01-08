@@ -210,6 +210,10 @@ impl IoArena {
     /// - Stable memory address
     /// - No reallocation
     /// - No aliasing with other `SlabMut`
+    ///
+    /// # Panics
+    ///
+    /// Panics in debug builds if `size > PAGE_SIZE`.
     pub fn alloc_mut(&mut self, size: usize) -> SlabMut {
         debug_assert!(size <= PAGE_SIZE);
 

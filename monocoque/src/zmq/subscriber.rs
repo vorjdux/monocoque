@@ -1,6 +1,5 @@
 //! SUB socket implementation.
 
-use super::common::channel_to_io_error;
 use bytes::Bytes;
 use compio::net::TcpStream;
 use monocoque_zmtp::subscriber::SubSocket as InternalSub;
@@ -45,38 +44,33 @@ impl SubSocket {
     /// Connect to a PUB peer and create a SUB socket.
     pub async fn connect(addr: impl compio::net::ToSocketAddrsAsync) -> io::Result<Self> {
         let stream = TcpStream::connect(addr).await?;
-        Ok(Self::from_stream(stream).await)
+        Self::from_stream(stream).await
     }
 
     /// Create a SUB socket from an existing TCP stream.
-    pub async fn from_stream(stream: TcpStream) -> Self {
-        Self {
-            inner: InternalSub::new(stream).await,
-        }
+    pub async fn from_stream(stream: TcpStream) -> io::Result<Self> {
+        Ok(Self {
+            inner: InternalSub::new(stream).await?,
+        })
     }
 
     /// Subscribe to messages matching the given topic prefix.
     ///
     /// Empty topic subscribes to all messages.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the subscription command cannot be sent
-    /// (e.g., connection closed).
-    pub async fn subscribe(&self, topic: &[u8]) -> io::Result<()> {
-        channel_to_io_error(self.inner.subscribe(topic).await)
+    pub fn subscribe(&mut self, topic: &[u8]) {
+        self.inner.subscribe(Bytes::copy_from_slice(topic));
     }
 
     /// Unsubscribe from messages matching the given topic prefix.
-    pub async fn unsubscribe(&self, topic: &[u8]) -> io::Result<()> {
-        channel_to_io_error(self.inner.unsubscribe(topic).await)
+    pub fn unsubscribe(&mut self, topic: &[u8]) {
+        self.inner.unsubscribe(&Bytes::copy_from_slice(topic));
     }
 
     /// Receive a multipart message.
     ///
     /// Only messages matching subscribed topics will be received.
     /// Returns `None` if the connection is closed.
-    pub async fn recv(&mut self) -> Option<Vec<Bytes>> {
-        self.inner.recv().await.ok()
+    pub async fn recv(&mut self) -> io::Result<Option<Vec<Bytes>>> {
+        self.inner.recv().await
     }
 }

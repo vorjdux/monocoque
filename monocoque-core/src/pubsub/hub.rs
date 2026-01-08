@@ -27,9 +27,9 @@ pub enum PubSubCmd {
     Close,
 }
 
-/// Events coming from peer actors (SUB sockets).
+/// Events coming from peers (SUB sockets).
 ///
-/// These are emitted by `SocketActor` when:
+/// These are emitted when:
 /// - handshake completes
 /// - connection closes
 /// - SUB / UNSUB commands are parsed
@@ -57,7 +57,7 @@ pub enum PubSubEvent {
 /// Supervisor for PUB/SUB sockets.
 ///
 /// This hub does *no* I/O itself.
-/// It only routes already-decoded messages between actors.
+/// It only routes already-decoded messages between peers.
 pub struct PubSubHub {
     /// Subscription index (topic -> peers)
     index: SubscriptionIndex,
@@ -74,7 +74,7 @@ pub struct PubSubHub {
     /// Monotonic key generator
     next_key: PeerKey,
 
-    /// Events from actors
+    /// Events from peers
     hub_rx: Receiver<PubSubEvent>,
 
     /// Messages from user (publish path)
@@ -82,7 +82,7 @@ pub struct PubSubHub {
 }
 
 impl PubSubHub {
-    #[must_use] 
+    #[must_use]
     pub fn new(hub_rx: Receiver<PubSubEvent>, user_tx_rx: Receiver<PubSubCmd>) -> Self {
         Self {
             index: SubscriptionIndex::new(),

@@ -4,8 +4,8 @@
 //! - Runtime-agnostic async loop (`flume::select`!, no tokio)
 //! - Strict types: `RouterCmd` has envelope, `PeerCmd` is body-only
 //! - Envelope normalization:
-//!     inbound (actor->user) is normalized elsewhere to [ID, Empty, Body...]
-//!     outbound (user->hub) accepts [ID, (Empty), Body...] in Standard mode
+//!   - inbound (actor->user) is normalized elsewhere to [ID, Empty, Body...]
+//!   - outbound (user->hub) accepts [ID, (Empty), Body...] in Standard mode
 //! - Load balancer mode: round-robin dispatch when no explicit routing id is used
 //! - "Ghost peer" self-heal: stale IDs removed from rr list when detected
 
@@ -22,14 +22,14 @@ pub enum RouterCmd {
     Close,
 }
 
-/// Commands sent from Hub -> Peer Actor (body only; hub strips any envelope)
+/// Commands sent from Hub -> Peer (body only; hub strips any envelope)
 #[derive(Debug)]
 pub enum PeerCmd {
     SendBody(Vec<Bytes>),
     Close,
 }
 
-/// Events sent from Peer Actor -> Hub (lifecycle)
+/// Events sent from Peer -> Hub (lifecycle)
 #[derive(Debug)]
 pub enum HubEvent {
     PeerUp {
@@ -55,7 +55,7 @@ pub enum RouterBehavior {
 
 /// The Router Supervisor.
 ///
-/// This runs once per ROUTER socket (listener), and coordinates N peer actors.
+/// This runs once per ROUTER socket (listener), and coordinates N peers.
 pub struct RouterHub {
     // routing table
     peers: HashMap<Bytes, Sender<PeerCmd>>,
@@ -71,7 +71,7 @@ pub struct RouterHub {
 }
 
 impl RouterHub {
-    #[must_use] 
+    #[must_use]
     pub fn new(
         hub_rx: Receiver<HubEvent>,
         user_tx_rx: Receiver<RouterCmd>,

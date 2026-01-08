@@ -6,7 +6,7 @@ use std::io;
 ///
 /// Used by all socket types to convert flume channel errors
 /// into standard IO errors with BrokenPipe kind.
-pub(crate) fn channel_to_io_error<T, E>(result: Result<T, E>) -> io::Result<T>
+pub fn channel_to_io_error<T, E>(result: Result<T, E>) -> io::Result<T>
 where
     E: std::error::Error + Send + Sync + 'static,
 {

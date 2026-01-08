@@ -1,6 +1,7 @@
 use crate::codec::{ZmtpDecoder, ZmtpError, ZmtpFrame};
 use crate::greeting::ZmtpGreeting;
 use bytes::{Bytes, BytesMut};
+use monocoque_core::buffer::SegmentedBuffer;
 
 /// Supported ZMQ socket types (no heap allocation)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +70,7 @@ enum State {
 pub struct ZmtpSession {
     state: State,
     local_socket_type: SocketType,
+    recv: SegmentedBuffer,
 }
 
 impl ZmtpSession {
@@ -79,6 +81,7 @@ impl ZmtpSession {
                 buffer: BytesMut::with_capacity(64),
             },
             local_socket_type,
+            recv: SegmentedBuffer::new(),
         }
     }
 
@@ -93,6 +96,7 @@ impl ZmtpSession {
                 decoder: ZmtpDecoder::new(),
             },
             local_socket_type,
+            recv: SegmentedBuffer::new(),
         }
     }
 
@@ -128,8 +132,10 @@ impl ZmtpSession {
     }
 
     /// Feed incoming bytes into the session
-    pub fn on_bytes(&mut self, mut src: Bytes) -> Vec<SessionEvent> {
+    pub fn on_bytes(&mut self, src: Bytes) -> Vec<SessionEvent> {
         let mut events = Vec::new();
+
+        self.recv.push(src);
 
         loop {
             match &mut self.state {
@@ -138,8 +144,10 @@ impl ZmtpSession {
                 // =========================
                 State::Greeting { buffer } => {
                     let needed = 64 - buffer.len();
-                    let take = needed.min(src.len());
-                    buffer.extend_from_slice(&src.split_to(take));
+                    let take = needed.min(self.recv.len());
+                    if let Some(bytes) = self.recv.take_bytes(take) {
+                        buffer.extend_from_slice(&bytes);
+                    }
 
                     if buffer.len() < 64 {
                         break;
@@ -189,7 +197,7 @@ impl ZmtpSession {
                     peer_socket_type,
                     peer_identity,
                 } => {
-                    match decoder.decode(&mut src) {
+                    match decoder.decode(&mut self.recv) {
                         Ok(Some(frame)) => {
                             if !frame.is_command() {
                                 events.push(SessionEvent::Error(ZmtpError::Protocol));
@@ -225,7 +233,7 @@ impl ZmtpSession {
                 // =========================
                 // Active
                 // =========================
-                State::Active { decoder } => match decoder.decode(&mut src) {
+                State::Active { decoder } => match decoder.decode(&mut self.recv) {
                     Ok(Some(frame)) => {
                         events.push(SessionEvent::Frame(frame));
                     }

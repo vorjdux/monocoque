@@ -18,7 +18,7 @@ fn test_pubsub_basic() {
             let (stream, _) = listener.accept().await.unwrap();
             
             // Create PUB socket
-            let mut pub_socket = PubSocket::from_stream(stream).await;
+            let mut pub_socket = PubSocket::from_stream(stream).await.unwrap();
 
             // Give subscriber time to connect and subscribe
             compio::time::sleep(Duration::from_millis(100)).await;

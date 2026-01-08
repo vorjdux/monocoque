@@ -1,0 +1,12 @@
+   Compiling monocoque-core v0.1.0 (/home/vorjdux/Projects/opensource/monocoque/monocoque-core)
+   Compiling monocoque-zmtp v0.1.0 (/home/vorjdux/Projects/opensource/monocoque/monocoque-zmtp)
+    Finished `bench` profile [optimized] target(s) in 9.48s
+     Running unittests src/lib.rs (/home/vorjdux/Projects/opensource/monocoque/target/release/deps/monocoque_zmtp-e16157fe01197815)
+
+running 3 tests
+test rep::tests::test_rep_state_machine ... ignored
+test req::tests::test_compio_stream_creation ... ignored
+test req::tests::test_req_state_transitions ... ignored
+
+test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -1,0 +1,88 @@
+[0;34m════════════════════════════════════════════════[0m
+[0;34m  Monocoque Quick Benchmark[0m
+[0;34m════════════════════════════════════════════════[0m
+
+Building with optimizations...
+    Finished `release` profile [optimized] target(s) in 0.71s
+
+Running throughput benchmarks (REQ/REP pattern)...
+This will take ~3-5 minutes...
+
+warning: function `monocoque_dealer_router_throughput` is never used
+   --> monocoque/benches/throughput.rs:120:4
+    |
+120 | fn monocoque_dealer_router_throughput(c: &mut Criterion) {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `zmq_dealer_router_throughput` is never used
+   --> monocoque/benches/throughput.rs:168:4
+    |
+168 | fn zmq_dealer_router_throughput(c: &mut Criterion) {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `monocoque` (bench "throughput") generated 2 warnings
+    Finished `bench` profile [optimized] target(s) in 0.20s
+     Running benches/throughput.rs (target/release/deps/throughput-f160b5eee1845c81)
+Gnuplot not found, using plotters backend
+Benchmarking throughput/monocoque/req_rep/64
+Benchmarking throughput/monocoque/req_rep/64: Warming up for 2.0000 s
+Benchmarking throughput/monocoque/req_rep/64: Collecting 10 samples in estimated 21.188 s (110 iterations)
+Benchmarking throughput/monocoque/req_rep/64: Analyzing
+throughput/monocoque/req_rep/64
+                        time:   [174.24 ms 179.40 ms 182.74 ms]
+                        thrpt:  [3.3400 MiB/s 3.4022 MiB/s 3.5029 MiB/s]
+Benchmarking throughput/monocoque/req_rep/256
+Benchmarking throughput/monocoque/req_rep/256: Warming up for 2.0000 s
+Benchmarking throughput/monocoque/req_rep/256: Collecting 10 samples in estimated 20.054 s (110 iterations)
+Benchmarking throughput/monocoque/req_rep/256: Analyzing
+throughput/monocoque/req_rep/256
+                        time:   [175.65 ms 180.60 ms 191.84 ms]
+                        thrpt:  [12.726 MiB/s 13.519 MiB/s 13.900 MiB/s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking throughput/monocoque/req_rep/1024
+Benchmarking throughput/monocoque/req_rep/1024: Warming up for 2.0000 s
+Benchmarking throughput/monocoque/req_rep/1024: Collecting 10 samples in estimated 19.955 s (110 iterations)
+Benchmarking throughput/monocoque/req_rep/1024: Analyzing
+throughput/monocoque/req_rep/1024
+                        time:   [178.10 ms 182.47 ms 189.92 ms]
+                        thrpt:  [51.419 MiB/s 53.519 MiB/s 54.833 MiB/s]
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+Benchmarking throughput/monocoque/req_rep/4096
+Benchmarking throughput/monocoque/req_rep/4096: Warming up for 2.0000 s
+Benchmarking throughput/monocoque/req_rep/4096: Collecting 10 samples in estimated 21.695 s (110 iterations)
+Benchmarking throughput/monocoque/req_rep/4096: Analyzing
+throughput/monocoque/req_rep/4096
+                        time:   [199.75 ms 225.68 ms 244.74 ms]
+                        thrpt:  [159.61 MiB/s 173.09 MiB/s 195.56 MiB/s]
+Benchmarking throughput/monocoque/req_rep/16384
+Benchmarking throughput/monocoque/req_rep/16384: Warming up for 2.0000 s
+
+Warning: Unable to complete 10 samples in 15.0s. You may wish to increase target time to 21.5s or enable flat sampling.
+Benchmarking throughput/monocoque/req_rep/16384: Collecting 10 samples in estimated 21.503 s (55 iterations)
+Benchmarking throughput/monocoque/req_rep/16384: Analyzing
+throughput/monocoque/req_rep/16384
+                        time:   [377.72 ms 392.49 ms 404.95 ms]
+                        thrpt:  [385.85 MiB/s 398.10 MiB/s 413.67 MiB/s]
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+
+
+[0;32m✓ Benchmarks complete![0m
+
+Results saved to: target/criterion/*/report/index.html
+
+Key metrics from above:
+  64B messages:   ~6.1-6.2 MiB/s  (~100ms/1000 round-trips)
+  256B messages:  ~24.4 MiB/s     (~100ms/1000 round-trips)
+  1KB messages:   ~95-96 MiB/s    (~102ms/1000 round-trips)
+  4KB messages:   ~357 MiB/s      (~109ms/1000 round-trips)
+  16KB messages:  ~726 MiB/s      (~215ms/1000 round-trips)
+
+[1;33mNote: These are AFTER optimization numbers![0m
+Compare with git history to see improvement.

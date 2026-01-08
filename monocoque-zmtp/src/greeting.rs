@@ -19,7 +19,9 @@ pub enum Mechanism {
 /// Parsed greeting information
 #[derive(Debug, Clone)]
 pub struct ZmtpGreeting {
+    #[allow(dead_code)] // Used in future auth implementations
     pub mechanism: Mechanism,
+    #[allow(dead_code)] // Used in future auth implementations
     pub as_server: bool,
 }
 

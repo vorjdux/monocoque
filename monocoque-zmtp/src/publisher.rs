@@ -1,140 +1,92 @@
-use crate::{integrated_actor::ZmtpIntegratedActor, session::SocketType};
-/// PUB (Publisher) socket implementation
-///
-/// Architecture: Application → `PubSocket` → `ZmtpIntegratedActor` → `SocketActor` → `TcpStream`
-///
-/// PUB sockets broadcast messages to all connected SUB sockets.
-use bytes::Bytes;
-use compio::net::TcpStream;
-use flume::{unbounded, Sender};
-use monocoque_core::{
-    actor::{SocketActor, SocketEvent, UserCmd},
-    alloc::IoArena,
-};
+//! Direct-stream PUB socket implementation
+//!
+//! This module provides a high-performance PUB socket using direct stream I/O
+//! for minimal latency.
+//!
+//! # PUB Pattern
+//!
+//! PUB sockets are send-only broadcast sockets.
 
-/// High-level PUB socket with async send API
-///
-/// Messages are multipart and broadcast to all subscribers.
+use bytes::{Bytes, BytesMut};
+use compio::io::AsyncWrite;
+use compio::net::TcpStream;
+use monocoque_core::alloc::IoArena;
+use monocoque_core::alloc::IoBytes;
+use std::io;
+use std::sync::Arc;
+use tracing::{debug, trace};
+
+use crate::{codec::encode_multipart, config::BufferConfig, handshake::perform_handshake, session::SocketType};
+
+/// Direct-stream PUB socket.
 pub struct PubSocket {
-    app_tx: Sender<Vec<Bytes>>,
-    _task_handles: (compio::runtime::Task<()>, compio::runtime::Task<()>),
+    /// Underlying TCP stream
+    stream: TcpStream,
+    /// Arena for zero-copy allocation
+    #[allow(dead_code)]
+    arena: Arc<IoArena>,
+    /// Write buffer for outgoing data (reused to avoid allocations)
+    write_buf: BytesMut,
+    /// Buffer configuration
+    #[allow(dead_code)]
+    config: BufferConfig,
 }
 
 impl PubSocket {
-    /// Create a new PUB socket from a `TcpStream`
-    ///
-    /// This spawns:
-    /// 1. `SocketActor` task for I/O
-    /// 2. Integration task bridging socket events → ZMTP session
-    pub async fn new(tcp_stream: TcpStream) -> Self {
-        // Create channels for socket actor communication
-        let (socket_event_tx, socket_event_rx) = unbounded();
-        let (socket_cmd_tx, socket_cmd_rx) = unbounded();
+    /// Create a new PUB socket from a TCP stream.
+    pub async fn new(mut stream: TcpStream) -> io::Result<Self> {
+        debug!("[PUB] Creating new direct PUB socket");
 
-        // Create channels for application communication
-        let (user_tx, user_rx) = unbounded(); // application → integrated (for send)
-        let (integrated_tx, integrated_rx) = unbounded(); // integrated → application (for recv, unused in PUB)
+        // Enable TCP_NODELAY for low latency
+        monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
+        debug!("[PUB] TCP_NODELAY enabled");
 
-        // Create socket actor
-        let io_arena = IoArena::new();
-        let socket_actor = SocketActor::new(tcp_stream, socket_event_tx, socket_cmd_rx, io_arena);
+        // Perform ZMTP handshake
+        debug!("[PUB] Performing ZMTP handshake...");
+        let handshake_result = perform_handshake(&mut stream, SocketType::Pub, None)
+            .await
+            .map_err(|e| io::Error::other(format!("Handshake failed: {}", e)))?;
 
-        // Create ZmtpIntegratedActor
-        let mut integrated_actor =
-            ZmtpIntegratedActor::new(SocketType::Pub, integrated_tx, user_rx);
+        debug!(
+            peer_socket_type = ?handshake_result.peer_socket_type,
+            "[PUB] Handshake complete"
+        );
 
-        // Send initial greeting before spawning tasks
-        let greeting = integrated_actor.local_greeting();
-        let _ = socket_cmd_tx.send(UserCmd::SendBytes(greeting));
+        // Create arena for zero-copy allocation
+        let arena = Arc::new(IoArena::new());
 
-        // Spawn SocketActor first
-        let socket_handle = compio::runtime::spawn(socket_actor.run());
+        // Create buffer config
+        let config = BufferConfig::default();
 
-        // Small delay to allow SocketActor pumps to initialize
-        // TODO: Replace with proper synchronization mechanism
-        compio::time::sleep(std::time::Duration::from_millis(1)).await;
+        // Create write buffer
+        let write_buf = BytesMut::with_capacity(config.write_buf_size);
 
-        // Spawn integration task
-        let integration_handle = compio::runtime::spawn(async move {
-            eprintln!("[PUB TASK] Integration task started");
+        debug!("[PUB] Socket initialized");
 
-            use futures::{select, FutureExt};
-
-            let mut handshake_complete = false;
-
-            loop {
-                select! {
-                    // Wait for socket events
-                    event = socket_event_rx.recv_async().fuse() => {
-                        match event {
-                            Ok(SocketEvent::Connected) => {
-                                // Connection established
-                            }
-                            Ok(SocketEvent::ReceivedBytes(bytes)) => {
-                                // Feed bytes into ZMTP session
-                                let session_events = integrated_actor.session.on_bytes(bytes);
-
-                                for event in session_events {
-                                    match event {
-                                        crate::session::SessionEvent::SendBytes(data) => {
-                                            let _ = socket_cmd_tx.send(UserCmd::SendBytes(data));
-                                        }
-                                        crate::session::SessionEvent::HandshakeComplete {
-                                            peer_identity,
-                                            peer_socket_type: _,
-                                        } => {
-                                            integrated_actor.handle_handshake_complete(peer_identity);
-                                            handshake_complete = true;
-                                        }
-                                        crate::session::SessionEvent::Frame(frame) => {
-                                            if handshake_complete {
-                                                integrated_actor.handle_frame(frame);
-                                            }
-                                        }
-                                        crate::session::SessionEvent::Error(_e) => {
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                            Ok(SocketEvent::Disconnected) | Err(_) => {
-                                break;
-                            }
-                        }
-                    }
-                    // Wait for outgoing messages from application
-                    msg = integrated_actor.user_rx.recv_async().fuse() => {
-                        match msg {
-                            Ok(multipart) => {
-                                eprintln!("[PUB TASK] Got {} frames from user_rx", multipart.len());
-                                let frames = integrated_actor.encode_outgoing_message(multipart);
-                                for frame in frames {
-                                    eprintln!("[PUB TASK] Sending {} bytes to SocketActor", frame.len());
-                                    let _ = socket_cmd_tx.send(UserCmd::SendBytes(frame));
-                                }
-                            }
-                            Err(_) => {
-                                eprintln!("[PUB TASK] user_rx channel closed, exiting");
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            eprintln!("[PUB TASK] Integration task exiting");
-        });
-
-        Self {
-            app_tx: user_tx,
-            _task_handles: (integration_handle, socket_handle),
-        }
+        Ok(Self {
+            stream,
+            arena,
+            write_buf,
+            config,
+        })
     }
 
-    /// Send (broadcast) a multipart message to all subscribers
-    ///
-    /// The message will be distributed to all connected SUB sockets
-    /// that have matching subscriptions.
-    pub async fn send(&self, msg: Vec<Bytes>) -> Result<(), flume::SendError<Vec<Bytes>>> {
-        self.app_tx.send_async(msg).await
+    /// Send a message.
+    pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
+        trace!("[PUB] Sending {} frames", msg.len());
+
+        // Encode message - reuse write_buf to avoid allocation
+        self.write_buf.clear();
+        encode_multipart(&msg, &mut self.write_buf);
+
+        // Write to stream using compio
+        use compio::buf::BufResult;
+
+        let buf = self.write_buf.split().freeze();
+        let BufResult(result, _) = AsyncWrite::write(&mut self.stream, IoBytes::new(buf)).await;
+        result?;
+
+        trace!("[PUB] Message sent successfully");
+        Ok(())
     }
 }

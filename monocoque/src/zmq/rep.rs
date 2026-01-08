@@ -69,10 +69,10 @@ impl RepSocket {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn from_stream(stream: TcpStream) -> Self {
-        Self {
-            inner: InternalRep::new(stream).await,
-        }
+    pub async fn from_stream(stream: TcpStream) -> io::Result<Self> {
+        Ok(Self {
+            inner: InternalRep::new(stream).await?,
+        })
     }
 
     /// Receive a request message.
@@ -99,7 +99,7 @@ impl RepSocket {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn recv(&self) -> Option<Vec<Bytes>> {
+    pub async fn recv(&mut self) -> Option<Vec<Bytes>> {
         self.inner.recv().await.ok().flatten()
     }
 
@@ -136,7 +136,7 @@ impl RepSocket {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn send(&self, msg: Vec<Bytes>) -> io::Result<()> {
+    pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
         channel_to_io_error(self.inner.send(msg).await)
     }
 }

@@ -21,4 +21,6 @@ futures.workspace = true
 async-trait.workspace = true
 hashbrown.workspace = true
 smallvec.workspace = true
+socket2 = "0.5"
 thiserror.workspace = true
+tracing = "0.1"

@@ -26,6 +26,7 @@ use compio::buf::BufResult;
 use compio::io::{AsyncReadExt, AsyncWriteExt};
 use compio::net::TcpStream;
 use monocoque_core::alloc::IoBytes;
+use tracing::debug;
 
 /// Result of a successful handshake
 #[derive(Debug)]
@@ -40,26 +41,26 @@ pub struct HandshakeResult {
 /// 1. Greeting exchange is complete
 /// 2. READY command exchange is complete
 ///
-/// Only after this completes should the stream be handed to SocketActor.
+/// Only after this completes should the stream be handed to `SocketActor`.
 pub async fn perform_handshake(
     stream: &mut TcpStream,
     local_socket_type: SocketType,
     identity: Option<&[u8]>,
 ) -> Result<HandshakeResult, ZmtpError> {
-    eprintln!("[HANDSHAKE] Starting synchronous handshake for {}", local_socket_type.as_str());
+    debug!("[HANDSHAKE] Starting synchronous handshake for {}", local_socket_type.as_str());
     
     // Step 1: Send our greeting
     let greeting_bytes = build_greeting();
     let io_buf = IoBytes::new(greeting_bytes.clone());
     let BufResult(write_res, _) = stream.write_all(io_buf).await;
     write_res.map_err(|_| ZmtpError::Protocol)?;
-    eprintln!("[HANDSHAKE] Sent greeting ({} bytes)", greeting_bytes.len());
+    debug!("[HANDSHAKE] Sent greeting ({} bytes)", greeting_bytes.len());
 
     // Step 2: Receive peer greeting
     let greeting_buf = [0u8; 64];
     let BufResult(read_res, greeting_buf) = stream.read_exact(greeting_buf).await;
     read_res.map_err(|_| ZmtpError::Protocol)?;
-    eprintln!("[HANDSHAKE] Received peer greeting (64 bytes)");
+    debug!("[HANDSHAKE] Received peer greeting (64 bytes)");
     
     // Validate greeting
     if greeting_buf[0] != 0xFF {
@@ -72,7 +73,7 @@ pub async fn perform_handshake(
     let io_buf = IoBytes::new(ready_frame.clone());
     let BufResult(write_res, _) = stream.write_all(io_buf).await;
     write_res.map_err(|_| ZmtpError::Protocol)?;
-    eprintln!("[HANDSHAKE] Sent READY command ({} bytes)", ready_frame.len());
+    debug!("[HANDSHAKE] Sent READY command ({} bytes)", ready_frame.len());
 
     // Step 4: Receive peer READY command
     // Read the frame header first
@@ -85,7 +86,7 @@ pub async fn perform_handshake(
     let is_long = (flags & 0x02) != 0;
     
     if !is_command {
-        eprintln!("[HANDSHAKE] ERROR: Expected COMMAND frame, got data frame");
+        debug!("[HANDSHAKE] ERROR: Expected COMMAND frame, got data frame");
         return Err(ZmtpError::Protocol);
     }
 
@@ -103,20 +104,20 @@ pub async fn perform_handshake(
     // READY commands are typically small (~27 bytes), use stack buffer
     const MAX_READY_SIZE: usize = 512; // Generous limit for READY command
     if body_len > MAX_READY_SIZE {
-        eprintln!("[HANDSHAKE] ERROR: READY body too large: {} bytes", body_len);
+        debug!("[HANDSHAKE] ERROR: READY body too large: {} bytes", body_len);
         return Err(ZmtpError::Protocol);
     }
     let body_buf = vec![0u8; body_len];
     let BufResult(read_res, body_buf) = stream.read_exact(body_buf).await;
     read_res.map_err(|_| ZmtpError::Protocol)?;
     
-    eprintln!("[HANDSHAKE] Received READY command ({} total bytes)", 2 + if is_long { 8 } else { 0 } + body_len);
+    debug!("[HANDSHAKE] Received READY command ({} total bytes)", 2 + if is_long { 8 } else { 0 } + body_len);
 
     // Parse READY command
     let ready_bytes = Bytes::from(body_buf);
     let (peer_socket_type, peer_identity) = parse_ready_command(&ready_bytes)?;
     
-    eprintln!("[HANDSHAKE] Handshake complete! Peer is {}", peer_socket_type.as_str());
+    debug!("[HANDSHAKE] Handshake complete! Peer is {}", peer_socket_type.as_str());
 
     Ok(HandshakeResult {
         peer_identity,
@@ -201,15 +202,18 @@ fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), Zmtp
             break;
         }
 
-        let value = &body[offset..offset + value_len];
+        // Store the range for zero-copy slice
+        let value_start = offset;
+        let value_end = offset + value_len;
         offset += value_len;
 
         match key {
             b"Socket-Type" => {
-                socket_type = Some(parse_socket_type(value)?);
+                socket_type = Some(parse_socket_type(&body[value_start..value_end])?);
             }
             b"Identity" => {
-                identity = Some(Bytes::copy_from_slice(value));
+                // Zero-copy: slice the existing Bytes instead of copying
+                identity = Some(body.slice(value_start..value_end));
             }
             _ => {
                 // Ignore unknown properties
@@ -222,7 +226,7 @@ fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), Zmtp
 }
 
 /// Parse socket type from bytes
-fn parse_socket_type(value: &[u8]) -> Result<SocketType, ZmtpError> {
+const fn parse_socket_type(value: &[u8]) -> Result<SocketType, ZmtpError> {
     match value {
         b"PAIR" => Ok(SocketType::Pair),
         b"DEALER" => Ok(SocketType::Dealer),

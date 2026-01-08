@@ -16,7 +16,7 @@ fn test_interop_pair() {
             let (stream, _) = listener.accept().await.unwrap();
             
             // Create DEALER socket (works as PAIR for point-to-point)
-            let dealer = DealerSocket::new(stream);
+            let mut dealer = DealerSocket::new(stream).await.unwrap();
 
             // Echo server logic
             let msg = dealer.recv().await.unwrap();
@@ -41,5 +41,5 @@ fn test_interop_pair() {
 #[test]
 fn test_interop_pair() {
     // Skip test if runtime feature not enabled
-    println!("Skipping interop_pair test - requires 'runtime' feature");
+    tracing::info!("Skipping interop_pair test - requires 'runtime' feature");
 }

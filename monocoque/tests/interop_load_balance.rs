@@ -18,12 +18,14 @@ fn test_router_load_balancer_basic() {
             let (stream, _) = listener.accept().await.unwrap();
             
             // Create ROUTER socket
-            let mut router = RouterSocket::from_stream(stream).await;
+            let mut router = RouterSocket::from_stream(stream).await.unwrap();
 
             // Receive message from dealer
             let msg = router.recv().await.unwrap();
-            println!("[Router] Received from: {:?}", 
-                     std::str::from_utf8(&msg[0]).unwrap_or("???"));
+            eprintln!(
+                "[Router] Received from: {:?}",
+                std::str::from_utf8(&msg[0]).unwrap_or("???")
+            );
 
             // Send response to specific peer
             router.send(vec![

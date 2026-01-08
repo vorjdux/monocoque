@@ -53,15 +53,15 @@ impl PubSocket {
     ) -> io::Result<(TcpListener, Self)> {
         let listener = TcpListener::bind(addr).await?;
         let (stream, _) = listener.accept().await?;
-        let socket = Self::from_stream(stream).await;
+        let socket = Self::from_stream(stream).await?;
         Ok((listener, socket))
     }
 
     /// Create a PUB socket from an existing TCP stream.
-    pub async fn from_stream(stream: TcpStream) -> Self {
-        Self {
-            inner: InternalPub::new(stream).await,
-        }
+    pub async fn from_stream(stream: TcpStream) -> io::Result<Self> {
+        Ok(Self {
+            inner: InternalPub::new(stream).await?,
+        })
     }
 
     /// Broadcast a multipart message to all subscribers.

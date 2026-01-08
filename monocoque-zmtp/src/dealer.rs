@@ -1,283 +1,154 @@
-//! # DEALER Socket Implementation
+//! Direct-stream DEALER socket implementation
 //!
-//! The DEALER socket provides asynchronous request-reply patterns with load balancing.
+//! This module provides a high-performance DEALER socket using direct stream I/O
+//! for minimal latency.
 //!
-//! ## Features
+//! # DEALER Pattern
 //!
-//! - **Bidirectional**: Can both send and receive multipart messages
-//! - **Load Balanced**: When multiple DEALER sockets connect to a ROUTER, messages are distributed fairly
-//! - **Asynchronous**: Non-blocking send and receive operations
-//! - **Multipart**: Full support for `ZeroMQ` multipart messages
-//!
-//! ## Usage Example
-//!
-//! ```rust,no_run
-//! use monocoque_zmtp::dealer::DealerSocket;
-//! use compio::net::TcpStream;
-//! use bytes::Bytes;
-//!
-//! #[compio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     // Connect to ROUTER server
-//!     let stream = TcpStream::connect("127.0.0.1:5555").await?;
-//!     let socket = DealerSocket::new(stream).await;
-//!     
-//!     // Send request
-//!     socket.send(vec![Bytes::from("Hello")]).await?;
-//!     
-//!     // Receive response
-//!     let response = socket.recv().await?;
-//!     println!("Got {} frames", response.len());
-//!     
-//!     Ok(())
-//! }
-//! ```
-//!
-//! ## Protocol Details
-//!
-//! DEALER implements the `ZeroMQ` DEALER socket pattern:
-//! - Messages are sent as-is (no envelope modification)
-//! - Compatible with ROUTER and REP sockets
-//! - Fair queuing when multiple DEALERs connect to one ROUTER
+//! DEALER sockets are bidirectional asynchronous sockets that allow sending and
+//! receiving messages freely without a strict request-reply pattern.
 
-use crate::{integrated_actor::ZmtpIntegratedActor, session::SocketType};
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
+use compio::io::{AsyncRead, AsyncWrite};
 use compio::net::TcpStream;
-use flume::{unbounded, Receiver, Sender};
-use monocoque_core::{
-    actor::{SocketActor, SocketEvent, UserCmd},
-    alloc::IoArena,
+use monocoque_core::alloc::IoArena;
+use monocoque_core::alloc::IoBytes;
+use monocoque_core::buffer::SegmentedBuffer;
+use smallvec::SmallVec;
+use std::io;
+use tracing::{debug, trace};
+
+use crate::{
+    codec::{encode_multipart, ZmtpDecoder},
+    config::BufferConfig,
+    handshake::perform_handshake,
+    session::SocketType,
 };
 
-/// A DEALER socket for asynchronous request-reply patterns.
-///
-/// DEALER sockets provide:
-/// - Bidirectional communication (send and receive)
-/// - Multipart message support
-/// - Load balancing when connecting to ROUTER sockets
-/// - Asynchronous, non-blocking operations
-///
-/// # Architecture
-///
-/// The socket integrates three layers:
-/// 1. `SocketActor` - Protocol-agnostic I/O with split read/write pumps
-/// 2. `ZmtpIntegratedActor` - ZMTP protocol handling (framing, handshake)
-/// 3. Application API - High-level async send/recv
-///
-/// # Example
-///
-/// ```rust,no_run
-/// use monocoque_zmtp::dealer::DealerSocket;
-/// use compio::net::TcpStream;
-/// use bytes::Bytes;
-///
-/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let stream = TcpStream::connect("127.0.0.1:5555").await?;
-/// let socket = DealerSocket::new(stream).await;
-///
-/// // Send a request
-/// socket.send(vec![Bytes::from("REQUEST")]).await?;
-///
-/// // Receive response
-/// let reply = socket.recv().await?;
-/// # Ok(())
-/// # }
-/// ```
+/// Direct-stream DEALER socket.
 pub struct DealerSocket {
-    /// Channel to send messages to application
-    app_tx: Sender<Vec<Bytes>>,
-    /// Channel to receive messages from application
-    app_rx: Receiver<Vec<Bytes>>,
-    /// Task handles (kept alive to prevent task cancellation)
-    _task_handles: (compio::runtime::Task<()>, compio::runtime::Task<()>),
+    /// Underlying TCP stream
+    stream: TcpStream,
+    /// ZMTP decoder for decoding frames
+    decoder: ZmtpDecoder,
+    /// Arena for zero-copy allocation
+    arena: IoArena,
+    /// Segmented read buffer for incoming data
+    recv: SegmentedBuffer,
+    /// Write buffer for outgoing data (reused to avoid allocations)
+    write_buf: BytesMut,
+    /// Accumulated frames for current multipart message
+    /// SmallVec avoids heap allocation for 1-4 frame messages (common case)
+    frames: SmallVec<[Bytes; 4]>,
+    /// Buffer configuration
+    config: BufferConfig,
 }
 
 impl DealerSocket {
-    /// Create a new DEALER socket from an established TCP stream.
-    ///
-    /// **Internal API**: For public-facing ergonomics, use `monocoque::DealerSocket::connect()`.
-    ///
-    /// This spawns background tasks for I/O, protocol handling, and routing.
-    ///
-    /// Performs synchronous handshake before spawning tasks to eliminate race conditions.
-    pub async fn new(mut stream: TcpStream) -> Self {
-        use crate::handshake::perform_handshake;
+    /// Create a new DEALER socket from a TCP stream.
+    pub async fn new(mut stream: TcpStream) -> io::Result<Self> {
+        debug!("[DEALER] Creating new direct DEALER socket");
 
-        // Perform synchronous handshake FIRST (before spawning any tasks)
+        // Enable TCP_NODELAY for low latency
+        monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
+        debug!("[DEALER] TCP_NODELAY enabled");
+
+        // Perform ZMTP handshake
+        debug!("[DEALER] Performing ZMTP handshake...");
         let handshake_result = perform_handshake(&mut stream, SocketType::Dealer, None)
             .await
-            .expect("Handshake failed");
-        let peer_identity = handshake_result.peer_identity;
+            .map_err(|e| io::Error::other(format!("Handshake failed: {}", e)))?;
 
-        // Create channels
-        let (socket_event_tx, socket_event_rx) = unbounded(); // SocketActor → integration
-        let (socket_cmd_tx, socket_cmd_rx) = unbounded(); // integration → SocketActor
-        let (app_tx, app_rx) = unbounded(); // integrated → application (for recv)
-        let (user_tx, user_rx) = unbounded(); // application → integrated (for send)
-
-        // Create SocketActor with post-handshake stream
-        let arena = IoArena::new();
-        let socket_actor = SocketActor::new(stream, socket_event_tx, socket_cmd_rx, arena);
-
-        // Create ZmtpIntegratedActor in Active state (handshake already complete)
-        let mut integrated_actor = ZmtpIntegratedActor::new_active(
-            SocketType::Dealer,
-            app_tx,  // integrated sends received messages TO app
-            user_rx, // integrated receives outgoing messages FROM app
-            peer_identity,
+        debug!(
+            peer_identity = ?handshake_result.peer_identity,
+            peer_socket_type = ?handshake_result.peer_socket_type,
+            "[DEALER] Handshake complete"
         );
 
-        // Spawn SocketActor
-        eprintln!("[DEALER] About to spawn SocketActor");
-        let socket_handle = compio::runtime::spawn(socket_actor.run());
-        eprintln!("[DEALER] SocketActor spawned");
+        // Create arena for zero-copy allocation
+        let arena = IoArena::new();
 
-        // Spawn the integration task
-        let _socket_cmd_tx_clone = socket_cmd_tx.clone();
-        eprintln!("[DEALER] About to spawn integration task");
-        let integration_handle = compio::runtime::spawn(async move {
-            use std::io::Write;
-            let _ = std::io::stderr().write_all(b"[DEALER TASK] Integration task started!\n");
-            let _ = std::io::stderr().flush();
+        // Create ZMTP decoder
+        let decoder = ZmtpDecoder::new();
 
-            // Handshake already complete, session is in Active state
-            use futures::{select, FutureExt};
+        let config = BufferConfig::default();
 
+        // Create buffers
+        let recv = SegmentedBuffer::new();
+        let write_buf = BytesMut::with_capacity(config.write_buf_size);
+
+        debug!("[DEALER] Socket initialized");
+
+        Ok(Self {
+            stream,
+            decoder,
+            arena,
+            recv,
+            write_buf,
+            frames: SmallVec::new(),
+            config,
+        })
+    }
+
+    /// Receive a message.
+    pub async fn recv(&mut self) -> io::Result<Option<Vec<Bytes>>> {
+        trace!("[DEALER] Waiting for message");
+
+        // Read from stream until we have a complete message
+        loop {
+            // Try to decode frames from buffer
             loop {
-                select! {
-                    // Wait for socket events (bytes from network)
-                    event = socket_event_rx.recv_async().fuse() => {
-                        match event {
-                            Ok(SocketEvent::Connected) => {
-                                // Connection established
-                            }
-                            Ok(SocketEvent::ReceivedBytes(bytes)) => {
-                                // Feed bytes into ZMTP session (only data frames now, no handshake)
-                                let session_events = integrated_actor.session.on_bytes(bytes);
+                match self.decoder.decode(&mut self.recv)? {
+                    Some(frame) => {
+                        let more = frame.more();
+                        self.frames.push(frame.payload);
 
-                                for event in session_events {
-                                    match event {
-                                        crate::session::SessionEvent::SendBytes(data) => {
-                                            let _ = socket_cmd_tx.send(UserCmd::SendBytes(data));
-                                        }
-                                        crate::session::SessionEvent::Frame(frame) => {
-                                            eprintln!("[DEALER TASK] Received frame from peer, passing to integrated_actor");
-                                            integrated_actor.handle_frame(frame);
-                                        }
-                                        crate::session::SessionEvent::Error(_e) => {
-                                            eprintln!("[DEALER TASK] Session error, exiting");
-                                            break;
-                                        }
-                                        _ => {
-                                            // HandshakeComplete shouldn't happen since we're in Active state
-                                        }
-                                    }
-                                }
-                            }
-                            Ok(SocketEvent::Disconnected) | Err(_) => {
-                                eprintln!("[DEALER TASK] Socket disconnected, exiting");
-                                break;
-                            }
+                        if !more {
+                            // Complete message received
+                            // Collect frames while preserving capacity
+                            let msg: Vec<Bytes> = self.frames.drain(..).collect();
+                            trace!("[DEALER] Received {} frames", msg.len());
+                            return Ok(Some(msg));
                         }
                     }
-                    // Wait for outgoing messages from application
-                    msg = integrated_actor.user_rx.recv_async().fuse() => {
-                        match msg {
-                            Ok(multipart) => {
-                                eprintln!("[DEALER TASK] Got {} frames from user_rx", multipart.len());
-                                let frames = integrated_actor.encode_outgoing_message(multipart);
-                                for frame in frames {
-                                    eprintln!("[DEALER TASK] Sending {} bytes to SocketActor", frame.len());
-                                    let _ = socket_cmd_tx.send(UserCmd::SendBytes(frame));
-                                }
-                            }
-                            Err(_) => {
-                                // Channel closed
-                                break;
-                            }
-                        }
-                    }
+                    None => break, // Need more data
                 }
             }
 
-            eprintln!("[DEALER TASK] Integration task exited!");
-        });
+            // Need more data - read from stream using reused buffer
+            use compio::buf::BufResult;
 
-        eprintln!("[DEALER] Returning socket");
+            let slab = self.arena.alloc_mut(self.config.read_buf_size);
+            let BufResult(result, slab) = AsyncRead::read(&mut self.stream, slab).await;
+            let n = result?;
 
-        Self {
-            app_tx: user_tx,
-            app_rx,
-            _task_handles: (integration_handle, socket_handle),
+            if n == 0 {
+                // EOF
+                trace!("[DEALER] Connection closed");
+                return Ok(None);
+            }
+
+            // Push bytes into segmented recv queue (zero-copy)
+            self.recv.push(slab.freeze());
         }
     }
 
-    /// Send a multipart message asynchronously.
-    ///
-    /// # Arguments
-    ///
-    /// * `parts` - Vector of message frames to send
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use monocoque_zmtp::dealer::DealerSocket;
-    /// # use bytes::Bytes;
-    /// # async fn example(socket: &DealerSocket) {
-    /// socket.send(vec![Bytes::from("Hello")]).await.unwrap();
-    /// # }
-    /// ```
-    pub async fn send(&self, parts: Vec<Bytes>) -> Result<(), flume::SendError<Vec<Bytes>>> {
-        eprintln!(
-            "[DEALER send()] Sending {} frames to channel {:?}",
-            parts.len(),
-            parts
-                .iter()
-                .map(|p| String::from_utf8_lossy(p).to_string())
-                .collect::<Vec<_>>()
-        );
-        let result = self.app_tx.send_async(parts).await;
-        eprintln!(
-            "[DEALER send()] Channel send result: {:?}",
-            result.as_ref().map(|()| "OK")
-        );
-        result
-    }
+    /// Send a message.
+    pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
+        trace!("[DEALER] Sending {} frames", msg.len());
 
-    /// Receive a multipart message asynchronously.
-    ///
-    /// # Returns
-    ///
-    /// A vector of message frames.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use monocoque_zmtp::dealer::DealerSocket;
-    /// # async fn example(socket: &DealerSocket) {
-    /// let message = socket.recv().await.unwrap();
-    /// println!("Got {} frames", message.len());
-    /// # }
-    /// ```
-    pub async fn recv(&self) -> Result<Vec<Bytes>, flume::RecvError> {
-        eprintln!("[DEALER recv()] Waiting for message from channel");
-        let result = self.app_rx.recv_async().await;
-        if let Ok(ref msg) = result {
-            eprintln!("[DEALER recv()] Received {} frames from channel", msg.len());
-        }
-        result
-    }
-}
+        // Encode message - reuse write_buf to avoid allocation
+        self.write_buf.clear();
+        encode_multipart(&msg, &mut self.write_buf);
 
-#[cfg(test)]
-mod tests {
+        // Write to stream using compio
+        use compio::buf::BufResult;
 
-    #[test]
-    fn test_dealer_creation() {
-        compio::runtime::Runtime::new().unwrap().block_on(async {
-            // This test validates the structure compiles
-            // Real testing requires a connected stream
-            println!("DEALER socket structure validated");
-        });
+        let buf = self.write_buf.split().freeze();
+        let BufResult(result, _) = AsyncWrite::write(&mut self.stream, IoBytes::new(buf)).await;
+        result?;
+
+        trace!("[DEALER] Message sent successfully");
+        Ok(())
     }
 }

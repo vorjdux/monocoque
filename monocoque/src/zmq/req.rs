@@ -77,7 +77,7 @@ impl ReqSocket {
     /// ```
     pub async fn connect(addr: impl AsRef<str>) -> io::Result<Self> {
         let stream = TcpStream::connect(addr.as_ref()).await?;
-        Ok(Self::from_stream(stream).await)
+        Self::from_stream(stream).await
     }
 
     /// Create a REQ socket from an existing TCP stream.
@@ -97,10 +97,10 @@ impl ReqSocket {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn from_stream(stream: TcpStream) -> Self {
-        Self {
-            inner: InternalReq::new(stream).await,
-        }
+    pub async fn from_stream(stream: TcpStream) -> io::Result<Self> {
+        Ok(Self {
+            inner: InternalReq::new(stream).await?,
+        })
     }
 
     /// Send a multipart message.
@@ -136,7 +136,7 @@ impl ReqSocket {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn send(&self, msg: Vec<Bytes>) -> io::Result<()> {
+    pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
         channel_to_io_error(self.inner.send(msg).await)
     }
 
@@ -168,7 +168,7 @@ impl ReqSocket {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn recv(&self) -> Option<Vec<Bytes>> {
+    pub async fn recv(&mut self) -> Option<Vec<Bytes>> {
         self.inner.recv().await.ok().flatten()
     }
 }

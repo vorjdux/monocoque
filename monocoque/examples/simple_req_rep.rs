@@ -10,9 +10,10 @@ use monocoque::zmq::{RepSocket, ReqSocket};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use tracing::info;
 
 fn main() {
-    println!("=== Monocoque REQ ↔ REP Simple Test ===\n");
+    info!("=== Monocoque REQ ↔ REP Simple Test ===\n");
 
     // Spawn REP server in background thread
     let addr = Arc::new(std::sync::Mutex::new(String::new()));
@@ -24,30 +25,30 @@ fn main() {
                 .await
                 .expect("Failed to bind");
             let local_addr = listener.local_addr().expect("Failed to get local addr");
-            println!("[REP] Listening on tcp://{}", local_addr);
+            info!("[REP] Listening on tcp://{}", local_addr);
             
             // Share the address with the client thread
             *addr_clone.lock().unwrap() = local_addr.to_string();
 
             let (stream, _) = listener.accept().await.expect("Failed to accept");
-            let socket = RepSocket::from_stream(stream).await;
-            println!("[REP] Client connected\n");
+            let mut socket = RepSocket::from_stream(stream).await.unwrap();
+            info!("[REP] Client connected\n");
 
             // First request-reply cycle
             if let Some(request) = socket.recv().await {
-                println!("[REP] Received request:");
+                info!("[REP] Received request:");
                 for (i, frame) in request.iter().enumerate() {
-                    println!("  Frame {}: {:?}", i, String::from_utf8_lossy(frame));
+                    info!("  Frame {}: {:?}", i, String::from_utf8_lossy(frame));
                 }
 
-                println!("[REP] Sending reply");
+                info!("[REP] Sending reply");
                 socket
                     .send(vec![Bytes::from_static(b"Reply from REP")])
                     .await
                     .expect("Failed to send");
             }
 
-            println!("[REP] Done");
+            info!("[REP] Done");
             
             drop(socket);
             
@@ -67,15 +68,15 @@ fn main() {
 
     // Run REQ client in main thread
     compio::runtime::Runtime::new().unwrap().block_on(async {
-        println!("[REQ] Connecting to tcp://{}", server_addr);
+        info!("[REQ] Connecting to tcp://{}", server_addr);
 
-        let socket = ReqSocket::connect(&server_addr)
+        let mut socket = ReqSocket::connect(&server_addr)
             .await
             .expect("Failed to connect");
-        println!("[REQ] Connected (handshake complete)\n");
+        info!("[REQ] Connected (handshake complete)\n");
 
         // Send request
-        println!("[REQ] Sending request");
+        info!("[REQ] Sending request");
         socket
             .send(vec![Bytes::from_static(b"Request from REQ")])
             .await
@@ -84,13 +85,13 @@ fn main() {
         // Receive reply
         let response = socket.recv().await;
         if let Some(msg) = response {
-            println!("[REQ] Received response:");
+            info!("[REQ] Received response:");
             for (i, frame) in msg.iter().enumerate() {
-                println!("  Frame {}: {:?}", i, String::from_utf8_lossy(frame));
+                info!("  Frame {}: {:?}", i, String::from_utf8_lossy(frame));
             }
         }
 
-        println!("[REQ] Done");
+        info!("[REQ] Done");
         
         drop(socket);
         
@@ -100,5 +101,5 @@ fn main() {
 
     server_handle.join().unwrap();
 
-    println!("\n✅ Simple test completed successfully!");
+    info!("\n✅ Simple test completed successfully!");
 }

@@ -22,7 +22,7 @@
 //! #[compio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let stream = TcpStream::connect("127.0.0.1:5555").await?;
-//!     let socket = DealerSocket::new(stream).await;
+//!     let mut socket = DealerSocket::new(stream).await?;
 //!     
 //!     socket.send(vec![Bytes::from("Hello!")]).await?;
 //!     let response = socket.recv().await?;
@@ -50,18 +50,22 @@
 #![allow(clippy::match_same_arms)]
 #![allow(clippy::unused_async)]
 #![allow(clippy::let_underscore_future)]
+#![allow(clippy::future_not_send)] // Runtime-agnostic design
+#![allow(clippy::uninlined_format_args)] // Style preference
+#![allow(clippy::missing_errors_doc)] // Will add gradually
+#![allow(clippy::doc_markdown)] // Too many false positives
+#![allow(clippy::while_let_loop)] // Sometimes clearer as explicit loop
+#![allow(clippy::option_if_let_else)] // Sometimes clearer as if/else
+#![allow(clippy::never_loop)] // State machines use loop with early returns
 
 // Internal modules (not part of public API)
 mod codec;
-mod command;
 mod greeting;
 mod handshake;
-pub mod integrated_actor; // Made public for integration tests
-mod mechanism;
-mod multipart;
 mod utils;
 
 // Public protocol types
+pub mod config;
 pub mod session;
 
 // Socket implementations

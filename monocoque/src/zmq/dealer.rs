@@ -71,7 +71,7 @@ impl DealerSocket {
     /// ```
     pub async fn connect(addr: impl compio::net::ToSocketAddrsAsync) -> io::Result<Self> {
         let stream = TcpStream::connect(addr).await?;
-        Ok(Self::from_stream(stream).await)
+        Self::from_stream(stream).await
     }
 
     /// Create a DEALER socket from an existing TCP stream.
@@ -92,10 +92,10 @@ impl DealerSocket {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn from_stream(stream: TcpStream) -> Self {
-        Self {
-            inner: InternalDealer::new(stream).await,
-        }
+    pub async fn from_stream(stream: TcpStream) -> io::Result<Self> {
+        Ok(Self {
+            inner: InternalDealer::new(stream).await?,
+        })
     }
 
     /// Send a multipart message.
@@ -140,6 +140,6 @@ impl DealerSocket {
     /// # }
     /// ```
     pub async fn recv(&mut self) -> Option<Vec<Bytes>> {
-        self.inner.recv().await.ok()
+        self.inner.recv().await.ok().flatten()
     }
 }

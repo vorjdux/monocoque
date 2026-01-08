@@ -84,6 +84,9 @@
 #![allow(clippy::module_name_repetitions)]
 #![allow(clippy::must_use_candidate)]
 #![allow(clippy::needless_pass_by_value)]
+#![allow(clippy::future_not_send)] // Runtime-agnostic design
+#![allow(clippy::missing_errors_doc)] // Will add gradually
+#![allow(clippy::doc_markdown)] // Too many false positives
 
 // Re-export core types
 pub use bytes::Bytes;
@@ -91,3 +94,6 @@ pub use bytes::Bytes;
 // Protocol modules (opt-in via features)
 #[cfg(feature = "zmq")]
 pub mod zmq;
+
+/// Development helpers (benches/tests)
+pub mod dev_tracing;

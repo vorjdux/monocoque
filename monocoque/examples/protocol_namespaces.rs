@@ -4,6 +4,8 @@
 //!
 //! This demonstrates how feature-gated protocols keep dependencies minimal.
 
+use tracing::info;
+
 // ============================================================================
 // Style 1: Explicit protocol namespace (recommended)
 // ============================================================================
@@ -16,7 +18,7 @@ async fn explicit_style() -> Result<(), Box<dyn std::error::Error>> {
     let (listener, router) = RouterSocket::bind("127.0.0.1:6666").await?;
 
     // Clear what protocol each socket uses
-    println!("Created ZMQ DEALER and ROUTER sockets");
+    tracing::info!("Created ZMQ DEALER and ROUTER sockets");
 
     drop((dealer, router, listener));
     Ok(())
@@ -33,7 +35,7 @@ async fn prelude_style() -> Result<(), Box<dyn std::error::Error>> {
     let dealer = DealerSocket::connect("127.0.0.1:5555").await?;
     let (listener, router) = RouterSocket::bind("127.0.0.1:6666").await?;
 
-    println!("Created ZMQ sockets (imported via prelude)");
+    tracing::info!("Created ZMQ sockets (imported via prelude)");
 
     drop((dealer, router, listener));
     Ok(())
@@ -54,17 +56,17 @@ async fn future_multi_protocol() -> Result<(), Box<dyn std::error::Error>> {
     // let mqtt_client = MqttClient::connect("mqtt://broker:1883").await?;
     // let amqp_conn = AmqpConn::connect("amqp://localhost:5672").await?;
 
-    println!("Multiple protocols coexist cleanly!");
+    tracing::info!("Multiple protocols coexist cleanly!");
 
     drop(zmq_socket);
     Ok(())
 }
 
 fn main() {
-    println!("Example requires 'zmq' feature:");
-    println!("  cargo run --example protocol_namespaces --features zmq");
-    println!();
-    println!("Import patterns:");
-    println!("  - Explicit: use monocoque::zmq::DealerSocket;");
-    println!("  - Prelude:  use monocoque::zmq::prelude::*;");
+    tracing::info!("Example requires 'zmq' feature:");
+    tracing::info!("  cargo run --example protocol_namespaces --features zmq");
+    tracing::info!("");
+    tracing::info!("Import patterns:");
+    tracing::info!("  - Explicit: use monocoque::zmq::DealerSocket;");
+    tracing::info!("  - Prelude:  use monocoque::zmq::prelude::*;");
 }

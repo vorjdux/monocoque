@@ -85,7 +85,7 @@ impl RouterSocket {
     ) -> io::Result<(TcpListener, Self)> {
         let listener = TcpListener::bind(addr).await?;
         let (stream, _) = listener.accept().await?;
-        let socket = Self::from_stream(stream).await;
+        let socket = Self::from_stream(stream).await?;
         Ok((listener, socket))
     }
 
@@ -112,10 +112,10 @@ impl RouterSocket {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn from_stream(stream: TcpStream) -> Self {
-        Self {
-            inner: InternalRouter::new(stream).await,
-        }
+    pub async fn from_stream(stream: TcpStream) -> io::Result<Self> {
+        Ok(Self {
+            inner: InternalRouter::new(stream).await?,
+        })
     }
 
     /// Send a multipart message.
@@ -166,6 +166,6 @@ impl RouterSocket {
     /// # }
     /// ```
     pub async fn recv(&mut self) -> Option<Vec<Bytes>> {
-        self.inner.recv().await.ok()
+        self.inner.recv().await.ok().flatten()
     }
 }

@@ -11,10 +11,11 @@ use compio::net::{TcpListener, TcpStream};
 /// This validates the complete ZMTP implementation including handshake and messaging.
 use monocoque_zmtp::{DealerSocket, RouterSocket};
 use std::time::Duration;
+use tracing::info;
 
 #[compio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("=== Basic ROUTER-DEALER Example ===\n");
+    info!("=== Basic ROUTER-DEALER Example ===\n");
 
     // Use random port to avoid conflicts
     let port = 15570
@@ -23,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .as_millis()
             % 10000) as u16;
     let addr = format!("127.0.0.1:{}", port);
-    println!("[INFO] Using address: {}\n", addr);
+    info!("[INFO] Using address: {}\n", addr);
 
     let addr_clone = addr.clone();
 
@@ -43,17 +44,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     router_result?;
     dealer_result?;
 
-    println!("\n✅ Example completed successfully!");
+    info!("\n✅ Example completed successfully!");
     Ok(())
 }
 
 async fn router_server(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
-    println!("[ROUTER] Binding to {}", addr);
+    info!("[ROUTER] Binding to {}", addr);
     let listener = TcpListener::bind(addr).await?;
 
-    println!("[ROUTER] Waiting for connection...");
+    info!("[ROUTER] Waiting for connection...");
     let (stream, addr) = listener.accept().await?;
-    println!("[ROUTER] Client connected from {}", addr);
+    info!("[ROUTER] Client connected from {}", addr);
 
     let socket = RouterSocket::new(stream).await;
 
@@ -61,12 +62,12 @@ async fn router_server(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
     compio::time::sleep(Duration::from_millis(300)).await;
 
     // Receive request
-    println!("[ROUTER] Waiting for request...");
+    info!("[ROUTER] Waiting for request...");
     let request = socket.recv().await?;
 
-    println!("[ROUTER] Received {} frames:", request.len());
+    info!("[ROUTER] Received {} frames:", request.len());
     for (i, frame) in request.iter().enumerate() {
-        println!(
+        info!(
             "[ROUTER]   Frame {}: {:?}",
             i,
             String::from_utf8_lossy(frame)
@@ -78,8 +79,8 @@ async fn router_server(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
         let identity = &request[0];
         let payload = &request[2..];
 
-        println!("[ROUTER] Identity: {:?}", String::from_utf8_lossy(identity));
-        println!(
+        info!("[ROUTER] Identity: {:?}", String::from_utf8_lossy(identity));
+        info!(
             "[ROUTER] Message: {:?}",
             String::from_utf8_lossy(&payload[0])
         );
@@ -91,21 +92,21 @@ async fn router_server(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
             Bytes::from("Hello from ROUTER!"),
         ];
 
-        println!("[ROUTER] Sending reply with {} frames...", reply.len());
+        info!("[ROUTER] Sending reply with {} frames...", reply.len());
         socket.send(reply).await?;
-        println!("[ROUTER] Reply sent");
+        info!("[ROUTER] Reply sent");
     }
 
     // Wait longer for DEALER to receive and process reply
-    println!("[ROUTER] Waiting for DEALER to process reply...");
+    info!("[ROUTER] Waiting for DEALER to process reply...");
     compio::time::sleep(Duration::from_secs(2)).await;
     Ok(())
 }
 
 async fn dealer_client(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
-    println!("[DEALER] Connecting to {}", addr);
+    info!("[DEALER] Connecting to {}", addr);
     let stream = TcpStream::connect(addr).await?;
-    println!("[DEALER] Connected!");
+    info!("[DEALER] Connected!");
 
     let socket = DealerSocket::new(stream).await;
 
@@ -114,17 +115,17 @@ async fn dealer_client(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     // Send request
     let request = vec![Bytes::from("Hello from DEALER!")];
-    println!("[DEALER] Sending request with {} frames...", request.len());
+    info!("[DEALER] Sending request with {} frames...", request.len());
     socket.send(request).await?;
-    println!("[DEALER] Request sent");
+    info!("[DEALER] Request sent");
 
     // Receive reply
-    println!("[DEALER] Waiting for reply...");
+    info!("[DEALER] Waiting for reply...");
     let reply = socket.recv().await?;
 
-    println!("[DEALER] Received {} frames:", reply.len());
+    info!("[DEALER] Received {} frames:", reply.len());
     for (i, frame) in reply.iter().enumerate() {
-        println!(
+        info!(
             "[DEALER]   Frame {}: {:?}",
             i,
             String::from_utf8_lossy(frame)
