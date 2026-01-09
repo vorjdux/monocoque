@@ -170,6 +170,63 @@ impl DealerSocket {
             monitor: None,
         })
     }
+
+    /// Create a DEALER socket from a TCP stream with TCP_NODELAY enabled.
+    ///
+    /// This method automatically enables TCP_NODELAY for optimal performance,
+    /// preventing Nagle's algorithm from buffering small packets.
+    ///
+    /// Uses large buffers (16KB) by default. For custom configuration, use
+    /// `from_tcp_with_config()`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use monocoque::zmq::DealerSocket;
+    /// use compio::net::TcpStream;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
+    /// let socket = DealerSocket::from_tcp(stream).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn from_tcp(stream: TcpStream) -> io::Result<Self> {
+        Ok(Self {
+            inner: InternalDealer::from_tcp(stream).await?,
+            monitor: None,
+        })
+    }
+
+    /// Create a DEALER socket from a TCP stream with TCP_NODELAY and custom config.
+    ///
+    /// This method automatically enables TCP_NODELAY for optimal performance.
+    ///
+    /// # Buffer Configuration
+    /// - Use `BufferConfig::small()` (4KB) for low-latency with small messages
+    /// - Use `BufferConfig::large()` (16KB) for high-throughput with large messages
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use monocoque::zmq::{DealerSocket, BufferConfig};
+    /// use compio::net::TcpStream;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
+    /// let socket = DealerSocket::from_tcp_with_config(stream, BufferConfig::small()).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn from_tcp_with_config(
+        stream: TcpStream,
+        config: monocoque_core::config::BufferConfig,
+    ) -> io::Result<Self> {
+        Ok(Self {
+            inner: InternalDealer::from_tcp_with_config(stream, config).await?,
+            monitor: None,
+        })
+    }
 }
 
 // Generic impl - works with any stream type

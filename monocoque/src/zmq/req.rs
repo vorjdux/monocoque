@@ -163,6 +163,25 @@ impl ReqSocket {
             monitor: None,
         })
     }
+
+    /// Create a REQ socket from a TCP stream with TCP_NODELAY enabled.
+    pub async fn from_tcp(stream: TcpStream) -> io::Result<Self> {
+        Ok(Self {
+            inner: InternalReq::from_tcp(stream).await?,
+            monitor: None,
+        })
+    }
+
+    /// Create a REQ socket from a TCP stream with TCP_NODELAY and custom config.
+    pub async fn from_tcp_with_config(
+        stream: TcpStream,
+        config: monocoque_core::config::BufferConfig,
+    ) -> io::Result<Self> {
+        Ok(Self {
+            inner: InternalReq::from_tcp_with_config(stream, config).await?,
+            monitor: None,
+        })
+    }
 }
 
 // Generic impl - works with any stream type
