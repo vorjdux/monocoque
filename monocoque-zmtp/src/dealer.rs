@@ -69,7 +69,7 @@ where
     /// - Use `BufferConfig::custom(read, write)` for fine-grained control
     ///
     /// Works with both TCP and Unix domain sockets.
-    /// 
+    ///
     /// **Note**: For TCP streams, use `from_tcp_with_config()` instead to ensure TCP_NODELAY is enabled.
     pub async fn with_config(mut stream: S, config: BufferConfig) -> io::Result<Self> {
         debug!("[DEALER] Creating new direct DEALER socket");

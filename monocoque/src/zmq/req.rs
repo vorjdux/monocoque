@@ -83,17 +83,21 @@ impl ReqSocket {
     /// ```
     pub async fn connect(endpoint: &str) -> io::Result<Self> {
         // Try parsing as endpoint, fall back to raw address
-        let addr = if let Ok(monocoque_core::endpoint::Endpoint::Tcp(a)) = 
-            monocoque_core::endpoint::Endpoint::parse(endpoint) {
+        let addr = if let Ok(monocoque_core::endpoint::Endpoint::Tcp(a)) =
+            monocoque_core::endpoint::Endpoint::parse(endpoint)
+        {
             a
         } else {
-            endpoint.parse::<std::net::SocketAddr>()
+            endpoint
+                .parse::<std::net::SocketAddr>()
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?
         };
 
         let stream = TcpStream::connect(addr).await?;
         let sock = Self::from_stream(stream).await?;
-        sock.emit_event(SocketEvent::Connected(monocoque_core::endpoint::Endpoint::Tcp(addr)));
+        sock.emit_event(SocketEvent::Connected(
+            monocoque_core::endpoint::Endpoint::Tcp(addr),
+        ));
         Ok(sock)
     }
 
@@ -115,13 +119,15 @@ impl ReqSocket {
     #[cfg(unix)]
     pub async fn connect_ipc(path: &str) -> io::Result<ReqSocket<compio::net::UnixStream>> {
         use std::path::PathBuf;
-        
+
         let clean_path = path.strip_prefix("ipc://").unwrap_or(path);
         let ipc_path = PathBuf::from(clean_path);
 
         let stream = monocoque_core::ipc::connect(&ipc_path).await?;
         let sock = ReqSocket::from_unix_stream(stream).await?;
-        sock.emit_event(SocketEvent::Connected(monocoque_core::endpoint::Endpoint::Ipc(ipc_path)));
+        sock.emit_event(SocketEvent::Connected(
+            monocoque_core::endpoint::Endpoint::Ipc(ipc_path),
+        ));
         Ok(sock)
     }
 
