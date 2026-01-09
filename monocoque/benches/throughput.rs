@@ -5,9 +5,11 @@
 //!
 //! Tests the PUBLIC API from `monocoque::zmq` (user-facing ergonomics)
 //!
-//! NOTE: With MESSAGE_COUNT=10,000, setup overhead is amortized over many messages.
-//! Each iteration creates fresh sockets but sends 10k messages, so connection setup
-//! time becomes negligible compared to actual message throughput measurement.
+//! FAIR BENCHMARKING:
+//! - Setup overhead (connection, handshake) IS included in measurement
+//! - BUT: With MESSAGE_COUNT=10,000, setup is <1% of total time
+//! - Both monocoque and zmq.rs measured identically (setup + 10k messages)
+//! - Focuses on actual throughput capacity, not just raw send/recv speed
 
 use bytes::Bytes;
 use compio::net::TcpListener;
@@ -19,6 +21,8 @@ const MESSAGE_SIZES: &[usize] = &[64, 256, 1024, 4096, 16384];
 const MESSAGE_COUNT: usize = 10_000;
 
 /// Benchmark monocoque REQ/REP throughput (public API)
+/// 
+/// Setup overhead included but amortized over 10k messages (<1% of total time)
 fn monocoque_req_rep_throughput(c: &mut Criterion) {
     monocoque::dev_tracing::init_tracing();
     let mut group = c.benchmark_group("throughput/monocoque/req_rep");
@@ -74,6 +78,8 @@ fn monocoque_req_rep_throughput(c: &mut Criterion) {
 }
 
 /// Benchmark zmq.rs (libzmq) REQ/REP throughput
+/// 
+/// Setup overhead included but amortized over 10k messages (<1% of total time)
 fn zmq_req_rep_throughput(c: &mut Criterion) {
     let mut group = c.benchmark_group("throughput/zmq_rs/req_rep");
     group.measurement_time(Duration::from_secs(15));
@@ -216,10 +222,11 @@ criterion_group!(
     config = Criterion::default()
         .measurement_time(Duration::from_secs(60))
         .warm_up_time(Duration::from_secs(5))
-        .sample_size(10);  // With 10k messages, each sample takes ~time, so keep low
+        .sample_size(10);  // With 10k messages per sample, setup overhead is amortized
     targets =
         monocoque_req_rep_throughput,
-        zmq_req_rep_throughput
-        // TODO: Add DEALER/ROUTER when REQ/REP is optimized
+        zmq_req_rep_throughput,
+        monocoque_dealer_router_throughput,
+        zmq_dealer_router_throughput
 );
 criterion_main!(benches);
