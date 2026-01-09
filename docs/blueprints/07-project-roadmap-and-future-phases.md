@@ -43,7 +43,6 @@ monocoque-zmtp/         ← ZMTP protocol (opt-in via features)
 
 monocoque-core/         ← Protocol-agnostic kernel
 ├── alloc/ (ONLY unsafe code)
-├── actor/ (Split pump IO)
 ├── router/ (Identity routing)
 ├── pubsub/ (Subscription index)
 └── (feature-gated, no protocols by default)
@@ -61,8 +60,8 @@ Implemented components:
 -   ✅ Stable IO buffers (`SlabMut` with `IoBufMut`)
 -   ✅ **IoBytes wrapper** (zero-copy `Bytes` → `IoBuf`)
 -   ✅ `io_uring` via `compio`
--   ✅ Split read/write pumps
--   ✅ Cancellation-safe vectored IO
+-   ✅ Direct stream I/O pattern
+-   ✅ Cancellation-safe IO
 -   ✅ Zero-copy `Bytes` pipeline
 -   ✅ Partial write handling
 
@@ -168,7 +167,7 @@ Features:
 -   PUB
 -   SUB
 -   XPUB / XSUB (optional)
--   Behavior selection in `SocketActor`
+-   Behavior implemented in socket types
 
 ---
 

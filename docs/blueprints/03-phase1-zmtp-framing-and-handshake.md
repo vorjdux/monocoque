@@ -172,11 +172,11 @@ HandshakeComplete
 
 ### Why this matters
 
--   Actor decides what to do
+-   Socket implementation decides what to do
 -   Session never performs IO
 -   No hidden side effects
 
-This becomes essential in Phase 2 and 3.
+This becomes essential for higher-level socket patterns.
 
 ---
 

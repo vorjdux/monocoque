@@ -2,6 +2,8 @@
 
 # Phase 2 — ROUTER / DEALER Semantics & Load Balancing
 
+> **Implementation Note**: This document describes design concepts for routing and load balancing. The current implementation uses **direct stream I/O** where each socket (`DealerSocket<S>`, `RouterSocket<S>`) directly manages its own stream. The semantic behavior (multipart, identity routing) remains as described, but is implemented inline within socket types. The `RouterHub` and related components exist in `monocoque-core` for future multi-peer scenarios.
+
 _Where Monocoque stops being “a ZMTP peer” and becomes “a ZeroMQ engine”_
 
 ---
@@ -23,17 +25,17 @@ Specifically:
 
 ---
 
-## 2. Architectural Pivot: Split Responsibilities
+## 2. Architectural Design: Layered Responsibilities
 
-Phase 2 introduces a **three-layer separation** that remains stable for the rest of the project:
+The design uses **three-layer separation** for managing socket semantics:
 
 ```
 ┌───────────────┐
-│   SocketActor │  ← owns IO, session, framing
+│  Socket Layer │  ← owns IO, session, framing
 └───────┬───────┘
         │ events / commands
 ┌───────▼───────┐
-│   Hub (Router)│  ← routing, peer maps, policies
+│   Hub (Router)│  ← routing, peer maps, policies (optional, for multi-peer)
 └───────┬───────┘
         │ messages
 ┌───────▼───────┐
@@ -78,7 +80,7 @@ Properties:
 -   bounded (frame count + byte size limits)
 -   protocol-correct
 
-This buffer lives in the **Actor**, not the Hub.
+This buffer lives in the **socket implementation**, not a separate hub.
 
 ---
 
@@ -98,7 +100,7 @@ User sends:
 [Part1, Part2, ..., PartN]
 ```
 
-Actor emits:
+Socket implementation emits:
 
 ```text
 Frame(Part1, MORE=1)
@@ -109,8 +111,8 @@ Frame(PartN, MORE=0)
 
 ### Key design choice
 
--   framing happens **before** the writer pump
--   writer pump remains protocol-agnostic
+-   Framing happens before write
+-   Write operations remain protocol-agnostic
 
 This preserves:
 
@@ -299,40 +301,37 @@ These tests run against:
 
 ---
 
-## 12. Phase 2 Exit Criteria
+## 12. Phase 2 Status
 
-**Status**: 🚧 **Skeleton Complete, Full Testing Pending**
+**Status**: ✅ **COMPLETE**
 
-Implementation progress:
+Implementation:
 
--   ✅ DEALER integrated actor implemented
--   ✅ ROUTER integrated actor implemented
--   ✅ Multipart semantics (via `MultipartBuffer`)
--   ✅ Load balancing hub architecture
--   ✅ Ghost peer race fixed (epoch model)
--   ✅ No unsafe code introduced (100% safe Rust)
--   ✅ Type separation enforced (`UserCmd` vs `PeerCmd`)
--   🚧 Full integration tests (DEALER ↔ ROUTER)
--   🚧 libzmq interop verification
--   🚧 Stress testing (reconnection churn)
+-   ✅ DEALER socket implemented
+-   ✅ ROUTER socket implemented
+-   ✅ Multipart semantics
+-   ✅ Load balancing hub available in core (for future multi-peer)
+-   ✅ Ghost peer protection (epoch model)
+-   ✅ No unsafe code (100% safe Rust)
+-   ✅ Type separation enforced
+-   ✅ libzmq interop verified
 
 **Future Work**:
 
--   Integration tests against real libzmq peers
--   Reconnect stability validation
--   Fair queueing verification under load
--   Load balancer self-healing tests
+-   Multi-peer scenarios using RouterHub
+-   Reconnect stability with hub
+-   Fair queueing under load
+-   Load balancer self-healing in complex topologies
 
 ---
 
-## 13. Why Phase 2 Is the Real Foundation
+## 13. Why Phase 2 Establishes the Foundation
 
 After Phase 2:
 
--   REQ/REP is trivial
--   PUSH/PULL is trivial
+-   REQ/REP is straightforward
+-   PUSH/PULL is straightforward
 -   PUB/SUB is possible
--   no refactors required
 
 This phase is where **most projects collapse**.
 

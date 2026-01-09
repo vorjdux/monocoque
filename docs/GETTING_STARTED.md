@@ -30,14 +30,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Connect to a ROUTER server
     let stream = TcpStream::connect("127.0.0.1:5555").await?;
     let socket = DealerSocket::new(stream);
-    
+
     // Send a request
     socket.send(vec![Bytes::from("Hello, Server!")]).await?;
-    
+
     // Receive response
     let response = socket.recv().await?;
     println!("Received: {} frames", response.len());
-    
+
     Ok(())
 }
 ```
@@ -115,31 +115,30 @@ let event = socket.recv().await?;
 
 ## Architecture Overview
 
-Monocoque uses a layered architecture:
+Monocoque uses a simple, direct architecture:
 
 ```
 ┌─────────────────────────────────┐
-│   Application (Your Code)       │  ← High-level socket APIs
+│   monocoque-zmtp (sockets)      │  ← Generic direct stream I/O
+│   DealerSocket, RouterSocket,   │     Each socket owns its stream
+│   PubSocket, SubSocket, etc.    │     Handles all operations inline
 ├─────────────────────────────────┤
-│   monocoque-zmtp                │  ← ZMTP protocol layer
-│   - DealerSocket, RouterSocket  │
-│   - ZmtpIntegratedActor         │
-│   - Session state machine       │
-├─────────────────────────────────┤
-│   monocoque-core                │  ← Protocol-agnostic core
-│   - SocketActor (split pumps)  │
-│   - IoArena (slab allocator)   │
-│   - Router/PubSub hubs          │
+│   monocoque-core (utilities)    │  ← Zero-copy allocation
+│   - IoArena, SlabMut, IoBytes   │     Buffer management
+│   - SegmentedBuffer             │     Protocol-agnostic helpers
+│   - Endpoint parsing             │
+│   - TCP/IPC utilities            │
 ├─────────────────────────────────┤
 │   compio (io_uring runtime)     │  ← Async I/O
 └─────────────────────────────────┘
 ```
 
 **Key Design Principles**:
-- **Unsafe code** is confined to `monocoque-core/src/alloc.rs`
-- **Protocol-agnostic core** enables custom protocols
-- **Zero-copy** message handling with `Bytes`
-- **Runtime-agnostic** async primitives
+
+-   **Direct stream I/O**: Each socket directly manages its own `AsyncRead + AsyncWrite` stream
+-   **Generic sockets**: `Socket<S = TcpStream>` works with any compatible stream
+-   **Zero-copy**: Messages use `Bytes` for refcount-based sharing
+-   **Runtime-agnostic**: Works with any async runtime providing streams
 
 ---
 
@@ -180,9 +179,9 @@ cargo test --package monocoque-zmtp --test interop_pubsub --features runtime
 
 See the `examples/` directory for complete, runnable examples:
 
-- `hello_dealer.rs` - Basic DEALER socket usage
-- `router_worker_pool.rs` - ROUTER load balancing pattern
-- `pubsub_events.rs` - PUB/SUB event distribution
+-   `hello_dealer.rs` - Basic DEALER socket usage
+-   `router_worker_pool.rs` - ROUTER load balancing pattern
+-   `pubsub_events.rs` - PUB/SUB event distribution
 
 Run an example:
 
@@ -223,17 +222,17 @@ cargo test --features runtime
 
 ## Next Steps
 
-- Read the [blueprints](docs/blueprints/) for architecture details
-- Check [IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) for current status
-- Review [NEXT_STEPS_ANALYSIS.md](docs/NEXT_STEPS_ANALYSIS.md) for roadmap
+-   Read the [blueprints](blueprints/) for architecture details
+-   Check [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) for current status
+-   Review [NEXT_STEPS_ANALYSIS.md](NEXT_STEPS_ANALYSIS.md) for roadmap
 
 ---
 
 ## Support
 
-- **Issues**: File on GitHub repository
-- **Documentation**: Run `cargo doc --open --all-features`
-- **Examples**: See `examples/` directory
+-   **Issues**: File on GitHub repository
+-   **Documentation**: Run `cargo doc --open --all-features`
+-   **Examples**: See `examples/` directory
 
 ---
 

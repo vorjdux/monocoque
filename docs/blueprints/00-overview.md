@@ -73,35 +73,25 @@ This ensures:
 ```
 ┌──────────────────────────────────────────┐
 │              Application                 │
-│   (UserCmd / Vec<Bytes> messages)        │
+│   (DealerSocket, RouterSocket, etc.)      │
 └──────────────────────────────────────────┘
                  │
                  ▼
 ┌──────────────────────────────────────────┐
-│               Hubs                        │
-│  RouterHub | PubSubHub | Dealer LB        │
-└──────────────────────────────────────────┘
-                 │
-                 ▼
-┌──────────────────────────────────────────┐
-│            SocketActor                   │
-│  - Read Pump                             │
-│  - Write Pump                            │
-│  - Multipart Bridge                     │
-└──────────────────────────────────────────┘
-                 │
-                 ▼
-┌──────────────────────────────────────────┐
-│          ZMTP Session Layer              │
+│         ZMTP Socket Layer               │
+│  (Direct stream I/O implementation)      │
 │  - Handshake                             │
-│  - Framing                              │
-│  - Commands                             │
+│  - Framing                               │
+│  - Multipart assembly                    │
+│  - Generic over AsyncRead+AsyncWrite     │
 └──────────────────────────────────────────┘
                  │
                  ▼
 ┌──────────────────────────────────────────┐
 │        IO Arena / Slab (unsafe)           │
-│        io_uring via compio                │
+│        + Buffer Management                 │
+│        + Transport Utilities               │
+│        io_uring via compio                 │
 └──────────────────────────────────────────┘
 ```
 
@@ -133,10 +123,8 @@ monocoque-core/
 │   ├── arena.rs
 │   ├── slab.rs
 │   └── invariants.md
-├── actor/
 ├── router/
 ├── pubsub/
-├── zmtp/
 └── tests/
 ```
 
@@ -173,7 +161,7 @@ The foundational layers of Monocoque are complete:
 
 -   Slab/Arena allocator with refcounting
 -   Zero-copy buffer management (`SlabMut` → `Bytes`)
--   Split pump architecture (independent read/write)
+-   `SegmentedBuffer` for efficient receive buffering
 -   `io_uring` integration via compio
 
 **Phase 1 - ZMTP Protocol Layer** ✅
@@ -182,30 +170,17 @@ The foundational layers of Monocoque are complete:
 -   Greeting and NULL handshake
 -   Session state machine (Sans-IO)
 -   READY command processing
--   Multipart message assembly
+-   Frame codec for encoding/decoding
 
-**Phase 2 - DEALER/ROUTER Sockets** ✅
+**Phase 2-4 - Socket Implementations** ✅
 
--   DEALER multipart logic
--   ROUTER identity envelopes
--   Hub + per-peer actor architecture
--   Load-balancing router mode
--   Epoch-based connection management
-
-**Phase 3 - PUB/SUB Engine** ✅
-
--   Sorted Prefix Table for subscription matching
--   Zero-copy broadcast mechanism
--   SUB command parsing
--   PUB/SUB socket types
--   Cache-friendly matching algorithm
-
-**Public API Layer** ✅
-
--   Ergonomic socket types (DealerSocket, RouterSocket, PubSocket, SubSocket)
--   Feature-gated protocols (`features = ["zmq"]`)
--   Idiomatic async/await API
--   Comprehensive documentation
+-   Direct stream I/O architecture (generic over AsyncRead+AsyncWrite)
+-   Each socket manages its own handshake, decoding, and multipart assembly
+-   DEALER: Asynchronous request-reply
+-   ROUTER: Identity-based routing
+-   PUB/SUB: Event distribution with subscription filtering
+-   REQ/REP: Synchronous request-reply patterns
+-   All sockets support TCP and Unix domain sockets
 
 ### Testing & Validation
 
@@ -220,19 +195,17 @@ The foundational layers of Monocoque are complete:
 
 ```
 ┌─────────────────────────────────────┐
-│     monocoque (public API)          │  ← Ergonomic user-facing types
-│  DealerSocket, RouterSocket, etc.   │
+│   monocoque-zmtp (sockets)          │  ← Direct stream I/O
+│  DealerSocket, RouterSocket, etc.   │     Generic over streams
 └──────────────┬──────────────────────┘
                │
-┌──────────────▼──────────────────────┐
-│  monocoque-zmtp (protocol layer)    │  ← ZMTP state machines (opt-in)
-│  Session, Framing, Commands         │
-└──────────────┬──────────────────────┘
-               │
-┌──────────────▼──────────────────────┐
-│  monocoque-core (kernel)            │  ← Protocol-agnostic IO/routing
-│  Actor, Hubs, Allocator             │
-└─────────────────────────────────────┘
+┌──────────────┼──────────────────────┐
+│              │                      │
+│  Protocol    │  Core Utilities      │
+│  (handshake, │  (alloc, buffer,     │
+│   codec)     │   endpoint, config)  │
+│              │                      │
+└──────────────┴──────────────────────┘
 ```
 
 ### Future Work

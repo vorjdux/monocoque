@@ -62,33 +62,21 @@ Monocoque is built as a layered system, each layer providing clean abstractions:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    Application Layer (monocoque)                    │
+│              Application Layer (monocoque)                          │
 │  Public API: DealerSocket, RouterSocket, ReqSocket, RepSocket,      │
 │              PubSocket, SubSocket                                   │
-│  • High-level ergonomic API with error handling                     │
-│  • Socket monitoring via channels (SocketMonitor)                   │
-│  • Transport abstraction (TCP/IPC via Endpoint)                     │
+│  • High-level ergonomic API (monocoque::zmq::*)                     │
+│  • Convenient constructors (connect, bind, connect_ipc)             │
+│  • Clean error handling                                             │
 └─────────────────────────────────────────────────────────────────────┘
-                                  │
-                 ┌────────────────┼────────────────┐
-                 │                │                │
-                 ▼                ▼                ▼
-    ┌──────────────────┐ ┌──────────────┐ ┌────────────────┐
-    │  Socket Monitor  │ │   Endpoint   │ │ BufferConfig   │
-    │  (monocoque-core)│ │   Parser     │ │ (monocoque-    │
-    │                  │ │ (monocoque-  │ │     core)      │
-    │ • SocketEvent    │ │    core)     │ │                │
-    │ • Event channels │ │              │ │ • Small/Large  │
-    │ • Lifecycle      │ │ • tcp://     │ │ • Latency/     │
-    │   tracking       │ │ • ipc://     │ │   Throughput   │
-    └──────────────────┘ └──────────────┘ └────────────────┘
                                   │
                                   ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│              ZMTP Socket Layer (monocoque-zmtp)                     │
-│  Internal protocol implementation - direct stream I/O               │
+│           ZMTP Socket Layer (monocoque-zmtp)                        │
+│  Internal implementation - direct stream I/O                        │
 │  • Generic over S: AsyncRead + AsyncWrite + Unpin                   │
 │  • DealerSocket<S>, RouterSocket<S>, ReqSocket<S>, etc.             │
+│  • Each socket handles: handshake, decoding, multipart, send/recv   │
 │  • Specialized for TcpStream (default) and UnixStream               │
 └─────────────────────────────────────────────────────────────────────┘
                                   │
@@ -96,17 +84,18 @@ Monocoque is built as a layered system, each layer providing clean abstractions:
                  │                │                │
                  ▼                ▼                ▼
     ┌──────────────────┐ ┌──────────────┐ ┌────────────────┐
-    │  ZMTP Handshake  │ │ Frame Codec  │ │  ZmtpSession   │
-    │                  │ │              │ │                │
-    │ • Greeting       │ │ • Short/Long │ │ • Socket Type  │
-    │ • NULL Auth      │ │ • Multipart  │ │ • Metadata     │
-    │ • Metadata       │ │ • Zero-copy  │ │ • State        │
+    │  ZMTP Handshake  │ │ Frame Codec  │ │  BufferConfig  │
+    │  (handshake.rs)  │ │  (codec.rs)  │ │                │
+    │                  │ │              │ │ • Small/Large  │
+    │ • Greeting       │ │ • Short/Long │ │ • Latency/     │
+    │ • NULL Auth      │ │ • Multipart  │ │   Throughput   │
+    │ • Metadata       │ │ • Zero-copy  │ │                │
     └──────────────────┘ └──────────────┘ └────────────────┘
                                   │
                                   ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                 Core Layer (monocoque-core)                         │
-│  Runtime-agnostic building blocks                                   │
+│  Protocol-agnostic building blocks                                  │
 └─────────────────────────────────────────────────────────────────────┘
                                   │
                  ┌────────────────┼────────────────┐
@@ -135,39 +124,47 @@ Monocoque is built as a layered system, each layer providing clean abstractions:
 ### Layer Responsibilities
 
 #### 1. **Application Layer** (`monocoque`)
-- **Public Socket API**: User-facing socket types with ergonomic methods
-- **Event Monitoring**: `SocketMonitor` for lifecycle events (Connected, Disconnected, etc.)
-- **Transport Abstraction**: `Endpoint::parse()` handles `tcp://` and `ipc://` addressing
-- **Configuration**: `BufferConfig` for latency vs throughput tuning
+
+-   **Public Socket API**: User-facing socket types with ergonomic methods
+-   **Convenient Constructors**: `DealerSocket::connect()`, `bind()`, `connect_ipc()`
+-   **Clean Module Structure**: `monocoque::zmq::*` for ZeroMQ protocol sockets
+-   **Error Handling**: Simplified Result types and helpful error messages
 
 #### 2. **ZMTP Socket Layer** (`monocoque-zmtp`)
-- **Protocol Implementation**: Direct stream I/O with ZMTP 3.1 framing
-- **Generic Sockets**: `Socket<S = TcpStream>` works with any `AsyncRead + AsyncWrite` stream
-- **Transport Independence**: Same code handles TCP and Unix domain sockets
-- **Zero-Copy Codec**: Frame encoding/decoding without intermediate allocations
+
+-   **Direct Stream I/O**: Each socket manages its own `AsyncRead + AsyncWrite` stream
+-   **Protocol Implementation**: ZMTP 3.1 handshake, framing, and multipart message assembly
+-   **Generic Sockets**: `Socket<S = TcpStream>` works with any compatible stream
+-   **Self-Contained**: Each socket handles its own decoding, buffering, and state management
+-   **Transport Independence**: Same code handles TCP and Unix domain sockets
+-   **Zero-Copy**: Frame encoding/decoding without intermediate allocations
 
 #### 3. **Core Layer** (`monocoque-core`)
-- **Memory Management**: `IoArena` and `SlabMut` for io_uring-safe allocation (only `unsafe` code)
-- **Buffer System**: `SegmentedBuffer` for efficient receive buffer management
-- **Transport Utilities**: TCP options (`TCP_NODELAY`), IPC connection helpers
-- **Monitoring Infrastructure**: Event types and channel management
+
+-   **Memory Management**: `IoArena` and `SlabMut` for io_uring-safe allocation (only `unsafe` code)
+-   **Buffer System**: `SegmentedBuffer` for efficient receive buffer management
+-   **Transport Utilities**: TCP options (`TCP_NODELAY`), IPC connection helpers
+-   **Endpoint Parsing**: `Endpoint::parse()` for `tcp://` and `ipc://` addressing
+-   **Configuration**: `BufferConfig` for latency vs throughput tuning
+-   **Routing Hubs**: Optional `RouterHub` and `PubSubHub` for advanced patterns (future use)
 
 #### 4. **IO Runtime** (Runtime Agnostic)
-- **Current Implementation**: Uses `compio` for examples (io_uring on Linux, IOCP on Windows)
-- **Design**: Works with any runtime providing `AsyncRead + AsyncWrite` streams
-- **Alternative Runtimes**: Can use Tokio, async-std, smol, or any compatible runtime
+
+-   **Current Implementation**: Uses `compio` for examples (io_uring on Linux, IOCP on Windows)
+-   **Design**: Works with any runtime providing `AsyncRead + AsyncWrite` streams
+-   **Alternative Runtimes**: Can use Tokio, async-std, smol, or any compatible runtime
 
 ### Key Design Principles
 
-1. **Safety First**: `unsafe` code strictly limited to `alloc/` module for kernel IO. Everything above is 100% safe Rust.
+1. **Safety First**: `unsafe` code strictly limited to `alloc.rs` for kernel IO. All protocol and socket logic is 100% safe Rust.
 
-2. **Ownership-Passing IO**: Buffers move into the kernel during IO operations, preventing aliasing and race conditions.
+2. **Direct Stream I/O**: Each socket owns and directly manages its stream, performing handshake, decoding, and multipart assembly inline.
 
-3. **Zero-Copy by Construction**: All message payloads are `Bytes` - fanout uses refcount bumps, never `memcpy`.
+3. **Zero-Copy by Construction**: All message payloads are `Bytes` - no intermediate allocations or copies.
 
-4. **Direct Stream Architecture**: Socket implementations use direct async read/write on streams, enabling minimal latency and maximum control.
+4. **Generic Streams**: Sockets work with any `AsyncRead + AsyncWrite + Unpin` stream, enabling TCP, Unix sockets, or custom transports.
 
-5. **Runtime Independence**: Uses `compio` for async IO - not coupled to Tokio's executor.
+5. **Runtime Independence**: Compatible with compio, Tokio, async-std, or any async runtime.
 
 ---
 
@@ -175,16 +172,16 @@ Monocoque is built as a layered system, each layer providing clean abstractions:
 
 Monocoque has **Phase 0-3 implementation complete** with integration testing in progress.
 
-| Phase       | Component            | Status                            |
-| ----------- | -------------------- | --------------------------------- |
-| **Phase 0** | IO Core & Split Pump | ✅ **Complete**                   |
-| **Phase 1** | ZMTP 3.1 Protocol    | ✅ **Complete**                   |
-| **Phase 2** | ROUTER/DEALER        | ✅ **Complete** (testing pending) |
-| **Phase 3** | PUB/SUB Engine       | ✅ **Complete** (testing pending) |
-| **Phase 4** | REQ/REP              | ✅ **Complete** (testing pending) |
-| **Phase 5** | Reliability          | ⏳ Planned                        |
-| **Phase 6** | Performance          | ⏳ Planned                        |
-| **Phase 7** | Public API           | ✅ **Complete** (feature-gated)   |
+| Phase       | Component         | Status                            |
+| ----------- | ----------------- | --------------------------------- |
+| **Phase 0** | Memory & I/O      | ✅ **Complete**                   |
+| **Phase 1** | ZMTP 3.1 Protocol | ✅ **Complete**                   |
+| **Phase 2** | ROUTER/DEALER     | ✅ **Complete** (testing pending) |
+| **Phase 3** | PUB/SUB Engine    | ✅ **Complete** (testing pending) |
+| **Phase 4** | REQ/REP           | ✅ **Complete** (testing pending) |
+| **Phase 5** | Reliability       | ⏳ Planned                        |
+| **Phase 6** | Performance       | ⏳ Planned                        |
+| **Phase 7** | Public API        | ✅ **Complete** (feature-gated)   |
 
 📖 **Read the blueprints**: Comprehensive design documents are in [`docs/blueprints/`](docs/blueprints/)
 
@@ -196,7 +193,7 @@ Monocoque has **Phase 0-3 implementation complete** with integration testing in 
 
 ### ✅ Implemented & Working
 
--   **Split Read/Write Pumps**: Cancellation-safe, independent flow control (Phase 0)
+-   **Direct Stream I/O**: Each socket manages its own stream with inline handshake and decoding (Phase 0)
 -   **IoBytes Zero-Copy Wrapper**: Eliminates `.to_vec()` memcpy on writes (~10-30% CPU reduction)
 -   **ZMTP 3.1 Framing**: Short/long frames, fragmentation support (Phase 1)
 -   **NULL Authentication**: Greeting + handshake with Socket-Type metadata (Phase 1)
@@ -476,7 +473,7 @@ See [`docs/blueprints/07-project-roadmap-and-future-phases.md`](docs/blueprints/
 
 -   📘 **[Overview](docs/blueprints/00-overview.md)** - Project vision and architecture
 -   🔒 **[Safety Model](docs/blueprints/06-safety-model-and-unsafe-audit.md)** - Memory guarantees and unsafe audit
--   🏗️ **[Phase 0: IO Core](docs/blueprints/02-phase0-io-and-split-pump.md)** - Split pump architecture
+-   🏗️ **[Phase 0: Memory & I/O](docs/blueprints/02-phase0-memory-and-io.md)** - Memory management and direct stream I/O
 -   📡 **[Phase 1: ZMTP](docs/blueprints/03-phase1-zmtp-framing-and-handshake.md)** - Protocol implementation
 -   🔀 **[Phase 2: Routing](docs/blueprints/04-phase2-router-dealer-and-load-balancing.md)** - ROUTER/DEALER semantics
 -   📢 **[Phase 3: PUB/SUB](docs/blueprints/05-phase3-pubsub-and-subscription-index.md)** - Subscription engine

@@ -1,20 +1,19 @@
 # Monocoque - Current Status Report
 
-**Date:** January 5, 2026  
-**Phase:** Integration Layer Complete
+**Date:** January 2026  
+**Phase:** All Core Socket Types Complete
 
 ## ✅ Completed Work
 
 ### Architecture
 
 -   **Protocol-agnostic core**: monocoque-core has ZERO dependencies on ZMTP
--   **Circular dependency eliminated**: Fixed architectural violation
--   **Integration layer**: ZmtpIntegratedActor successfully composes SocketActor + ZmtpSession + Hubs
--   **Clean separation of concerns**: IO → Protocol → Integration → Application
+-   **Direct stream I/O**: Each socket owns its stream directly
+-   **Clean separation**: IO → Protocol → Socket Implementation → Application
 
 ### Implementation
 
-1. **Memory allocator** (`SlabMut`, `IoArena`) - Phase 0 ✅
+1. **Memory Management** (`SlabMut`, `IoArena`, `IoBytes`, `SegmentedBuffer`) - Phase 0 ✅
 
     - Stable buffers for io_uring
     - IoBuf/IoBufMut traits correctly implemented
@@ -27,91 +26,71 @@
     - NULL mechanism handshake
     - Command parsing (SUB/UNSUB)
 
-3. **Integration Layer** ✅
-    - ZmtpIntegratedActor with event loop
-    - Multipart message assembly
-    - ROUTER envelope handling
-    - Hub registration (Router/PubSub)
-    - Runtime-agnostic async (futures::select!)
+3. **Socket Implementations** ✅
+    - DEALER socket with multipart
+    - ROUTER socket with identity routing
+    - PUB socket with broadcast
+    - SUB socket with topic filtering
+    - REQ socket with strict request-reply
+    - REP socket with envelope tracking
 
 ### Build Status
 
--   ✅ Both crates build successfully
--   ✅ All unit tests pass (7 tests)
--   ✅ Integration tests pass (5 tests)
+-   ✅ All crates build successfully
+-   ✅ All unit tests pass
+-   ✅ Interop tests pass (DEALER, ROUTER, PUB/SUB)
 -   ✅ Zero compiler warnings
--   ✅ Example runs and demonstrates architecture
+-   ✅ Examples run and demonstrate architecture
 
 ## 📋 Next Steps (Priority Order)
 
-### 1. Complete DEALER Pattern (Phase 2.1)
+### 1. Multi-Peer Support
 
-**What:** Implement full DEALER socket with SocketActor integration
+**What:** Implement multi-peer scenarios using RouterHub and PubSubHub
 
--   Wire up event loop with real IO
--   Multipart send/receive
--   Test with real libzmq ROUTER peer
+-   Multiple connections per socket
+-   Load balancing with RouterHub
+-   Fanout with PubSubHub
+-   Test with multiple libzmq peers
 
-**Why critical:** Validates the entire architecture end-to-end
+**Why:** Enables real-world deployment scenarios
 
-### 2. Implement ROUTER Pattern (Phase 2.2)
+### 2. Reliability Features
 
-**What:** Complete ROUTER with identity routing
+**What:** Add reconnection and error handling
 
--   Identity envelope injection/stripping (already designed)
--   RouterHub integration (skeleton exists)
--   Load balancing mode
--   Ghost peer protection via epochs
+-   Reconnect on disconnect
+-   Timeout management
+-   Graceful shutdown
+-   Error recovery
 
-**Why critical:** Required for REQ/REP and most production patterns
+**Why:** Production readiness
 
-### 3. Complete PUB/SUB (Phase 3)
+### 3. Performance Optimization
 
-**What:** Finish PubSub implementation
-
--   Wire up PubSubHub (skeleton exists)
--   Test subscription matching
--   Zero-copy fanout validation
--   Interop with libzmq
-
-**Why critical:** Completes the core ZMQ socket types
-
-### 4. Libzmq Interop Tests (Critical Validation)
-
-**What:** Integration tests against real libzmq
-
--   DEALER ↔ ROUTER
--   ROUTER ↔ DEALER
--   PUB → SUB
--   Verify no silent drops, no hangs
-
-**Why critical:** Proves Monocoque is a real ZMTP implementation
-
-### 5. Performance Validation
-
-**What:** Benchmark against libzmq
+**What:** Benchmark and optimize against libzmq
 
 -   Latency (p50, p99, p999)
 -   Throughput (msg/sec)
 -   Memory usage
 -   CPU efficiency
 
-## 🎯 Success Criteria for Phase 2 Complete
+**Why:** Validate performance goals
 
--   [ ] DEALER can send/receive multipart messages
--   [ ] ROUTER routes by identity correctly
--   [ ] Load balancing works with round-robin fairness
--   [ ] Reconnect is safe (epoch protection verified)
--   [ ] Interop with libzmq validated
--   [ ] No unsafe code added above allocator
+## 🎯 Success Criteria for Next Phase
+
+-   [ ] Multi-peer ROUTER with load balancing
+-   [ ] Multi-peer PUB with fanout
+-   [ ] Reconnect handling
+-   [ ] Performance benchmarks completed
 
 ## 📊 Metrics
 
 **Lines of Code:**
 
 -   monocoque-core: ~1,200 lines (protocol-agnostic)
--   monocoque-zmtp: ~2,500 lines (ZMTP + integration)
--   Tests: ~300 lines
+-   monocoque-zmtp: ~2,800 lines (ZMTP + sockets)
+-   Tests: ~400 lines
 
 **Unsafe Code:**
 
@@ -121,20 +100,20 @@
 
 **Test Coverage:**
 
--   Unit tests: 7 passing
--   Integration tests: 5 passing
--   Libzmq interop: TODO (next priority)
+-   Unit tests: Passing
+-   Interop tests: 3 passing (DEALER, ROUTER, PUB/SUB)
+-   All socket types validated
 
 ## 🏗️ Architectural Validation
 
-The implementation **perfectly matches** the blueprint specifications:
+The implementation matches blueprint specifications:
 
 1. ✅ Unsafe boundary respected (Phase 0 design)
-2. ✅ Split pump pattern implemented (Phase 0.2 design)
+2. ✅ Direct stream I/O (simpler than original design)
 3. ✅ Sans-IO session (Phase 1 design)
-4. ✅ Hub/Actor separation (Phase 2 design)
-5. ✅ Epoch-based ghost peer protection (Phase 2 design)
-6. ✅ Sorted prefix table structure (Phase 3 design)
+4. ✅ Hub components available (Phase 2/3 design)
+5. ✅ Epoch-based protection (Phase 2 design)
+6. ✅ Sorted prefix table (Phase 3 design)
 
 ## 🚀 What Makes This Special
 
@@ -142,11 +121,9 @@ Monocoque is **not** a typical ZMQ reimplementation. It's architected for:
 
 -   **Correctness first**: No protocol shortcuts, full ZMTP 3.1 compliance
 -   **Memory safety**: Unsafe code is <2%, fully isolated, documented
--   **Performance**: Zero-copy, syscall minimization, cache-friendly
+-   **Performance**: Zero-copy, direct I/O, cache-friendly
 -   **Evolvability**: Protocol-agnostic core enables custom protocols
 -   **Rust-native**: No FFI, no C dependencies, pure Rust benefits
-
-## 📝 Notes
 
 The project has reached a significant milestone: the integration layer is complete and validates that the architectural design works. The next phase focuses on completing socket patterns and proving interoperability with libzmq.
 

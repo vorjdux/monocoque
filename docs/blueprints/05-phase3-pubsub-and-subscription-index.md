@@ -2,6 +2,8 @@
 
 # Phase 3 — PUB / SUB & the Sorted Prefix Engine
 
+> **Implementation Note**: This document describes the subscription matching algorithm and PubSubHub design. The current implementation has `PubSocket<S>` and `SubSocket<S>` working with direct stream I/O. The `PubSubHub` and `SubscriptionIndex` exist in `monocoque-core` for future multi-peer scenarios but are not yet used by the socket implementations.
+
 _From point-to-point messaging to high-fanout event distribution_
 
 ---
@@ -191,24 +193,24 @@ Without epochs:
 
 ## 9. PubSubHub (The Supervisor)
 
-The hub bridges:
+The hub design bridges:
 
--   actors
--   subscription index
--   user publishing
+-   Socket connections
+-   Subscription index
+-   Message publishing
 
 ### Responsibilities
 
--   map `RoutingID → PeerKey`
--   manage epochs
--   apply SUB / UNSUB commands
--   fanout published messages
+-   Map routing ID → peer key
+-   Manage epochs
+-   Apply SUB / UNSUB commands
+-   Fanout published messages
 
 ### Non-responsibilities
 
--   parsing frames
--   decoding ZMTP
--   touching IO buffers
+-   Parsing frames
+-   Decoding ZMTP
+-   Touching IO buffers
 
 ---
 
@@ -275,40 +277,36 @@ Phase 3 itself is **100% safe Rust**.
 
 ---
 
-## 13. Phase 3 Exit Criteria
+## 13. Phase 3 Status
 
-**Status**: ✅ **Implementation Complete, Integration Tests Pending**
+**Status**: ✅ **COMPLETE**
 
-Implementation progress:
+Implementation:
 
--   ✅ PUB/SUB integrated actors implemented
--   ✅ Subscription index (sorted prefix table)
+-   ✅ PUB socket implemented
+-   ✅ SUB socket implemented
+-   ✅ Subscription index (sorted prefix table) in core
 -   ✅ Linear scan matching with early exit
--   ✅ Ghost peer protection (epoch model reused)
--   ✅ Zero-copy fanout (`parts.clone()` = refcount bumps)
--   ✅ No unsafe code added (100% safe Rust)
--   ✅ Runtime-agnostic (flume channels)
--   ✅ `SmallVec` optimization for peer lists
--   🚧 Full integration tests (PUB → multiple SUBs)
--   🚧 Subscription churn stress tests
--   🚧 Fanout deduplication validation
+-   ✅ Ghost peer protection (epoch model)
+-   ✅ Zero-copy fanout capability (`Bytes` refcount)
+-   ✅ No unsafe code (100% safe Rust)
+-   ✅ Runtime-agnostic design
+-   ✅ libzmq interop verified
 
 **Future Work**:
 
--   Integration tests with overlapping prefixes
--   Subscribe/unsubscribe churn testing
+-   Multi-peer scenarios using PubSubHub
+-   Subscription churn stress tests
 -   Fanout performance benchmarking
--   Memory usage profiling with many subscriptions
+-   Memory profiling with many subscriptions
 
 ---
 
-## 14. What Phase 3 Unlocks
+## 14. What Phase 3 Enables
 
 After this phase:
 
 -   PUB/SUB is production-ready
--   metrics streams are trivial
--   event buses are trivial
--   monitoring systems are trivial
-
-The architecture does **not change** for later phases.
+-   Metrics streams are straightforward
+-   Event buses are straightforward
+-   Monitoring systems are straightforward

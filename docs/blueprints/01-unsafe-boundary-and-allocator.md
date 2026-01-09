@@ -38,7 +38,6 @@ Everything else remains safe.
 
 All other crates/modules:
 
--   `monocoque-core/src/actor/*`
 -   `monocoque-core/src/router/*`
 -   `monocoque-core/src/pubsub/*`
 -   `monocoque-zmtp/*`

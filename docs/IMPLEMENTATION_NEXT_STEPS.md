@@ -321,17 +321,19 @@ Current state: Basic inline docs
 -   ✅ ROUTER socket (libzmq compatible)
 -   ✅ PUB socket (libzmq compatible)
 -   ✅ SUB socket (libzmq compatible)
+-   ✅ REQ socket
+-   ✅ REP socket
 -   ✅ Zero-copy message handling
--   ✅ Split-pump IO architecture
+-   ✅ Direct stream I/O
 -   ✅ ZMTP 3.1 protocol
 -   ✅ NULL authentication mechanism
 
 ### What's Next
 
--   🎯 REQ/REP socket patterns
--   🚧 Multi-peer support
+-   🎯 Multi-peer support
 -   📊 Performance benchmarking
 -   📝 Documentation enhancements
+-   🔒 Additional authentication mechanisms
 
 ### How to Contribute
 

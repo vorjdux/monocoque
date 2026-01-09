@@ -133,41 +133,41 @@ The trait implementation does **not lie** to the kernel.
 
 ---
 
-## 7. Cancellation Safety (Split Pump Proof)
+## 7. Cancellation Safety
 
 ### The classic bug
 
--   start async write
--   task cancelled
--   buffer dropped while kernel still writes
+-   Start async write
+-   Task cancelled
+-   Buffer dropped while kernel still writes
 
-### Why Monocoque is immune
+### Why Monocoque is safe
 
--   write pump owns buffers
--   cancellation drops task _after_ kernel returns buffers
--   ownership round-tripped through `write_vectored`
--   no buffer is dropped while in-flight
+-   Socket owns buffers directly
+-   Cancellation drops task _after_ kernel returns buffers
+-   Ownership round-tripped through `write_all`
+-   No buffer dropped while in-flight
 
-This is not accidental — it is architectural.
+This is architectural.
 
 ---
 
-## 8. Actor Isolation & Alias Prevention
+## 8. Socket Isolation & Alias Prevention
 
 Every connection has:
 
--   its own read pump
--   its own write pump
--   its own slab slices
--   its own session state
+-   Its own stream
+-   Its own decoder
+-   Its own slab slices
+-   Its own session state
 
-No shared mutable state across actors.
+No shared mutable state across sockets.
 
-Hubs only pass:
+Hubs (when used) only pass:
 
 -   `Bytes`
 -   `PeerKey`
--   channel senders
+-   Channel senders
 
 Never references.
 
