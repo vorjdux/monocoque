@@ -1,0 +1,116 @@
+[package]
+name = "monocoque"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "High-performance ZeroMQ-compatible messaging runtime built on io_uring"
+homepage = "https://github.com/vorjdux/monocoque"
+documentation = "https://docs.rs/monocoque"
+readme = "../README.md"
+keywords = ["zeromq", "zmq", "messaging", "io_uring", "async"]
+categories = ["network-programming", "asynchronous"]
+
+# Examples
+[[example]]
+name = "api_demo"
+required-features = ["zmq"]
+
+[[example]]
+name = "handshake_test"
+required-features = ["zmq"]
+
+[[example]]
+name = "hello_dealer"
+required-features = ["zmq"]
+
+[[bench]]
+name = "throughput"
+harness = false
+required-features = ["zmq"]
+
+[[bench]]
+name = "latency"
+harness = false
+required-features = ["zmq"]
+
+[[bench]]
+name = "patterns"
+harness = false
+required-features = ["zmq"]
+
+[[example]]
+name = "protocol_namespaces"
+required-features = ["zmq"]
+
+[[example]]
+name = "pubsub_events"
+required-features = ["zmq"]
+
+[[example]]
+name = "router_dealer_basic"
+required-features = ["zmq"]
+
+[[example]]
+name = "router_worker_pool"
+required-features = ["zmq"]
+
+# Interoperability examples (manual verification)
+[[example]]
+name = "interop_dealer_libzmq"
+required-features = ["zmq"]
+
+[[example]]
+name = "interop_router_libzmq"
+required-features = ["zmq"]
+
+[[example]]
+name = "interop_pubsub_libzmq"
+required-features = ["zmq"]
+
+# Integration tests with libzmq
+[[test]]
+name = "interop_load_balance"
+required-features = ["zmq"]
+
+[[test]]
+name = "interop_pair"
+required-features = ["zmq"]
+
+[[test]]
+name = "interop_pubsub"
+required-features = ["zmq"]
+
+[[test]]
+name = "interop_router"
+required-features = ["zmq"]
+
+[dependencies]
+# Internal implementation crates (not exposed)
+monocoque-core = { version = "0.1.0", path = "../monocoque-core" }
+monocoque-zmtp = { version = "0.1.0", path = "../monocoque-zmtp", optional = true }
+
+# Re-export dependencies for user convenience
+bytes = { workspace = true }
+compio = { workspace = true }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+zmq = { workspace = true }
+flume = { workspace = true }
+futures = { workspace = true }
+criterion = { workspace = true }
+tokio = { workspace = true }
+
+[features]
+default = []
+
+# Protocol implementations (opt-in)
+zmq = ["dep:monocoque-zmtp"]
+
+# Future protocols
+# mqtt = ["dep:monocoque-mqtt"]
+# amqp = ["dep:monocoque-amqp"]
