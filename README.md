@@ -431,17 +431,17 @@ Monocoque is in early development. Contributions are welcome, especially:
 
 ## Why Monocoque vs. Alternatives?
 
-| Feature            | libzmq (C++)   | Rust ZMQ Bindings | Monocoque     |
-| ------------------ | -------------- | ----------------- | ------------- |
-| Memory Safety      | ❌ Manual      | ✅ Via FFI        | ✅ Native     |
-| Zero-Copy          | Partial        | ❌ FFI boundary   | ✅ `Bytes`    |
-| IO Backend         | `select/epoll` | (inherited)       | ✅ `io_uring` |
-| Socket Monitoring  | Socket-based   | Via FFI           | ✅ Channel    |
-| IPC Transport      | ✅ Yes         | Via FFI           | ✅ Native     |
-| Endpoint Parsing   | String-based   | String-based      | ✅ Validated  |
-| Protocol Evolution | Hard (C++)     | Impossible        | ✅ Sans-IO    |
-| Custom Protocols   | No             | No                | ✅ Yes        |
-| Runtime Coupling   | N/A            | Often Tokio-bound | ✅ Agnostic   |
+| Feature            | libzmq (C++)   | Rust ZMQ Bindings | Monocoque          |
+| ------------------ | -------------- | ----------------- | ------------------ |
+| Memory Safety      | ❌ Manual      | ✅ Via FFI        | ✅ Native          |
+| Zero-Copy          | Partial        | ❌ FFI boundary   | ✅ `Bytes`         |
+| IO Backend         | `select/epoll` | (inherited)       | ✅ `io_uring`      |
+| Socket Monitoring  | ZMQ Socket     | Via FFI           | ✅ Native Channels |
+| IPC Transport      | ✅ Yes         | Via FFI           | ✅ Native          |
+| Endpoint Parsing   | String-based   | String-based      | ✅ Validated       |
+| Protocol Evolution | Hard (C++)     | Impossible        | ✅ Sans-IO         |
+| Custom Protocols   | No             | No                | ✅ Yes             |
+| Runtime Coupling   | N/A            | Often Tokio-bound | ✅ Agnostic        |
 
 ---
 
