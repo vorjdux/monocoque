@@ -69,6 +69,8 @@ where
     /// - Use `BufferConfig::large()` (16KB) for high-throughput routing with large messages
     ///
     /// Works with both TCP and Unix domain sockets.
+    ///
+    /// **Note**: For TCP streams, use `from_tcp_with_config()` instead to ensure TCP_NODELAY is enabled.
     pub async fn with_config(mut stream: S, config: BufferConfig) -> io::Result<Self> {
         debug!("[ROUTER] Creating new direct ROUTER socket");
 

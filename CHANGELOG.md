@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+### Performance: TCP_NODELAY Support in Public API (2026-01-09)
+
+**Summary**: Added `from_tcp()` and `from_tcp_with_config()` methods to public socket APIs to ensure TCP_NODELAY is properly enabled for optimal performance. This fixes a critical performance issue where using generic constructors would cause Nagle's algorithm to buffer small packets, resulting in 40-200ms delays.
+
+#### Performance Fixes
+
+-   **Fix: DEALER/ROUTER 60x Performance Regression** - TCP_NODELAY not enabled:
+    -   Root cause: Generic `from_stream()` methods don't enable TCP_NODELAY
+    -   Only specialized TCP methods call `monocoque_core::tcp::enable_tcp_nodelay()`
+    -   Impact: Nagle's algorithm buffered small packets causing 40-200ms delays
+    -   DEALER/ROUTER throughput: 784ms → 92ms (8.5x faster)
+    -   Now 3.4x faster than zmq.rs for 64-byte messages
+
+#### API Additions
+
+-   **Add: Public TCP Methods with TCP_NODELAY** - All socket types now expose:
+    -   `Socket::from_tcp(stream)` - Enable TCP_NODELAY with default config
+    -   `Socket::from_tcp_with_config(stream, config)` - TCP_NODELAY + custom buffers
+    -   Available on: `DealerSocket`, `RouterSocket`, `ReqSocket`, `RepSocket`
+    -   Wraps internal implementations from monocoque-zmtp
+
+#### Documentation
+
+-   **Doc: TCP_NODELAY Requirements** - Added warnings to generic constructors:
+    -   `DealerSocket::with_config()` - Note to use `from_tcp_with_config()` for TCP
+    -   `RouterSocket::with_config()` - Same guidance for optimal TCP performance
+    -   Prevents users from accidentally disabling TCP_NODELAY
+
+#### Benchmark Improvements
+
+-   **Fix: Throughput Benchmarks** - Now use proper TCP-optimized methods:
+    -   Changed from `from_stream_with_config()` → `from_tcp_with_config()`
+    -   Ensures fair comparison with TCP_NODELAY enabled
+    -   All benchmarks now use public API (not internal monocoque-zmtp)
+
 ### TCP and IPC Transport Support (2026-01-09)
 
 **Summary**: Completed full implementation of both TCP and IPC (Unix domain socket) transport support across all socket types. The entire stack now supports transparent transport selection with zero-cost abstractions.
