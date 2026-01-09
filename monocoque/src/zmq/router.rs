@@ -3,6 +3,7 @@
 use super::common::channel_to_io_error;
 use bytes::Bytes;
 use compio::net::{TcpListener, TcpStream};
+use monocoque_core::monitor::{create_monitor, SocketEvent, SocketEventSender, SocketMonitor};
 use monocoque_zmtp::router::RouterSocket as InternalRouter;
 use std::io;
 
@@ -42,8 +43,12 @@ use std::io;
 /// # Ok(())
 /// # }
 /// ```
-pub struct RouterSocket {
-    inner: InternalRouter,
+pub struct RouterSocket<S = TcpStream>
+where
+    S: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+{
+    inner: InternalRouter<S>,
+    monitor: Option<SocketEventSender>,
 }
 
 impl RouterSocket {
@@ -115,7 +120,66 @@ impl RouterSocket {
     pub async fn from_stream(stream: TcpStream) -> io::Result<Self> {
         Ok(Self {
             inner: InternalRouter::new(stream).await?,
+            monitor: None,
         })
+    }
+
+    /// Create a ROUTER socket from an existing TCP stream with custom buffer configuration.
+    ///
+    /// # Buffer Configuration
+    /// - Use `BufferConfig::small()` (4KB) for low-latency routing with small messages
+    /// - Use `BufferConfig::large()` (16KB) for high-throughput routing with large messages (recommended)
+    pub async fn from_stream_with_config(
+        stream: TcpStream,
+        config: monocoque_core::config::BufferConfig,
+    ) -> io::Result<Self> {
+        Ok(Self {
+            inner: InternalRouter::with_config(stream, config).await?,
+            monitor: None,
+        })
+    }
+}
+
+// Generic impl - works with any stream type
+impl<S> RouterSocket<S>
+where
+    S: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+{
+    /// Enable monitoring for this socket.
+    ///
+    /// Returns a receiver for socket lifecycle events. Once enabled, the socket
+    /// will emit events like Accepted, Disconnected, etc.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use monocoque::zmq::RouterSocket;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let (_listener, mut socket) = RouterSocket::bind("127.0.0.1:5555").await?;
+    /// let monitor = socket.monitor();
+    ///
+    /// // Spawn task to handle events
+    /// compio::runtime::spawn(async move {
+    ///     while let Ok(event) = monitor.recv_async().await {
+    ///         println!("Socket event: {}", event);
+    ///     }
+    /// });
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn monitor(&mut self) -> SocketMonitor {
+        let (sender, receiver) = create_monitor();
+        self.monitor = Some(sender);
+        receiver
+    }
+
+    /// Helper to emit monitoring events (if monitoring is enabled).
+    #[allow(dead_code)]
+    fn emit_event(&self, event: SocketEvent) {
+        if let Some(monitor) = &self.monitor {
+            let _ = monitor.send(event); // Ignore errors if receiver dropped
+        }
     }
 
     /// Send a multipart message.
@@ -167,5 +231,28 @@ impl RouterSocket {
     /// ```
     pub async fn recv(&mut self) -> Option<Vec<Bytes>> {
         self.inner.recv().await.ok().flatten()
+    }
+}
+
+// Unix-specific impl for IPC support
+#[cfg(unix)]
+impl RouterSocket<compio::net::UnixStream> {
+    /// Create a ROUTER socket from an existing Unix domain socket stream (IPC).
+    pub async fn from_unix_stream(stream: compio::net::UnixStream) -> io::Result<Self> {
+        Ok(Self {
+            inner: InternalRouter::new(stream).await?,
+            monitor: None,
+        })
+    }
+
+    /// Create a ROUTER socket from an existing Unix stream with custom buffer configuration.
+    pub async fn from_unix_stream_with_config(
+        stream: compio::net::UnixStream,
+        config: monocoque_core::config::BufferConfig,
+    ) -> io::Result<Self> {
+        Ok(Self {
+            inner: InternalRouter::with_config(stream, config).await?,
+            monitor: None,
+        })
     }
 }

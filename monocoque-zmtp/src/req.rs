@@ -44,10 +44,10 @@
 
 use crate::{
     codec::{encode_multipart, ZmtpDecoder},
-    config::BufferConfig,
     handshake::perform_handshake,
     session::SocketType,
 };
+use monocoque_core::config::BufferConfig;
 use bytes::{Bytes, BytesMut};
 use compio::io::{AsyncRead, AsyncWrite};
 use compio::net::TcpStream;
@@ -95,9 +95,12 @@ pub enum ReqState {
 /// # Ok(())
 /// # }
 /// ```
-pub struct ReqSocket {
-    /// Underlying TCP stream
-    stream: TcpStream,
+pub struct ReqSocket<S = TcpStream>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    /// Underlying stream (TCP or Unix socket)
+    stream: S,
     /// ZMTP decoder for decoding frames
     decoder: ZmtpDecoder,
     /// Arena for zero-copy allocation
@@ -115,8 +118,11 @@ pub struct ReqSocket {
     config: BufferConfig,
 }
 
-impl ReqSocket {
-    /// Create a new REQ socket from a TCP stream.
+impl<S> ReqSocket<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    /// Create a new REQ socket from a stream.
     ///
     /// This performs the ZMTP handshake and initializes the socket.
     ///
@@ -138,12 +144,18 @@ impl ReqSocket {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn new(mut stream: TcpStream) -> io::Result<Self> {
-        debug!("[REQ] Creating new direct REQ socket");
+    pub async fn new(stream: S) -> io::Result<Self> {
+        // REQ sockets typically handle low-latency RPC with small messages
+        Self::with_config(stream, BufferConfig::small()).await
+    }
 
-        // Enable TCP_NODELAY for low latency
-        monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
-        debug!("[REQ] TCP_NODELAY enabled");
+    /// Create a new REQ socket from a stream with custom buffer configuration.
+    ///
+    /// # Buffer Configuration
+    /// - Use `BufferConfig::small()` (4KB) for low-latency request/reply with small messages
+    /// - Use `BufferConfig::large()` (16KB) for high-throughput with large messages
+    pub async fn with_config(mut stream: S, config: BufferConfig) -> io::Result<Self> {
+        debug!("[REQ] Creating new direct REQ socket");
 
         // Perform ZMTP handshake
         debug!("[REQ] Performing ZMTP handshake...");
@@ -165,13 +177,10 @@ impl ReqSocket {
 
         // Create segmented recv buffer
         let recv = SegmentedBuffer::new();
-        
-        // Create buffer config
-        let config = BufferConfig::default();
-        
+
         // Create write buffer (reused for sends)
         let write_buf = BytesMut::with_capacity(config.write_buf_size);
-        
+
         debug!("[REQ] Socket initialized");
 
         Ok(Self {
@@ -283,7 +292,7 @@ impl ReqSocket {
                     Some(frame) => {
                         let more = frame.more();
                         self.frames.push(frame.payload);
-                        
+
                         if !more {
                             // Complete message received
                             let msg: Vec<Bytes> = self.frames.drain(..).collect();
@@ -322,13 +331,13 @@ impl ReqSocket {
         self.state
     }
 
-    /// Get a reference to the underlying TCP stream.
-    pub const fn stream_ref(&self) -> &TcpStream {
+    /// Get a reference to the underlying stream.
+    pub const fn stream_ref(&self) -> &S {
         &self.stream
     }
 
-    /// Get a mutable reference to the underlying TCP stream.
-    pub fn stream_mut(&mut self) -> &mut TcpStream {
+    /// Get a mutable reference to the underlying stream.
+    pub fn stream_mut(&mut self) -> &mut S {
         &mut self.stream
     }
 }
@@ -349,5 +358,24 @@ mod tests {
     fn test_compio_stream_creation() {
         // Validate CompioStream can be created
         // Actual I/O tests require a real connection
+    }
+}
+
+// Specialized implementation for TCP streams to enable TCP_NODELAY
+impl ReqSocket<TcpStream> {
+    /// Create a new REQ socket from a TCP stream with TCP_NODELAY enabled.
+    pub async fn from_tcp(stream: TcpStream) -> io::Result<Self> {
+        Self::from_tcp_with_config(stream, BufferConfig::large()).await
+    }
+
+    /// Create a new REQ socket from a TCP stream with TCP_NODELAY and custom config.
+    pub async fn from_tcp_with_config(
+        stream: TcpStream,
+        config: BufferConfig,
+    ) -> io::Result<Self> {
+        // Enable TCP_NODELAY for low latency
+        monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
+        debug!("[REQ] TCP_NODELAY enabled");
+        Self::with_config(stream, config).await
     }
 }

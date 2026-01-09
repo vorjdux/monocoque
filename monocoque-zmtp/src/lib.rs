@@ -1,10 +1,15 @@
 //! # Monocoque ZMTP
 //!
-//! High-performance `ZeroMQ` (ZMTP 3.1) protocol implementation in Rust.
+//! **Internal protocol implementation crate for Monocoque.**
 //!
-//! ## Overview
+//! ⚠️ **This is an internal implementation detail. Use the `monocoque` crate for the public API.**
 //!
-//! Monocoque provides a clean, safe, and efficient implementation of `ZeroMQ` socket patterns:
+//! This crate provides the low-level ZMTP 3.1 protocol implementation with direct stream I/O.
+//! For application development, use `monocoque::zmq::*` which provides a higher-level, more
+//! ergonomic API with proper error handling and convenience methods.
+//!
+//! ## Socket Types (Internal API)
+//!
 //! - **DEALER**: Asynchronous request-reply with load balancing
 //! - **ROUTER**: Server-side routing with identity-based addressing  
 //! - **REQ**: Synchronous request-reply client (strict alternation)
@@ -12,21 +17,21 @@
 //! - **PUB**: Publisher for broadcasting events
 //! - **SUB**: Subscriber with topic-based filtering
 //!
-//! ## Quick Start
+//! ## For Application Development
 //!
-//! ```rust,no_run
-//! use monocoque_zmtp::DealerSocket;
-//! use compio::net::TcpStream;
-//! use bytes::Bytes;
+//! ```toml
+//! [dependencies]
+//! monocoque = { version = "0.1", features = ["zmq"] }
+//! ```
+//!
+//! ```rust,ignore
+//! use monocoque::zmq::DealerSocket;
 //!
 //! #[compio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let stream = TcpStream::connect("127.0.0.1:5555").await?;
-//!     let mut socket = DealerSocket::new(stream).await?;
-//!     
-//!     socket.send(vec![Bytes::from("Hello!")]).await?;
-//!     let response = socket.recv().await?;
-//!     
+//!     let mut socket = DealerSocket::connect("127.0.0.1:5555").await?;
+//!     socket.send(vec![b"Hello!".into()]).await?;
+//!     let response = socket.recv().await;
 //!     Ok(())
 //! }
 //! ```
@@ -65,7 +70,6 @@ mod handshake;
 mod utils;
 
 // Public protocol types
-pub mod config;
 pub mod session;
 
 // Socket implementations
@@ -78,6 +82,7 @@ pub mod subscriber;
 
 // Re-export socket types for clean API
 pub use dealer::DealerSocket;
+pub use monocoque_core::config::BufferConfig;
 pub use publisher::PubSocket;
 pub use rep::RepSocket;
 pub use req::ReqSocket;

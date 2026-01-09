@@ -30,8 +30,7 @@
 //! use monocoque::zmq::prelude::*;
 //!
 //! # #[cfg(feature = "zmq")]
-//! # #[compio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Connect to a ZeroMQ peer
 //! let mut socket = DealerSocket::connect("127.0.0.1:5555").await?;
 //!

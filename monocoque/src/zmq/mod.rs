@@ -11,6 +11,12 @@
 //! - [`PubSocket`] - Publisher (broadcast to subscribers)
 //! - [`SubSocket`] - Subscriber (receive filtered messages)
 //!
+//! # Features
+//!
+//! - **Endpoint Parsing**: Use `Endpoint::parse("tcp://...")` or `Endpoint::parse("ipc://...")`
+//! - **Socket Monitoring**: Subscribe to connection events via `socket.monitor()`
+//! - **IPC Transport**: Unix domain sockets for low-latency local communication (Unix only)
+//!
 //! # Quick Start
 //!
 //! ## DEALER (Client)
@@ -55,11 +61,17 @@ mod subscriber;
 
 // Re-export socket types
 pub use dealer::DealerSocket;
+pub use monocoque_core::config::BufferConfig;
+pub use monocoque_core::endpoint::{Endpoint, EndpointError};
+pub use monocoque_core::monitor::{SocketEvent, SocketMonitor};
 pub use publisher::PubSocket;
 pub use rep::RepSocket;
 pub use req::ReqSocket;
 pub use router::RouterSocket;
 pub use subscriber::SubSocket;
+
+#[cfg(unix)]
+pub use monocoque_core::ipc;
 
 /// Convenient imports for ZeroMQ protocol.
 ///

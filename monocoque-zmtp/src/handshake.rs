@@ -23,8 +23,7 @@ use crate::session::SocketType;
 use crate::utils::{build_ready, encode_frame, FLAG_COMMAND};
 use bytes::{Bytes, BytesMut};
 use compio::buf::BufResult;
-use compio::io::{AsyncReadExt, AsyncWriteExt};
-use compio::net::TcpStream;
+use compio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use monocoque_core::alloc::IoBytes;
 use tracing::debug;
 
@@ -42,11 +41,14 @@ pub struct HandshakeResult {
 /// 2. READY command exchange is complete
 ///
 /// Only after this completes should the stream be handed to `SocketActor`.
-pub async fn perform_handshake(
-    stream: &mut TcpStream,
+pub async fn perform_handshake<S>(
+    stream: &mut S,
     local_socket_type: SocketType,
     identity: Option<&[u8]>,
-) -> Result<HandshakeResult, ZmtpError> {
+) -> Result<HandshakeResult, ZmtpError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     debug!("[HANDSHAKE] Starting synchronous handshake for {}", local_socket_type.as_str());
     
     // Step 1: Send our greeting

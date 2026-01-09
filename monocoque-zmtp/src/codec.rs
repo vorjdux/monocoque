@@ -3,7 +3,7 @@ use monocoque_core::buffer::SegmentedBuffer;
 use std::io;
 use thiserror::Error;
 
-use crate::config::STAGING_BUF_INITIAL_CAP;
+use monocoque_core::config::STAGING_BUF_INITIAL_CAP;
 
 /// ZMTP protocol errors
 #[derive(Debug, Error)]

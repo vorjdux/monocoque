@@ -8,7 +8,7 @@
 use bytes::Bytes;
 use compio::net::TcpListener;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use monocoque::zmq::{RepSocket, ReqSocket};
+use monocoque::zmq::{BufferConfig, RepSocket, ReqSocket};
 use std::time::Duration;
 
 const MESSAGE_SIZES: &[usize] = &[64, 256]; // Reduced for quick testing
@@ -42,7 +42,7 @@ fn monocoque_req_rep_latency(c: &mut Criterion) {
 
                         let server_task = compio::runtime::spawn(async move {
                             let (stream, _) = listener.accept().await.unwrap();
-                            let mut rep = RepSocket::from_stream(stream).await.unwrap();
+                            let mut rep = RepSocket::from_stream_with_config(stream, BufferConfig::small()).await.unwrap();
                             for _ in 0..ROUND_TRIPS {
                                 if let Some(msg) = rep.recv().await {
                                     rep.send(msg).await.ok();
@@ -53,7 +53,7 @@ fn monocoque_req_rep_latency(c: &mut Criterion) {
                         });
 
                         let stream = compio::net::TcpStream::connect(server_addr).await.unwrap();
-                        let mut req = ReqSocket::from_stream(stream).await.unwrap();
+                        let mut req = ReqSocket::from_stream_with_config(stream, BufferConfig::small()).await.unwrap();
 
                         for _ in 0..ROUND_TRIPS {
                             req.send(vec![black_box(payload.clone())]).await.unwrap();
@@ -136,13 +136,13 @@ fn monocoque_connection_latency(c: &mut Criterion) {
                 let accept_task = compio::runtime::spawn(async move {
                     for _ in 0..CONNECTIONS {
                         let (stream, _) = listener.accept().await.unwrap();
-                        let _ = RepSocket::from_stream(stream).await.unwrap();
+                        let _ = RepSocket::from_stream_with_config(stream, BufferConfig::small()).await.unwrap();
                     }
                 });
 
                 for _ in 0..CONNECTIONS {
                     let stream = compio::net::TcpStream::connect(server_addr).await.unwrap();
-                    let req = ReqSocket::from_stream(stream).await.unwrap();
+                    let req = ReqSocket::from_stream_with_config(stream, BufferConfig::small()).await.unwrap();
                     black_box(req);
                 }
 

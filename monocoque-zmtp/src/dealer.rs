@@ -20,15 +20,18 @@ use tracing::{debug, trace};
 
 use crate::{
     codec::{encode_multipart, ZmtpDecoder},
-    config::BufferConfig,
     handshake::perform_handshake,
     session::SocketType,
 };
+use monocoque_core::config::BufferConfig;
 
 /// Direct-stream DEALER socket.
-pub struct DealerSocket {
-    /// Underlying TCP stream
-    stream: TcpStream,
+pub struct DealerSocket<S = TcpStream>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    /// Underlying stream (TCP or Unix socket)
+    stream: S,
     /// ZMTP decoder for decoding frames
     decoder: ZmtpDecoder,
     /// Arena for zero-copy allocation
@@ -44,14 +47,30 @@ pub struct DealerSocket {
     config: BufferConfig,
 }
 
-impl DealerSocket {
-    /// Create a new DEALER socket from a TCP stream.
-    pub async fn new(mut stream: TcpStream) -> io::Result<Self> {
-        debug!("[DEALER] Creating new direct DEALER socket");
+impl<S> DealerSocket<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    /// Create a new DEALER socket from a stream with large buffer configuration (16KB).
+    ///
+    /// DEALER sockets typically handle high-throughput workloads with larger messages,
+    /// so large buffers provide optimal performance. Use `with_config()` for different workloads.
+    ///
+    /// Works with both TCP and Unix domain sockets.
+    pub async fn new(stream: S) -> io::Result<Self> {
+        Self::with_config(stream, BufferConfig::large()).await
+    }
 
-        // Enable TCP_NODELAY for low latency
-        monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
-        debug!("[DEALER] TCP_NODELAY enabled");
+    /// Create a new DEALER socket from a stream with custom buffer configuration.
+    ///
+    /// # Buffer Configuration
+    /// - Use `BufferConfig::small()` (4KB) for low-latency with small messages
+    /// - Use `BufferConfig::large()` (16KB) for high-throughput with large messages
+    /// - Use `BufferConfig::custom(read, write)` for fine-grained control
+    ///
+    /// Works with both TCP and Unix domain sockets.
+    pub async fn with_config(mut stream: S, config: BufferConfig) -> io::Result<Self> {
+        debug!("[DEALER] Creating new direct DEALER socket");
 
         // Perform ZMTP handshake
         debug!("[DEALER] Performing ZMTP handshake...");
@@ -70,8 +89,6 @@ impl DealerSocket {
 
         // Create ZMTP decoder
         let decoder = ZmtpDecoder::new();
-
-        let config = BufferConfig::default();
 
         // Create buffers
         let recv = SegmentedBuffer::new();
@@ -150,5 +167,21 @@ impl DealerSocket {
 
         trace!("[DEALER] Message sent successfully");
         Ok(())
+    }
+}
+
+// Specialized implementation for TCP streams to enable TCP_NODELAY
+impl DealerSocket<TcpStream> {
+    /// Create a new DEALER socket from a TCP stream with TCP_NODELAY enabled.
+    pub async fn from_tcp(stream: TcpStream) -> io::Result<Self> {
+        Self::from_tcp_with_config(stream, BufferConfig::large()).await
+    }
+
+    /// Create a new DEALER socket from a TCP stream with TCP_NODELAY and custom config.
+    pub async fn from_tcp_with_config(stream: TcpStream, config: BufferConfig) -> io::Result<Self> {
+        // Enable TCP_NODELAY for low latency
+        monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
+        debug!("[DEALER] TCP_NODELAY enabled");
+        Self::with_config(stream, config).await
     }
 }

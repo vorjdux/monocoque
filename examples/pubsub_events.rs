@@ -98,7 +98,7 @@ async fn run_subscriber() {
     
     // Subscribe to trade events only
     info!("[Subscriber] Subscribing to 'trade.' prefix");
-    socket.subscribe(Bytes::from("trade.")).await.unwrap();
+    socket.subscribe(b"trade.");
     
     // Give subscription time to register
     compio::time::sleep(Duration::from_millis(200)).await;

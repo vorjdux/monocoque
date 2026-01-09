@@ -3,6 +3,7 @@
 use super::common::channel_to_io_error;
 use bytes::Bytes;
 use compio::net::TcpStream;
+use monocoque_core::monitor::{create_monitor, SocketEvent, SocketEventSender, SocketMonitor};
 use monocoque_zmtp::dealer::DealerSocket as InternalDealer;
 use std::io;
 
@@ -39,25 +40,31 @@ use std::io;
 /// # Ok(())
 /// # }
 /// ```
-pub struct DealerSocket {
-    inner: InternalDealer,
+pub struct DealerSocket<S = TcpStream>
+where
+    S: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+{
+    inner: InternalDealer<S>,
+    monitor: Option<SocketEventSender>,
 }
 
 impl DealerSocket {
     /// Connect to a ZeroMQ peer and create a DEALER socket.
     ///
-    /// This is the recommended way to create a DEALER socket. It handles
-    /// TCP connection and ZMTP handshake automatically.
+    /// Supports both TCP and IPC endpoints:
+    /// - TCP: `"tcp://127.0.0.1:5555"` or `"127.0.0.1:5555"`
+    /// - IPC: `"ipc:///tmp/socket.sock"` (Unix only)
     ///
     /// # Arguments
     ///
-    /// * `addr` - Socket address to connect to (e.g., `"127.0.0.1:5555"`)
+    /// * `endpoint` - Endpoint to connect to
     ///
     /// # Errors
     ///
     /// Returns an error if:
-    /// - The TCP connection fails (network unreachable, connection refused, etc.)
-    /// - DNS resolution fails for the provided address
+    /// - The connection fails (network unreachable, connection refused, etc.)
+    /// - DNS resolution fails for TCP endpoints
+    /// - Invalid endpoint format
     ///
     /// # Example
     ///
@@ -65,13 +72,63 @@ impl DealerSocket {
     /// use monocoque::zmq::DealerSocket;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let socket = DealerSocket::connect("127.0.0.1:5555").await?;
+    /// // TCP connection
+    /// let socket1 = DealerSocket::connect("tcp://127.0.0.1:5555").await?;
+    ///
+    /// // IPC connection (Unix only)
+    /// #[cfg(unix)]
+    /// let socket2 = DealerSocket::connect("ipc:///tmp/socket.sock").await?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn connect(addr: impl compio::net::ToSocketAddrsAsync) -> io::Result<Self> {
+    pub async fn connect(endpoint: &str) -> io::Result<Self> {
+        // Try parsing as endpoint, fall back to raw address
+        let addr = if let Ok(monocoque_core::endpoint::Endpoint::Tcp(a)) =
+            monocoque_core::endpoint::Endpoint::parse(endpoint)
+        {
+            a
+        } else {
+            endpoint
+                .parse::<std::net::SocketAddr>()
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?
+        };
+
         let stream = TcpStream::connect(addr).await?;
-        Self::from_stream(stream).await
+        let sock = Self::from_stream(stream).await?;
+        sock.emit_event(SocketEvent::Connected(
+            monocoque_core::endpoint::Endpoint::Tcp(addr),
+        ));
+        Ok(sock)
+    }
+
+    /// Connect to a ZeroMQ peer via IPC (Unix domain sockets).
+    ///
+    /// Unix-only. Accepts IPC paths with or without `ipc://` prefix.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # #[cfg(unix)]
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// use monocoque::zmq::DealerSocket;
+    ///
+    /// let mut socket = DealerSocket::connect_ipc("/tmp/dealer.sock").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(unix)]
+    pub async fn connect_ipc(path: &str) -> io::Result<DealerSocket<compio::net::UnixStream>> {
+        use std::path::PathBuf;
+
+        let clean_path = path.strip_prefix("ipc://").unwrap_or(path);
+        let ipc_path = PathBuf::from(clean_path);
+
+        let stream = monocoque_core::ipc::connect(&ipc_path).await?;
+        let sock = DealerSocket::from_unix_stream(stream).await?;
+        sock.emit_event(SocketEvent::Connected(
+            monocoque_core::endpoint::Endpoint::Ipc(ipc_path),
+        ));
+        Ok(sock)
     }
 
     /// Create a DEALER socket from an existing TCP stream.
@@ -95,7 +152,66 @@ impl DealerSocket {
     pub async fn from_stream(stream: TcpStream) -> io::Result<Self> {
         Ok(Self {
             inner: InternalDealer::new(stream).await?,
+            monitor: None,
         })
+    }
+
+    /// Create a DEALER socket from an existing TCP stream with custom buffer configuration.
+    ///
+    /// # Buffer Configuration
+    /// - Use `BufferConfig::small()` (4KB) for low-latency with small messages
+    /// - Use `BufferConfig::large()` (16KB) for high-throughput with large messages (recommended)
+    pub async fn from_stream_with_config(
+        stream: TcpStream,
+        config: monocoque_core::config::BufferConfig,
+    ) -> io::Result<Self> {
+        Ok(Self {
+            inner: InternalDealer::with_config(stream, config).await?,
+            monitor: None,
+        })
+    }
+}
+
+// Generic impl - works with any stream type
+impl<S> DealerSocket<S>
+where
+    S: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+{
+    /// Enable monitoring for this socket.
+    ///
+    /// Returns a receiver for socket lifecycle events. Once enabled, the socket
+    /// will emit events like Connected, Disconnected, etc.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use monocoque::zmq::{DealerSocket, SocketEvent};
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut socket = DealerSocket::connect("127.0.0.1:5555").await?;
+    /// let monitor = socket.monitor();
+    ///
+    /// // Spawn task to handle events
+    /// compio::runtime::spawn(async move {
+    ///     while let Ok(event) = monitor.recv_async().await {
+    ///         println!("Socket event: {}", event);
+    ///     }
+    /// });
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn monitor(&mut self) -> SocketMonitor {
+        let (sender, receiver) = create_monitor();
+        self.monitor = Some(sender);
+        receiver
+    }
+
+    /// Helper to emit monitoring events (if monitoring is enabled).
+    #[allow(dead_code)]
+    fn emit_event(&self, event: SocketEvent) {
+        if let Some(monitor) = &self.monitor {
+            let _ = monitor.send(event); // Ignore errors if receiver dropped
+        }
     }
 
     /// Send a multipart message.
@@ -141,5 +257,28 @@ impl DealerSocket {
     /// ```
     pub async fn recv(&mut self) -> Option<Vec<Bytes>> {
         self.inner.recv().await.ok().flatten()
+    }
+}
+
+// Unix-specific impl for IPC support
+#[cfg(unix)]
+impl DealerSocket<compio::net::UnixStream> {
+    /// Create a DEALER socket from an existing Unix domain socket stream (IPC).
+    pub async fn from_unix_stream(stream: compio::net::UnixStream) -> io::Result<Self> {
+        Ok(Self {
+            inner: InternalDealer::new(stream).await?,
+            monitor: None,
+        })
+    }
+
+    /// Create a DEALER socket from an existing Unix stream with custom buffer configuration.
+    pub async fn from_unix_stream_with_config(
+        stream: compio::net::UnixStream,
+        config: monocoque_core::config::BufferConfig,
+    ) -> io::Result<Self> {
+        Ok(Self {
+            inner: InternalDealer::with_config(stream, config).await?,
+            monitor: None,
+        })
     }
 }

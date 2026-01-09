@@ -19,16 +19,19 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, trace};
 
 use crate::codec::{encode_multipart, ZmtpDecoder};
-use crate::config::BufferConfig;
 use crate::{handshake::perform_handshake, session::SocketType};
 use monocoque_core::buffer::SegmentedBuffer;
+use monocoque_core::config::BufferConfig;
 
 static PEER_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// Direct-stream ROUTER socket.
-pub struct RouterSocket {
-    /// Underlying TCP stream
-    stream: TcpStream,
+pub struct RouterSocket<S = TcpStream>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    /// Underlying stream (TCP or Unix socket)
+    stream: S,
     /// ZMTP decoder for decoding frames
     decoder: ZmtpDecoder,
     /// Arena for zero-copy allocation
@@ -45,14 +48,29 @@ pub struct RouterSocket {
     config: BufferConfig,
 }
 
-impl RouterSocket {
-    /// Create a new ROUTER socket from a TCP stream.
-    pub async fn new(mut stream: TcpStream) -> io::Result<Self> {
-        debug!("[ROUTER] Creating new direct ROUTER socket");
+impl<S> RouterSocket<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    /// Create a new ROUTER socket from a stream with large buffer configuration (16KB).
+    ///
+    /// ROUTER sockets typically handle high-throughput workloads with message routing,
+    /// so large buffers provide optimal performance. Use `with_config()` for different workloads.
+    ///
+    /// Works with both TCP and Unix domain sockets.
+    pub async fn new(stream: S) -> io::Result<Self> {
+        Self::with_config(stream, BufferConfig::large()).await
+    }
 
-        // Enable TCP_NODELAY for low latency
-        monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
-        debug!("[ROUTER] TCP_NODELAY enabled");
+    /// Create a new ROUTER socket from a stream with custom buffer configuration.
+    ///
+    /// # Buffer Configuration
+    /// - Use `BufferConfig::small()` (4KB) for low-latency routing with small messages
+    /// - Use `BufferConfig::large()` (16KB) for high-throughput routing with large messages
+    ///
+    /// Works with both TCP and Unix domain sockets.
+    pub async fn with_config(mut stream: S, config: BufferConfig) -> io::Result<Self> {
+        debug!("[ROUTER] Creating new direct ROUTER socket");
 
         // Perform ZMTP handshake
         debug!("[ROUTER] Performing ZMTP handshake...");
@@ -80,9 +98,6 @@ impl RouterSocket {
 
         // Create ZMTP decoder
         let decoder = ZmtpDecoder::new();
-
-        // Create buffer config
-        let config = BufferConfig::default();
 
         // Create buffers
         let recv = SegmentedBuffer::new();
@@ -116,16 +131,16 @@ impl RouterSocket {
                     Some(frame) => {
                         let more = frame.more();
                         self.frames.push(frame.payload);
-                        
+
                         if !more {
                             // Complete message received
                             let msg: Vec<Bytes> = self.frames.drain(..).collect();
                             trace!("[ROUTER] Received {} frames", msg.len());
-                            
+
                             // Prepend peer identity to the message
                             let mut frames = vec![self.peer_identity.clone()];
                             frames.extend(msg);
-                            
+
                             return Ok(Some(frames));
                         }
                     }
@@ -159,11 +174,7 @@ impl RouterSocket {
         trace!("[ROUTER] Sending {} frames", msg.len());
 
         // Skip the first frame (identity) if present and send the rest
-        let frames_to_send = if msg.len() > 1 {
-            &msg[1..]
-        } else {
-            &msg[..]
-        };
+        let frames_to_send = if msg.len() > 1 { &msg[1..] } else { &msg[..] };
 
         // Encode message - reuse write_buf to avoid allocation
         self.write_buf.clear();
@@ -178,5 +189,21 @@ impl RouterSocket {
 
         trace!("[ROUTER] Message sent successfully");
         Ok(())
+    }
+}
+
+// Specialized implementation for TCP streams to enable TCP_NODELAY
+impl RouterSocket<TcpStream> {
+    /// Create a new ROUTER socket from a TCP stream with TCP_NODELAY enabled.
+    pub async fn from_tcp(stream: TcpStream) -> io::Result<Self> {
+        Self::from_tcp_with_config(stream, BufferConfig::large()).await
+    }
+
+    /// Create a new ROUTER socket from a TCP stream with TCP_NODELAY and custom config.
+    pub async fn from_tcp_with_config(stream: TcpStream, config: BufferConfig) -> io::Result<Self> {
+        // Enable TCP_NODELAY for low latency
+        monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
+        debug!("[ROUTER] TCP_NODELAY enabled");
+        Self::with_config(stream, config).await
     }
 }

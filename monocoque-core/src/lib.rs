@@ -22,9 +22,15 @@
 pub mod alloc;
 pub mod backpressure;
 pub mod buffer;
+pub mod config;
+pub mod endpoint;
 pub mod error;
+pub mod monitor;
 pub mod router;
 pub mod tcp;
+
+#[cfg(unix)]
+pub mod ipc;
 
 pub mod pubsub {
     pub mod hub;
@@ -37,8 +43,13 @@ pub mod prelude {
     pub use crate::alloc::{IoArena, SlabMut};
     pub use crate::backpressure::{BytePermits, NoOpPermits, Permit};
     pub use crate::buffer::SegmentedBuffer;
+    pub use crate::endpoint::Endpoint;
+    pub use crate::monitor::{SocketEvent, SocketMonitor};
     pub use crate::pubsub::hub::{PubSubCmd, PubSubEvent, PubSubHub};
     pub use crate::pubsub::index::{PeerKey, SubscriptionIndex};
     pub use crate::router::{HubEvent, PeerCmd, RouterBehavior, RouterCmd, RouterHub};
     pub use crate::tcp::enable_tcp_nodelay;
+
+    #[cfg(unix)]
+    pub use crate::ipc;
 }

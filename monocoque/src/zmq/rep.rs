@@ -3,6 +3,7 @@
 use super::common::channel_to_io_error;
 use bytes::Bytes;
 use compio::net::TcpStream;
+use monocoque_core::monitor::{create_monitor, SocketEvent, SocketEventSender, SocketMonitor};
 use monocoque_zmtp::rep::RepSocket as InternalRep;
 use std::io;
 
@@ -33,7 +34,7 @@ use std::io;
 /// // Bind and accept
 /// let listener = TcpListener::bind("127.0.0.1:5555").await?;
 /// let (stream, _) = listener.accept().await?;
-/// let socket = RepSocket::from_stream(stream).await;
+/// let mut socket = RepSocket::from_stream(stream).await?;
 ///
 /// loop {
 ///     // Receive request
@@ -46,8 +47,12 @@ use std::io;
 /// }
 /// # }
 /// ```
-pub struct RepSocket {
-    inner: InternalRep,
+pub struct RepSocket<S = TcpStream>
+where
+    S: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+{
+    inner: InternalRep<S>,
+    monitor: Option<SocketEventSender>,
 }
 
 impl RepSocket {
@@ -65,14 +70,53 @@ impl RepSocket {
     /// # async fn example() -> std::io::Result<()> {
     /// let listener = TcpListener::bind("127.0.0.1:5555").await?;
     /// let (stream, _) = listener.accept().await?;
-    /// let socket = RepSocket::from_stream(stream).await;
+    /// let socket = RepSocket::from_stream(stream).await?;
     /// # Ok(())
     /// # }
     /// ```
     pub async fn from_stream(stream: TcpStream) -> io::Result<Self> {
         Ok(Self {
             inner: InternalRep::new(stream).await?,
+            monitor: None,
         })
+    }
+
+    /// Create a REP socket from an existing TCP stream with custom buffer configuration.
+    ///
+    /// # Buffer Configuration
+    /// - Use `BufferConfig::small()` (4KB) for low-latency request/reply with small messages (recommended)
+    /// - Use `BufferConfig::large()` (16KB) for high-throughput with large messages
+    pub async fn from_stream_with_config(
+        stream: TcpStream,
+        config: monocoque_core::config::BufferConfig,
+    ) -> io::Result<Self> {
+        Ok(Self {
+            inner: InternalRep::with_config(stream, config).await?,
+            monitor: None,
+        })
+    }
+}
+
+// Generic impl - works with any stream type
+impl<S> RepSocket<S>
+where
+    S: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+{
+    /// Enable monitoring for this socket.
+    ///
+    /// Returns a receiver for socket lifecycle events.
+    pub fn monitor(&mut self) -> SocketMonitor {
+        let (sender, receiver) = create_monitor();
+        self.monitor = Some(sender);
+        receiver
+    }
+
+    /// Helper to emit monitoring events (if monitoring is enabled).
+    #[allow(dead_code)]
+    fn emit_event(&self, event: SocketEvent) {
+        if let Some(monitor) = &self.monitor {
+            let _ = monitor.send(event);
+        }
     }
 
     /// Receive a request message.
@@ -90,7 +134,7 @@ impl RepSocket {
     /// ```rust,no_run
     /// use monocoque::zmq::RepSocket;
     ///
-    /// # async fn example(socket: &RepSocket) -> std::io::Result<()> {
+    /// # async fn example(socket: &mut RepSocket) -> std::io::Result<()> {
     /// if let Some(request) = socket.recv().await {
     ///     for (i, frame) in request.iter().enumerate() {
     ///         println!("Frame {}: {:?}", i, frame);
@@ -124,7 +168,7 @@ impl RepSocket {
     /// use monocoque::zmq::RepSocket;
     /// use bytes::Bytes;
     ///
-    /// # async fn example(socket: &RepSocket) -> std::io::Result<()> {
+    /// # async fn example(socket: &mut RepSocket) -> std::io::Result<()> {
     /// // Send single-part reply
     /// socket.send(vec![Bytes::from("OK")]).await?;
     ///
@@ -138,5 +182,28 @@ impl RepSocket {
     /// ```
     pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
         channel_to_io_error(self.inner.send(msg).await)
+    }
+}
+
+// Unix-specific impl for IPC support
+#[cfg(unix)]
+impl RepSocket<compio::net::UnixStream> {
+    /// Create a REP socket from an existing Unix domain socket stream (IPC).
+    pub async fn from_unix_stream(stream: compio::net::UnixStream) -> io::Result<Self> {
+        Ok(Self {
+            inner: InternalRep::new(stream).await?,
+            monitor: None,
+        })
+    }
+
+    /// Create a REP socket from an existing Unix stream with custom buffer configuration.
+    pub async fn from_unix_stream_with_config(
+        stream: compio::net::UnixStream,
+        config: monocoque_core::config::BufferConfig,
+    ) -> io::Result<Self> {
+        Ok(Self {
+            inner: InternalRep::with_config(stream, config).await?,
+            monitor: None,
+        })
     }
 }

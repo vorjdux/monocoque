@@ -8,7 +8,7 @@
 use bytes::Bytes;
 use compio::net::TcpListener;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use monocoque::zmq::{PubSocket, SubSocket};
+use monocoque::zmq::{BufferConfig, PubSocket, SubSocket};
 use std::time::Duration;
 
 // NOTE: Multi-subscriber fanout is currently not benchmarked here because the
@@ -43,7 +43,7 @@ fn monocoque_pubsub_fanout(c: &mut Criterion) {
                         // Accept first connection and spawn pub task
                         let pub_task = compio::runtime::spawn(async move {
                             let (stream, _) = listener.accept().await.unwrap();
-                            let mut pub_socket = PubSocket::from_stream(stream).await.unwrap();
+                            let mut pub_socket = PubSocket::from_stream_with_config(stream, BufferConfig::large()).await.unwrap();
 
                             // Wait for subscriptions
                             compio::time::sleep(Duration::from_millis(50)).await;
@@ -61,7 +61,7 @@ fn monocoque_pubsub_fanout(c: &mut Criterion) {
                             let task = compio::runtime::spawn(async move {
                                 let stream =
                                     compio::net::TcpStream::connect(server_addr).await.unwrap();
-                                let mut sub = SubSocket::from_stream(stream).await.unwrap();
+                                let mut sub = SubSocket::from_stream_with_config(stream, BufferConfig::large()).await.unwrap();
                                 sub.subscribe(b""); // Subscribe to all
 
                                 let mut count = 0;

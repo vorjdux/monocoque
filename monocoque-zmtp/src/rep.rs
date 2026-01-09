@@ -24,10 +24,10 @@ use tracing::{debug, trace};
 
 use crate::{
     codec::{encode_multipart, ZmtpDecoder},
-    config::BufferConfig,
     handshake::perform_handshake,
     session::SocketType,
 };
+use monocoque_core::config::BufferConfig;
 
 /// REP socket state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,9 +78,12 @@ pub enum RepState {
 /// # Ok(())
 /// # }
 /// ```
-pub struct RepSocket {
-    /// Underlying TCP stream
-    stream: TcpStream,
+pub struct RepSocket<S = TcpStream>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    /// Underlying stream (TCP or Unix socket)
+    stream: S,
     /// ZMTP decoder for decoding frames
     decoder: ZmtpDecoder,
     /// Arena for zero-copy allocation
@@ -97,35 +100,34 @@ pub struct RepSocket {
     config: BufferConfig,
 }
 
-impl RepSocket {
-    /// Create a new REP socket from a TCP stream.
+impl<S> RepSocket<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    /// Create a new REP socket from a stream.
     ///
     /// This performs the ZMTP handshake and initializes the socket.
+    /// Works with both TCP and Unix domain sockets.
     ///
     /// # Errors
     ///
     /// Returns an error if:
     /// - Handshake fails
     /// - Connection is closed during handshake
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// use monocoque_zmtp::rep::RepSocket;
-    /// use compio::net::TcpStream;
-    ///
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
-    /// let socket = RepSocket::new(stream).await?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn new(mut stream: TcpStream) -> io::Result<Self> {
-        debug!("[REP] Creating new direct REP socket");
+    pub async fn new(stream: S) -> io::Result<Self> {
+        // REP sockets typically handle low-latency RPC with small messages
+        Self::with_config(stream, BufferConfig::small()).await
+    }
 
-        // Enable TCP_NODELAY for low latency
-        monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
-        debug!("[REP] TCP_NODELAY enabled");
+    /// Create a new REP socket from a stream with custom buffer configuration.
+    ///
+    /// # Buffer Configuration
+    /// - Use `BufferConfig::small()` (4KB) for low-latency request/reply with small messages
+    /// - Use `BufferConfig::large()` (16KB) for high-throughput with large messages
+    ///
+    /// Works with both TCP and Unix domain sockets.
+    pub async fn with_config(mut stream: S, config: BufferConfig) -> io::Result<Self> {
+        debug!("[REP] Creating new direct REP socket");
 
         // Perform ZMTP handshake
         debug!("[REP] Performing ZMTP handshake...");
@@ -144,9 +146,6 @@ impl RepSocket {
 
         // Create ZMTP decoder
         let decoder = ZmtpDecoder::new();
-
-        // Create buffer config
-        let config = BufferConfig::default();
 
         // Create buffers
         let recv = SegmentedBuffer::new();
@@ -212,7 +211,7 @@ impl RepSocket {
                     Some(frame) => {
                         let more = frame.more();
                         self.frames.push(frame.payload);
-                        
+
                         if !more {
                             // Complete message received
                             let msg: Vec<Bytes> = self.frames.drain(..).collect();
@@ -307,8 +306,8 @@ mod tests {
 
     #[test]
     fn test_rep_state_machine() {
-        use compio::net::TcpListener;
         use bytes::Bytes;
+        use compio::net::TcpListener;
 
         compio::runtime::Runtime::new().unwrap().block_on(async {
             // Create a pair of connected sockets
@@ -319,17 +318,15 @@ mod tests {
             let client_task = compio::runtime::spawn(async move {
                 compio::time::sleep(std::time::Duration::from_millis(10)).await;
                 let stream = compio::net::TcpStream::connect(addr).await.unwrap();
-                let mut req = crate::req::ReqSocket::new(stream)
-                    .await
-                    .unwrap();
-                
+                let mut req = crate::req::ReqSocket::new(stream).await.unwrap();
+
                 // Send request
                 req.send(vec![Bytes::from("test")]).await.unwrap();
-                
+
                 // Wait for and verify reply
                 let reply = req.recv().await.unwrap();
                 assert!(reply.is_some());
-                
+
                 req
             });
 
@@ -347,9 +344,28 @@ mod tests {
             // Send reply should transition back to AwaitingRequest
             rep.send(msg.unwrap()).await.unwrap();
             assert_eq!(rep.state(), RepState::AwaitingRequest);
-            
+
             // Wait for client
             client_task.await;
         });
+    }
+}
+
+// Specialized implementation for TCP streams to enable TCP_NODELAY
+impl RepSocket<TcpStream> {
+    /// Create a new REP socket from a TCP stream with TCP_NODELAY enabled.
+    pub async fn from_tcp(stream: TcpStream) -> io::Result<Self> {
+        Self::from_tcp_with_config(stream, BufferConfig::small()).await
+    }
+
+    /// Create a new REP socket from a TCP stream with TCP_NODELAY and custom config.
+    pub async fn from_tcp_with_config(
+        stream: TcpStream,
+        config: BufferConfig,
+    ) -> io::Result<Self> {
+        // Enable TCP_NODELAY for low latency
+        monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
+        debug!("[REP] TCP_NODELAY enabled");
+        Self::with_config(stream, config).await
     }
 }
