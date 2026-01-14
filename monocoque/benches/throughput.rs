@@ -1,6 +1,6 @@
 //! Throughput benchmarks: messages per second
 //!
-//! Compares monocoque vs zmq.rs (libzmq bindings) for raw throughput.
+//! Compares monocoque vs rust-zmq (zmq crate, FFI bindings to libzmq) for raw throughput.
 //! Measures: How many messages can be sent/received per second?
 //!
 //! Tests the PUBLIC API from `monocoque::zmq` (user-facing ergonomics)
@@ -8,7 +8,7 @@
 //! FAIR BENCHMARKING:
 //! - Setup overhead (connection, handshake) IS included in measurement
 //! - BUT: With MESSAGE_COUNT=10,000, setup is <1% of total time
-//! - Both monocoque and zmq.rs measured identically (setup + 10k messages)
+//! - Both monocoque and rust-zmq measured identically (setup + 10k messages)
 //! - Focuses on actual throughput capacity, not just raw send/recv speed
 
 use bytes::Bytes;
@@ -81,7 +81,7 @@ fn monocoque_req_rep_throughput(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark zmq.rs (libzmq) REQ/REP throughput
+/// Benchmark rust-zmq (zmq crate) REQ/REP throughput
 ///
 /// Setup overhead included but amortized over 10k messages (<1% of total time)
 fn zmq_req_rep_throughput(c: &mut Criterion) {
@@ -180,7 +180,7 @@ fn monocoque_dealer_router_throughput(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark zmq.rs (libzmq) DEALER/ROUTER throughput
+/// Benchmark rust-zmq (zmq crate) DEALER/ROUTER throughput
 fn zmq_dealer_router_throughput(c: &mut Criterion) {
     let mut group = c.benchmark_group("throughput/zmq_rs/dealer_router");
     group.measurement_time(Duration::from_secs(15));
