@@ -46,6 +46,8 @@ where
     peer_identity: Bytes,
     /// Buffer configuration
     config: BufferConfig,
+    /// Send buffer for batching (explicit flush control)
+    send_buffer: BytesMut,
 }
 
 impl<S> RouterSocket<S>
@@ -116,6 +118,7 @@ where
             frames: SmallVec::new(),
             peer_identity,
             config,
+            send_buffer: BytesMut::new(),
         })
     }
 
@@ -168,10 +171,14 @@ where
         }
     }
 
-    /// Send a message.
+    /// Send a message immediately.
     ///
     /// For ROUTER sockets, the first frame should be the destination identity,
-    /// but since this is a single-peer connection, we just send the frames as-is.
+    /// but since this is a single-peer connection, we skip it and send the rest.
+    ///
+    /// Encodes and sends the message in a single I/O operation.
+    /// For high-throughput scenarios, consider using `send_buffered()` + `flush()`
+    /// to batch multiple messages.
     pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
         trace!("[ROUTER] Sending {} frames", msg.len());
 
@@ -191,6 +198,54 @@ where
 
         trace!("[ROUTER] Message sent successfully");
         Ok(())
+    }
+
+    /// Send a message to the internal buffer without flushing.
+    ///
+    /// Use this for batching multiple messages before a single flush.
+    /// Call `flush()` to send all buffered messages.
+    pub fn send_buffered(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
+        trace!("[ROUTER] Buffering {} frames", msg.len());
+
+        // Skip the first frame (identity) and encode the rest
+        let frames_to_send = if msg.len() > 1 { &msg[1..] } else { &msg[..] };
+        encode_multipart(frames_to_send, &mut self.send_buffer);
+        Ok(())
+    }
+
+    /// Flush all buffered messages to the network.
+    pub async fn flush(&mut self) -> io::Result<()> {
+        if self.send_buffer.is_empty() {
+            return Ok(());
+        }
+
+        trace!("[ROUTER] Flushing {} bytes", self.send_buffer.len());
+
+        use compio::buf::BufResult;
+        let buf = self.send_buffer.split().freeze();
+        let BufResult(result, _) = AsyncWrite::write(&mut self.stream, IoBytes::new(buf)).await;
+        result?;
+
+        trace!("[ROUTER] Flush completed");
+        Ok(())
+    }
+
+    /// Send multiple messages in a single batch (convenience method).
+    pub async fn send_batch(&mut self, messages: &[Vec<Bytes>]) -> io::Result<()> {
+        trace!("[ROUTER] Batching {} messages", messages.len());
+
+        for msg in messages {
+            let frames_to_send = if msg.len() > 1 { &msg[1..] } else { &msg[..] };
+            encode_multipart(frames_to_send, &mut self.send_buffer);
+        }
+
+        self.flush().await
+    }
+
+    /// Get the number of bytes currently buffered.
+    #[inline]
+    pub fn buffered_bytes(&self) -> usize {
+        self.send_buffer.len()
     }
 }
 

@@ -45,6 +45,8 @@ where
     frames: SmallVec<[Bytes; 4]>,
     /// Buffer configuration
     config: BufferConfig,
+    /// Send buffer for batching (explicit flush control)
+    send_buffer: BytesMut,
 }
 
 impl<S> DealerSocket<S>
@@ -106,6 +108,7 @@ where
             write_buf,
             frames: SmallVec::new(),
             config,
+            send_buffer: BytesMut::new(),
         })
     }
 
@@ -152,7 +155,11 @@ where
         }
     }
 
-    /// Send a message.
+    /// Send a message immediately.
+    ///
+    /// Encodes and sends the message in a single I/O operation.
+    /// For high-throughput scenarios, consider using `send_buffered()` + `flush()`
+    /// to batch multiple messages.
     pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
         trace!("[DEALER] Sending {} frames", msg.len());
 
@@ -169,6 +176,88 @@ where
 
         trace!("[DEALER] Message sent successfully");
         Ok(())
+    }
+
+    /// Send a message to the internal buffer without flushing.
+    ///
+    /// Use this for batching multiple messages before a single flush.
+    /// Call `flush()` to send all buffered messages.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use monocoque_zmtp::DealerSocket;
+    /// # use bytes::Bytes;
+    /// # async fn example(mut socket: DealerSocket) -> std::io::Result<()> {
+    /// // Batch 100 messages
+    /// for i in 0..100 {
+    ///     socket.send_buffered(vec![Bytes::from(format!("msg {}", i))])?;
+    /// }
+    /// // Single I/O operation for all 100 messages
+    /// socket.flush().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn send_buffered(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
+        trace!("[DEALER] Buffering {} frames", msg.len());
+
+        // Encode directly into send_buffer
+        encode_multipart(&msg, &mut self.send_buffer);
+        Ok(())
+    }
+
+    /// Flush all buffered messages to the network.
+    ///
+    /// Sends all messages buffered by `send_buffered()` in a single I/O operation.
+    pub async fn flush(&mut self) -> io::Result<()> {
+        if self.send_buffer.is_empty() {
+            return Ok(());
+        }
+
+        trace!("[DEALER] Flushing {} bytes", self.send_buffer.len());
+
+        // Write buffered data
+        use compio::buf::BufResult;
+        let buf = self.send_buffer.split().freeze();
+        let BufResult(result, _) = AsyncWrite::write(&mut self.stream, IoBytes::new(buf)).await;
+        result?;
+
+        trace!("[DEALER] Flush completed");
+        Ok(())
+    }
+
+    /// Send multiple messages in a single batch (convenience method).
+    ///
+    /// This is equivalent to calling `send_buffered()` for each message
+    /// followed by `flush()`, but more ergonomic.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use monocoque_zmtp::DealerSocket;
+    /// # use bytes::Bytes;
+    /// # async fn example(mut socket: DealerSocket) -> std::io::Result<()> {
+    /// let messages = vec![
+    ///     vec![Bytes::from("msg1")],
+    ///     vec![Bytes::from("msg2")],
+    ///     vec![Bytes::from("msg3")],
+    /// ];
+    /// socket.send_batch(&messages).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn send_batch(&mut self, messages: &[Vec<Bytes>]) -> io::Result<()> {
+        trace!("[DEALER] Batching {} messages", messages.len());
+
+        for msg in messages {
+            encode_multipart(msg, &mut self.send_buffer);
+        }
+
+        self.flush().await
+    }
+
+    /// Get the number of bytes currently buffered.
+    #[inline]
+    pub fn buffered_bytes(&self) -> usize {
+        self.send_buffer.len()
     }
 }
 

@@ -96,6 +96,8 @@ impl RouterSocket {
 
     /// Create a ROUTER socket from an existing TCP stream.
     ///
+    /// **Deprecated**: Use [`RouterSocket::from_tcp()`] instead to enable TCP_NODELAY for optimal latency.
+    ///
     /// Use this for advanced scenarios or when accepting multiple connections
     /// from a listener.
     ///
@@ -111,12 +113,19 @@ impl RouterSocket {
     /// loop {
     ///     let (stream, addr) = listener.accept().await?;
     ///     println!("New connection from {}", addr);
-    ///     let socket = RouterSocket::from_stream(stream).await;
+    ///     // Prefer this:
+    ///     let socket = RouterSocket::from_tcp(stream).await?;
+    ///     // Over this:
+    ///     // let socket = RouterSocket::from_stream(stream).await;
     ///     // Handle socket (e.g., spawn task)
     /// }
     /// # Ok(())
     /// # }
     /// ```
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use `from_tcp()` instead to enable TCP_NODELAY"
+    )]
     pub async fn from_stream(stream: TcpStream) -> io::Result<Self> {
         Ok(Self {
             inner: InternalRouter::new(stream).await?,
@@ -129,6 +138,10 @@ impl RouterSocket {
     /// # Buffer Configuration
     /// - Use `BufferConfig::small()` (4KB) for low-latency routing with small messages
     /// - Use `BufferConfig::large()` (16KB) for high-throughput routing with large messages (recommended)
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use `from_tcp_with_config()` instead to enable TCP_NODELAY"
+    )]
     pub async fn from_stream_with_config(
         stream: TcpStream,
         config: monocoque_core::config::BufferConfig,
@@ -226,6 +239,29 @@ where
     /// ```
     pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
         channel_to_io_error(self.inner.send(msg).await)
+    }
+
+    /// Send a message to the internal buffer without flushing.
+    ///
+    /// Use this for batching multiple messages before a single flush.
+    pub fn send_buffered(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
+        channel_to_io_error(self.inner.send_buffered(msg))
+    }
+
+    /// Flush all buffered messages to the network.
+    pub async fn flush(&mut self) -> io::Result<()> {
+        channel_to_io_error(self.inner.flush().await)
+    }
+
+    /// Send multiple messages in a single batch.
+    pub async fn send_batch(&mut self, messages: &[Vec<Bytes>]) -> io::Result<()> {
+        channel_to_io_error(self.inner.send_batch(messages).await)
+    }
+
+    /// Get the number of bytes currently buffered.
+    #[inline]
+    pub fn buffered_bytes(&self) -> usize {
+        self.inner.buffered_bytes()
     }
 
     /// Receive a multipart message.

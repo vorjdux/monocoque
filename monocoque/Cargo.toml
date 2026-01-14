@@ -41,6 +41,21 @@ name = "patterns"
 harness = false
 required-features = ["zmq"]
 
+[[bench]]
+name = "pipelined_throughput"
+harness = false
+required-features = ["zmq"]
+
+[[bench]]
+name = "ipc_vs_tcp"
+harness = false
+required-features = ["zmq"]
+
+[[bench]]
+name = "multithreaded"
+harness = false
+required-features = ["zmq"]
+
 [[example]]
 name = "protocol_namespaces"
 required-features = ["zmq"]
@@ -104,6 +119,7 @@ flume = { workspace = true }
 futures = { workspace = true }
 criterion = { workspace = true }
 tokio = { workspace = true }
+num_cpus = "1.16"
 
 [features]
 default = []

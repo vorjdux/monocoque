@@ -51,12 +51,10 @@ fn monocoque_req_rep_latency(c: &mut Criterion) {
 
                             let server_task = compio::runtime::spawn(async move {
                                 let (stream, _) = listener.accept().await.unwrap();
-                                let mut rep = RepSocket::from_stream_with_config(
-                                    stream,
-                                    BufferConfig::small(),
-                                )
-                                .await
-                                .unwrap();
+                                let mut rep =
+                                    RepSocket::from_tcp_with_config(stream, BufferConfig::small())
+                                        .await
+                                        .unwrap();
 
                                 // Server echo loop
                                 loop {
@@ -73,7 +71,7 @@ fn monocoque_req_rep_latency(c: &mut Criterion) {
                             let stream =
                                 compio::net::TcpStream::connect(server_addr).await.unwrap();
                             let mut req =
-                                ReqSocket::from_stream_with_config(stream, BufferConfig::small())
+                                ReqSocket::from_tcp_with_config(stream, BufferConfig::small())
                                     .await
                                     .unwrap();
 
@@ -180,7 +178,7 @@ fn monocoque_connection_latency(c: &mut Criterion) {
                 let accept_task = compio::runtime::spawn(async move {
                     for _ in 0..CONNECTIONS {
                         let (stream, _) = listener.accept().await.unwrap();
-                        let _ = RepSocket::from_stream_with_config(stream, BufferConfig::small())
+                        let _ = RepSocket::from_tcp_with_config(stream, BufferConfig::small())
                             .await
                             .unwrap();
                     }
@@ -188,7 +186,7 @@ fn monocoque_connection_latency(c: &mut Criterion) {
 
                 for _ in 0..CONNECTIONS {
                     let stream = compio::net::TcpStream::connect(server_addr).await.unwrap();
-                    let req = ReqSocket::from_stream_with_config(stream, BufferConfig::small())
+                    let req = ReqSocket::from_tcp_with_config(stream, BufferConfig::small())
                         .await
                         .unwrap();
                     black_box(req);
@@ -230,8 +228,7 @@ fn zmq_connection_latency(c: &mut Criterion) {
 criterion_group!(
     benches,
     monocoque_req_rep_latency,
-    zmq_req_rep_latency,
-    monocoque_connection_latency
+    zmq_req_rep_latency // monocoque_connection_latency - disabled, needs proper resource cleanup
 );
 // zmq_connection_latency disabled - exhausts file descriptors
 criterion_main!(benches);
