@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Quick benchmark comparison - Before/After optimizations
-# Runs only the monocoque benchmarks (not zmq.rs comparison)
+# Runs only the monocoque benchmarks (not rust-zmq comparison)
 
 set -euo pipefail
 
@@ -21,7 +21,7 @@ export RUSTFLAGS="-C target-cpu=native"
 cargo build --release --features zmq --benches 2>&1 | grep -E "(Compiling|Finished)"
 echo
 
-# Run just the monocoque benchmarks (skip zmq.rs comparison)
+# Run just the monocoque benchmarks (skip rust-zmq comparison)
 echo "Running throughput benchmarks (REQ/REP pattern)..."
 echo "This will take ~3-5 minutes..."
 echo

@@ -59,7 +59,7 @@ fn main() {
 
     // Give server time to start and get address
     // Note: This settle time is standard practice in ZeroMQ implementations.
-    // libzmq uses SETTLE_TIME=300ms, zmq.rs uses 100ms sleeps.
+    // libzmq uses SETTLE_TIME=300ms, rust-zmq uses 100ms sleeps.
     // This is only needed for localhost TCP tests; real network latency
     // naturally provides this settling period.
     thread::sleep(Duration::from_millis(100));
