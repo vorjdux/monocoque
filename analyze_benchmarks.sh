@@ -32,7 +32,7 @@ for file in target/criterion/latency_monocoque_req_rep/round_trip/*/new/estimate
 done
 
 echo ""
-echo "### zmq.rs"
+echo "### rust-zmq (zmq crate)"
 for file in target/criterion/latency_zmq_rs_req_rep/round_trip/*/new/estimates.json; do
     if [ -f "$file" ]; then
         size=$(echo $file | sed 's|.*/\([0-9]*B\)/new.*|\1|')

@@ -1,6 +1,6 @@
 //! Latency benchmarks: round-trip time in microseconds
 //!
-//! Compares monocoque vs zmq.rs (libzmq bindings) for latency.
+//! Compares monocoque vs rust-zmq (zmq crate, FFI bindings to libzmq) for latency.
 //! Measures: How fast is a single message round-trip?
 //!
 //! Tests the PUBLIC API from `monocoque::zmq` (user-facing ergonomics)
@@ -102,7 +102,7 @@ fn monocoque_req_rep_latency(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark zmq.rs (libzmq) REQ/REP latency
+/// Benchmark rust-zmq (zmq crate, FFI to libzmq) REQ/REP latency
 ///
 /// Setup (OUTSIDE measurement):
 /// - Socket creation + connection
@@ -200,7 +200,7 @@ fn monocoque_connection_latency(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark zmq.rs connection establishment latency
+/// Benchmark rust-zmq connection establishment latency
 fn zmq_connection_latency(c: &mut Criterion) {
     let mut group = c.benchmark_group("latency/zmq_rs/connection");
     group.sample_size(10); // Low sample count to avoid "too many open files"
@@ -213,7 +213,7 @@ fn zmq_connection_latency(c: &mut Criterion) {
         let endpoint = rep.get_last_endpoint().unwrap().unwrap();
 
         b.iter(|| {
-            // Create fewer connections per iteration for zmq.rs (50 instead of 100)
+            // Create fewer connections per iteration for rust-zmq (50 instead of 100)
             for _ in 0..50 {
                 let req = ctx.socket(zmq::REQ).unwrap();
                 req.connect(black_box(&endpoint)).unwrap();
