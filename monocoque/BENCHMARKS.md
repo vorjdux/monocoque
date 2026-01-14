@@ -1,6 +1,6 @@
 # Monocoque Performance Benchmarks
 
-Comprehensive performance benchmarks comparing Monocoque against zmq.rs (libzmq Rust bindings) and other Rust ZMQ implementations.
+Comprehensive performance benchmarks comparing Monocoque against rust-zmq (zmq crate, Rust FFI bindings to libzmq) and other Rust ZMQ implementations.
 
 ## Objective
 
@@ -20,7 +20,7 @@ Comprehensive performance benchmarks comparing Monocoque against zmq.rs (libzmq 
 **Tests**:
 - REQ/REP throughput (64B to 16KB messages)
 - DEALER/ROUTER throughput (64B to 16KB messages)
-- Compares monocoque vs zmq.rs
+- Compares monocoque vs rust-zmq
 
 **Target**: > 1M msg/sec for small messages
 
@@ -61,7 +61,7 @@ cargo bench --bench patterns
 
 # Run with filtering
 cargo bench throughput/monocoque  # Only monocoque tests
-cargo bench latency/zmq_rs        # Only zmq.rs tests
+cargo bench latency/zmq_rs        # Only rust-zmq tests
 ```
 
 ### Optimal Configuration
@@ -111,7 +111,7 @@ Criterion generates:
 **Throughput**:
 - Higher is better
 - Look for: msgs/sec, MB/sec
-- Compare: monocoque vs zmq.rs ratio
+- Compare: monocoque vs rust-zmq ratio
 
 **Latency**:
 - Lower is better
@@ -207,8 +207,8 @@ Based on blueprint specifications:
 
 ## Comparison Matrix
 
-| Feature | Monocoque | zmq.rs | Advantage |
-|---------|-----------|---------|-----------|
+| Feature | Monocoque | rust-zmq | Advantage |
+|---------|-----------|----------|-----------|
 | I/O Model | io_uring | epoll | Monocoque |
 | Memory | Zero-copy (Bytes) | Memcpy | Monocoque |
 | Allocation | Arena | General | Monocoque |
