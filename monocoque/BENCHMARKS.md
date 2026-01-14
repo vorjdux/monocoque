@@ -61,7 +61,7 @@ cargo bench --bench patterns
 
 # Run with filtering
 cargo bench throughput/monocoque  # Only monocoque tests
-cargo bench latency/zmq_rs        # Only rust-zmq tests
+cargo bench latency/rust_zmq      # Only rust-zmq tests
 ```
 
 ### Optimal Configuration
@@ -130,7 +130,7 @@ throughput/monocoque/req_rep/256B
                         time:   [450.23 μs 452.67 μs 455.34 μs]
                         thrpt:  [2.21 M msg/s]
 
-throughput/zmq_rs/req_rep/256B
+throughput/rust_zmq/req_rep/256B
                         time:   [850.45 μs 853.12 μs 856.03 μs]
                         thrpt:  [1.17 M msg/s]
 ```

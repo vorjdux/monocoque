@@ -111,7 +111,7 @@ fn monocoque_req_rep_latency(c: &mut Criterion) {
 /// Measured (INSIDE iter):
 /// - Single send + recv round-trip only
 fn zmq_req_rep_latency(c: &mut Criterion) {
-    let mut group = c.benchmark_group("latency/zmq_rs/req_rep");
+    let mut group = c.benchmark_group("latency/rust_zmq/req_rep");
     group.measurement_time(Duration::from_secs(10));
     group.sample_size(100); // Match monocoque sample count
 
@@ -202,7 +202,7 @@ fn monocoque_connection_latency(c: &mut Criterion) {
 
 /// Benchmark rust-zmq connection establishment latency
 fn zmq_connection_latency(c: &mut Criterion) {
-    let mut group = c.benchmark_group("latency/zmq_rs/connection");
+    let mut group = c.benchmark_group("latency/rust_zmq/connection");
     group.sample_size(10); // Low sample count to avoid "too many open files"
     group.warm_up_time(Duration::from_millis(50)); // Very minimal warmup
 

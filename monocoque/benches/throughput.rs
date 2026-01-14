@@ -85,7 +85,7 @@ fn monocoque_req_rep_throughput(c: &mut Criterion) {
 ///
 /// Setup overhead included but amortized over 10k messages (<1% of total time)
 fn zmq_req_rep_throughput(c: &mut Criterion) {
-    let mut group = c.benchmark_group("throughput/zmq_rs/req_rep");
+    let mut group = c.benchmark_group("throughput/rust_zmq/req_rep");
     group.measurement_time(Duration::from_secs(15));
     group.sample_size(10);
 
@@ -182,7 +182,7 @@ fn monocoque_dealer_router_throughput(c: &mut Criterion) {
 
 /// Benchmark rust-zmq (zmq crate) DEALER/ROUTER throughput
 fn zmq_dealer_router_throughput(c: &mut Criterion) {
-    let mut group = c.benchmark_group("throughput/zmq_rs/dealer_router");
+    let mut group = c.benchmark_group("throughput/rust_zmq/dealer_router");
     group.measurement_time(Duration::from_secs(15));
     group.sample_size(10);
 
