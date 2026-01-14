@@ -10,7 +10,7 @@
 
 - **Latency: 30% Faster than libzmq** (Phase 1 Target: Met ✅)
   - Monocoque: 21-22μs round-trip (64B-1KB messages)
-  - libzmq (zmq.rs): 31-46μs round-trip
+  - rust-zmq (`zmq` crate, FFI bindings to libzmq): 31-46μs round-trip
   - IPC: 7-10% faster than TCP (74-76ms vs 80-87ms for 10k messages)
   - **Fastest ZeroMQ implementation in Rust**
 
@@ -18,7 +18,7 @@
   - With batching: 2M+ msg/sec (64B messages)
   - Without batching: ~327k msg/sec (synchronous)
   - Target was 500k-1M msg/sec - achieved 2x-4x better
-  - libzmq deadlocks with large pipelines
+  - rust-zmq (`zmq` crate) deadlocks with large pipelines
 
 #### New Features
 

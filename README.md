@@ -230,17 +230,17 @@ Monocoque is the **fastest ZeroMQ implementation in Rust**, achieving:
 
 ### Latency: 30% Faster than libzmq
 
-| Message Size | Monocoque | libzmq (zmq.rs) | Improvement |
-|--------------|-----------|-----------------|-------------|
-| 64B          | 21μs     | 31μs           | **32% faster** |
-| 256B         | 22μs     | 31μs           | **29% faster** |
-| 1024B        | 22μs     | 33μs           | **31% faster** |
+| Message Size | Monocoque | rust-zmq (libzmq) | Improvement |
+|--------------|-----------|-------------------|-------------|
+| 64B          | 21μs     | 31μs             | **32% faster** |
+| 256B         | 22μs     | 31μs             | **29% faster** |
+| 1024B        | 22μs     | 33μs             | **31% faster** |
 
 ### Throughput: 2M+ Messages/Second
 
 - **Synchronous (REQ/REP ping-pong)**: ~327k msg/sec
 - **Pipelined (DEALER/ROUTER)**: 2M+ msg/sec with batching API
-- **libzmq comparison**: libzmq deadlocks on large pipelines, monocoque handles 100k+ messages
+- **vs rust-zmq**: rust-zmq (`zmq` crate, FFI bindings to libzmq) deadlocks on large pipelines, monocoque handles 100k+ messages
 
 ### IPC: Faster than TCP Loopback
 
@@ -281,7 +281,7 @@ firefox target/criterion/report/index.html
 ```
 
 Benchmarks include:
-- Latency comparison with libzmq
+- Latency comparison with rust-zmq (`zmq` crate, FFI bindings to libzmq)
 - Synchronous and pipelined throughput
 - IPC vs TCP performance (Unix-only)
 - Multi-threaded scaling
