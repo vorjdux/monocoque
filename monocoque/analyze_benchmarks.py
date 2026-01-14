@@ -109,7 +109,7 @@ def generate_summary(results: Dict) -> str:
     comparisons = []
     for name, data in results.items():
         if 'monocoque' in name:
-            base = name.replace('monocoque', 'zmq_rs').replace('_monocoque_', '_zmq_rs_')
+            base = name.replace('monocoque', 'rust_zmq').replace('_monocoque_', '_rust_zmq_')
             if base in results:
                 mono_time = data['mean']
                 zmq_time = results[base]['mean']

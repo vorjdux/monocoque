@@ -33,7 +33,7 @@ done
 
 echo ""
 echo "### rust-zmq (zmq crate)"
-for file in target/criterion/latency_zmq_rs_req_rep/round_trip/*/new/estimates.json; do
+for file in target/criterion/latency_rust_zmq_req_rep/round_trip/*/new/estimates.json; do
     if [ -f "$file" ]; then
         size=$(echo $file | sed 's|.*/\([0-9]*B\)/new.*|\1|')
         mean=$(jq -r '.mean.point_estimate' "$file")

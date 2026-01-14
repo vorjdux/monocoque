@@ -98,7 +98,7 @@ fn monocoque_pubsub_fanout(c: &mut Criterion) {
 
 /// Benchmark rust-zmq (zmq crate) PUB/SUB fanout
 fn zmq_pubsub_fanout(c: &mut Criterion) {
-    let mut group = c.benchmark_group("patterns/zmq_rs/pubsub_fanout");
+    let mut group = c.benchmark_group("patterns/rust_zmq/pubsub_fanout");
 
     for &num_subs in FANOUT_SUBSCRIBERS {
         group.throughput(Throughput::Elements((MESSAGE_COUNT * num_subs) as u64));
@@ -211,7 +211,7 @@ fn monocoque_topic_filtering(c: &mut Criterion) {
 
 /// Benchmark rust-zmq topic filtering efficiency
 fn zmq_topic_filtering(c: &mut Criterion) {
-    let mut group = c.benchmark_group("patterns/zmq_rs/topic_filtering");
+    let mut group = c.benchmark_group("patterns/rust_zmq/topic_filtering");
 
     let matched_ratio = 0.1;
 

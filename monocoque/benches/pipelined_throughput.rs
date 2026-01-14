@@ -115,7 +115,7 @@ fn monocoque_dealer_router_pipelined(c: &mut Criterion) {
 ///
 /// NOTE: Uses fewer messages (1000) to avoid deadlock with blocking I/O
 fn zmq_dealer_router_pipelined(c: &mut Criterion) {
-    let mut group = c.benchmark_group("pipelined/zmq_rs/dealer_router");
+    let mut group = c.benchmark_group("pipelined/rust_zmq/dealer_router");
     group.measurement_time(Duration::from_secs(20));
     group.sample_size(10);
 
