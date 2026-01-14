@@ -43,7 +43,10 @@ fn monocoque_pubsub_fanout(c: &mut Criterion) {
                         // Accept first connection and spawn pub task
                         let pub_task = compio::runtime::spawn(async move {
                             let (stream, _) = listener.accept().await.unwrap();
-                            let mut pub_socket = PubSocket::from_stream_with_config(stream, BufferConfig::large()).await.unwrap();
+                            let mut pub_socket =
+                                PubSocket::from_tcp_with_config(stream, BufferConfig::large())
+                                    .await
+                                    .unwrap();
 
                             // Wait for subscriptions
                             compio::time::sleep(Duration::from_millis(50)).await;
@@ -61,7 +64,10 @@ fn monocoque_pubsub_fanout(c: &mut Criterion) {
                             let task = compio::runtime::spawn(async move {
                                 let stream =
                                     compio::net::TcpStream::connect(server_addr).await.unwrap();
-                                let mut sub = SubSocket::from_stream_with_config(stream, BufferConfig::large()).await.unwrap();
+                                let mut sub =
+                                    SubSocket::from_tcp_with_config(stream, BufferConfig::large())
+                                        .await
+                                        .unwrap();
                                 sub.subscribe(b""); // Subscribe to all
 
                                 let mut count = 0;
@@ -165,7 +171,7 @@ fn monocoque_topic_filtering(c: &mut Criterion) {
 
                 let pub_task = compio::runtime::spawn(async move {
                     let (stream, _) = listener.accept().await.unwrap();
-                    let mut pub_socket = PubSocket::from_stream(stream).await.unwrap();
+                    let mut pub_socket = PubSocket::from_tcp(stream).await.unwrap();
 
                     compio::time::sleep(Duration::from_millis(50)).await;
 
@@ -182,7 +188,7 @@ fn monocoque_topic_filtering(c: &mut Criterion) {
 
                 let sub_task = compio::runtime::spawn(async move {
                     let stream = compio::net::TcpStream::connect(server_addr).await.unwrap();
-                    let mut sub = SubSocket::from_stream(stream).await.unwrap();
+                    let mut sub = SubSocket::from_tcp(stream).await.unwrap();
                     sub.subscribe(b"match.");
 
                     let expected = (MESSAGE_COUNT as f64 * matched_ratio) as usize;

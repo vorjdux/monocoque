@@ -94,7 +94,7 @@ impl DealerSocket {
         };
 
         let stream = TcpStream::connect(addr).await?;
-        let sock = Self::from_stream(stream).await?;
+        let sock = Self::from_tcp(stream).await?;
         sock.emit_event(SocketEvent::Connected(
             monocoque_core::endpoint::Endpoint::Tcp(addr),
         ));
@@ -133,6 +133,8 @@ impl DealerSocket {
 
     /// Create a DEALER socket from an existing TCP stream.
     ///
+    /// **Deprecated**: Use [`DealerSocket::from_tcp()`] instead to enable TCP_NODELAY for optimal latency.
+    ///
     /// Use this for advanced scenarios where you need full control over
     /// the TCP connection (e.g., custom socket options, TLS wrapping).
     ///
@@ -144,11 +146,17 @@ impl DealerSocket {
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
-    /// // Configure stream (e.g., set TCP_NODELAY)
-    /// let socket = DealerSocket::from_stream(stream).await;
+    /// // Prefer this:
+    /// let socket = DealerSocket::from_tcp(stream).await?;
+    /// // Over this:
+    /// // let socket = DealerSocket::from_stream(stream).await?;
     /// # Ok(())
     /// # }
     /// ```
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use `from_tcp()` instead to enable TCP_NODELAY"
+    )]
     pub async fn from_stream(stream: TcpStream) -> io::Result<Self> {
         Ok(Self {
             inner: InternalDealer::new(stream).await?,
@@ -161,6 +169,10 @@ impl DealerSocket {
     /// # Buffer Configuration
     /// - Use `BufferConfig::small()` (4KB) for low-latency with small messages
     /// - Use `BufferConfig::large()` (16KB) for high-throughput with large messages (recommended)
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use `from_tcp_with_config()` instead to enable TCP_NODELAY"
+    )]
     pub async fn from_stream_with_config(
         stream: TcpStream,
         config: monocoque_core::config::BufferConfig,
@@ -295,6 +307,67 @@ where
     /// ```
     pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
         channel_to_io_error(self.inner.send(msg).await)
+    }
+
+    /// Send a message to the internal buffer without flushing.
+    ///
+    /// Use this for batching multiple messages before a single flush.
+    /// Call `flush()` to send all buffered messages.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use monocoque::zmq::DealerSocket;
+    /// # use bytes::Bytes;
+    /// # async fn example(mut socket: DealerSocket) -> Result<(), Box<dyn std::error::Error>> {
+    /// // Batch 100 messages
+    /// for i in 0..100 {
+    ///     socket.send_buffered(vec![Bytes::from(format!("msg {}", i))]).await?;
+    /// }
+    /// // Single I/O operation for all 100 messages
+    /// socket.flush().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn send_buffered(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
+        channel_to_io_error(self.inner.send_buffered(msg))
+    }
+
+    /// Flush all buffered messages to the network.
+    ///
+    /// Sends all messages buffered by `send_buffered()` in a single I/O operation.
+    pub async fn flush(&mut self) -> io::Result<()> {
+        channel_to_io_error(self.inner.flush().await)
+    }
+
+    /// Send multiple messages in a single batch (convenience method).
+    ///
+    /// This is equivalent to calling `send_buffered()` for each message
+    /// followed by `flush()`, but more ergonomic.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use monocoque::zmq::DealerSocket;
+    /// # use bytes::Bytes;
+    /// # async fn example(mut socket: DealerSocket) -> Result<(), Box<dyn std::error::Error>> {
+    /// let messages = vec![
+    ///     vec![Bytes::from("msg1")],
+    ///     vec![Bytes::from("msg2")],
+    ///     vec![Bytes::from("msg3")],
+    /// ];
+    /// socket.send_batch(&messages).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn send_batch(&mut self, messages: &[Vec<Bytes>]) -> io::Result<()> {
+        channel_to_io_error(self.inner.send_batch(messages).await)
+    }
+
+    /// Get the number of bytes currently buffered.
+    #[inline]
+    pub fn buffered_bytes(&self) -> usize {
+        self.inner.buffered_bytes()
     }
 
     /// Receive a multipart message.

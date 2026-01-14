@@ -58,6 +58,8 @@ where
 impl RepSocket {
     /// Create a REP socket from an existing TCP stream.
     ///
+    /// **Deprecated**: Use [`RepSocket::from_tcp()`] instead to enable TCP_NODELAY for optimal latency.
+    ///
     /// REP sockets typically accept incoming connections, so this is
     /// used with a listener:
     ///
@@ -70,10 +72,17 @@ impl RepSocket {
     /// # async fn example() -> std::io::Result<()> {
     /// let listener = TcpListener::bind("127.0.0.1:5555").await?;
     /// let (stream, _) = listener.accept().await?;
-    /// let socket = RepSocket::from_stream(stream).await?;
+    /// // Prefer this:
+    /// let socket = RepSocket::from_tcp(stream).await?;
+    /// // Over this:
+    /// // let socket = RepSocket::from_stream(stream).await?;
     /// # Ok(())
     /// # }
     /// ```
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use `from_tcp()` instead to enable TCP_NODELAY"
+    )]
     pub async fn from_stream(stream: TcpStream) -> io::Result<Self> {
         Ok(Self {
             inner: InternalRep::new(stream).await?,
@@ -86,6 +95,10 @@ impl RepSocket {
     /// # Buffer Configuration
     /// - Use `BufferConfig::small()` (4KB) for low-latency request/reply with small messages (recommended)
     /// - Use `BufferConfig::large()` (16KB) for high-throughput with large messages
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use `from_tcp_with_config()` instead to enable TCP_NODELAY"
+    )]
     pub async fn from_stream_with_config(
         stream: TcpStream,
         config: monocoque_core::config::BufferConfig,

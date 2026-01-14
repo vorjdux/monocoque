@@ -94,7 +94,7 @@ impl ReqSocket {
         };
 
         let stream = TcpStream::connect(addr).await?;
-        let sock = Self::from_stream(stream).await?;
+        let sock = Self::from_tcp(stream).await?;
         sock.emit_event(SocketEvent::Connected(
             monocoque_core::endpoint::Endpoint::Tcp(addr),
         ));
@@ -133,8 +133,8 @@ impl ReqSocket {
 
     /// Create a REQ socket from an existing TCP stream.
     ///
-    /// Use this when you need more control over the TCP connection,
-    /// such as setting socket options or using a pre-connected stream.
+    /// **Deprecated**: Use [`ReqSocket::from_tcp()`] instead to enable TCP_NODELAY for optimal latency.
+    /// This method exists for compatibility but doesn't enable TCP_NODELAY.
     ///
     /// # Example
     ///
@@ -144,10 +144,17 @@ impl ReqSocket {
     ///
     /// # async fn example() -> std::io::Result<()> {
     /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
-    /// let socket = ReqSocket::from_stream(stream).await;
+    /// // Prefer this:
+    /// let socket = ReqSocket::from_tcp(stream).await?;
+    /// // Over this:
+    /// // let socket = ReqSocket::from_stream(stream).await;
     /// # Ok(())
     /// # }
     /// ```
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use `from_tcp()` instead to enable TCP_NODELAY"
+    )]
     pub async fn from_stream(stream: TcpStream) -> io::Result<Self> {
         Ok(Self {
             inner: InternalReq::new(stream).await?,
@@ -160,6 +167,10 @@ impl ReqSocket {
     /// # Buffer Configuration
     /// - Use `BufferConfig::small()` (4KB) for low-latency request/reply with small messages (recommended)
     /// - Use `BufferConfig::large()` (16KB) for high-throughput with large messages
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use `from_tcp_with_config()` instead to enable TCP_NODELAY"
+    )]
     pub async fn from_stream_with_config(
         stream: TcpStream,
         config: monocoque_core::config::BufferConfig,

@@ -63,6 +63,12 @@ impl PubSocket {
     }
 
     /// Create a PUB socket from an existing TCP stream.
+    ///
+    /// **Deprecated**: Use [`PubSocket::from_tcp()`] instead to enable TCP_NODELAY for optimal latency.
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use `from_tcp()` instead to enable TCP_NODELAY"
+    )]
     pub async fn from_stream(stream: TcpStream) -> io::Result<Self> {
         Ok(Self {
             inner: InternalPub::new(stream).await?,
@@ -72,15 +78,40 @@ impl PubSocket {
 
     /// Create a PUB socket from an existing TCP stream with custom buffer configuration.
     ///
+    /// **Deprecated**: Use [`PubSocket::from_tcp_with_config()`] instead to enable TCP_NODELAY for optimal latency.
+    ///
     /// # Buffer Configuration
     /// - Use `BufferConfig::small()` (4KB) for low-latency pub/sub with small messages
     /// - Use `BufferConfig::large()` (16KB) for high-throughput pub/sub with large messages (recommended)
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use `from_tcp_with_config()` instead to enable TCP_NODELAY"
+    )]
     pub async fn from_stream_with_config(
         stream: TcpStream,
         config: monocoque_core::config::BufferConfig,
     ) -> io::Result<Self> {
         Ok(Self {
             inner: InternalPub::with_config(stream, config).await?,
+            monitor: None,
+        })
+    }
+
+    /// Create a PUB socket from a TCP stream with TCP_NODELAY enabled.
+    pub async fn from_tcp(stream: TcpStream) -> io::Result<Self> {
+        Ok(Self {
+            inner: InternalPub::from_tcp(stream).await?,
+            monitor: None,
+        })
+    }
+
+    /// Create a PUB socket from a TCP stream with TCP_NODELAY and custom config.
+    pub async fn from_tcp_with_config(
+        stream: TcpStream,
+        config: monocoque_core::config::BufferConfig,
+    ) -> io::Result<Self> {
+        Ok(Self {
+            inner: InternalPub::from_tcp_with_config(stream, config).await?,
             monitor: None,
         })
     }

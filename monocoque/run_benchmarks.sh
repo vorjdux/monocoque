@@ -138,7 +138,7 @@ EOF
     
     # Extract key results from criterion output
     if [[ -d "$BENCH_DIR" ]]; then
-        for bench in throughput latency patterns; do
+        for bench in throughput latency patterns pipelined_throughput ipc_vs_tcp multithreaded; do
             if [[ -d "$BENCH_DIR/$bench" ]]; then
                 echo "### $bench" >> "$report_file"
                 echo "" >> "$report_file"
@@ -171,8 +171,15 @@ Open in browser: \`file://$(pwd)/$BENCH_DIR/report/index.html\`
 | REQ/REP 256B | TBD | TBD | TBD |
 | DEALER/ROUTER 1KB | TBD | TBD | TBD |
 | PUB/SUB fanout (10) | TBD | TBD | TBD |
+| Pipelined (10k msgs) | TBD | TBD | TBD |
 
-_(Extract from HTML reports)_
+### New Benchmarks
+
+- **Pipelined Throughput**: Tests batched send/receive with explicit flush API
+- **IPC vs TCP**: Compares Unix domain sockets vs TCP loopback performance
+- **Multithreaded**: Tests horizontal scalability across CPU cores
+
+_(Extract detailed results from HTML reports)_
 
 ## Notes
 
@@ -239,6 +246,9 @@ main() {
     run_benchmark_suite "throughput" "$baseline_arg"
     run_benchmark_suite "latency" "$baseline_arg"
     run_benchmark_suite "patterns" "$baseline_arg"
+    run_benchmark_suite "pipelined_throughput" "$baseline_arg"
+    run_benchmark_suite "ipc_vs_tcp" "$baseline_arg"
+    run_benchmark_suite "multithreaded" "$baseline_arg"
     
     generate_summary
     open_report

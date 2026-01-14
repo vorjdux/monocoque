@@ -70,17 +70,21 @@ impl SubSocket {
     /// ```
     pub async fn connect(endpoint: &str) -> io::Result<Self> {
         // Try parsing as endpoint, fall back to raw address
-        let addr = if let Ok(monocoque_core::endpoint::Endpoint::Tcp(a)) = 
-            monocoque_core::endpoint::Endpoint::parse(endpoint) {
+        let addr = if let Ok(monocoque_core::endpoint::Endpoint::Tcp(a)) =
+            monocoque_core::endpoint::Endpoint::parse(endpoint)
+        {
             a
         } else {
-            endpoint.parse::<std::net::SocketAddr>()
+            endpoint
+                .parse::<std::net::SocketAddr>()
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?
         };
 
         let stream = TcpStream::connect(addr).await?;
-        let sock = Self::from_stream(stream).await?;
-        sock.emit_event(SocketEvent::Connected(monocoque_core::endpoint::Endpoint::Tcp(addr)));
+        let sock = Self::from_tcp(stream).await?;
+        sock.emit_event(SocketEvent::Connected(
+            monocoque_core::endpoint::Endpoint::Tcp(addr),
+        ));
         Ok(sock)
     }
 
@@ -105,18 +109,26 @@ impl SubSocket {
     #[cfg(unix)]
     pub async fn connect_ipc(path: &str) -> io::Result<SubSocket<compio::net::UnixStream>> {
         use std::path::PathBuf;
-        
+
         // Strip "ipc://" prefix if present
         let clean_path = path.strip_prefix("ipc://").unwrap_or(path);
         let ipc_path = PathBuf::from(clean_path);
 
         let stream = monocoque_core::ipc::connect(&ipc_path).await?;
         let sock = SubSocket::from_unix_stream(stream).await?;
-        sock.emit_event(SocketEvent::Connected(monocoque_core::endpoint::Endpoint::Ipc(ipc_path)));
+        sock.emit_event(SocketEvent::Connected(
+            monocoque_core::endpoint::Endpoint::Ipc(ipc_path),
+        ));
         Ok(sock)
     }
 
     /// Create a SUB socket from an existing TCP stream.
+    ///
+    /// **Deprecated**: Use [`SubSocket::from_tcp()`] instead to enable TCP_NODELAY for optimal latency.
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use `from_tcp()` instead to enable TCP_NODELAY"
+    )]
     pub async fn from_stream(stream: TcpStream) -> io::Result<Self> {
         Ok(Self {
             inner: InternalSub::new(stream).await?,
@@ -126,15 +138,40 @@ impl SubSocket {
 
     /// Create a SUB socket from an existing TCP stream with custom buffer configuration.
     ///
+    /// **Deprecated**: Use [`SubSocket::from_tcp_with_config()`] instead to enable TCP_NODELAY for optimal latency.
+    ///
     /// # Buffer Configuration
     /// - Use `BufferConfig::small()` (4KB) for low-latency pub/sub with small messages
-    /// - Use `BufferConfig::large()` (16KB) for high-throughput pub/sub with large messages (recommended)
+    /// - Use `BufferConfig::large()` (16KB) for high-throughput pub/sub with large messages
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use `from_tcp_with_config()` instead to enable TCP_NODELAY"
+    )]
     pub async fn from_stream_with_config(
         stream: TcpStream,
         config: monocoque_core::config::BufferConfig,
     ) -> io::Result<Self> {
         Ok(Self {
             inner: InternalSub::with_config(stream, config).await?,
+            monitor: None,
+        })
+    }
+
+    /// Create a SUB socket from a TCP stream with TCP_NODELAY enabled.
+    pub async fn from_tcp(stream: TcpStream) -> io::Result<Self> {
+        Ok(Self {
+            inner: InternalSub::from_tcp(stream).await?,
+            monitor: None,
+        })
+    }
+
+    /// Create a SUB socket from a TCP stream with TCP_NODELAY and custom config.
+    pub async fn from_tcp_with_config(
+        stream: TcpStream,
+        config: monocoque_core::config::BufferConfig,
+    ) -> io::Result<Self> {
+        Ok(Self {
+            inner: InternalSub::from_tcp_with_config(stream, config).await?,
             monitor: None,
         })
     }
