@@ -143,7 +143,7 @@
     -   Only specialized TCP methods call `monocoque_core::tcp::enable_tcp_nodelay()`
     -   Impact: Nagle's algorithm buffered small packets causing 40-200ms delays
     -   DEALER/ROUTER throughput: 784ms → 92ms (8.5x faster)
-    -   Now 3.4x faster than zmq.rs for 64-byte messages
+    -   Now 3.4x faster than rust-zmq (zmq crate) for 64-byte messages
 
 #### API Additions
 
@@ -336,9 +336,9 @@
 -   **Updated: README.md** - Added socket monitoring example and updated features list
 -   **Updated: Socket Documentation** - Added monitoring examples to DealerSocket and RouterSocket
 
-### New Features from zmq.rs Analysis (2026-01-09)
+### New Features Analysis (2026-01-09)
 
-**Summary**: Implemented three major features inspired by comprehensive zmq.rs comparison: Endpoint Parsing, Socket Monitoring API, and IPC Transport. These additions enhance usability, observability, and performance while maintaining Monocoque's architectural advantages.
+**Summary**: Implemented three major features: Endpoint Parsing, Socket Monitoring API, and IPC Transport. These additions enhance usability, observability, and performance while maintaining Monocoque's architectural advantages.
 
 #### Features
 
@@ -376,7 +376,6 @@
 
 -   **Add: `FEATURES_IMPLEMENTATION.md`** - Complete feature documentation with API design, testing results, and integration status
 -   **Add: `INTEGRATION_GUIDE.md`** - Step-by-step guide for integrating monitoring and IPC into socket implementations
--   **Add: `ZMQ_RS_COMPARISON.md`** - Comprehensive 700+ line analysis of zmq.rs codebase with performance comparisons
 
 #### Performance
 
@@ -393,9 +392,9 @@
 -   **Re-exports from `monocoque::zmq`** for public API
 -   **Maintained architectural advantages**: All features built on io_uring, zero-copy remains intact
 
-#### Comparison with zmq.rs
+#### Feature Comparison
 
-| Feature               | zmq.rs            | Monocoque              | Notes                                    |
+| Feature               | libzmq            | Monocoque              | Notes                                    |
 | --------------------- | ----------------- | ---------------------- | ---------------------------------------- |
 | **Endpoint Parsing**  | ✅ tcp/ipc/inproc | ✅ tcp/ipc             | inproc deferred (requires shared memory) |
 | **Socket Monitoring** | ✅ Socket-based   | ✅ Channel-based       | Monocoque uses lock-free channels        |
@@ -490,7 +489,7 @@ let socket = ReqSocket::from_stream_with_config(
 
 -   REQ/REP latency: **~180µs per round-trip** for small messages (64-256B)
 -   Throughput: **414 MiB/s** for 16KB messages
--   **4-5x faster** than zmq.rs/libzmq in REQ/REP patterns
+-   **4-5x faster** than rust-zmq (zmq crate, FFI to libzmq) in REQ/REP patterns
 -   Zero-copy architecture maintained throughout optimizations
 
 ### Technical Details

@@ -111,7 +111,7 @@ fn monocoque_dealer_router_pipelined(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark zmq.rs (libzmq) pipelined throughput for comparison
+/// Benchmark rust-zmq (zmq crate) pipelined throughput for comparison
 ///
 /// NOTE: Uses fewer messages (1000) to avoid deadlock with blocking I/O
 fn zmq_dealer_router_pipelined(c: &mut Criterion) {

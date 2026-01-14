@@ -1,6 +1,6 @@
 //! Pattern-specific benchmarks: PUB/SUB fanout, load balancing, etc.
 //!
-//! Compares monocoque vs zmq.rs for different messaging patterns.
+//! Compares monocoque vs rust-zmq (zmq crate) for different messaging patterns.
 //! Measures: Pattern-specific performance characteristics.
 //!
 //! Tests the PUBLIC API from `monocoque::zmq` (user-facing ergonomics)
@@ -96,7 +96,7 @@ fn monocoque_pubsub_fanout(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark zmq.rs (libzmq) PUB/SUB fanout
+/// Benchmark rust-zmq (zmq crate) PUB/SUB fanout
 fn zmq_pubsub_fanout(c: &mut Criterion) {
     let mut group = c.benchmark_group("patterns/zmq_rs/pubsub_fanout");
 
@@ -209,7 +209,7 @@ fn monocoque_topic_filtering(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark zmq.rs topic filtering efficiency
+/// Benchmark rust-zmq topic filtering efficiency
 fn zmq_topic_filtering(c: &mut Criterion) {
     let mut group = c.benchmark_group("patterns/zmq_rs/topic_filtering");
 

@@ -168,7 +168,7 @@ Results are located in: \`${BENCH_DIR}/target/criterion/\`
 - **Location**: \`${BENCH_DIR}/target/criterion/throughput/\`
 - **Measures**: Messages per second (synchronous ping-pong)
 - **Patterns**: REQ/REP, DEALER/ROUTER
-- **Comparison**: monocoque vs libzmq (zmq.rs)
+- **Comparison**: monocoque vs rust-zmq (zmq crate, FFI to libzmq)
 
 ### Pipelined Throughput Benchmarks
 

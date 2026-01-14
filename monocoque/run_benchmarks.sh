@@ -164,9 +164,9 @@ Open in browser: \`file://$(pwd)/$BENCH_DIR/report/index.html\`
 
 ## Comparison
 
-### Monocoque vs zmq.rs
+### Monocoque vs rust-zmq
 
-| Benchmark | Monocoque | zmq.rs | Speedup |
+| Benchmark | Monocoque | rust-zmq | Speedup |
 |-----------|-----------|--------|---------|
 | REQ/REP 256B | TBD | TBD | TBD |
 | DEALER/ROUTER 1KB | TBD | TBD | TBD |
