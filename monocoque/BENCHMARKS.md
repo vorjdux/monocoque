@@ -5,11 +5,12 @@ Comprehensive performance benchmarks comparing Monocoque against rust-zmq (zmq c
 ## Objective
 
 **Outperform existing Rust ZMQ libraries** through:
-- Zero-copy message passing with `Bytes`
-- io_uring-based I/O (Linux only, requires kernel 5.6+)
-- Arena allocation for read buffers
-- Optimized subscription indexing (sorted Vec, cache-friendly)
-- Minimal overhead socket types
+
+-   Zero-copy message passing with `Bytes`
+-   io_uring-based I/O (Linux only, requires kernel 5.6+)
+-   Arena allocation for read buffers
+-   Optimized subscription indexing (sorted Vec, cache-friendly)
+-   Minimal overhead socket types
 
 ## Benchmark Suites
 
@@ -18,9 +19,10 @@ Comprehensive performance benchmarks comparing Monocoque against rust-zmq (zmq c
 **Measures**: Messages per second
 
 **Tests**:
-- REQ/REP throughput (64B to 16KB messages)
-- DEALER/ROUTER throughput (64B to 16KB messages)
-- Compares monocoque vs rust-zmq
+
+-   REQ/REP throughput (64B to 16KB messages)
+-   DEALER/ROUTER throughput (64B to 16KB messages)
+-   Compares monocoque vs rust-zmq
 
 **Target**: > 1M msg/sec for small messages
 
@@ -29,9 +31,10 @@ Comprehensive performance benchmarks comparing Monocoque against rust-zmq (zmq c
 **Measures**: Round-trip time in microseconds
 
 **Tests**:
-- REQ/REP latency (8B to 4KB messages)
-- Connection establishment latency
-- Single message round-trip time
+
+-   REQ/REP latency (8B to 4KB messages)
+-   Connection establishment latency
+-   Single message round-trip time
 
 **Target**: < 10μs latency for local connections
 
@@ -40,9 +43,10 @@ Comprehensive performance benchmarks comparing Monocoque against rust-zmq (zmq c
 **Measures**: Pattern-specific performance
 
 **Tests**:
-- PUB/SUB fanout (1 → N subscribers)
-- Topic filtering efficiency
-- Subscription matching overhead
+
+-   PUB/SUB fanout (1 → N subscribers)
+-   Topic filtering efficiency
+-   Subscription matching overhead
 
 **Target**: Linear scaling with subscriber count
 
@@ -102,26 +106,30 @@ taskset -c 0,1 cargo bench --bench latency
 ### Output Format
 
 Criterion generates:
-- **HTML reports**: `target/criterion/report/index.html`
-- **CSV data**: `target/criterion/<benchmark>/*/estimates.json`
-- **Console output**: Summary statistics
+
+-   **HTML reports**: `target/criterion/report/index.html`
+-   **CSV data**: `target/criterion/<benchmark>/*/estimates.json`
+-   **Console output**: Summary statistics
 
 ### Key Metrics
 
 **Throughput**:
-- Higher is better
-- Look for: msgs/sec, MB/sec
-- Compare: monocoque vs rust-zmq ratio
+
+-   Higher is better
+-   Look for: msgs/sec, MB/sec
+-   Compare: monocoque vs rust-zmq ratio
 
 **Latency**:
-- Lower is better
-- Look for: mean, median, p95, p99
-- Target: Sub-10μs for local connections
+
+-   Lower is better
+-   Look for: mean, median, p95, p99
+-   Target: Sub-10μs for local connections
 
 **Patterns**:
-- Scaling characteristics
-- Look for: Linear vs sub-linear scaling
-- Verify: Optimization effectiveness
+
+-   Scaling characteristics
+-   Look for: Linear vs sub-linear scaling
+-   Verify: Optimization effectiveness
 
 ### Interpreting Results
 
@@ -141,80 +149,83 @@ throughput/rust_zmq/req_rep/256B
 
 ### Message Sizes
 
-- **Small**: 8-64 bytes (typical control messages)
-- **Medium**: 256-1024 bytes (typical data messages)
-- **Large**: 4-16KB (bulk transfers)
+-   **Small**: 8-64 bytes (typical control messages)
+-   **Medium**: 256-1024 bytes (typical data messages)
+-   **Large**: 4-16KB (bulk transfers)
 
 ### Test Configurations
 
 **REQ/REP**:
-- Synchronous request/response
-- Measures round-trip latency
-- Single client ↔ server
+
+-   Synchronous request/response
+-   Measures round-trip latency
+-   Single client ↔ server
 
 **DEALER/ROUTER**:
-- Asynchronous messaging
-- Load balancing potential
-- Identity-based routing
+
+-   Asynchronous messaging
+-   Load balancing potential
+-   Identity-based routing
 
 **PUB/SUB**:
-- One-to-many broadcast
-- Topic-based filtering
-- Fanout scaling (1, 5, 10, 20, 50 subscribers)
+
+-   One-to-many broadcast
+-   Topic-based filtering
+-   Fanout scaling (1, 5, 10, 20, 50 subscribers)
 
 ## Performance Targets
 
 Based on blueprint specifications:
 
-| Metric | Target | Measured | Status |
-|--------|--------|----------|--------|
-| Throughput (small) | > 1M msg/s | TBD | ⏳ |
-| Throughput (large) | > 500 MB/s | TBD | ⏳ |
-| Latency (local) | < 10μs | TBD | ⏳ |
-| PUB/SUB fanout | Linear | TBD | ⏳ |
+| Metric             | Target     | Measured | Status |
+| ------------------ | ---------- | -------- | ------ |
+| Throughput (small) | > 1M msg/s | TBD      | ⏳     |
+| Throughput (large) | > 500 MB/s | TBD      | ⏳     |
+| Latency (local)    | < 10μs     | TBD      | ⏳     |
+| PUB/SUB fanout     | Linear     | TBD      | ⏳     |
 
 ## Optimizations Benchmarked
 
 ### Zero-Copy
 
-- **Implementation**: All payloads use `Bytes` (refcounted)
-- **Benefit**: No memcpy for message routing
-- **Measure**: Compare same-size message throughput
+-   **Implementation**: All payloads use `Bytes` (refcounted)
+-   **Benefit**: No memcpy for message routing
+-   **Measure**: Compare same-size message throughput
 
 ### io_uring
 
-- **Implementation**: Compio runtime with io_uring backend
-- **Benefit**: Reduced syscalls, batched I/O
-- **Measure**: Latency reduction vs blocking I/O
+-   **Implementation**: Compio runtime with io_uring backend
+-   **Benefit**: Reduced syscalls, batched I/O
+-   **Measure**: Latency reduction vs blocking I/O
 
 ### Arena Allocation
 
-- **Implementation**: 8KB slabs for read buffers
-- **Benefit**: Reduced allocator pressure
-- **Measure**: Throughput stability under load
+-   **Implementation**: 8KB slabs for read buffers
+-   **Benefit**: Reduced allocator pressure
+-   **Measure**: Throughput stability under load
 
 ### Sorted Subscription Index
 
-- **Implementation**: Sorted `Vec<Bytes>` with early exit
-- **Benefit**: Cache-friendly, predictable branches
-- **Measure**: Topic filtering overhead
+-   **Implementation**: Sorted `Vec<Bytes>` with early exit
+-   **Benefit**: Cache-friendly, predictable branches
+-   **Measure**: Topic filtering overhead
 
 ### SmallVec Multipart
 
-- **Implementation**: Inline storage for 1-4 frames
-- **Benefit**: Zero heap allocations for typical messages
-- **Measure**: Multipart message throughput
+-   **Implementation**: Inline storage for 1-4 frames
+-   **Benefit**: Zero heap allocations for typical messages
+-   **Measure**: Multipart message throughput
 
 ## Comparison Matrix
 
-| Feature | Monocoque | rust-zmq | Advantage |
-|---------|-----------|----------|-----------|
-| I/O Model | io_uring | epoll | Monocoque |
-| Memory | Zero-copy (Bytes) | Memcpy | Monocoque |
-| Allocation | Arena | General | Monocoque |
-| Runtime | Async (compio) | Blocking | Monocoque |
-| Subscription | Sorted Vec | HashMap | Monocoque |
-| API | Rust-native | C FFI | Monocoque |
+| Feature      | Monocoque         | rust-zmq | Advantage |
+| ------------ | ----------------- | -------- | --------- |
+| I/O Model    | io_uring          | epoll    | Monocoque |
+| Memory       | Zero-copy (Bytes) | Memcpy   | Monocoque |
+| Allocation   | Arena             | General  | Monocoque |
+| Runtime      | Async (compio)    | Blocking | Monocoque |
+| Subscription | Sorted Vec        | HashMap  | Monocoque |
+| API          | Rust-native       | C FFI    | Monocoque |
 
 ## Contributing Benchmarks
 
@@ -227,26 +238,27 @@ Based on blueprint specifications:
 
 ### Benchmark Guidelines
 
-- **Warmup**: Run 100+ iterations before measuring
-- **Duration**: 10-15 seconds for stable results
-- **Samples**: 30-200 samples per benchmark
-- **Isolation**: Avoid cross-benchmark interference
-- **Repeatability**: Use fixed seeds, controlled environment
+-   **Warmup**: Run 100+ iterations before measuring
+-   **Duration**: 10-15 seconds for stable results
+-   **Samples**: 30-200 samples per benchmark
+-   **Isolation**: Avoid cross-benchmark interference
+-   **Repeatability**: Use fixed seeds, controlled environment
 
 ## CI/CD Integration
 
 Benchmarks run automatically on:
-- Major commits to `main`
-- Pull requests (performance regression check)
-- Release tags (publish results)
+
+-   Major commits to `main`
+-   Pull requests (performance regression check)
+-   Release tags (publish results)
 
 Results stored in: `bench_results/<commit>/`
 
 ## References
 
-- [Criterion.rs Documentation](https://bheisler.github.io/criterion.rs/book/)
-- [ZeroMQ Benchmark Methodology](http://zeromq.org/results:perf)
-- [io_uring Performance Analysis](https://kernel.dk/io_uring.pdf)
+-   [Criterion.rs Documentation](https://bheisler.github.io/criterion.rs/book/)
+-   [ZeroMQ Benchmark Methodology](http://zeromq.org/results:perf)
+-   [io_uring Performance Analysis](https://kernel.dk/io_uring.pdf)
 
 ## License
 
