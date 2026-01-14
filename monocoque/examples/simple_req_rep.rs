@@ -18,7 +18,7 @@ fn main() {
     // Spawn REP server in background thread
     let addr = Arc::new(std::sync::Mutex::new(String::new()));
     let addr_clone = addr.clone();
-    
+
     let server_handle = thread::spawn(move || {
         compio::runtime::Runtime::new().unwrap().block_on(async {
             let listener = compio::net::TcpListener::bind("127.0.0.1:0")
@@ -26,7 +26,7 @@ fn main() {
                 .expect("Failed to bind");
             let local_addr = listener.local_addr().expect("Failed to get local addr");
             info!("[REP] Listening on tcp://{}", local_addr);
-            
+
             // Share the address with the client thread
             *addr_clone.lock().unwrap() = local_addr.to_string();
 
@@ -49,9 +49,9 @@ fn main() {
             }
 
             info!("[REP] Done");
-            
+
             drop(socket);
-            
+
             // Keep connection alive briefly
             compio::time::sleep(Duration::from_millis(50)).await;
         });
@@ -63,7 +63,7 @@ fn main() {
     // This is only needed for localhost TCP tests; real network latency
     // naturally provides this settling period.
     thread::sleep(Duration::from_millis(100));
-    
+
     let server_addr = addr.lock().unwrap().clone();
 
     // Run REQ client in main thread
@@ -92,9 +92,9 @@ fn main() {
         }
 
         info!("[REQ] Done");
-        
+
         drop(socket);
-        
+
         // Small delay to let messages flush
         compio::time::sleep(Duration::from_millis(50)).await;
     });

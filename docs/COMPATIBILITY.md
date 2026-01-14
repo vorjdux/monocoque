@@ -44,10 +44,11 @@ b.extend_from_slice(&[0x03, 0x00]);
 | ROUTER      | ✅       | ✅        | Phase 2 - Complete    |
 | PUB         | ✅       | ✅        | Phase 3 - Complete    |
 | SUB         | ✅       | ✅        | Phase 3 - Complete    |
-| REQ         | ✅       | 🔄        | Phase 4 - Planned     |
-| REP         | ✅       | 🔄        | Phase 4 - Planned     |
+| REQ         | ✅       | ✅        | Phase 4 - Complete    |
+| REP         | ✅       | ✅        | Phase 4 - Complete    |
 | PUSH        | ✅       | 🔄        | Phase 5 - Planned     |
 | PULL        | ✅       | 🔄        | Phase 5 - Planned     |
+| PAIR        | ✅       | 🔄        | Phase 0 - Planned     |
 | PAIR        | ✅       | 🔄        | Phase 0 - Planned     |
 
 ### Feature Compatibility

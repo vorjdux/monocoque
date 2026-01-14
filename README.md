@@ -230,23 +230,23 @@ Monocoque is the **fastest ZeroMQ implementation in Rust**, achieving:
 
 ### Latency: 30% Faster than libzmq
 
-| Message Size | Monocoque | rust-zmq (libzmq) | Improvement |
-|--------------|-----------|-------------------|-------------|
-| 64B          | 21μs     | 31μs             | **32% faster** |
-| 256B         | 22μs     | 31μs             | **29% faster** |
-| 1024B        | 22μs     | 33μs             | **31% faster** |
+| Message Size | Monocoque | rust-zmq (libzmq) | Improvement    |
+| ------------ | --------- | ----------------- | -------------- |
+| 64B          | 21μs      | 31μs              | **32% faster** |
+| 256B         | 22μs      | 31μs              | **29% faster** |
+| 1024B        | 22μs      | 33μs              | **31% faster** |
 
 ### Throughput: 2M+ Messages/Second
 
-- **Synchronous (REQ/REP ping-pong)**: ~327k msg/sec
-- **Pipelined (DEALER/ROUTER)**: 2M+ msg/sec with batching API
-- **vs rust-zmq**: rust-zmq (`zmq` crate, FFI bindings to libzmq) deadlocks on large pipelines, monocoque handles 100k+ messages
+-   **Synchronous (REQ/REP ping-pong)**: ~327k msg/sec
+-   **Pipelined (DEALER/ROUTER)**: 2M+ msg/sec with batching API
+-   **vs rust-zmq**: rust-zmq (`zmq` crate, FFI bindings to libzmq) deadlocks on large pipelines, monocoque handles 100k+ messages
 
 ### IPC: Faster than TCP Loopback
 
-- **IPC (Unix domain sockets)**: 74-76ms for 10k messages
-- **TCP (localhost)**: 80-87ms for 10k messages
-- **Advantage**: 7-10% faster for local communication
+-   **IPC (Unix domain sockets)**: 74-76ms for 10k messages
+-   **TCP (localhost)**: 80-87ms for 10k messages
+-   **Advantage**: 7-10% faster for local communication
 
 ### Explicit Batching API (Power Users)
 
@@ -281,11 +281,12 @@ firefox target/criterion/report/index.html
 ```
 
 Benchmarks include:
-- Latency comparison with rust-zmq (`zmq` crate, FFI bindings to libzmq)
-- Synchronous and pipelined throughput
-- IPC vs TCP performance (Unix-only)
-- Multi-threaded scaling
-- PUB/SUB patterns
+
+-   Latency comparison with rust-zmq (`zmq` crate, FFI bindings to libzmq)
+-   Synchronous and pipelined throughput
+-   IPC vs TCP performance (Unix-only)
+-   Multi-threaded scaling
+-   PUB/SUB patterns
 
 ---
 
@@ -530,11 +531,11 @@ Monocoque is in early development. Contributions are welcome, especially:
 -   [x] TCP and IPC transport support - **Complete**
 -   [x] Public API with feature gates - **Complete**
 -   [x] **Performance Phase 1** - **Complete** 🚀
-    - [x] Explicit batching API (send_buffered/flush/send_batch)
-    - [x] TCP_NODELAY by default for all TCP connections
-    - [x] Comprehensive benchmark suite (6 benchmarks)
-    - [x] 21μs latency - **30% faster than libzmq**
-    - [x] 2M+ msg/sec throughput with batching
+    -   [x] Explicit batching API (send_buffered/flush/send_batch)
+    -   [x] TCP_NODELAY by default for all TCP connections
+    -   [x] Comprehensive benchmark suite (6 benchmarks)
+    -   [x] 21μs latency - **30% faster than libzmq**
+    -   [x] 2M+ msg/sec throughput with batching
 -   [ ] Multi-peer router architecture
 -   [ ] Connection pooling and load balancing patterns
 -   [ ] AddressSanitizer/ThreadSanitizer validation
@@ -542,7 +543,7 @@ Monocoque is in early development. Contributions are welcome, especially:
 **Next Phase**:
 
 -   [ ] Zero-copy with io_uring fixed buffers
--   [ ] SIMD-accelerated topic matching  
+-   [ ] SIMD-accelerated topic matching
 -   [ ] Target: 15-20μs latency, 3-5M msg/sec throughput
 
 **Long-Term Vision**:

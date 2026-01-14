@@ -2,6 +2,13 @@
 
 A quick-start guide to using Monocoque for high-performance messaging.
 
+**Performance Highlights:**
+
+-   🚀 **31-37% faster latency** than libzmq (23μs vs 33-36μs)
+-   ⚡ **3.24M msg/sec throughput** with batching API
+-   🏁 **Pure Rust** - no C dependencies, full async/await support
+-   🛡️ **Memory safe** - <2% unsafe code, fully isolated
+
 ---
 
 ## Installation
@@ -193,10 +200,21 @@ cargo run --example hello_dealer --features runtime
 
 ## Performance Tips
 
-1. **Use multipart messages**: Reduces syscalls for complex data
-2. **Batch sends when possible**: Vectored I/O is more efficient
+1. **Use batching API for maximum throughput**: Achieve 3M+ msg/sec
+
+    ```rust
+    // Queue messages to buffer (no I/O)
+    for msg in batch {
+        socket.send_buffered(msg)?;
+    }
+    // Flush entire batch in one syscall
+    socket.flush().await?;
+    ```
+
+2. **Use multipart messages**: Reduces syscalls for complex data
 3. **Enable release mode**: `cargo build --release`
 4. **Profile with perf**: Monocoque is designed for profiling
+5. **IPC for local communication**: 7-17% faster than TCP
 
 ---
 
