@@ -105,7 +105,7 @@ def generate_summary(results: Dict) -> str:
                 output.append(f"- **{name}**: {format_throughput(throughput, tp.get('unit', 'bytes'))}")
         output.append("")
     
-    # Compare monocoque vs zmq.rs
+    # Compare monocoque vs rust-zmq
     comparisons = []
     for name, data in results.items():
         if 'monocoque' in name:
@@ -117,7 +117,7 @@ def generate_summary(results: Dict) -> str:
                 comparisons.append((name, speedup))
     
     if comparisons:
-        output.append("### Monocoque vs zmq.rs Comparison")
+        output.append("### Monocoque vs rust-zmq Comparison")
         for name, speedup in sorted(comparisons, key=lambda x: x[1], reverse=True):
             if speedup > 1:
                 output.append(f"- **{name}**: {speedup:.2f}x faster")
