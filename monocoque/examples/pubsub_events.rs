@@ -1,55 +1,81 @@
-/// `PubSub` Events Example
+/// PubSub Events Example
 ///
 /// This example demonstrates PUB/SUB pattern for event distribution:
-/// - Publisher broadcasts events on different topics
-/// - Subscribers filter events by topic prefix
+/// - Publisher broadcasts events on different topics using worker pool
+/// - Subscriber filters events by topic prefix
 ///
 /// Architecture:
-/// - PUB socket broadcasts to all subscribers
+/// - PUB socket with worker pool broadcasts to all subscribers
 /// - SUB socket subscribes to specific topics
 /// - Topics are prefix-matched (e.g., "trade." matches "trade.BTC", "trade.ETH")
 use bytes::Bytes;
-use compio::net::{TcpListener, TcpStream};
 use monocoque::zmq::{PubSocket, SubSocket};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::{error, info};
 
 #[compio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .init();
+
     info!("=== PubSub Events Example ===\n");
 
-    // Start subscriber in background
-    let subscriber_handle = compio::runtime::spawn(async {
-        run_subscriber().await;
+    // Shared port between publisher and subscriber
+    let port = Arc::new(Mutex::new(None));
+    let port_clone = port.clone();
+
+    // Start publisher in background
+    let publisher_handle = compio::runtime::spawn(async move {
+        if let Err(e) = run_publisher(port_clone).await {
+            error!("[Main] Publisher error: {e}");
+        }
     });
 
-    // Give subscriber time to connect
+    // Give publisher time to bind
     compio::time::sleep(Duration::from_millis(500)).await;
 
-    // Start publisher
-    let publisher_handle = compio::runtime::spawn(async {
-        run_publisher().await;
+    // Get the port
+    let port_num = {
+        let p = port.lock().unwrap();
+        p.expect("Publisher should have set port")
+    };
+
+    // Start subscriber in background BEFORE publisher accepts
+    let subscriber_handle = compio::runtime::spawn(async move {
+        if let Err(e) = run_subscriber(port_num).await {
+            error!("[Main] Subscriber error: {e}");
+        }
     });
+    
+    // Give subscriber time to connect and subscribe
+    compio::time::sleep(Duration::from_millis(500)).await;
 
     // Wait for both to complete
-    let _ = futures::join!(subscriber_handle, publisher_handle);
+    let _ = futures::join!(publisher_handle, subscriber_handle);
 
     Ok(())
 }
 
-async fn run_publisher() {
-    info!("[Publisher] Starting on port 5556...");
+async fn run_publisher(port: Arc<Mutex<Option<u16>>>) -> Result<(), Box<dyn std::error::Error>> {
+    info!("[Publisher] Starting...");
 
-    let listener = TcpListener::bind("127.0.0.1:5556").await.unwrap();
+    let mut socket = PubSocket::bind("127.0.0.1:0").await?;
+    let bound_port = socket.local_addr()?.port();
+    
+    // Share the port with subscriber
+    *port.lock().unwrap() = Some(bound_port);
+    info!("[Publisher] Bound to port {}", bound_port);
 
     // Accept subscriber connection
-    let (stream, addr) = listener.accept().await.unwrap();
-    info!("[Publisher] Subscriber connected from {addr}");
+    socket.accept_subscriber().await?;
+    info!("[Publisher] Subscriber connected");
 
-    let mut socket = PubSocket::from_stream(stream).await.unwrap();
+    // Give subscriber time to send subscription
+    std::thread::sleep(Duration::from_millis(500));
 
-    // Give handshake time to complete
-    compio::time::sleep(Duration::from_millis(200)).await;
+    info!("[Publisher] Publishing events...");
 
     // Publish events on different topics
     let events = vec![
@@ -73,38 +99,37 @@ async fn run_publisher() {
                 break;
             }
         }
-
-        compio::time::sleep(Duration::from_millis(500)).await;
+        
+        // Small delay between messages
+        std::thread::sleep(Duration::from_millis(50));
     }
 
     info!("[Publisher] Done publishing");
 
     // Keep connection alive briefly
-    compio::time::sleep(Duration::from_secs(1)).await;
+    std::thread::sleep(Duration::from_millis(200));
+    
+    Ok(())
 }
 
-async fn run_subscriber() {
-    // Wait for publisher to be ready
-    compio::time::sleep(Duration::from_millis(200)).await;
+async fn run_subscriber(port: u16) -> Result<(), Box<dyn std::error::Error>> {
+    info!("[Subscriber] Connecting to publisher on port {}...", port);
 
-    info!("[Subscriber] Connecting to publisher on port 5556...");
-
-    let stream = TcpStream::connect("127.0.0.1:5556").await.unwrap();
-    let mut socket = SubSocket::from_stream(stream).await.unwrap();
+    let mut socket = SubSocket::connect(&format!("127.0.0.1:{}", port)).await?;
 
     // Subscribe to trade events only
     info!("[Subscriber] Subscribing to 'trade.' prefix");
-    socket.subscribe(b"trade.");
-
-    // Give subscription time to register
-    compio::time::sleep(Duration::from_millis(200)).await;
+    socket.subscribe(b"trade.").await?;
+    
+    // Small delay to ensure subscription is registered before messages are sent
+    std::thread::sleep(Duration::from_millis(50));
 
     info!("[Subscriber] Waiting for events...\n");
 
     // Receive events
     for _ in 0..10 {
-        match compio::time::timeout(Duration::from_secs(2), socket.recv()).await {
-            Ok(Ok(Some(message))) => {
+        match socket.recv().await {
+            Ok(Some(message)) => {
                 if message.len() >= 2 {
                     let topic = std::str::from_utf8(&message[0]).unwrap_or("<invalid>");
                     let data = std::str::from_utf8(&message[1]).unwrap_or("<invalid>");
@@ -116,20 +141,17 @@ async fn run_subscriber() {
                     );
                 }
             }
-            Ok(Ok(None)) => {
+            Ok(None) => {
                 info!("[Subscriber] Connection closed");
                 break;
             }
-            Ok(Err(e)) => {
+            Err(e) => {
                 error!("[Subscriber] Recv error: {e}");
-                break;
-            }
-            Err(_) => {
-                info!("[Subscriber] Timeout waiting for events");
                 break;
             }
         }
     }
 
     info!("[Subscriber] Done receiving");
+    Ok(())
 }

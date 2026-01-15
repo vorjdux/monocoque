@@ -44,10 +44,12 @@
 
 use crate::{
     codec::{encode_multipart, ZmtpDecoder},
-    handshake::perform_handshake,
+    handshake::perform_handshake_with_timeout,
     session::SocketType,
 };
 use monocoque_core::config::BufferConfig;
+use monocoque_core::options::SocketOptions;
+use monocoque_core::poison::PoisonGuard;
 use bytes::{Bytes, BytesMut};
 use compio::io::{AsyncRead, AsyncWrite};
 use compio::net::TcpStream;
@@ -116,6 +118,10 @@ where
     state: ReqState,
     /// Buffer configuration
     config: BufferConfig,
+    /// Socket options (timeouts, limits, etc.)
+    options: SocketOptions,
+    /// Connection health flag (true if I/O was cancelled mid-operation)
+    is_poisoned: bool,
 }
 
 impl<S> ReqSocket<S>
@@ -146,7 +152,7 @@ where
     /// ```
     pub async fn new(stream: S) -> io::Result<Self> {
         // REQ sockets typically handle low-latency RPC with small messages
-        Self::with_config(stream, BufferConfig::small()).await
+        Self::with_options(stream, BufferConfig::small(), SocketOptions::default()).await
     }
 
     /// Create a new REQ socket from a stream with custom buffer configuration.
@@ -154,14 +160,28 @@ where
     /// # Buffer Configuration
     /// - Use `BufferConfig::small()` (4KB) for low-latency request/reply with small messages
     /// - Use `BufferConfig::large()` (16KB) for high-throughput with large messages
-    pub async fn with_config(mut stream: S, config: BufferConfig) -> io::Result<Self> {
+    pub async fn with_config(stream: S, config: BufferConfig) -> io::Result<Self> {
+        Self::with_options(stream, config, SocketOptions::default()).await
+    }
+
+    /// Create a new REQ socket with custom buffer configuration and socket options.
+    pub async fn with_options(
+        mut stream: S,
+        config: BufferConfig,
+        options: SocketOptions,
+    ) -> io::Result<Self> {
         debug!("[REQ] Creating new direct REQ socket");
 
         // Perform ZMTP handshake
         debug!("[REQ] Performing ZMTP handshake...");
-        let handshake_result = perform_handshake(&mut stream, SocketType::Req, None)
-            .await
-            .map_err(|e| io::Error::other(format!("Handshake failed: {}", e)))?;
+        let handshake_result = perform_handshake_with_timeout(
+            &mut stream,
+            SocketType::Req,
+            None,
+            Some(options.handshake_timeout),
+        )
+        .await
+        .map_err(|e| io::Error::other(format!("Handshake failed: {}", e)))?;
 
         debug!(
             peer_identity = ?handshake_result.peer_identity,
@@ -192,6 +212,8 @@ where
             frames: SmallVec::new(),
             state: ReqState::Idle,
             config,
+            options,
+            is_poisoned: false,
         })
     }
 
@@ -217,6 +239,14 @@ where
     /// # }
     /// ```
     pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
+        // Check health before attempting I/O
+        if self.is_poisoned {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "Socket poisoned by cancelled I/O - reconnect required",
+            ));
+        }
+
         // Check state machine
         if self.state != ReqState::Idle {
             return Err(io::Error::new(
@@ -231,12 +261,46 @@ where
         self.write_buf.clear();
         encode_multipart(&msg, &mut self.write_buf);
 
+        // Arm the guard - if dropped before disarm, socket remains poisoned
+        let guard = PoisonGuard::new(&mut self.is_poisoned);
+
         // Write to stream using compio
         use compio::buf::BufResult;
 
         let buf = self.write_buf.split().freeze();
-        let BufResult(result, _) = AsyncWrite::write(&mut self.stream, IoBytes::new(buf)).await;
+        
+        // Apply send timeout from options
+        let BufResult(result, _) = match self.options.send_timeout {
+            None => {
+                // Blocking mode - no timeout
+                AsyncWrite::write(&mut self.stream, IoBytes::new(buf)).await
+            }
+            Some(dur) if dur.is_zero() => {
+                // Non-blocking mode
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "Socket is in non-blocking mode and cannot send immediately",
+                ));
+            }
+            Some(dur) => {
+                // Timed mode - apply timeout
+                use compio::time::timeout;
+                match timeout(dur, AsyncWrite::write(&mut self.stream, IoBytes::new(buf))).await {
+                    Ok(result) => result,
+                    Err(_) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            format!("Send operation timed out after {:?}", dur),
+                        ));
+                    }
+                }
+            }
+        };
+        
         result?;
+
+        // Success - disarm the guard
+        guard.disarm();
 
         // Transition to awaiting reply
         self.state = ReqState::AwaitingReply;
@@ -309,7 +373,35 @@ where
             use compio::buf::BufResult;
 
             let slab = self.arena.alloc_mut(self.config.read_buf_size);
-            let BufResult(result, slab) = AsyncRead::read(&mut self.stream, slab).await;
+            
+            // Apply recv timeout from options
+            let BufResult(result, slab) = match self.options.recv_timeout {
+                None => {
+                    // Blocking mode - no timeout
+                    AsyncRead::read(&mut self.stream, slab).await
+                }
+                Some(dur) if dur.is_zero() => {
+                    // Non-blocking mode
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "Socket is in non-blocking mode and no data is available",
+                    ));
+                }
+                Some(dur) => {
+                    // Timed mode - apply timeout
+                    use compio::time::timeout;
+                    match timeout(dur, AsyncRead::read(&mut self.stream, slab)).await {
+                        Ok(result) => result,
+                        Err(_) => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::TimedOut,
+                                format!("Receive operation timed out after {:?}", dur),
+                            ));
+                        }
+                    }
+                }
+            };
+            
             let n = result?;
 
             if n == 0 {
@@ -339,6 +431,33 @@ where
     /// Get a mutable reference to the underlying stream.
     pub fn stream_mut(&mut self) -> &mut S {
         &mut self.stream
+    }
+
+    /// Close the socket gracefully.
+    ///
+    /// REQ sockets send immediately (no buffering), so this simply drops the socket.
+    /// The linger option is not applicable to REQ sockets.
+    pub async fn close(self) -> io::Result<()> {
+        trace!("[REQ] Closing socket");
+        Ok(())
+    }
+
+    /// Get a reference to the socket options.
+    #[inline]
+    pub fn options(&self) -> &SocketOptions {
+        &self.options
+    }
+
+    /// Get a mutable reference to the socket options.
+    #[inline]
+    pub fn options_mut(&mut self) -> &mut SocketOptions {
+        &mut self.options
+    }
+
+    /// Set socket options (builder-style).
+    #[inline]
+    pub fn set_options(&mut self, options: SocketOptions) {
+        self.options = options;
     }
 }
 
@@ -376,6 +495,18 @@ impl ReqSocket<TcpStream> {
         // Enable TCP_NODELAY for low latency
         monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
         debug!("[REQ] TCP_NODELAY enabled");
-        Self::with_config(stream, config).await
+        Self::with_options(stream, config, SocketOptions::default()).await
+    }
+
+    /// Create a new REQ socket from a TCP stream with TCP_NODELAY and custom options.
+    pub async fn from_tcp_with_options(
+        stream: TcpStream,
+        config: BufferConfig,
+        options: SocketOptions,
+    ) -> io::Result<Self> {
+        // Enable TCP_NODELAY for low latency
+        monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
+        debug!("[REQ] TCP_NODELAY enabled");
+        Self::with_options(stream, config, options).await
     }
 }

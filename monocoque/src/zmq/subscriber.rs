@@ -202,13 +202,17 @@ where
     /// Subscribe to messages matching the given topic prefix.
     ///
     /// Empty topic subscribes to all messages.
-    pub fn subscribe(&mut self, topic: &[u8]) {
-        self.inner.subscribe(Bytes::copy_from_slice(topic));
+    /// 
+    /// This sends a subscription message to the PUB socket.
+    pub async fn subscribe(&mut self, topic: &[u8]) -> io::Result<()> {
+        self.inner.subscribe(Bytes::copy_from_slice(topic)).await
     }
 
     /// Unsubscribe from messages matching the given topic prefix.
-    pub fn unsubscribe(&mut self, topic: &[u8]) {
-        self.inner.unsubscribe(&Bytes::copy_from_slice(topic));
+    ///
+    /// This sends an unsubscription message to the PUB socket.
+    pub async fn unsubscribe(&mut self, topic: &[u8]) -> io::Result<()> {
+        self.inner.unsubscribe(&Bytes::copy_from_slice(topic)).await
     }
 
     /// Receive a multipart message.

@@ -1,24 +1,19 @@
-//! PUB socket implementation.
+//! PUB socket implementation with worker pool architecture.
 
-use super::common::channel_to_io_error;
 use bytes::Bytes;
-use compio::net::{TcpListener, TcpStream};
+use compio::net::TcpListener;
 use monocoque_core::monitor::{create_monitor, SocketEvent, SocketEventSender, SocketMonitor};
 use monocoque_zmtp::publisher::PubSocket as InternalPub;
 use std::io;
 
-/// A PUB socket for broadcasting messages.
+/// A PUB socket for broadcasting messages to multiple subscribers.
 ///
-/// PUB sockets broadcast messages to all connected SUB peers.
-/// They're used for:
-///
-/// - Event broadcasting
-/// - One-to-many messaging
-/// - Topic-based distribution
-///
-/// ## ZeroMQ Compatibility
-///
-/// Compatible with `zmq::PUB` and `zmq::SUB` sockets from libzmq.
+/// PubSocket uses a **worker pool architecture** to handle multiple subscribers efficiently:
+/// - Multiple OS threads (default: CPU core count)
+/// - Each worker runs its own compio runtime with io_uring
+/// - Round-robin subscriber distribution across workers
+/// - Zero-copy message broadcasting via Arc<Bytes>
+/// - Lock-free subscription management
 ///
 /// ## Example
 ///
@@ -27,101 +22,72 @@ use std::io;
 /// use bytes::Bytes;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let (listener, mut socket) = PubSocket::bind("127.0.0.1:5555").await?;
+/// let mut socket = PubSocket::bind("127.0.0.1:5555").await?;
 ///
-/// // Broadcast messages
-/// socket.send(vec![
-///     Bytes::from("topic"),
-///     Bytes::from("data"),
-/// ]).await?;
+/// // Accept subscribers (non-blocking with worker pool)
+/// socket.accept_subscriber().await?;
+///
+/// // Broadcast to all subscribers
+/// socket.send(vec![Bytes::from("topic"), Bytes::from("data")]).await?;
 /// # Ok(())
 /// # }
 /// ```
-pub struct PubSocket<S = TcpStream>
-where
-    S: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
-{
-    inner: InternalPub<S>,
+pub struct PubSocket {
+    inner: InternalPub,
+    listener: TcpListener,
     monitor: Option<SocketEventSender>,
 }
 
 impl PubSocket {
-    /// Bind to an address and accept the first subscriber.
-    ///
-    /// # Returns
-    ///
-    /// A tuple of `(listener, socket)` where:
-    /// - `listener` can be used to accept additional subscribers
-    /// - `socket` is ready to broadcast to the first subscriber
-    pub async fn bind(
-        addr: impl compio::net::ToSocketAddrsAsync,
-    ) -> io::Result<(TcpListener, Self)> {
+    /// Bind to an address with default worker count (CPU cores).
+    pub async fn bind(addr: impl compio::net::ToSocketAddrsAsync) -> io::Result<Self> {
         let listener = TcpListener::bind(addr).await?;
-        let (stream, _) = listener.accept().await?;
-        let socket = Self::from_stream(stream).await?;
-        Ok((listener, socket))
-    }
-
-    /// Create a PUB socket from an existing TCP stream.
-    ///
-    /// **Deprecated**: Use [`PubSocket::from_tcp()`] instead to enable TCP_NODELAY for optimal latency.
-    #[deprecated(
-        since = "0.1.0",
-        note = "Use `from_tcp()` instead to enable TCP_NODELAY"
-    )]
-    pub async fn from_stream(stream: TcpStream) -> io::Result<Self> {
         Ok(Self {
-            inner: InternalPub::new(stream).await?,
+            inner: InternalPub::new(),
+            listener,
             monitor: None,
         })
     }
 
-    /// Create a PUB socket from an existing TCP stream with custom buffer configuration.
-    ///
-    /// **Deprecated**: Use [`PubSocket::from_tcp_with_config()`] instead to enable TCP_NODELAY for optimal latency.
-    ///
-    /// # Buffer Configuration
-    /// - Use `BufferConfig::small()` (4KB) for low-latency pub/sub with small messages
-    /// - Use `BufferConfig::large()` (16KB) for high-throughput pub/sub with large messages (recommended)
-    #[deprecated(
-        since = "0.1.0",
-        note = "Use `from_tcp_with_config()` instead to enable TCP_NODELAY"
-    )]
-    pub async fn from_stream_with_config(
-        stream: TcpStream,
-        config: monocoque_core::config::BufferConfig,
+    /// Bind with a specific number of worker threads.
+    pub async fn bind_with_workers(
+        addr: impl compio::net::ToSocketAddrsAsync,
+        worker_count: usize,
     ) -> io::Result<Self> {
+        let listener = TcpListener::bind(addr).await?;
         Ok(Self {
-            inner: InternalPub::with_config(stream, config).await?,
+            inner: InternalPub::with_workers(worker_count),
+            listener,
             monitor: None,
         })
     }
 
-    /// Create a PUB socket from a TCP stream with TCP_NODELAY enabled.
-    pub async fn from_tcp(stream: TcpStream) -> io::Result<Self> {
-        Ok(Self {
-            inner: InternalPub::from_tcp(stream).await?,
-            monitor: None,
-        })
+    /// Accept a new subscriber connection.
+    ///
+    /// Performs ZMTP handshake and assigns the subscriber to a worker thread.
+    /// Returns the subscriber ID.
+    pub async fn accept_subscriber(&mut self) -> io::Result<u64> {
+        self.inner.accept_subscriber(&self.listener).await
     }
 
-    /// Create a PUB socket from a TCP stream with TCP_NODELAY and custom config.
-    pub async fn from_tcp_with_config(
-        stream: TcpStream,
-        config: monocoque_core::config::BufferConfig,
-    ) -> io::Result<Self> {
-        Ok(Self {
-            inner: InternalPub::from_tcp_with_config(stream, config).await?,
-            monitor: None,
-        })
+    /// Broadcast a multipart message to all matching subscribers.
+    ///
+    /// Messages are distributed to all workers in parallel.
+    /// The first frame is typically used as a topic for subscription filtering.
+    pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
+        self.inner.send(msg).await
     }
-}
 
-// Generic impl - works with any stream type
-impl<S> PubSocket<S>
-where
-    S: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
-{
+    /// Get the number of active subscribers.
+    pub fn subscriber_count(&self) -> usize {
+        self.inner.subscriber_count()
+    }
+
+    /// Get the local address this socket is bound to.
+    pub fn local_addr(&self) -> io::Result<std::net::SocketAddr> {
+        self.listener.local_addr()
+    }
+
     /// Enable monitoring for this socket.
     ///
     /// Returns a receiver for socket lifecycle events.
@@ -137,39 +103,5 @@ where
         if let Some(monitor) = &self.monitor {
             let _ = monitor.send(event);
         }
-    }
-
-    /// Broadcast a multipart message to all subscribers.
-    ///
-    /// The first frame is typically used as a topic for filtering.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the underlying connection is closed or broken.
-    pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
-        channel_to_io_error(self.inner.send(msg).await)
-    }
-}
-
-// Unix-specific impl for IPC support
-#[cfg(unix)]
-impl PubSocket<compio::net::UnixStream> {
-    /// Create a PUB socket from an existing Unix domain socket stream (IPC).
-    pub async fn from_unix_stream(stream: compio::net::UnixStream) -> io::Result<Self> {
-        Ok(Self {
-            inner: InternalPub::new(stream).await?,
-            monitor: None,
-        })
-    }
-
-    /// Create a PUB socket from an existing Unix stream with custom buffer configuration.
-    pub async fn from_unix_stream_with_config(
-        stream: compio::net::UnixStream,
-        config: monocoque_core::config::BufferConfig,
-    ) -> io::Result<Self> {
-        Ok(Self {
-            inner: InternalPub::with_config(stream, config).await?,
-            monitor: None,
-        })
     }
 }

@@ -16,6 +16,11 @@ use tracing::{error, info};
 
 #[compio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize tracing
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .init();
+
     info!("Starting ROUTER worker pool on tcp://127.0.0.1:5555");
 
     let listener = TcpListener::bind("127.0.0.1:5555").await?;
@@ -41,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn handle_worker(stream: compio::net::TcpStream, task_counter: Arc<AtomicU64>) {
-    let mut socket = RouterSocket::from_stream(stream).await.unwrap();
+    let mut socket = RouterSocket::from_tcp(stream).await.unwrap();
 
     // Send tasks to this worker
     for _ in 0..10 {

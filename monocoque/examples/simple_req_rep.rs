@@ -2,23 +2,32 @@
 //!
 //! Run this example:
 //! ```bash
-//! cargo run --example simple_req_rep
+//! cargo run --example simple_req_rep --features zmq
 //! ```
 
 use bytes::Bytes;
 use monocoque::zmq::{RepSocket, ReqSocket};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 use tracing::info;
 
 fn main() {
+    // Initialize tracing
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .init();
+
     info!("=== Monocoque REQ ↔ REP Simple Test ===\n");
 
-    // Spawn REP server in background thread
+    // Shared state
     let addr = Arc::new(std::sync::Mutex::new(String::new()));
     let addr_clone = addr.clone();
+    let server_ready = Arc::new(AtomicBool::new(false));
+    let server_ready_clone = server_ready.clone();
 
+    // Spawn REP server in background thread
     let server_handle = thread::spawn(move || {
         compio::runtime::Runtime::new().unwrap().block_on(async {
             let listener = compio::net::TcpListener::bind("127.0.0.1:0")
@@ -29,10 +38,11 @@ fn main() {
 
             // Share the address with the client thread
             *addr_clone.lock().unwrap() = local_addr.to_string();
+            server_ready_clone.store(true, Ordering::Release);
 
             let (stream, _) = listener.accept().await.expect("Failed to accept");
-            let mut socket = RepSocket::from_stream(stream).await.unwrap();
-            info!("[REP] Client connected\n");
+            let mut socket = RepSocket::from_tcp(stream).await.unwrap();
+            info!("[REP] Client connected");
 
             // First request-reply cycle
             if let Some(request) = socket.recv().await {
@@ -48,21 +58,15 @@ fn main() {
                     .expect("Failed to send");
             }
 
-            info!("[REP] Done");
-
-            drop(socket);
-
-            // Keep connection alive briefly
-            compio::time::sleep(Duration::from_millis(50)).await;
+            info!("[REP] Request-reply cycle complete");
         });
     });
 
-    // Give server time to start and get address
-    // Note: This settle time is standard practice in ZeroMQ implementations.
-    // libzmq uses SETTLE_TIME=300ms, rust-zmq uses 100ms sleeps.
-    // This is only needed for localhost TCP tests; real network latency
-    // naturally provides this settling period.
-    thread::sleep(Duration::from_millis(100));
+    // Wait for server to be ready
+    while !server_ready.load(Ordering::Acquire) {
+        thread::sleep(Duration::from_millis(10));
+    }
+    thread::sleep(Duration::from_millis(50)); // Extra settling time
 
     let server_addr = addr.lock().unwrap().clone();
 
@@ -73,7 +77,7 @@ fn main() {
         let mut socket = ReqSocket::connect(&server_addr)
             .await
             .expect("Failed to connect");
-        info!("[REQ] Connected (handshake complete)\n");
+        info!("[REQ] Connected (handshake complete)");
 
         // Send request
         info!("[REQ] Sending request");
@@ -83,23 +87,23 @@ fn main() {
             .expect("Failed to send");
 
         // Receive reply
+        info!("[REQ] Waiting for reply");
         let response = socket.recv().await;
         if let Some(msg) = response {
             info!("[REQ] Received response:");
             for (i, frame) in msg.iter().enumerate() {
                 info!("  Frame {}: {:?}", i, String::from_utf8_lossy(frame));
             }
+        } else {
+            info!("[REQ] No response received");
         }
 
-        info!("[REQ] Done");
-
-        drop(socket);
-
-        // Small delay to let messages flush
-        compio::time::sleep(Duration::from_millis(50)).await;
+        info!("[REQ] Request-reply cycle complete");
     });
 
-    server_handle.join().unwrap();
+    // Wait for server thread to complete
+    info!("Waiting for server thread to finish...");
+    server_handle.join().expect("Server thread panicked");
 
     info!("\n✅ Simple test completed successfully!");
 }

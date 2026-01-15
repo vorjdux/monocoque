@@ -20,7 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let stream = TcpStream::connect("127.0.0.1:5555").await?;
     
     // Create DEALER socket
-    let mut socket = DealerSocket::from_stream(stream).await?;
+    let mut socket = DealerSocket::from_tcp(stream).await?;
     
     info!("Connected! Sending message...");
     

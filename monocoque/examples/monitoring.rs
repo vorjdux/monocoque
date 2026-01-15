@@ -16,6 +16,11 @@ use std::time::Duration;
 
 #[compio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize tracing
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .init();
+
     println!("=== Socket Monitoring Example ===\n");
 
     // Create a socket and enable monitoring

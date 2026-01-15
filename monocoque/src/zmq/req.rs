@@ -101,6 +101,51 @@ impl ReqSocket {
         Ok(sock)
     }
 
+    /// Connect to a ZeroMQ peer with custom socket options.
+    ///
+    /// This allows configuring timeouts and other options before connection.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use monocoque::zmq::ReqSocket;
+    /// use monocoque::SocketOptions;
+    /// use std::time::Duration;
+    ///
+    /// # async fn example() -> std::io::Result<()> {
+    /// let options = SocketOptions::default()
+    ///     .with_send_timeout(Duration::from_secs(5))
+    ///     .with_recv_timeout(Duration::from_secs(10));
+    ///
+    /// let socket = ReqSocket::connect_with_options(
+    ///     "tcp://127.0.0.1:5555",
+    ///     options
+    /// ).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn connect_with_options(
+        endpoint: &str,
+        options: monocoque_core::options::SocketOptions,
+    ) -> io::Result<Self> {
+        let addr = if let Ok(monocoque_core::endpoint::Endpoint::Tcp(a)) =
+            monocoque_core::endpoint::Endpoint::parse(endpoint)
+        {
+            a
+        } else {
+            endpoint
+                .parse::<std::net::SocketAddr>()
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?
+        };
+
+        let stream = TcpStream::connect(addr).await?;
+        let sock = Self::from_tcp_with_options(stream, options).await?;
+        sock.emit_event(SocketEvent::Connected(
+            monocoque_core::endpoint::Endpoint::Tcp(addr),
+        ));
+        Ok(sock)
+    }
+
     /// Connect to a ZeroMQ peer via IPC (Unix domain sockets).
     ///
     /// Unix-only. Accepts IPC paths with or without `ipc://` prefix.
@@ -199,6 +244,22 @@ impl ReqSocket {
             monitor: None,
         })
     }
+
+    /// Create a REQ socket from a TCP stream with custom socket options.
+    pub async fn from_tcp_with_options(
+        stream: TcpStream,
+        options: monocoque_core::options::SocketOptions,
+    ) -> io::Result<Self> {
+        Ok(Self {
+            inner: InternalReq::from_tcp_with_options(
+                stream,
+                monocoque_core::config::BufferConfig::small(),
+                options,
+            )
+            .await?,
+            monitor: None,
+        })
+    }
 }
 
 // Generic impl - works with any stream type
@@ -290,6 +351,59 @@ where
     /// ```
     pub async fn recv(&mut self) -> Option<Vec<Bytes>> {
         self.inner.recv().await.ok().flatten()
+    }
+
+    /// Get a reference to the socket options.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use monocoque::zmq::ReqSocket;
+    ///
+    /// # async fn example(socket: &ReqSocket) {
+    /// let timeout = socket.options().recv_timeout;
+    /// println!("Receive timeout: {:?}", timeout);
+    /// # }
+    /// ```
+    pub fn options(&self) -> &monocoque_core::options::SocketOptions {
+        self.inner.options()
+    }
+
+    /// Get a mutable reference to the socket options.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use monocoque::zmq::ReqSocket;
+    /// use std::time::Duration;
+    ///
+    /// # async fn example(socket: &mut ReqSocket) {
+    /// socket.options_mut().recv_timeout = Some(Duration::from_secs(30));
+    /// # }
+    /// ```
+    pub fn options_mut(&mut self) -> &mut monocoque_core::options::SocketOptions {
+        self.inner.options_mut()
+    }
+
+    /// Set the socket options.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use monocoque::zmq::ReqSocket;
+    /// use monocoque::SocketOptions;
+    /// use std::time::Duration;
+    ///
+    /// # async fn example(socket: &mut ReqSocket) {
+    /// let options = SocketOptions::default()
+    ///     .with_send_timeout(Duration::from_secs(5))
+    ///     .with_recv_timeout(Duration::from_secs(10));
+    ///
+    /// socket.set_options(options);
+    /// # }
+    /// ```
+    pub fn set_options(&mut self, options: monocoque_core::options::SocketOptions) {
+        self.inner.set_options(options);
     }
 }
 
