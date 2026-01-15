@@ -20,11 +20,13 @@
 
 use crate::codec::ZmtpError;
 use crate::session::SocketType;
+use crate::timeout::{read_exact_with_timeout, write_all_with_timeout};
 use crate::utils::{build_ready, encode_frame, FLAG_COMMAND};
 use bytes::{Bytes, BytesMut};
 use compio::buf::BufResult;
-use compio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use compio::io::{AsyncRead, AsyncWrite};
 use monocoque_core::alloc::IoBytes;
+use std::time::Duration;
 use tracing::debug;
 
 /// Result of a successful handshake
@@ -49,18 +51,46 @@ pub async fn perform_handshake<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    debug!("[HANDSHAKE] Starting synchronous handshake for {}", local_socket_type.as_str());
+    perform_handshake_with_timeout(stream, local_socket_type, identity, None).await
+}
+
+/// Performs the complete ZMTP handshake with a configurable timeout.
+///
+/// # Arguments
+///
+/// * `timeout` - Maximum time to complete the entire handshake
+///   - `None`: Block indefinitely (default behavior)
+///   - `Some(duration)`: Fail if handshake doesn't complete within duration
+///
+/// # Errors
+///
+/// Returns `ZmtpError::Timeout` if the handshake exceeds the specified timeout.
+pub async fn perform_handshake_with_timeout<S>(
+    stream: &mut S,
+    local_socket_type: SocketType,
+    identity: Option<&[u8]>,
+    timeout: Option<Duration>,
+) -> Result<HandshakeResult, ZmtpError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    debug!("[HANDSHAKE] Starting synchronous handshake for {} (timeout: {:?})", 
+        local_socket_type.as_str(), timeout);
     
     // Step 1: Send our greeting
     let greeting_bytes = build_greeting();
     let io_buf = IoBytes::new(greeting_bytes.clone());
-    let BufResult(write_res, _) = stream.write_all(io_buf).await;
+    let BufResult(write_res, _) = write_all_with_timeout(stream, io_buf, timeout)
+        .await
+        .map_err(|_| ZmtpError::Protocol)?;
     write_res.map_err(|_| ZmtpError::Protocol)?;
     debug!("[HANDSHAKE] Sent greeting ({} bytes)", greeting_bytes.len());
 
     // Step 2: Receive peer greeting
     let greeting_buf = [0u8; 64];
-    let BufResult(read_res, greeting_buf) = stream.read_exact(greeting_buf).await;
+    let BufResult(read_res, greeting_buf) = read_exact_with_timeout(stream, greeting_buf, timeout)
+        .await
+        .map_err(|_| ZmtpError::Protocol)?;
     read_res.map_err(|_| ZmtpError::Protocol)?;
     debug!("[HANDSHAKE] Received peer greeting (64 bytes)");
     
@@ -73,14 +103,18 @@ where
     let ready_body = build_ready(local_socket_type.as_str(), identity);
     let ready_frame = encode_frame(FLAG_COMMAND, &ready_body);
     let io_buf = IoBytes::new(ready_frame.clone());
-    let BufResult(write_res, _) = stream.write_all(io_buf).await;
+    let BufResult(write_res, _) = write_all_with_timeout(stream, io_buf, timeout)
+        .await
+        .map_err(|_| ZmtpError::Protocol)?;
     write_res.map_err(|_| ZmtpError::Protocol)?;
     debug!("[HANDSHAKE] Sent READY command ({} bytes)", ready_frame.len());
 
     // Step 4: Receive peer READY command
     // Read the frame header first
     let header_buf = [0u8; 2];
-    let BufResult(read_res, header_buf) = stream.read_exact(header_buf).await;
+    let BufResult(read_res, header_buf) = read_exact_with_timeout(stream, header_buf, timeout)
+        .await
+        .map_err(|_| ZmtpError::Protocol)?;
     read_res.map_err(|_| ZmtpError::Protocol)?;
     
     let flags = header_buf[0];
@@ -95,7 +129,9 @@ where
     // Read body length
     let body_len = if is_long {
         let len_buf = [0u8; 8];
-        let BufResult(read_res, len_buf) = stream.read_exact(len_buf).await;
+        let BufResult(read_res, len_buf) = read_exact_with_timeout(stream, len_buf, timeout)
+            .await
+            .map_err(|_| ZmtpError::Protocol)?;
         read_res.map_err(|_| ZmtpError::Protocol)?;
         u64::from_be_bytes(len_buf) as usize
     } else {
@@ -110,7 +146,9 @@ where
         return Err(ZmtpError::Protocol);
     }
     let body_buf = vec![0u8; body_len];
-    let BufResult(read_res, body_buf) = stream.read_exact(body_buf).await;
+    let BufResult(read_res, body_buf) = read_exact_with_timeout(stream, body_buf, timeout)
+        .await
+        .map_err(|_| ZmtpError::Protocol)?;
     read_res.map_err(|_| ZmtpError::Protocol)?;
     
     debug!("[HANDSHAKE] Received READY command ({} total bytes)", 2 + if is_long { 8 } else { 0 } + body_len);

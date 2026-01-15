@@ -26,6 +26,7 @@ pub mod config;
 pub mod endpoint;
 pub mod error;
 pub mod monitor;
+pub mod options;
 pub mod router;
 pub mod tcp;
 
@@ -45,6 +46,7 @@ pub mod prelude {
     pub use crate::buffer::SegmentedBuffer;
     pub use crate::endpoint::Endpoint;
     pub use crate::monitor::{SocketEvent, SocketMonitor};
+    pub use crate::options::SocketOptions;
     pub use crate::pubsub::hub::{PubSubCmd, PubSubEvent, PubSubHub};
     pub use crate::pubsub::index::{PeerKey, SubscriptionIndex};
     pub use crate::router::{HubEvent, PeerCmd, RouterBehavior, RouterCmd, RouterHub};

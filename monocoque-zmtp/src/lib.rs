@@ -67,6 +67,7 @@
 mod codec;
 mod greeting;
 mod handshake;
+mod timeout;
 mod utils;
 
 // Public protocol types

@@ -14,13 +14,14 @@ use compio::net::TcpStream;
 use monocoque_core::alloc::IoArena;
 use monocoque_core::alloc::IoBytes;
 use monocoque_core::buffer::SegmentedBuffer;
+use monocoque_core::options::SocketOptions;
 use smallvec::SmallVec;
 use std::io;
 use tracing::{debug, trace};
 
 use crate::{
     codec::{encode_multipart, ZmtpDecoder},
-    handshake::perform_handshake,
+    handshake::perform_handshake_with_timeout,
     session::SocketType,
 };
 use monocoque_core::config::BufferConfig;
@@ -47,6 +48,8 @@ where
     config: BufferConfig,
     /// Send buffer for batching (explicit flush control)
     send_buffer: BytesMut,
+    /// Socket options (timeouts, limits, etc.)
+    options: SocketOptions,
 }
 
 impl<S> DealerSocket<S>
@@ -60,7 +63,7 @@ where
     ///
     /// Works with both TCP and Unix domain sockets.
     pub async fn new(stream: S) -> io::Result<Self> {
-        Self::with_config(stream, BufferConfig::large()).await
+        Self::with_options(stream, BufferConfig::large(), SocketOptions::default()).await
     }
 
     /// Create a new DEALER socket from a stream with custom buffer configuration.
@@ -73,14 +76,57 @@ where
     /// Works with both TCP and Unix domain sockets.
     ///
     /// **Note**: For TCP streams, use `from_tcp_with_config()` instead to ensure TCP_NODELAY is enabled.
-    pub async fn with_config(mut stream: S, config: BufferConfig) -> io::Result<Self> {
+    pub async fn with_config(stream: S, config: BufferConfig) -> io::Result<Self> {
+        Self::with_options(stream, config, SocketOptions::default()).await
+    }
+
+    /// Create a new DEALER socket with custom buffer configuration and socket options.
+    ///
+    /// # Arguments
+    ///
+    /// * `stream` - The underlying stream (TCP or Unix socket)
+    /// * `config` - Buffer configuration for read/write operations
+    /// * `options` - Socket options (timeouts, limits, etc.)
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use monocoque_zmtp::DealerSocket;
+    /// use monocoque_core::config::BufferConfig;
+    /// use monocoque_core::options::SocketOptions;
+    /// use std::time::Duration;
+    /// use compio::net::TcpStream;
+    ///
+    /// # async fn example() -> std::io::Result<()> {
+    /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
+    /// let options = SocketOptions::default()
+    ///     .with_recv_timeout(Duration::from_secs(5))
+    ///     .with_send_timeout(Duration::from_secs(5));
+    /// let socket = DealerSocket::with_options(
+    ///     stream,
+    ///     BufferConfig::large(),
+    ///     options
+    /// ).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn with_options(
+        mut stream: S,
+        config: BufferConfig,
+        options: SocketOptions,
+    ) -> io::Result<Self> {
         debug!("[DEALER] Creating new direct DEALER socket");
 
-        // Perform ZMTP handshake
+        // Perform ZMTP handshake with timeout
         debug!("[DEALER] Performing ZMTP handshake...");
-        let handshake_result = perform_handshake(&mut stream, SocketType::Dealer, None)
-            .await
-            .map_err(|e| io::Error::other(format!("Handshake failed: {}", e)))?;
+        let handshake_result = perform_handshake_with_timeout(
+            &mut stream,
+            SocketType::Dealer,
+            None,
+            Some(options.handshake_timeout),
+        )
+        .await
+        .map_err(|e| io::Error::other(format!("Handshake failed: {}", e)))?;
 
         debug!(
             peer_identity = ?handshake_result.peer_identity,
@@ -109,6 +155,7 @@ where
             frames: SmallVec::new(),
             config,
             send_buffer: BytesMut::new(),
+            options,
         })
     }
 
@@ -259,6 +306,50 @@ where
     pub fn buffered_bytes(&self) -> usize {
         self.send_buffer.len()
     }
+
+    /// Get a reference to the socket options.
+    #[inline]
+    pub fn options(&self) -> &SocketOptions {
+        &self.options
+    }
+
+    /// Get a mutable reference to the socket options.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use monocoque_zmtp::DealerSocket;
+    /// # use std::time::Duration;
+    /// # async fn example(mut socket: DealerSocket) {
+    /// // Change receive timeout dynamically
+    /// socket.options_mut().recv_timeout = Some(Duration::from_secs(10));
+    /// # }
+    /// ```
+    #[inline]
+    pub fn options_mut(&mut self) -> &mut SocketOptions {
+        &mut self.options
+    }
+
+    /// Set socket options (builder-style).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use monocoque_zmtp::DealerSocket;
+    /// # use monocoque_core::options::SocketOptions;
+    /// # use std::time::Duration;
+    /// # async fn example(mut socket: DealerSocket) {
+    /// socket.set_options(
+    ///     SocketOptions::default()
+    ///         .with_recv_timeout(Duration::from_secs(5))
+    ///         .with_send_timeout(Duration::from_secs(5))
+    /// );
+    /// # }
+    /// ```
+    #[inline]
+    pub fn set_options(&mut self, options: SocketOptions) {
+        self.options = options;
+    }
 }
 
 // Specialized implementation for TCP streams to enable TCP_NODELAY
@@ -273,6 +364,18 @@ impl DealerSocket<TcpStream> {
         // Enable TCP_NODELAY for low latency
         monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
         debug!("[DEALER] TCP_NODELAY enabled");
-        Self::with_config(stream, config).await
+        Self::with_options(stream, config, SocketOptions::default()).await
+    }
+
+    /// Create a new DEALER socket from a TCP stream with full configuration.
+    pub async fn from_tcp_with_options(
+        stream: TcpStream,
+        config: BufferConfig,
+        options: SocketOptions,
+    ) -> io::Result<Self> {
+        // Enable TCP_NODELAY for low latency
+        monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
+        debug!("[DEALER] TCP_NODELAY enabled");
+        Self::with_options(stream, config, options).await
     }
 }
