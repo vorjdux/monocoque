@@ -27,7 +27,7 @@ fn main() {
             let (stream, _) = listener.accept().await.expect("Failed to accept");
             info!("[Monocoque ROUTER] Client connected");
 
-            let mut router = RouterSocket::from_stream(stream).await.unwrap();
+            let mut router = RouterSocket::from_tcp(stream).await.unwrap();
 
             // Receive request with identity envelope
             let msg = router.recv().await.expect("Connection closed");

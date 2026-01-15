@@ -1,0 +1,337 @@
+//! Direct-stream PUB socket implementation
+//!
+//! This module provides a high-performance PUB socket using direct stream I/O
+//! for minimal latency.
+//!
+//! # PUB Pattern
+//!
+//! PUB sockets are send-only broadcast sockets.
+
+use bytes::{Bytes, BytesMut};
+use compio::io::{AsyncRead, AsyncWrite};
+use compio::net::TcpStream;
+use monocoque_core::alloc::IoArena;
+use monocoque_core::alloc::IoBytes;
+use monocoque_core::buffer::SegmentedBuffer;
+use monocoque_core::options::SocketOptions;
+use monocoque_core::poison::PoisonGuard;
+use std::collections::HashSet;
+use std::io;
+use std::sync::Arc;
+use tracing::{debug, trace, warn};
+
+use crate::{codec::encode_multipart, handshake::perform_handshake_with_timeout, session::SocketType};
+use monocoque_core::config::BufferConfig;
+
+/// Direct-stream PUB socket.
+pub struct PubSocket<S = TcpStream>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    /// Underlying stream (TCP or Unix socket)
+    stream: S,
+    /// Arena for zero-copy allocation
+    #[allow(dead_code)]
+    arena: Arc<IoArena>,
+    /// Write buffer for outgoing data (reused to avoid allocations)
+    write_buf: BytesMut,
+    /// Read buffer for draining subscription messages from SUB sockets
+    recv_buf: SegmentedBuffer,
+    /// Active subscriptions from the connected SUB socket
+    subscriptions: HashSet<Bytes>,
+    /// Buffer configuration
+    #[allow(dead_code)]
+    config: BufferConfig,
+    /// Socket options (timeouts, limits, etc.)
+    options: SocketOptions,
+    /// Connection health flag (true if I/O was cancelled mid-operation)
+    is_poisoned: bool,
+}
+
+impl<S> PubSocket<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    /// Create a new PUB socket from a stream with large buffer configuration (16KB).
+    ///
+    /// PUB sockets typically broadcast bulk data to multiple subscribers,
+    /// so large buffers provide optimal performance. Use `with_config()` for different workloads.
+    ///
+    /// Works with both TCP and Unix domain sockets.
+    pub async fn new(stream: S) -> io::Result<Self> {
+        Self::with_options(stream, BufferConfig::large(), SocketOptions::default()).await
+    }
+
+    /// Create a new PUB socket from a stream with custom buffer configuration.
+    ///
+    /// # Buffer Configuration
+    /// - Use `BufferConfig::small()` (4KB) for low-latency pub/sub with small messages
+    /// - Use `BufferConfig::large()` (16KB) for high-throughput pub/sub with large messages
+    ///
+    /// Works with both TCP and Unix domain sockets.
+    pub async fn with_config(stream: S, config: BufferConfig) -> io::Result<Self> {
+        Self::with_options(stream, config, SocketOptions::default()).await
+    }
+
+    /// Create a new PUB socket with custom buffer configuration and socket options.
+    pub async fn with_options(
+        mut stream: S,
+        config: BufferConfig,
+        options: SocketOptions,
+    ) -> io::Result<Self> {
+        debug!("[PUB] Creating new direct PUB socket");
+
+        // Perform ZMTP handshake
+        debug!("[PUB] Performing ZMTP handshake...");
+        let handshake_result = perform_handshake_with_timeout(
+            &mut stream,
+            SocketType::Pub,
+            None,
+            Some(options.handshake_timeout),
+        )
+        .await
+        .map_err(|e| io::Error::other(format!("Handshake failed: {}", e)))?;
+
+        debug!(
+            peer_socket_type = ?handshake_result.peer_socket_type,
+            "[PUB] Handshake complete"
+        );
+
+        // Create arena for zero-copy allocation
+        let arena = Arc::new(IoArena::new());
+
+        // Create write buffer
+        let write_buf = BytesMut::with_capacity(config.write_buf_size);
+
+        // Create read buffer for subscription messages
+        let recv_buf = SegmentedBuffer::new();
+
+        // Initialize empty subscriptions set
+        let subscriptions = HashSet::new();
+
+        debug!("[PUB] Socket initialized");
+
+        Ok(Self {
+            stream,
+            arena,
+            write_buf,
+            recv_buf,
+            subscriptions,
+            config,
+            options,
+            is_poisoned: false,
+        })
+    }
+
+    /// Send a message.
+    pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
+        // Check health before attempting I/O
+        if self.is_poisoned {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "Socket poisoned by cancelled I/O - reconnect required",
+            ));
+        }
+
+        // Check if message matches any subscription
+        if !self.matches_subscription(&msg) {
+            trace!("[PUB] Message filtered (no matching subscription)");
+            return Ok(());
+        }
+
+        trace!("[PUB] Sending {} frames", msg.len());
+
+        // Encode message - reuse write_buf to avoid allocation
+        self.write_buf.clear();
+        encode_multipart(&msg, &mut self.write_buf);
+
+        // Arm the guard - if dropped before disarm, socket remains poisoned
+        let guard = PoisonGuard::new(&mut self.is_poisoned);
+
+        // Write to stream using compio
+        use compio::buf::BufResult;
+
+        let buf = self.write_buf.split().freeze();
+        
+        // Apply send timeout from options
+        let BufResult(result, _) = match self.options.send_timeout {
+            None => {
+                // Blocking mode - no timeout
+                AsyncWrite::write(&mut self.stream, IoBytes::new(buf)).await
+            }
+            Some(dur) if dur.is_zero() => {
+                // Non-blocking mode
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "Socket is in non-blocking mode and cannot send immediately",
+                ));
+            }
+            Some(dur) => {
+                // Timed mode - apply timeout
+                use compio::time::timeout;
+                match timeout(dur, AsyncWrite::write(&mut self.stream, IoBytes::new(buf))).await {
+                    Ok(result) => result,
+                    Err(_) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            format!("Send operation timed out after {:?}", dur),
+                        ));
+                    }
+                }
+            }
+        };
+        
+        result?;
+
+        // Success - disarm the guard
+        guard.disarm();
+
+        trace!("[PUB] Message sent successfully");
+        Ok(())
+    }
+
+    /// Manually process pending subscription messages from SUB sockets.
+    ///
+    /// Check if a message matches any active subscription.
+    fn matches_subscription(&self, msg: &[Bytes]) -> bool {
+        // If no subscriptions, nothing should be sent
+        if self.subscriptions.is_empty() {
+            return false;
+        }
+
+        // Empty subscription (b"") matches everything
+        if self.subscriptions.contains(&Bytes::new()) {
+            return true;
+        }
+
+        // Check if first frame starts with any subscription prefix
+        if let Some(first_frame) = msg.first() {
+            self.subscriptions.iter().any(|sub| {
+                first_frame.len() >= sub.len() && &first_frame[..sub.len()] == &sub[..]
+            })
+        } else {
+            false
+        }
+    }
+
+    /// Process subscription messages from SUB sockets (non-blocking).
+    ///
+    /// Call this before sending messages to ensure subscriptions are up-to-date.
+    /// Uses a non-blocking read with a short timeout.
+    ///
+    /// Reads and processes subscription/unsubscription messages:
+    /// - 0x01 + prefix = subscribe
+    /// - 0x00 + prefix = unsubscribe
+    pub async fn process_subscriptions(&mut self) -> io::Result<()> {
+        use compio::buf::BufResult;
+        
+        trace!("[PUB] process_subscriptions() called");
+        
+        // Try to read available subscription data (non-blocking with tiny timeout)
+        let buf = vec![0u8; 256];
+        
+        trace!("[PUB] Starting timeout read (10ms)...");
+        let read_result = compio::time::timeout(
+            std::time::Duration::from_millis(10),
+            AsyncRead::read(&mut self.stream, buf)
+        ).await;
+        
+        trace!("[PUB] Read operation completed");
+        
+        match read_result {
+            Ok(BufResult(Ok(n), buf)) => {
+                if n > 0 {
+                    trace!("[PUB] Read {} bytes of subscription data", n);
+                    
+                    // Process each subscription message
+                    let data = &buf[..n];
+                    if !data.is_empty() {
+                        match data[0] {
+                            0x01 => {
+                                // Subscribe
+                                let prefix = Bytes::copy_from_slice(&data[1..]);
+                                debug!("[PUB] Adding subscription: {:?}", prefix);
+                                self.subscriptions.insert(prefix);
+                            }
+                            0x00 => {
+                                // Unsubscribe
+                                let prefix = Bytes::copy_from_slice(&data[1..]);
+                                debug!("[PUB] Removing subscription: {:?}", prefix);
+                                self.subscriptions.remove(&prefix);
+                            }
+                            _ => {
+                                warn!("[PUB] Received invalid subscription message: first byte = {:#x}", data[0]);
+                            }
+                        }
+                    }
+                } else {
+                    trace!("[PUB] Read 0 bytes (connection might be closing)");
+                }
+            }
+            Ok(BufResult(Err(e), _)) => {
+                trace!("[PUB] Read error: {}", e);
+            }
+            Err(_) => {
+                trace!("[PUB] Read timeout - no subscription data available");
+            }
+        }
+        
+        trace!("[PUB] process_subscriptions() returning");
+        Ok(())
+    }
+
+    /// Close the socket gracefully.
+    ///
+    /// PUB sockets don't buffer data, so this simply drops the socket.
+    /// The linger option is not applicable to PUB sockets.
+    pub async fn close(self) -> io::Result<()> {
+        trace!("[PUB] Closing socket");
+        Ok(())
+    }
+
+    /// Get a reference to the socket options.
+    #[inline]
+    pub fn options(&self) -> &SocketOptions {
+        &self.options
+    }
+
+    /// Get a mutable reference to the socket options.
+    #[inline]
+    pub fn options_mut(&mut self) -> &mut SocketOptions {
+        &mut self.options
+    }
+
+    /// Set socket options (builder-style).
+    #[inline]
+    pub fn set_options(&mut self, options: SocketOptions) {
+        self.options = options;
+    }
+}
+
+// Specialized implementation for TCP streams to enable TCP_NODELAY
+impl PubSocket<TcpStream> {
+    /// Create a new PUB socket from a TCP stream with TCP_NODELAY enabled.
+    pub async fn from_tcp(stream: TcpStream) -> io::Result<Self> {
+        Self::from_tcp_with_config(stream, BufferConfig::large()).await
+    }
+
+    /// Create a new PUB socket from a TCP stream with TCP_NODELAY and custom config.
+    pub async fn from_tcp_with_config(stream: TcpStream, config: BufferConfig) -> io::Result<Self> {
+        // Enable TCP_NODELAY for low latency
+        monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
+        debug!("[PUB] TCP_NODELAY enabled");
+        Self::with_options(stream, config, SocketOptions::default()).await
+    }
+
+    /// Create a new PUB socket from a TCP stream with full configuration.
+    pub async fn from_tcp_with_options(
+        stream: TcpStream,
+        config: BufferConfig,
+        options: SocketOptions,
+    ) -> io::Result<Self> {
+        // Enable TCP_NODELAY for low latency
+        monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
+        debug!("[PUB] TCP_NODELAY enabled");
+        Self::with_options(stream, config, options).await
+    }
+}

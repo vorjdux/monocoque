@@ -35,15 +35,14 @@ fn main() {
 
     // Run Monocoque PUB server
     compio::runtime::Runtime::new().unwrap().block_on(async {
-        let listener = compio::net::TcpListener::bind("127.0.0.1:5562")
+        let mut pub_socket = PubSocket::bind("127.0.0.1:5562")
             .await
             .expect("Failed to bind");
         info!("[Monocoque PUB] Listening on tcp://127.0.0.1:5562");
 
-        let (stream, _) = listener.accept().await.expect("Failed to accept");
+        // Accept subscriber connection
+        pub_socket.accept_subscriber().await.expect("Failed to accept subscriber");
         info!("[Monocoque PUB] Subscriber connected\n");
-
-        let mut pub_socket = PubSocket::from_stream(stream).await.unwrap();
 
         // Give subscriber time to send subscription
         compio::time::sleep(Duration::from_millis(100)).await;

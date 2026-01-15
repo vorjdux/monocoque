@@ -65,6 +65,14 @@ name = "pubsub_events"
 required-features = ["zmq"]
 
 [[example]]
+name = "pubsub_multi_compio"
+required-features = ["zmq"]
+
+[[example]]
+name = "multi_pub_minimal"
+required-features = ["zmq"]
+
+[[example]]
 name = "router_dealer_basic"
 required-features = ["zmq"]
 
@@ -120,6 +128,7 @@ futures = { workspace = true }
 criterion = { workspace = true }
 tokio = { workspace = true }
 num_cpus = "1.16"
+portpicker = "0.1"
 
 [features]
 default = []

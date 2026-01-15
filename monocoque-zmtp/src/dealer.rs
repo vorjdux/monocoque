@@ -15,8 +15,10 @@ use monocoque_core::alloc::IoArena;
 use monocoque_core::alloc::IoBytes;
 use monocoque_core::buffer::SegmentedBuffer;
 use monocoque_core::options::SocketOptions;
+use monocoque_core::poison::PoisonGuard;
 use smallvec::SmallVec;
 use std::io;
+use std::time::Duration;
 use tracing::{debug, trace};
 
 use crate::{
@@ -50,6 +52,8 @@ where
     send_buffer: BytesMut,
     /// Socket options (timeouts, limits, etc.)
     options: SocketOptions,
+    /// Connection health flag (true if I/O was cancelled mid-operation)
+    is_poisoned: bool,
 }
 
 impl<S> DealerSocket<S>
@@ -156,6 +160,7 @@ where
             config,
             send_buffer: BytesMut::new(),
             options,
+            is_poisoned: false,
         })
     }
 
@@ -188,7 +193,36 @@ where
             use compio::buf::BufResult;
 
             let slab = self.arena.alloc_mut(self.config.read_buf_size);
-            let BufResult(result, slab) = AsyncRead::read(&mut self.stream, slab).await;
+            
+            // Apply recv timeout from options
+            let BufResult(result, slab) = match self.options.recv_timeout {
+                None => {
+                    // Blocking mode - no timeout
+                    AsyncRead::read(&mut self.stream, slab).await
+                }
+                Some(dur) if dur.is_zero() => {
+                    // Non-blocking mode - return WouldBlock immediately if not ready
+                    // compio doesn't directly support non-blocking, so we use a minimal timeout
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "Socket is in non-blocking mode and no data is available",
+                    ));
+                }
+                Some(dur) => {
+                    // Timed mode - apply timeout
+                    use compio::time::timeout;
+                    match timeout(dur, AsyncRead::read(&mut self.stream, slab)).await {
+                        Ok(result) => result,
+                        Err(_) => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::TimedOut,
+                                format!("Receive operation timed out after {:?}", dur),
+                            ));
+                        }
+                    }
+                }
+            };
+            
             let n = result?;
 
             if n == 0 {
@@ -208,6 +242,14 @@ where
     /// For high-throughput scenarios, consider using `send_buffered()` + `flush()`
     /// to batch multiple messages.
     pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
+        // Check health before attempting I/O
+        if self.is_poisoned {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "Socket poisoned by cancelled I/O - reconnect required",
+            ));
+        }
+
         trace!("[DEALER] Sending {} frames", msg.len());
 
         // Encode message - reuse write_buf to avoid allocation
@@ -218,8 +260,42 @@ where
         use compio::buf::BufResult;
 
         let buf = self.write_buf.split().freeze();
-        let BufResult(result, _) = AsyncWrite::write(&mut self.stream, IoBytes::new(buf)).await;
+        
+        // Arm the guard - if dropped before disarm, socket remains poisoned
+        let guard = PoisonGuard::new(&mut self.is_poisoned);
+        
+        // Apply send timeout from options
+        let BufResult(result, _) = match self.options.send_timeout {
+            None => {
+                // Blocking mode - no timeout
+                AsyncWrite::write(&mut self.stream, IoBytes::new(buf)).await
+            }
+            Some(dur) if dur.is_zero() => {
+                // Non-blocking mode
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "Socket is in non-blocking mode and cannot send immediately",
+                ));
+            }
+            Some(dur) => {
+                // Timed mode - apply timeout
+                use compio::time::timeout;
+                match timeout(dur, AsyncWrite::write(&mut self.stream, IoBytes::new(buf))).await {
+                    Ok(result) => result,
+                    Err(_) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            format!("Send operation timed out after {:?}", dur),
+                        ));
+                    }
+                }
+            }
+        };
+        
         result?;
+
+        // Success - disarm the guard
+        guard.disarm();
 
         trace!("[DEALER] Message sent successfully");
         Ok(())
@@ -260,13 +336,55 @@ where
             return Ok(());
         }
 
+        // Check health before attempting I/O
+        if self.is_poisoned {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "Socket poisoned by cancelled I/O - reconnect required",
+            ));
+        }
+
         trace!("[DEALER] Flushing {} bytes", self.send_buffer.len());
 
         // Write buffered data
         use compio::buf::BufResult;
         let buf = self.send_buffer.split().freeze();
-        let BufResult(result, _) = AsyncWrite::write(&mut self.stream, IoBytes::new(buf)).await;
+        
+        // Arm the guard - if dropped before disarm, socket remains poisoned
+        let guard = PoisonGuard::new(&mut self.is_poisoned);
+        
+        // Apply send timeout from options
+        let BufResult(result, _) = match self.options.send_timeout {
+            None => {
+                // Blocking mode - no timeout
+                AsyncWrite::write(&mut self.stream, IoBytes::new(buf)).await
+            }
+            Some(dur) if dur.is_zero() => {
+                // Non-blocking mode
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "Socket is in non-blocking mode and cannot flush immediately",
+                ));
+            }
+            Some(dur) => {
+                // Timed mode - apply timeout
+                use compio::time::timeout;
+                match timeout(dur, AsyncWrite::write(&mut self.stream, IoBytes::new(buf))).await {
+                    Ok(result) => result,
+                    Err(_) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            format!("Flush operation timed out after {:?}", dur),
+                        ));
+                    }
+                }
+            }
+        };
+        
         result?;
+
+        // Success - disarm the guard
+        guard.disarm();
 
         trace!("[DEALER] Flush completed");
         Ok(())
@@ -305,6 +423,124 @@ where
     #[inline]
     pub fn buffered_bytes(&self) -> usize {
         self.send_buffer.len()
+    }
+
+    /// Close the socket gracefully, respecting the linger timeout.
+    ///
+    /// This method attempts to flush any buffered send data before closing.
+    /// The behavior depends on the `linger` option:
+    ///
+    /// - `Some(Duration::ZERO)`: Close immediately, discarding buffered data
+    /// - `Some(duration)`: Try to flush buffered data within the timeout
+    /// - `None`: Block indefinitely until all data is sent (default libzmq behavior)
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use monocoque_zmtp::DealerSocket;
+    /// # async fn example(mut socket: DealerSocket) -> std::io::Result<()> {
+    /// // Send some data
+    /// socket.send_buffered(vec![bytes::Bytes::from("data")]);
+    ///
+    /// // Close gracefully, flushing buffered data
+    /// socket.close().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn close(mut self) -> io::Result<()> {
+        let linger = self.options.linger;
+        
+        // If no data buffered, just drop the socket
+        if self.send_buffer.is_empty() {
+            trace!("[DEALER] No buffered data, closing immediately");
+            return Ok(());
+        }
+
+        trace!(
+            "[DEALER] Closing with {} bytes buffered, linger={:?}",
+            self.send_buffer.len(),
+            linger
+        );
+
+        match linger {
+            Some(dur) if dur.is_zero() => {
+                // Linger = 0: discard buffered data immediately
+                debug!("[DEALER] Linger=0, discarding {} bytes", self.send_buffer.len());
+                Ok(())
+            }
+            Some(dur) => {
+                // Linger = timeout: try to flush within timeout
+                use compio::time::timeout;
+                match timeout(dur, self.flush()).await {
+                    Ok(Ok(())) => {
+                        debug!("[DEALER] Successfully flushed before close");
+                        Ok(())
+                    }
+                    Ok(Err(e)) => {
+                        debug!("[DEALER] Flush failed: {}", e);
+                        Err(e)
+                    }
+                    Err(_) => {
+                        debug!("[DEALER] Linger timeout expired, closing anyway");
+                        // Timeout expired, but we close gracefully anyway
+                        Ok(())
+                    }
+                }
+            }
+            None => {
+                // Linger = indefinite: block until flushed
+                debug!("[DEALER] Linger=indefinite, flushing all buffered data");
+                self.flush().await
+            }
+        }
+    }
+
+    /// Wait for the appropriate reconnection delay based on socket options.
+    ///
+    /// This is a convenience method for implementing reconnection logic.
+    /// It sleeps for the duration specified in the socket's reconnect options,
+    /// providing a simple way to implement exponential backoff.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use monocoque_zmtp::DealerSocket;
+    /// # use compio::net::TcpStream;
+    /// # use std::time::Duration;
+    /// # async fn reconnect_loop(addr: &str) -> std::io::Result<()> {
+    /// use monocoque_core::reconnect::ReconnectState;
+    /// use monocoque_core::options::SocketOptions;
+    ///
+    /// let options = SocketOptions::default()
+    ///     .with_reconnect_ivl(Duration::from_millis(100))
+    ///     .with_reconnect_ivl_max(Duration::from_secs(30));
+    ///
+    /// let mut reconnect = ReconnectState::new(&options);
+    ///
+    /// loop {
+    ///     match TcpStream::connect(addr).await {
+    ///         Ok(stream) => {
+    ///             let socket = DealerSocket::from_tcp_with_options(
+    ///                 stream,
+    ///                 monocoque_core::config::BufferConfig::large(),
+    ///                 options.clone()
+    ///             ).await?;
+    ///             reconnect.reset();
+    ///             // Use socket...
+    ///             break;
+    ///         }
+    ///         Err(e) => {
+    ///             eprintln!("Connection failed: {}, retrying...", e);
+    ///             let delay = reconnect.next_delay();
+    ///             compio::time::sleep(delay).await;
+    ///         }
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn wait_reconnect_delay(options: &SocketOptions, attempt: u32) -> Duration {
+        options.next_reconnect_ivl(attempt)
     }
 
     /// Get a reference to the socket options.

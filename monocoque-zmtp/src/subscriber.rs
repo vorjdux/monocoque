@@ -8,16 +8,17 @@
 //! SUB sockets receive messages from PUB sockets and filter them based on
 //! subscriptions.
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use compio::io::{AsyncRead, AsyncWrite};
 use compio::net::TcpStream;
 use monocoque_core::alloc::IoArena;
 use monocoque_core::buffer::SegmentedBuffer;
+use monocoque_core::options::SocketOptions;
 use smallvec::SmallVec;
 use std::io;
 use tracing::{debug, trace};
 
-use crate::{codec::ZmtpDecoder, handshake::perform_handshake, session::SocketType};
+use crate::{codec::ZmtpDecoder, handshake::perform_handshake_with_timeout, session::SocketType};
 use monocoque_core::config::BufferConfig;
 
 /// Direct-stream SUB socket.
@@ -39,6 +40,12 @@ where
     subscriptions: Vec<Bytes>,
     /// Buffer configuration
     config: BufferConfig,
+    /// Socket options (timeouts, limits, etc.)
+    options: SocketOptions,
+    /// Connection health flag (true if I/O was cancelled mid-operation)
+    /// Note: SUB sockets are receive-only, so this field is reserved for consistency
+    #[allow(dead_code)]
+    is_poisoned: bool,
 }
 
 impl<S> SubSocket<S>
@@ -52,7 +59,7 @@ where
     ///
     /// Works with both TCP and Unix domain sockets.
     pub async fn new(stream: S) -> io::Result<Self> {
-        Self::with_config(stream, BufferConfig::large()).await
+        Self::with_options(stream, BufferConfig::large(), SocketOptions::default()).await
     }
 
     /// Create a new SUB socket from a stream with custom buffer configuration.
@@ -62,14 +69,28 @@ where
     /// - Use `BufferConfig::large()` (16KB) for high-throughput pub/sub with large messages
     ///
     /// Works with both TCP and Unix domain sockets.
-    pub async fn with_config(mut stream: S, config: BufferConfig) -> io::Result<Self> {
+    pub async fn with_config(stream: S, config: BufferConfig) -> io::Result<Self> {
+        Self::with_options(stream, config, SocketOptions::default()).await
+    }
+
+    /// Create a new SUB socket with custom buffer configuration and socket options.
+    pub async fn with_options(
+        mut stream: S,
+        config: BufferConfig,
+        options: SocketOptions,
+    ) -> io::Result<Self> {
         debug!("[SUB] Creating new direct SUB socket");
 
         // Perform ZMTP handshake
         debug!("[SUB] Performing ZMTP handshake...");
-        let handshake_result = perform_handshake(&mut stream, SocketType::Sub, None)
-            .await
-            .map_err(|e| io::Error::other(format!("Handshake failed: {}", e)))?;
+        let handshake_result = perform_handshake_with_timeout(
+            &mut stream,
+            SocketType::Sub,
+            None,
+            Some(options.handshake_timeout),
+        )
+        .await
+        .map_err(|e| io::Error::other(format!("Handshake failed: {}", e)))?;
 
         debug!(
             peer_socket_type = ?handshake_result.peer_socket_type,
@@ -95,24 +116,72 @@ where
             frames: SmallVec::new(),
             subscriptions: Vec::new(),
             config,
+            options,
+            is_poisoned: false,
         })
     }
 
     /// Subscribe to messages with the given prefix.
     ///
     /// An empty prefix subscribes to all messages.
-    pub fn subscribe(&mut self, prefix: Bytes) {
+    /// 
+    /// This sends a subscription message to the PUB socket per ZMTP protocol.
+    pub async fn subscribe(&mut self, prefix: impl Into<Bytes>) -> io::Result<()> {
+        let prefix = prefix.into();
         trace!("[SUB] Adding subscription: {:?}", prefix);
+        
         if !self.subscriptions.contains(&prefix) {
-            self.subscriptions.push(prefix);
+            self.subscriptions.push(prefix.clone());
             self.subscriptions.sort();
         }
+
+        // Send subscription message to PUB socket
+        // Format: [0x01] [subscription prefix...]
+        use compio::buf::BufResult;
+        use compio::io::AsyncWrite;
+        use monocoque_core::alloc::IoBytes;
+        
+        let mut sub_msg = BytesMut::with_capacity(prefix.len() + 1);
+        sub_msg.extend_from_slice(&[0x01]); // Subscribe command
+        sub_msg.extend_from_slice(&prefix);
+        
+        let buf = sub_msg.freeze();
+        trace!("[SUB] Sending subscription message ({} bytes)", buf.len());
+        
+        let BufResult(result, _) = AsyncWrite::write(&mut self.stream, IoBytes::new(buf)).await;
+        result?;
+        
+        trace!("[SUB] Subscription message sent successfully");
+        
+        Ok(())
     }
 
     /// Unsubscribe from messages with the given prefix.
-    pub fn unsubscribe(&mut self, prefix: &Bytes) {
+    ///
+    /// This sends an unsubscription message to the PUB socket per ZMTP protocol.
+    pub async fn unsubscribe(&mut self, prefix: &Bytes) -> io::Result<()> {
         trace!("[SUB] Removing subscription: {:?}", prefix);
         self.subscriptions.retain(|s| s != prefix);
+
+        // Send unsubscription message to PUB socket
+        // Format: [0x00] [subscription prefix...]
+        use compio::buf::BufResult;
+        use compio::io::AsyncWrite;
+        use monocoque_core::alloc::IoBytes;
+        
+        let mut unsub_msg = BytesMut::with_capacity(prefix.len() + 1);
+        unsub_msg.extend_from_slice(&[0x00]); // Unsubscribe command
+        unsub_msg.extend_from_slice(prefix);
+        
+        let buf = unsub_msg.freeze();
+        trace!("[SUB] Sending unsubscription message ({} bytes)", buf.len());
+        
+        let BufResult(result, _) = AsyncWrite::write(&mut self.stream, IoBytes::new(buf)).await;
+        result?;
+        
+        trace!("[SUB] Unsubscription message sent successfully");
+        
+        Ok(())
     }
 
     /// Check if a message matches any subscription.
@@ -176,7 +245,35 @@ where
                 use compio::buf::BufResult;
 
                 let slab = self.arena.alloc_mut(self.config.read_buf_size);
-                let BufResult(result, slab) = AsyncRead::read(&mut self.stream, slab).await;
+                
+                // Apply recv timeout from options
+                let BufResult(result, slab) = match self.options.recv_timeout {
+                    None => {
+                        // Blocking mode - no timeout
+                        AsyncRead::read(&mut self.stream, slab).await
+                    }
+                    Some(dur) if dur.is_zero() => {
+                        // Non-blocking mode
+                        return Err(io::Error::new(
+                            io::ErrorKind::WouldBlock,
+                            "Socket is in non-blocking mode and no data is available",
+                        ));
+                    }
+                    Some(dur) => {
+                        // Timed mode - apply timeout
+                        use compio::time::timeout;
+                        match timeout(dur, AsyncRead::read(&mut self.stream, slab)).await {
+                            Ok(result) => result,
+                            Err(_) => {
+                                return Err(io::Error::new(
+                                    io::ErrorKind::TimedOut,
+                                    format!("Receive operation timed out after {:?}", dur),
+                                ));
+                            }
+                        }
+                    }
+                };
+                
                 let n = result?;
 
                 if n == 0 {
@@ -189,6 +286,33 @@ where
                 self.recv.push(slab.freeze());
             }
         }
+    }
+
+    /// Close the socket gracefully.
+    ///
+    /// SUB sockets don't send data, so this simply drops the socket.
+    /// The linger option is not applicable to SUB sockets.
+    pub async fn close(self) -> io::Result<()> {
+        trace!("[SUB] Closing socket");
+        Ok(())
+    }
+
+    /// Get a reference to the socket options.
+    #[inline]
+    pub fn options(&self) -> &SocketOptions {
+        &self.options
+    }
+
+    /// Get a mutable reference to the socket options.
+    #[inline]
+    pub fn options_mut(&mut self) -> &mut SocketOptions {
+        &mut self.options
+    }
+
+    /// Set socket options (builder-style).
+    #[inline]
+    pub fn set_options(&mut self, options: SocketOptions) {
+        self.options = options;
     }
 }
 
@@ -204,6 +328,18 @@ impl SubSocket<TcpStream> {
         // Enable TCP_NODELAY for low latency
         monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
         debug!("[SUB] TCP_NODELAY enabled");
-        Self::with_config(stream, config).await
+        Self::with_options(stream, config, SocketOptions::default()).await
+    }
+
+    /// Create a new SUB socket from a TCP stream with full configuration.
+    pub async fn from_tcp_with_options(
+        stream: TcpStream,
+        config: BufferConfig,
+        options: SocketOptions,
+    ) -> io::Result<Self> {
+        // Enable TCP_NODELAY for low latency
+        monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
+        debug!("[SUB] TCP_NODELAY enabled");
+        Self::with_options(stream, config, options).await
     }
 }

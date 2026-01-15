@@ -13,13 +13,15 @@ use compio::io::{AsyncRead, AsyncWrite};
 use compio::net::TcpStream;
 use monocoque_core::alloc::IoArena;
 use monocoque_core::alloc::IoBytes;
+use monocoque_core::options::SocketOptions;
+use monocoque_core::poison::PoisonGuard;
 use smallvec::SmallVec;
 use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, trace};
 
 use crate::codec::{encode_multipart, ZmtpDecoder};
-use crate::{handshake::perform_handshake, session::SocketType};
+use crate::{handshake::perform_handshake_with_timeout, session::SocketType};
 use monocoque_core::buffer::SegmentedBuffer;
 use monocoque_core::config::BufferConfig;
 
@@ -48,6 +50,10 @@ where
     config: BufferConfig,
     /// Send buffer for batching (explicit flush control)
     send_buffer: BytesMut,
+    /// Socket options (timeouts, limits, etc.)
+    options: SocketOptions,
+    /// Connection health flag (true if I/O was cancelled mid-operation)
+    is_poisoned: bool,
 }
 
 impl<S> RouterSocket<S>
@@ -61,7 +67,7 @@ where
     ///
     /// Works with both TCP and Unix domain sockets.
     pub async fn new(stream: S) -> io::Result<Self> {
-        Self::with_config(stream, BufferConfig::large()).await
+        Self::with_options(stream, BufferConfig::large(), SocketOptions::default()).await
     }
 
     /// Create a new ROUTER socket from a stream with custom buffer configuration.
@@ -73,14 +79,28 @@ where
     /// Works with both TCP and Unix domain sockets.
     ///
     /// **Note**: For TCP streams, use `from_tcp_with_config()` instead to ensure TCP_NODELAY is enabled.
-    pub async fn with_config(mut stream: S, config: BufferConfig) -> io::Result<Self> {
+    pub async fn with_config(stream: S, config: BufferConfig) -> io::Result<Self> {
+        Self::with_options(stream, config, SocketOptions::default()).await
+    }
+
+    /// Create a new ROUTER socket with custom buffer configuration and socket options.
+    pub async fn with_options(
+        mut stream: S,
+        config: BufferConfig,
+        options: SocketOptions,
+    ) -> io::Result<Self> {
         debug!("[ROUTER] Creating new direct ROUTER socket");
 
         // Perform ZMTP handshake
         debug!("[ROUTER] Performing ZMTP handshake...");
-        let handshake_result = perform_handshake(&mut stream, SocketType::Router, None)
-            .await
-            .map_err(|e| io::Error::other(format!("Handshake failed: {}", e)))?;
+        let handshake_result = perform_handshake_with_timeout(
+            &mut stream,
+            SocketType::Router,
+            None,
+            Some(options.handshake_timeout),
+        )
+        .await
+        .map_err(|e| io::Error::other(format!("Handshake failed: {}", e)))?;
 
         // Get or generate peer identity
         let peer_identity = if let Some(id) = handshake_result.peer_identity {
@@ -119,6 +139,8 @@ where
             peer_identity,
             config,
             send_buffer: BytesMut::new(),
+            options,
+            is_poisoned: false,
         })
     }
 
@@ -157,7 +179,35 @@ where
             use compio::buf::BufResult;
 
             let slab = self.arena.alloc_mut(self.config.read_buf_size);
-            let BufResult(result, slab) = AsyncRead::read(&mut self.stream, slab).await;
+            
+            // Apply recv timeout from options
+            let BufResult(result, slab) = match self.options.recv_timeout {
+                None => {
+                    // Blocking mode - no timeout
+                    AsyncRead::read(&mut self.stream, slab).await
+                }
+                Some(dur) if dur.is_zero() => {
+                    // Non-blocking mode
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "Socket is in non-blocking mode and no data is available",
+                    ));
+                }
+                Some(dur) => {
+                    // Timed mode - apply timeout
+                    use compio::time::timeout;
+                    match timeout(dur, AsyncRead::read(&mut self.stream, slab)).await {
+                        Ok(result) => result,
+                        Err(_) => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::TimedOut,
+                                format!("Receive operation timed out after {:?}", dur),
+                            ));
+                        }
+                    }
+                }
+            };
+            
             let n = result?;
 
             if n == 0 {
@@ -180,6 +230,14 @@ where
     /// For high-throughput scenarios, consider using `send_buffered()` + `flush()`
     /// to batch multiple messages.
     pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
+        // Check health before attempting I/O
+        if self.is_poisoned {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "Socket poisoned by cancelled I/O - reconnect required",
+            ));
+        }
+
         trace!("[ROUTER] Sending {} frames", msg.len());
 
         // Skip the first frame (identity) if present and send the rest
@@ -189,12 +247,46 @@ where
         self.write_buf.clear();
         encode_multipart(frames_to_send, &mut self.write_buf);
 
+        // Arm the guard - if dropped before disarm, socket remains poisoned
+        let guard = PoisonGuard::new(&mut self.is_poisoned);
+
         // Write to stream using compio
         use compio::buf::BufResult;
 
         let buf = self.write_buf.split().freeze();
-        let BufResult(result, _) = AsyncWrite::write(&mut self.stream, IoBytes::new(buf)).await;
+        
+        // Apply send timeout from options
+        let BufResult(result, _) = match self.options.send_timeout {
+            None => {
+                // Blocking mode - no timeout
+                AsyncWrite::write(&mut self.stream, IoBytes::new(buf)).await
+            }
+            Some(dur) if dur.is_zero() => {
+                // Non-blocking mode
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "Socket is in non-blocking mode and cannot send immediately",
+                ));
+            }
+            Some(dur) => {
+                // Timed mode - apply timeout
+                use compio::time::timeout;
+                match timeout(dur, AsyncWrite::write(&mut self.stream, IoBytes::new(buf))).await {
+                    Ok(result) => result,
+                    Err(_) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            format!("Send operation timed out after {:?}", dur),
+                        ));
+                    }
+                }
+            }
+        };
+        
         result?;
+
+        // Success - disarm the guard
+        guard.disarm();
 
         trace!("[ROUTER] Message sent successfully");
         Ok(())
@@ -215,16 +307,58 @@ where
 
     /// Flush all buffered messages to the network.
     pub async fn flush(&mut self) -> io::Result<()> {
+        // Check health before attempting I/O
+        if self.is_poisoned {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "Socket poisoned by cancelled I/O - reconnect required",
+            ));
+        }
+
         if self.send_buffer.is_empty() {
             return Ok(());
         }
 
         trace!("[ROUTER] Flushing {} bytes", self.send_buffer.len());
 
+        // Arm the guard - if dropped before disarm, socket remains poisoned
+        let guard = PoisonGuard::new(&mut self.is_poisoned);
+
         use compio::buf::BufResult;
         let buf = self.send_buffer.split().freeze();
-        let BufResult(result, _) = AsyncWrite::write(&mut self.stream, IoBytes::new(buf)).await;
+        
+        // Apply send timeout from options
+        let BufResult(result, _) = match self.options.send_timeout {
+            None => {
+                // Blocking mode - no timeout
+                AsyncWrite::write(&mut self.stream, IoBytes::new(buf)).await
+            }
+            Some(dur) if dur.is_zero() => {
+                // Non-blocking mode
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "Socket is in non-blocking mode and cannot flush immediately",
+                ));
+            }
+            Some(dur) => {
+                // Timed mode - apply timeout
+                use compio::time::timeout;
+                match timeout(dur, AsyncWrite::write(&mut self.stream, IoBytes::new(buf))).await {
+                    Ok(result) => result,
+                    Err(_) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            format!("Flush operation timed out after {:?}", dur),
+                        ));
+                    }
+                }
+            }
+        };
+        
         result?;
+
+        // Success - disarm the guard
+        guard.disarm();
 
         trace!("[ROUTER] Flush completed");
         Ok(())
@@ -247,6 +381,75 @@ where
     pub fn buffered_bytes(&self) -> usize {
         self.send_buffer.len()
     }
+
+    /// Close the socket gracefully, respecting the linger timeout.
+    ///
+    /// This method attempts to flush any buffered send data before closing.
+    /// The behavior depends on the `linger` option:
+    ///
+    /// - `Some(Duration::ZERO)`: Close immediately, discarding buffered data
+    /// - `Some(duration)`: Try to flush buffered data within the timeout
+    /// - `None`: Block indefinitely until all data is sent (default libzmq behavior)
+    pub async fn close(mut self) -> io::Result<()> {
+        let linger = self.options.linger;
+        
+        if self.send_buffer.is_empty() {
+            trace!("[ROUTER] No buffered data, closing immediately");
+            return Ok(());
+        }
+
+        trace!(
+            "[ROUTER] Closing with {} bytes buffered, linger={:?}",
+            self.send_buffer.len(),
+            linger
+        );
+
+        match linger {
+            Some(dur) if dur.is_zero() => {
+                debug!("[ROUTER] Linger=0, discarding {} bytes", self.send_buffer.len());
+                Ok(())
+            }
+            Some(dur) => {
+                use compio::time::timeout;
+                match timeout(dur, self.flush()).await {
+                    Ok(Ok(())) => {
+                        debug!("[ROUTER] Successfully flushed before close");
+                        Ok(())
+                    }
+                    Ok(Err(e)) => {
+                        debug!("[ROUTER] Flush failed: {}", e);
+                        Err(e)
+                    }
+                    Err(_) => {
+                        debug!("[ROUTER] Linger timeout expired, closing anyway");
+                        Ok(())
+                    }
+                }
+            }
+            None => {
+                debug!("[ROUTER] Linger=indefinite, flushing all buffered data");
+                self.flush().await
+            }
+        }
+    }
+
+    /// Get a reference to the socket options.
+    #[inline]
+    pub fn options(&self) -> &SocketOptions {
+        &self.options
+    }
+
+    /// Get a mutable reference to the socket options.
+    #[inline]
+    pub fn options_mut(&mut self) -> &mut SocketOptions {
+        &mut self.options
+    }
+
+    /// Set socket options (builder-style).
+    #[inline]
+    pub fn set_options(&mut self, options: SocketOptions) {
+        self.options = options;
+    }
 }
 
 // Specialized implementation for TCP streams to enable TCP_NODELAY
@@ -261,6 +464,18 @@ impl RouterSocket<TcpStream> {
         // Enable TCP_NODELAY for low latency
         monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
         debug!("[ROUTER] TCP_NODELAY enabled");
-        Self::with_config(stream, config).await
+        Self::with_options(stream, config, SocketOptions::default()).await
+    }
+
+    /// Create a new ROUTER socket from a TCP stream with full configuration.
+    pub async fn from_tcp_with_options(
+        stream: TcpStream,
+        config: BufferConfig,
+        options: SocketOptions,
+    ) -> io::Result<Self> {
+        // Enable TCP_NODELAY for low latency
+        monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
+        debug!("[ROUTER] TCP_NODELAY enabled");
+        Self::with_options(stream, config, options).await
     }
 }

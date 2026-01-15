@@ -51,7 +51,7 @@ fn main() {
             .await
             .expect("Failed to connect");
 
-        let mut dealer = DealerSocket::from_stream(stream).await.unwrap();
+        let mut dealer = DealerSocket::from_tcp(stream).await.unwrap();
         info!("[Monocoque DEALER] Connected");
 
         // Send request (DEALER adds identity automatically)

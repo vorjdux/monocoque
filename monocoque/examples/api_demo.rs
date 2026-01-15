@@ -3,6 +3,11 @@ use tracing::info;
 
 #[compio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize tracing
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .init();
+
     info!("=== Monocoque API Examples ===\n");
     
     // Example 1: DEALER Socket

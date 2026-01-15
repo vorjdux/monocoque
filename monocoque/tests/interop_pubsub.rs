@@ -12,15 +12,13 @@ fn test_pubsub_basic() {
     // Publisher thread
     thread::spawn(move || {
         compio::runtime::Runtime::new().unwrap().block_on(async {
-            let listener = compio::net::TcpListener::bind("127.0.0.1:5560").await.unwrap();
+            let mut pub_socket = PubSocket::bind("127.0.0.1:5560").await.unwrap();
             ready_tx.send(()).unwrap();
 
-            let (stream, _) = listener.accept().await.unwrap();
+            // Accept subscriber connection
+            pub_socket.accept_subscriber().await.unwrap();
             
-            // Create PUB socket
-            let mut pub_socket = PubSocket::from_stream(stream).await.unwrap();
-
-            // Give subscriber time to connect and subscribe
+            // Give subscriber time to subscribe
             compio::time::sleep(Duration::from_millis(100)).await;
 
             // Publish message

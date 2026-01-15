@@ -15,6 +15,11 @@ use tracing::info;
 
 #[compio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize tracing
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .init();
+
     info!("=== Basic ROUTER-DEALER Example ===\n");
 
     // Use random port to avoid conflicts
@@ -37,9 +42,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start DEALER (client)
     let dealer_task = compio::runtime::spawn(async move { dealer_client(&addr_clone).await });
 
-    // Wait for both to complete
-    let router_result = router_task.await;
-    let dealer_result = dealer_task.await;
+    // Wait for both to complete concurrently
+    let (router_result, dealer_result) = futures::join!(router_task, dealer_task);
 
     router_result?;
     dealer_result?;
@@ -56,10 +60,7 @@ async fn router_server(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
     let (stream, addr) = listener.accept().await?;
     info!("[ROUTER] Client connected from {addr}");
 
-    let mut socket = RouterSocket::from_stream(stream).await?;
-
-    // Wait for handshake to complete
-    compio::time::sleep(Duration::from_millis(500)).await;
+    let mut socket = RouterSocket::from_tcp(stream).await?;
 
     // Receive request
     info!("[ROUTER] Waiting for request...");
@@ -74,21 +75,20 @@ async fn router_server(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    // ROUTER messages have envelope: [identity, empty_frame, ...payload]
-    if request.len() >= 3 {
+    // ROUTER messages from DEALER: [identity, ...payload]
+    if request.len() >= 2 {
         let identity = &request[0];
-        let payload = &request[2..];
+        let payload = &request[1];
 
         info!("[ROUTER] Identity: {:?}", String::from_utf8_lossy(identity));
         info!(
             "[ROUTER] Message: {:?}",
-            String::from_utf8_lossy(&payload[0])
+            String::from_utf8_lossy(payload)
         );
 
         // Send reply back to same identity
         let reply = vec![
             identity.clone(),
-            Bytes::new(), // Empty delimiter frame
             Bytes::from("Hello from ROUTER!"),
         ];
 
@@ -97,9 +97,7 @@ async fn router_server(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
         info!("[ROUTER] Reply sent");
     }
 
-    // Wait longer for DEALER to receive and process reply
-    info!("[ROUTER] Waiting for DEALER to process reply...");
-    compio::time::sleep(Duration::from_secs(3)).await;
+    info!("[ROUTER] Complete");
     Ok(())
 }
 
@@ -108,10 +106,7 @@ async fn dealer_client(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
     let stream = TcpStream::connect(addr).await?;
     info!("[DEALER] Connected!");
 
-    let mut socket = DealerSocket::from_stream(stream).await?;
-
-    // Wait for handshake to complete
-    compio::time::sleep(Duration::from_millis(500)).await;
+    let mut socket = DealerSocket::from_tcp(stream).await?;
 
     // Send request
     let request = vec![Bytes::from("Hello from DEALER!")];
@@ -132,7 +127,5 @@ async fn dealer_client(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    // Keep connection alive to allow ROUTER to send reply
-    compio::time::sleep(Duration::from_millis(1000)).await;
     Ok(())
 }
