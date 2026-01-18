@@ -358,6 +358,72 @@ where
         guard.disarm();
         Ok(())
     }
+
+    /// Write the contents of write_buf directly to the stream.
+    ///
+    /// This is used when the caller has already encoded data into write_buf
+    /// and wants to send it without additional copying. Applies send_timeout
+    /// from options and uses PoisonGuard for cancellation safety.
+    pub(crate) async fn write_from_buf(&mut self) -> io::Result<()> {
+        // Check health
+        if self.is_poisoned {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "Socket poisoned by cancelled I/O",
+            ));
+        }
+
+        // Ensure we have a connected stream
+        let stream = self.stream.as_mut().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
+        })?;
+
+        // Arm poison guard
+        let guard = PoisonGuard::new(&mut self.is_poisoned);
+
+        // Send write_buf contents
+        let buf = self.write_buf.split().freeze();
+
+        use compio::buf::BufResult;
+        
+        // Apply send timeout from options
+        let BufResult(result, _) = match self.options.send_timeout {
+            None => {
+                // Blocking mode - no timeout
+                AsyncWrite::write(stream, IoBytes::new(buf)).await
+            }
+            Some(dur) if dur.is_zero() => {
+                // Non-blocking mode
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "Socket is in non-blocking mode and cannot send immediately",
+                ));
+            }
+            Some(dur) => {
+                // Timed mode - apply timeout
+                use compio::time::timeout;
+                match timeout(dur, AsyncWrite::write(stream, IoBytes::new(buf))).await {
+                    Ok(result) => result,
+                    Err(_) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            format!("Send operation timed out after {:?}", dur),
+                        ));
+                    }
+                }
+            }
+        };
+
+        // Mark disconnected on error
+        if result.is_err() {
+            self.stream = None;
+        }
+
+        result?;
+
+        guard.disarm();
+        Ok(())
+    }
 }
 
 impl SocketBase<TcpStream> {

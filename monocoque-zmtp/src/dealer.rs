@@ -8,26 +8,22 @@
 //! DEALER sockets are bidirectional asynchronous sockets that allow sending and
 //! receiving messages freely without a strict request-reply pattern.
 
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use compio::io::{AsyncRead, AsyncWrite};
 use compio::net::TcpStream;
-use monocoque_core::alloc::IoArena;
-use monocoque_core::alloc::IoBytes;
-use monocoque_core::buffer::SegmentedBuffer;
 use monocoque_core::options::SocketOptions;
-use monocoque_core::poison::PoisonGuard;
 use smallvec::SmallVec;
 use std::io;
 use std::time::Duration;
 use tracing::{debug, trace};
 
 use crate::{
-    codec::{encode_multipart, ZmtpDecoder},
+    base::SocketBase,
+    codec::encode_multipart,
     handshake::perform_handshake_with_timeout,
     session::SocketType,
 };
 use monocoque_core::config::BufferConfig;
-use monocoque_core::reconnect::ReconnectState;
 use monocoque_core::endpoint::Endpoint;
 use std::fmt;
 
@@ -36,33 +32,11 @@ pub struct DealerSocket<S = TcpStream>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    /// Underlying stream (TCP or Unix socket) - None when disconnected
-    stream: Option<S>,
-    /// Optional endpoint for automatic reconnection
-    endpoint: Option<Endpoint>,
-    /// Reconnection state tracker
-    reconnect: Option<ReconnectState>,
-    /// ZMTP decoder for decoding frames
-    decoder: ZmtpDecoder,
-    /// Arena for zero-copy allocation
-    arena: IoArena,
-    /// Segmented read buffer for incoming data
-    recv: SegmentedBuffer,
-    /// Write buffer for outgoing data (reused to avoid allocations)
-    write_buf: BytesMut,
+    /// Base socket infrastructure (stream, buffers, options, reconnection)
+    base: SocketBase<S>,
     /// Accumulated frames for current multipart message
     /// SmallVec avoids heap allocation for 1-4 frame messages (common case)
     frames: SmallVec<[Bytes; 4]>,
-    /// Buffer configuration
-    config: BufferConfig,
-    /// Send buffer for batching (explicit flush control)
-    send_buffer: BytesMut,
-    /// Socket options (timeouts, limits, etc.)
-    options: SocketOptions,
-    /// Connection health flag (true if I/O was cancelled mid-operation)
-    is_poisoned: bool,
-    /// Number of messages currently buffered (for HWM enforcement)
-    buffered_messages: usize,
 }
 
 impl<S> DealerSocket<S>
@@ -147,32 +121,11 @@ where
             "[DEALER] Handshake complete"
         );
 
-        // Create arena for zero-copy allocation
-        let arena = IoArena::new();
-
-        // Create ZMTP decoder
-        let decoder = ZmtpDecoder::new();
-
-        // Create buffers
-        let recv = SegmentedBuffer::new();
-        let write_buf = BytesMut::with_capacity(config.write_buf_size);
-
         debug!("[DEALER] Socket initialized");
 
         Ok(Self {
-            stream: Some(stream),
-            endpoint: None,
-            reconnect: None,
-            decoder,
-            arena,
-            recv,
-            write_buf,
+            base: SocketBase::new(stream, config, options),
             frames: SmallVec::new(),
-            config,
-            send_buffer: BytesMut::new(),
-            options,
-            is_poisoned: false,
-            buffered_messages: 0,
         })
     }
 
@@ -262,110 +215,27 @@ where
             "[DEALER] Connected to {}", endpoint
         );
 
-        // Create socket with reconnection enabled
-        let arena = IoArena::new();
-        let decoder = ZmtpDecoder::new();
-        let recv = SegmentedBuffer::new();
-        let write_buf = BytesMut::with_capacity(config.write_buf_size);
-        let reconnect_state = ReconnectState::new(&options);
-
         Ok(Self {
-            stream: Some(stream),
-            endpoint: Some(parsed_endpoint),
-            reconnect: Some(reconnect_state),
-            decoder,
-            arena,
-            recv,
-            write_buf,
+            base: SocketBase::with_endpoint(stream, parsed_endpoint, config, options),
             frames: SmallVec::new(),
-            config,
-            send_buffer: BytesMut::new(),
-            options,
-            is_poisoned: false,
-            buffered_messages: 0,
         })
-    }
-
-    /// Try to reconnect to the stored endpoint.
-    ///
-    /// Returns Ok(()) if reconnection succeeded, Err otherwise.
-    /// On success, resets the poisoned flag and reconnection state.
-    async fn try_reconnect(&mut self) -> io::Result<()>
-    where
-        S: From<TcpStream> + fmt::Debug,
-    {
-        use compio::net::TcpStream;
-
-        // Can only reconnect if we have an endpoint
-        let endpoint = self.endpoint.as_ref().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotConnected,
-                "No endpoint configured for reconnection - use connect() API"
-            )
-        })?;
-
-        debug!("[DEALER] Attempting reconnection to {}", endpoint);
-
-        // Connect based on endpoint type
-        let mut new_stream = match endpoint {
-            Endpoint::Tcp(addr) => {
-                let tcp_stream = TcpStream::connect(addr).await?;
-                S::from(tcp_stream)
-            }
-            #[cfg(unix)]
-            Endpoint::Ipc(_path) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    "IPC reconnection not yet supported"
-                ));
-            }
-        };
-
-        // Perform handshake
-        perform_handshake_with_timeout(
-            &mut new_stream,
-            SocketType::Dealer,
-            None,
-            Some(self.options.handshake_timeout),
-        )
-        .await
-        .map_err(|e| io::Error::other(format!("Reconnection handshake failed: {}", e)))?;
-
-        // Success! Replace stream and reset state
-        self.stream = Some(new_stream);
-        self.is_poisoned = false;
-        self.buffered_messages = 0;
-        self.send_buffer.clear();
-
-        if let Some(ref mut reconnect) = self.reconnect {
-            reconnect.reset();
-        }
-
-        debug!("[DEALER] Reconnection successful");
-        Ok(())
     }
 
     /// Receive a message.
     pub async fn recv(&mut self) -> io::Result<Option<Vec<Bytes>>> {
         trace!("[DEALER] Waiting for message");
 
-        // Ensure we have a connected stream
-        let stream = self.stream.as_mut().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
-        })?;
-
         // Read from stream until we have a complete message
         loop {
             // Try to decode frames from buffer
             loop {
-                match self.decoder.decode(&mut self.recv)? {
+                match self.base.decoder.decode(&mut self.base.recv)? {
                     Some(frame) => {
                         let more = frame.more();
                         self.frames.push(frame.payload);
 
                         if !more {
                             // Complete message received
-                            // Collect frames while preserving capacity
                             let msg: Vec<Bytes> = self.frames.drain(..).collect();
                             trace!("[DEALER] Received {} frames", msg.len());
                             return Ok(Some(msg));
@@ -375,51 +245,18 @@ where
                 }
             }
 
-            // Need more data - read from stream using reused buffer
-            use compio::buf::BufResult;
-
-            let slab = self.arena.alloc_mut(self.config.read_buf_size);
-            
-            // Apply recv timeout from options
-            let BufResult(result, slab) = match self.options.recv_timeout {
+            // Need more data - delegate to base
+            match self.base.read_frame().await? {
+                Some(_frame) => {
+                    // Frame added to recv buffer, continue decoding
+                    continue;
+                }
                 None => {
-                    // Blocking mode - no timeout
-                    AsyncRead::read(stream, slab).await
+                    // EOF - connection closed
+                    trace!("[DEALER] Connection closed");
+                    return Ok(None);
                 }
-                Some(dur) if dur.is_zero() => {
-                    // Non-blocking mode - return WouldBlock immediately if not ready
-                    // compio doesn't directly support non-blocking, so we use a minimal timeout
-                    return Err(io::Error::new(
-                        io::ErrorKind::WouldBlock,
-                        "Socket is in non-blocking mode and no data is available",
-                    ));
-                }
-                Some(dur) => {
-                    // Timed mode - apply timeout
-                    use compio::time::timeout;
-                    match timeout(dur, AsyncRead::read(stream, slab)).await {
-                        Ok(result) => result,
-                        Err(_) => {
-                            return Err(io::Error::new(
-                                io::ErrorKind::TimedOut,
-                                format!("Receive operation timed out after {:?}", dur),
-                            ));
-                        }
-                    }
-                }
-            };
-            
-            let n = result?;
-
-            if n == 0 {
-                // EOF - mark stream as disconnected
-                trace!("[DEALER] Connection closed");
-                self.stream = None;
-                return Ok(None);
             }
-
-            // Push bytes into segmented recv queue (zero-copy)
-            self.recv.push(slab.freeze());
         }
     }
 
@@ -429,72 +266,14 @@ where
     /// For high-throughput scenarios, consider using `send_buffered()` + `flush()`
     /// to batch multiple messages.
     pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
-        // Check health before attempting I/O
-        if self.is_poisoned {
-            return Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "Socket poisoned by cancelled I/O - reconnect required",
-            ));
-        }
-
-        // Ensure we have a connected stream
-        let stream = self.stream.as_mut().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
-        })?;
-
         trace!("[DEALER] Sending {} frames", msg.len());
 
-        // Encode message - reuse write_buf to avoid allocation
-        self.write_buf.clear();
-        encode_multipart(&msg, &mut self.write_buf);
+        // Encode message into write_buf
+        self.base.write_buf.clear();
+        encode_multipart(&msg, &mut self.base.write_buf);
 
-        // Write to stream using compio
-        use compio::buf::BufResult;
-
-        let buf = self.write_buf.split().freeze();
-        
-        // Arm the guard - if dropped before disarm, socket remains poisoned
-        let guard = PoisonGuard::new(&mut self.is_poisoned);
-        
-        // Apply send timeout from options
-        let BufResult(result, _) = match self.options.send_timeout {
-            None => {
-                // Blocking mode - no timeout
-                AsyncWrite::write(stream, IoBytes::new(buf)).await
-            }
-            Some(dur) if dur.is_zero() => {
-                // Non-blocking mode
-                return Err(io::Error::new(
-                    io::ErrorKind::WouldBlock,
-                    "Socket is in non-blocking mode and cannot send immediately",
-                ));
-            }
-            Some(dur) => {
-                // Timed mode - apply timeout
-                use compio::time::timeout;
-                match timeout(dur, AsyncWrite::write(stream, IoBytes::new(buf))).await {
-                    Ok(result) => result,
-                    Err(_) => {
-                        return Err(io::Error::new(
-                            io::ErrorKind::TimedOut,
-                            format!("Send operation timed out after {:?}", dur),
-                        ));
-                    }
-                }
-            }
-        };
-        
-        let write_result = result;
-
-        // If write failed, mark stream as disconnected
-        if write_result.is_err() {
-            self.stream = None;
-        }
-
-        write_result?;
-
-        // Success - disarm the guard
-        guard.disarm();
+        // Delegate to base for writing from write_buf
+        self.base.write_from_buf().await?;
 
         trace!("[DEALER] Message sent successfully");
         Ok(())
@@ -536,12 +315,12 @@ where
     /// ```
     pub fn send_buffered(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
         // Check HWM before buffering
-        if self.buffered_messages >= self.options.send_hwm {
+        if self.base.buffered_messages >= self.base.options.send_hwm {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
                 format!(
                     "Send high water mark reached ({} messages). Flush or drop messages.",
-                    self.options.send_hwm
+                    self.base.options.send_hwm
                 ),
             ));
         }
@@ -549,8 +328,8 @@ where
         trace!("[DEALER] Buffering {} frames", msg.len());
 
         // Encode directly into send_buffer
-        encode_multipart(&msg, &mut self.send_buffer);
-        self.buffered_messages += 1;
+        encode_multipart(&msg, &mut self.base.send_buffer);
+        self.base.buffered_messages += 1;
         Ok(())
     }
 
@@ -558,73 +337,8 @@ where
     ///
     /// Sends all messages buffered by `send_buffered()` in a single I/O operation.
     pub async fn flush(&mut self) -> io::Result<()> {
-        if self.send_buffer.is_empty() {
-            return Ok(());
-        }
-
-        // Check health before attempting I/O
-        if self.is_poisoned {
-            return Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "Socket poisoned by cancelled I/O - reconnect required",
-            ));
-        }
-
-        // Ensure we have a connected stream
-        let stream = self.stream.as_mut().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
-        })?;
-
-        trace!("[DEALER] Flushing {} bytes", self.send_buffer.len());
-
-        // Write buffered data
-        use compio::buf::BufResult;
-        let buf = self.send_buffer.split().freeze();
-        
-        // Arm the guard - if dropped before disarm, socket remains poisoned
-        let guard = PoisonGuard::new(&mut self.is_poisoned);
-        
-        // Apply send timeout from options
-        let BufResult(result, _) = match self.options.send_timeout {
-            None => {
-                // Blocking mode - no timeout
-                AsyncWrite::write(stream, IoBytes::new(buf)).await
-            }
-            Some(dur) if dur.is_zero() => {
-                // Non-blocking mode
-                return Err(io::Error::new(
-                    io::ErrorKind::WouldBlock,
-                    "Socket is in non-blocking mode and cannot flush immediately",
-                ));
-            }
-            Some(dur) => {
-                // Timed mode - apply timeout
-                use compio::time::timeout;
-                match timeout(dur, AsyncWrite::write(stream, IoBytes::new(buf))).await {
-                    Ok(result) => result,
-                    Err(_) => {
-                        return Err(io::Error::new(
-                            io::ErrorKind::TimedOut,
-                            format!("Flush operation timed out after {:?}", dur),
-                        ));
-                    }
-                }
-            }
-        };
-        
-        let write_result = result;
-
-        // If write failed, mark stream as disconnected
-        if write_result.is_err() {
-            self.stream = None;
-        }
-
-        write_result?;
-
-        // Success - disarm the guard and reset counter
-        guard.disarm();
-        self.buffered_messages = 0;
-
+        trace!("[DEALER] Flushing {} bytes", self.base.send_buffer.len());
+        self.base.flush_send_buffer().await?;
         trace!("[DEALER] Flush completed");
         Ok(())
     }
@@ -659,17 +373,17 @@ where
 
         for msg in messages {
             // Check HWM for each message
-            if self.buffered_messages >= self.options.send_hwm {
+            if self.base.buffered_messages >= self.base.options.send_hwm {
                 return Err(io::Error::new(
                     io::ErrorKind::WouldBlock,
                     format!(
                         "Send high water mark reached ({} messages)",
-                        self.options.send_hwm
+                        self.base.options.send_hwm
                     ),
                 ));
             }
-            encode_multipart(msg, &mut self.send_buffer);
-            self.buffered_messages += 1;
+            encode_multipart(msg, &mut self.base.send_buffer);
+            self.base.buffered_messages += 1;
         }
 
         self.flush().await
@@ -678,7 +392,7 @@ where
     /// Get the number of bytes currently buffered.
     #[inline]
     pub fn buffered_bytes(&self) -> usize {
-        self.send_buffer.len()
+        self.base.send_buffer.len()
     }
 
     /// Close the socket gracefully, respecting the linger timeout.
@@ -704,24 +418,24 @@ where
     /// # }
     /// ```
     pub async fn close(mut self) -> io::Result<()> {
-        let linger = self.options.linger;
+        let linger = self.base.options.linger;
         
         // If no data buffered, just drop the socket
-        if self.send_buffer.is_empty() {
+        if self.base.send_buffer.is_empty() {
             trace!("[DEALER] No buffered data, closing immediately");
             return Ok(());
         }
 
         trace!(
             "[DEALER] Closing with {} bytes buffered, linger={:?}",
-            self.send_buffer.len(),
+            self.base.send_buffer.len(),
             linger
         );
 
         match linger {
             Some(dur) if dur.is_zero() => {
                 // Linger = 0: discard buffered data immediately
-                debug!("[DEALER] Linger=0, discarding {} bytes", self.send_buffer.len());
+                debug!("[DEALER] Linger=0, discarding {} bytes", self.base.send_buffer.len());
                 Ok(())
             }
             Some(dur) => {
@@ -802,7 +516,7 @@ where
     /// Get a reference to the socket options.
     #[inline]
     pub fn options(&self) -> &SocketOptions {
-        &self.options
+        &self.base.options
     }
 
     /// Get a mutable reference to the socket options.
@@ -819,7 +533,7 @@ where
     /// ```
     #[inline]
     pub fn options_mut(&mut self) -> &mut SocketOptions {
-        &mut self.options
+        &mut self.base.options
     }
 
     /// Set socket options (builder-style).
@@ -840,7 +554,7 @@ where
     /// ```
     #[inline]
     pub fn set_options(&mut self, options: SocketOptions) {
-        self.options = options;
+        self.base.options = options;
     }
 }
 
@@ -871,6 +585,14 @@ impl DealerSocket<TcpStream> {
         Self::with_options(stream, config, options).await
     }
 
+    /// Try to reconnect to the stored endpoint.
+    ///
+    /// Returns Ok(()) if reconnection succeeded, Err otherwise.
+    /// On success, resets the poisoned flag and reconnection state.
+    async fn try_reconnect(&mut self) -> io::Result<()> {
+        self.base.try_reconnect(SocketType::Dealer).await
+    }
+
     /// Receive a message with automatic reconnection.
     ///
     /// If the socket was created with `connect()` and has an endpoint configured,
@@ -879,7 +601,7 @@ impl DealerSocket<TcpStream> {
     /// For sockets created with `from_tcp()`, this behaves the same as `recv()`.
     pub async fn recv_with_reconnect(&mut self) -> io::Result<Option<Vec<Bytes>>> {
         // Try to reconnect if disconnected
-        if self.stream.is_none() {
+        if self.base.stream.is_none() {
             trace!("[DEALER] Stream disconnected, attempting reconnection");
             if let Err(e) = self.try_reconnect().await {
                 debug!("[DEALER] Reconnection failed: {}", e);
@@ -899,7 +621,7 @@ impl DealerSocket<TcpStream> {
     /// For sockets created with `from_tcp()`, this behaves the same as `send()`.
     pub async fn send_with_reconnect(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
         // Try to reconnect if disconnected
-        if self.stream.is_none() {
+        if self.base.stream.is_none() {
             trace!("[DEALER] Stream disconnected, attempting reconnection");
             if let Err(e) = self.try_reconnect().await {
                 debug!("[DEALER] Reconnection failed: {}", e);
