@@ -64,6 +64,7 @@ pub use dealer::DealerSocket;
 pub use monocoque_core::config::BufferConfig;
 pub use monocoque_core::endpoint::{Endpoint, EndpointError};
 pub use monocoque_core::monitor::{SocketEvent, SocketMonitor};
+pub use monocoque_core::options::SocketOptions;
 pub use publisher::PubSocket;
 pub use rep::RepSocket;
 pub use req::ReqSocket;
@@ -83,8 +84,9 @@ pub use monocoque_core::ipc;
 /// // Now you have:
 /// // - DealerSocket, RouterSocket, ReqSocket, RepSocket, PubSocket, SubSocket
 /// // - Bytes for zero-copy messages
+/// // - BufferConfig, SocketOptions for configuration
 /// ```
 pub mod prelude {
-    pub use super::{DealerSocket, PubSocket, RepSocket, ReqSocket, RouterSocket, SubSocket};
+    pub use super::{BufferConfig, DealerSocket, PubSocket, RepSocket, ReqSocket, RouterSocket, SocketOptions, SubSocket};
     pub use bytes::Bytes;
 }

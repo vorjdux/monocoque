@@ -122,40 +122,7 @@ impl SubSocket {
         Ok(sock)
     }
 
-    /// Create a SUB socket from an existing TCP stream.
-    ///
-    /// **Deprecated**: Use [`SubSocket::from_tcp()`] instead to enable TCP_NODELAY for optimal latency.
-    #[deprecated(
-        since = "0.1.0",
-        note = "Use `from_tcp()` instead to enable TCP_NODELAY"
-    )]
-    pub async fn from_stream(stream: TcpStream) -> io::Result<Self> {
-        Ok(Self {
-            inner: InternalSub::new(stream).await?,
-            monitor: None,
-        })
-    }
 
-    /// Create a SUB socket from an existing TCP stream with custom buffer configuration.
-    ///
-    /// **Deprecated**: Use [`SubSocket::from_tcp_with_config()`] instead to enable TCP_NODELAY for optimal latency.
-    ///
-    /// # Buffer Configuration
-    /// - Use `BufferConfig::small()` (4KB) for low-latency pub/sub with small messages
-    /// - Use `BufferConfig::large()` (16KB) for high-throughput pub/sub with large messages
-    #[deprecated(
-        since = "0.1.0",
-        note = "Use `from_tcp_with_config()` instead to enable TCP_NODELAY"
-    )]
-    pub async fn from_stream_with_config(
-        stream: TcpStream,
-        config: monocoque_core::config::BufferConfig,
-    ) -> io::Result<Self> {
-        Ok(Self {
-            inner: InternalSub::with_config(stream, config).await?,
-            monitor: None,
-        })
-    }
 
     /// Create a SUB socket from a TCP stream with TCP_NODELAY enabled.
     pub async fn from_tcp(stream: TcpStream) -> io::Result<Self> {
@@ -165,13 +132,53 @@ impl SubSocket {
         })
     }
 
-    /// Create a SUB socket from a TCP stream with TCP_NODELAY and custom config.
-    pub async fn from_tcp_with_config(
+    /// Create a SUB socket from a TCP stream with custom options.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use monocoque::zmq::{SubSocket, SocketOptions};
+    /// use compio::net::TcpStream;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
+    /// let socket = SubSocket::from_tcp_with_options(
+    ///     stream,
+    ///     SocketOptions::default()
+    ///         .with_recv_hwm(500)
+    ///         .with_buffer_sizes(4096, 4096)
+    /// ).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn from_tcp_with_options(
         stream: TcpStream,
-        config: monocoque_core::config::BufferConfig,
+        options: monocoque_core::options::SocketOptions,
     ) -> io::Result<Self> {
+        let config = monocoque_core::config::BufferConfig {
+            read_buf_size: options.read_buffer_size,
+            write_buf_size: options.write_buffer_size,
+        };
         Ok(Self {
-            inner: InternalSub::from_tcp_with_config(stream, config).await?,
+            inner: InternalSub::with_options(stream, config, options).await?,
+            monitor: None,
+        })
+    }
+
+    /// Create a SUB socket from any stream with custom options.
+    pub async fn with_options<Stream>(
+        stream: Stream,
+        options: monocoque_core::options::SocketOptions,
+    ) -> io::Result<SubSocket<Stream>>
+    where
+        Stream: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+    {
+        let config = monocoque_core::config::BufferConfig {
+            read_buf_size: options.read_buffer_size,
+            write_buf_size: options.write_buffer_size,
+        };
+        Ok(SubSocket {
+            inner: InternalSub::with_options(stream, config, options).await?,
             monitor: None,
         })
     }

@@ -14,6 +14,7 @@ documentation = "https://docs.rs/monocoque-core"
 readme = "../README.md"
 
 [dependencies]
+async-lock = "3.3"
 bytes.workspace = true
 compio.workspace = true
 flume.workspace = true

@@ -64,10 +64,10 @@
 #![allow(clippy::never_loop)] // State machines use loop with early returns
 
 // Internal modules (not part of public API)
+mod base;
 mod codec;
 mod greeting;
 mod handshake;
-mod timeout;
 mod utils;
 
 // Public protocol types

@@ -57,57 +57,7 @@ where
 
 impl RepSocket {
     /// Create a REP socket from an existing TCP stream.
-    ///
-    /// **Deprecated**: Use [`RepSocket::from_tcp()`] instead to enable TCP_NODELAY for optimal latency.
-    ///
-    /// REP sockets typically accept incoming connections, so this is
-    /// used with a listener:
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// use monocoque::zmq::RepSocket;
-    /// use compio::net::TcpListener;
-    ///
-    /// # async fn example() -> std::io::Result<()> {
-    /// let listener = TcpListener::bind("127.0.0.1:5555").await?;
-    /// let (stream, _) = listener.accept().await?;
-    /// // Prefer this:
-    /// let socket = RepSocket::from_tcp(stream).await?;
-    /// // Over this:
-    /// // let socket = RepSocket::from_stream(stream).await?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    #[deprecated(
-        since = "0.1.0",
-        note = "Use `from_tcp()` instead to enable TCP_NODELAY"
-    )]
-    pub async fn from_stream(stream: TcpStream) -> io::Result<Self> {
-        Ok(Self {
-            inner: InternalRep::new(stream).await?,
-            monitor: None,
-        })
-    }
 
-    /// Create a REP socket from an existing TCP stream with custom buffer configuration.
-    ///
-    /// # Buffer Configuration
-    /// - Use `BufferConfig::small()` (4KB) for low-latency request/reply with small messages (recommended)
-    /// - Use `BufferConfig::large()` (16KB) for high-throughput with large messages
-    #[deprecated(
-        since = "0.1.0",
-        note = "Use `from_tcp_with_config()` instead to enable TCP_NODELAY"
-    )]
-    pub async fn from_stream_with_config(
-        stream: TcpStream,
-        config: monocoque_core::config::BufferConfig,
-    ) -> io::Result<Self> {
-        Ok(Self {
-            inner: InternalRep::with_config(stream, config).await?,
-            monitor: None,
-        })
-    }
 
     /// Create a REP socket from a TCP stream with TCP_NODELAY enabled.
     pub async fn from_tcp(stream: TcpStream) -> io::Result<Self> {
@@ -117,13 +67,35 @@ impl RepSocket {
         })
     }
 
-    /// Create a REP socket from a TCP stream with TCP_NODELAY and custom config.
-    pub async fn from_tcp_with_config(
+    /// Create a REP socket from a TCP stream with custom options.
+    pub async fn from_tcp_with_options(
         stream: TcpStream,
-        config: monocoque_core::config::BufferConfig,
+        options: monocoque_core::options::SocketOptions,
     ) -> io::Result<Self> {
+        let config = monocoque_core::config::BufferConfig {
+            read_buf_size: options.read_buffer_size,
+            write_buf_size: options.write_buffer_size,
+        };
         Ok(Self {
-            inner: InternalRep::from_tcp_with_config(stream, config).await?,
+            inner: InternalRep::with_options(stream, config, options).await?,
+            monitor: None,
+        })
+    }
+
+    /// Create a REP socket from any stream with custom options.
+    pub async fn with_options<Stream>(
+        stream: Stream,
+        options: monocoque_core::options::SocketOptions,
+    ) -> io::Result<RepSocket<Stream>>
+    where
+        Stream: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+    {
+        let config = monocoque_core::config::BufferConfig {
+            read_buf_size: options.read_buffer_size,
+            write_buf_size: options.write_buffer_size,
+        };
+        Ok(RepSocket {
+            inner: InternalRep::with_options(stream, config, options).await?,
             monitor: None,
         })
     }

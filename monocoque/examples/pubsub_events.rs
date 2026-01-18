@@ -10,7 +10,6 @@
 /// - Topics are prefix-matched (e.g., "trade." matches "trade.BTC", "trade.ETH")
 use bytes::Bytes;
 use monocoque::zmq::{PubSocket, SubSocket};
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::{error, info};
 
@@ -22,60 +21,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("=== PubSub Events Example ===\n");
 
-    // Shared port between publisher and subscriber
-    let port = Arc::new(Mutex::new(None));
-    let port_clone = port.clone();
+    // Pick a port to use
+    let port = portpicker::pick_unused_port().expect("No ports available");
+    info!("Using port {}", port);
 
-    // Start publisher in background
-    let publisher_handle = compio::runtime::spawn(async move {
-        if let Err(e) = run_publisher(port_clone).await {
-            error!("[Main] Publisher error: {e}");
-        }
-    });
+    // Start publisher
+    let mut pub_socket = PubSocket::bind(format!("127.0.0.1:{}", port)).await?;
+    info!("[Publisher] Bound to port {}", port);
 
-    // Give publisher time to bind
-    compio::time::sleep(Duration::from_millis(500)).await;
-
-    // Get the port
-    let port_num = {
-        let p = port.lock().unwrap();
-        p.expect("Publisher should have set port")
-    };
-
-    // Start subscriber in background BEFORE publisher accepts
+    // Start subscriber in background FIRST (before accept)
     let subscriber_handle = compio::runtime::spawn(async move {
-        if let Err(e) = run_subscriber(port_num).await {
-            error!("[Main] Subscriber error: {e}");
+        if let Err(e) = run_subscriber(port).await {
+            error!("[Subscriber] Error: {e}");
         }
     });
-    
-    // Give subscriber time to connect and subscribe
-    compio::time::sleep(Duration::from_millis(500)).await;
 
-    // Wait for both to complete
-    let _ = futures::join!(publisher_handle, subscriber_handle);
+    // Small delay to allow subscriber to start connecting
+    std::thread::sleep(Duration::from_millis(100));
 
-    Ok(())
-}
-
-async fn run_publisher(port: Arc<Mutex<Option<u16>>>) -> Result<(), Box<dyn std::error::Error>> {
-    info!("[Publisher] Starting...");
-
-    let mut socket = PubSocket::bind("127.0.0.1:0").await?;
-    let bound_port = socket.local_addr()?.port();
-    
-    // Share the port with subscriber
-    *port.lock().unwrap() = Some(bound_port);
-    info!("[Publisher] Bound to port {}", bound_port);
-
-    // Accept subscriber connection
-    socket.accept_subscriber().await?;
+    // Accept subscriber connection (this will block until subscriber connects)
+    pub_socket.accept_subscriber().await?;
     info!("[Publisher] Subscriber connected");
 
-    // Give subscriber time to send subscription
-    std::thread::sleep(Duration::from_millis(500));
+    // CRITICAL: Wait for subscriber to complete its handshake AND send subscription
+    // The accept_subscriber() only completes the publisher's side of handshake.
+    // The subscriber still needs time to:
+    // 1. Complete its side of the handshake
+    // 2. Send subscription message
+    // 3. Be ready to receive messages
+    //
+    // TODO: Implement proper ready signaling (e.g., wait for subscription message)
+    std::thread::sleep(Duration::from_millis(2000));
 
-    info!("[Publisher] Publishing events...");
+    info!("[Publisher] Publishing events immediately...");
 
     // Publish events on different topics
     let events = vec![
@@ -89,56 +67,41 @@ async fn run_publisher(port: Arc<Mutex<Option<u16>>>) -> Result<(), Box<dyn std:
 
     for (topic, data) in events {
         let message = vec![Bytes::from(topic), Bytes::from(data)];
-
         info!("[Publisher] Publishing: {topic} -> {data}");
-
-        match socket.send(message).await {
-            Ok(()) => {}
-            Err(e) => {
-                error!("[Publisher] Send error: {e}");
-                break;
-            }
-        }
-        
-        // Small delay between messages
-        std::thread::sleep(Duration::from_millis(50));
+        pub_socket.send(message).await?;
+        // Note: No delay - messages sent as fast as possible
     }
 
     info!("[Publisher] Done publishing");
 
-    // Keep connection alive briefly
-    std::thread::sleep(Duration::from_millis(200));
-    
+    // Wait for subscriber to finish receiving
+    subscriber_handle.await;
+
     Ok(())
 }
 
-async fn run_subscriber(port: u16) -> Result<(), Box<dyn std::error::Error>> {
-    info!("[Subscriber] Connecting to publisher on port {}...", port);
 
+
+async fn run_subscriber(port: u16) -> Result<(), Box<dyn std::error::Error>> {
+    info!("[Subscriber] Connecting to port {}...", port);
     let mut socket = SubSocket::connect(&format!("127.0.0.1:{}", port)).await?;
+    info!("[Subscriber] Connected!");
 
     // Subscribe to trade events only
     info!("[Subscriber] Subscribing to 'trade.' prefix");
     socket.subscribe(b"trade.").await?;
-    
-    // Small delay to ensure subscription is registered before messages are sent
-    std::thread::sleep(Duration::from_millis(50));
+    info!("[Subscriber] Subscribed!");
 
     info!("[Subscriber] Waiting for events...\n");
 
-    // Receive events
-    for _ in 0..10 {
+    // Receive 4 trade events (we're publishing 6 total, 4 are trade.*)
+    for i in 0..4 {
         match socket.recv().await {
             Ok(Some(message)) => {
                 if message.len() >= 2 {
                     let topic = std::str::from_utf8(&message[0]).unwrap_or("<invalid>");
                     let data = std::str::from_utf8(&message[1]).unwrap_or("<invalid>");
-                    info!("[Subscriber] Received: {topic} -> {data}");
-                } else {
-                    info!(
-                        "[Subscriber] Received message with {} frames",
-                        message.len()
-                    );
+                    info!("[Subscriber] Message {}: {topic} -> {data}", i + 1);
                 }
             }
             Ok(None) => {

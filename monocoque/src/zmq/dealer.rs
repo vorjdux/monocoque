@@ -101,6 +101,133 @@ impl DealerSocket {
         Ok(sock)
     }
 
+    /// Connect to a ZeroMQ peer with automatic reconnection support.
+    ///
+    /// This method enables the socket to automatically detect disconnections
+    /// and attempt reconnection with exponential backoff. Unlike the basic
+    /// `connect()` method, this stores the endpoint and manages the underlying
+    /// connection lifecycle.
+    ///
+    /// Supports TCP endpoints only:
+    /// - TCP: `"tcp://127.0.0.1:5555"`
+    ///
+    /// # Reconnection Behavior
+    ///
+    /// When a disconnection is detected (EOF, write error, poisoned socket):
+    /// - The socket enters a disconnected state
+    /// - Next `send()` or `recv()` will attempt reconnection
+    /// - Backoff delays: 100ms → 200ms → 400ms → ... (capped at 30s)
+    /// - Successful reconnection resets the backoff
+    ///
+    /// # Arguments
+    ///
+    /// * `endpoint` - TCP endpoint to connect to (e.g., "tcp://127.0.0.1:5555")
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The initial connection fails
+    /// - DNS resolution fails
+    /// - Invalid endpoint format
+    /// - IPC endpoints (not supported for generic reconnection)
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use monocoque::zmq::DealerSocket;
+    /// use bytes::Bytes;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// // Create socket with reconnection support
+    /// let mut socket = DealerSocket::connect_with_reconnect("tcp://127.0.0.1:5555").await?;
+    ///
+    /// // Send will automatically reconnect on disconnection
+    /// loop {
+    ///     match socket.send(vec![Bytes::from("REQUEST")]).await {
+    ///         Ok(_) => println!("Sent successfully"),
+    ///         Err(e) if e.kind() == std::io::ErrorKind::NotConnected => {
+    ///             println!("Disconnected, will retry on next send");
+    ///         }
+    ///         Err(e) => return Err(e.into()),
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Notes
+    ///
+    /// - For IPC/Unix sockets, use `connect_ipc()` without reconnection
+    /// - For explicit stream control without reconnection, use `from_tcp()`
+    /// - Reconnection only works for TCP streams
+    pub async fn connect_with_reconnect(endpoint: &str) -> io::Result<Self> {
+        use monocoque_zmtp::SocketConfig;
+
+        // Use default config and options
+        let config = SocketConfig::default();
+        let options = monocoque_core::socket_options::SocketOptions::default();
+
+        let inner = InternalDealer::connect(endpoint, config, options).await?;
+        
+        // Parse endpoint for monitoring
+        let parsed = monocoque_core::endpoint::Endpoint::parse(endpoint)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        
+        let sock = Self {
+            inner,
+            monitor: None,
+        };
+        
+        sock.emit_event(SocketEvent::Connected(parsed));
+        Ok(sock)
+    }
+
+    /// Connect to a ZeroMQ peer with automatic reconnection and custom options.
+    ///
+    /// Same as `connect_with_reconnect()` but allows customizing socket behavior:
+    /// - Buffer sizes (send/recv)
+    /// - High water marks (HWM)
+    /// - Timeouts
+    /// - Identity
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use monocoque::zmq::{DealerSocket, SocketOptions};
+    /// use bytes::Bytes;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut socket = DealerSocket::connect_with_reconnect_and_options(
+    ///     "tcp://127.0.0.1:5555",
+    ///     SocketOptions::default()
+    ///         .with_send_hwm(100)
+    ///         .with_identity(Some(Bytes::from("worker-1")))
+    /// ).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn connect_with_reconnect_and_options(
+        endpoint: &str,
+        options: monocoque_core::socket_options::SocketOptions,
+    ) -> io::Result<Self> {
+        use monocoque_zmtp::SocketConfig;
+
+        let config = SocketConfig::default();
+        let inner = InternalDealer::connect(endpoint, config, options).await?;
+        
+        // Parse endpoint for monitoring
+        let parsed = monocoque_core::endpoint::Endpoint::parse(endpoint)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        
+        let sock = Self {
+            inner,
+            monitor: None,
+        };
+        
+        sock.emit_event(SocketEvent::Connected(parsed));
+        Ok(sock)
+    }
+
     /// Connect to a ZeroMQ peer via IPC (Unix domain sockets).
     ///
     /// Unix-only. Accepts IPC paths with or without `ipc://` prefix.
@@ -131,65 +258,15 @@ impl DealerSocket {
         Ok(sock)
     }
 
-    /// Create a DEALER socket from an existing TCP stream.
-    ///
-    /// **Deprecated**: Use [`DealerSocket::from_tcp()`] instead to enable TCP_NODELAY for optimal latency.
-    ///
-    /// Use this for advanced scenarios where you need full control over
-    /// the TCP connection (e.g., custom socket options, TLS wrapping).
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// use monocoque::zmq::DealerSocket;
-    /// use compio::net::TcpStream;
-    ///
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
-    /// // Prefer this:
-    /// let socket = DealerSocket::from_tcp(stream).await?;
-    /// // Over this:
-    /// // let socket = DealerSocket::from_stream(stream).await?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    #[deprecated(
-        since = "0.1.0",
-        note = "Use `from_tcp()` instead to enable TCP_NODELAY"
-    )]
-    pub async fn from_stream(stream: TcpStream) -> io::Result<Self> {
-        Ok(Self {
-            inner: InternalDealer::new(stream).await?,
-            monitor: None,
-        })
-    }
 
-    /// Create a DEALER socket from an existing TCP stream with custom buffer configuration.
-    ///
-    /// # Buffer Configuration
-    /// - Use `BufferConfig::small()` (4KB) for low-latency with small messages
-    /// - Use `BufferConfig::large()` (16KB) for high-throughput with large messages (recommended)
-    #[deprecated(
-        since = "0.1.0",
-        note = "Use `from_tcp_with_config()` instead to enable TCP_NODELAY"
-    )]
-    pub async fn from_stream_with_config(
-        stream: TcpStream,
-        config: monocoque_core::config::BufferConfig,
-    ) -> io::Result<Self> {
-        Ok(Self {
-            inner: InternalDealer::with_config(stream, config).await?,
-            monitor: None,
-        })
-    }
 
     /// Create a DEALER socket from a TCP stream with TCP_NODELAY enabled.
     ///
     /// This method automatically enables TCP_NODELAY for optimal performance,
     /// preventing Nagle's algorithm from buffering small packets.
     ///
-    /// Uses large buffers (16KB) by default. For custom configuration, use
-    /// `from_tcp_with_config()`.
+    /// Uses default buffer sizes (8KB) and socket options. For custom configuration,
+    /// use `with_options()`.
     ///
     /// # Example
     ///
@@ -210,32 +287,90 @@ impl DealerSocket {
         })
     }
 
-    /// Create a DEALER socket from a TCP stream with TCP_NODELAY and custom config.
+    /// Create a DEALER socket from a TCP stream with custom options.
     ///
-    /// This method automatically enables TCP_NODELAY for optimal performance.
+    /// Provides full control over buffer sizes, HWM, timeouts, etc. through SocketOptions.
     ///
-    /// # Buffer Configuration
-    /// - Use `BufferConfig::small()` (4KB) for low-latency with small messages
-    /// - Use `BufferConfig::large()` (16KB) for high-throughput with large messages
-    ///
-    /// # Example
+    /// # Examples
     ///
     /// ```rust,no_run
-    /// use monocoque::zmq::{DealerSocket, BufferConfig};
+    /// use monocoque::zmq::{DealerSocket, SocketOptions};
     /// use compio::net::TcpStream;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
-    /// let socket = DealerSocket::from_tcp_with_config(stream, BufferConfig::small()).await?;
+    /// 
+    /// // Customize HWM only (uses default 8KB buffers)
+    /// let socket = DealerSocket::from_tcp_with_options(
+    ///     stream,
+    ///     SocketOptions::default().with_send_hwm(100)
+    /// ).await?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn from_tcp_with_config(
+    ///
+    /// ```rust,no_run
+    /// # use monocoque::zmq::{DealerSocket, SocketOptions};
+    /// # use compio::net::TcpStream;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let stream = TcpStream::connect("127.0.0.1:5555").await?;
+    /// // Customize both buffers and HWM
+    /// let socket = DealerSocket::from_tcp_with_options(
+    ///     stream,
+    ///     SocketOptions::default()
+    ///         .with_buffer_sizes(4096, 4096)  // 4KB buffers for low latency
+    ///         .with_send_hwm(100)
+    /// ).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn from_tcp_with_options(
         stream: TcpStream,
-        config: monocoque_core::config::BufferConfig,
+        options: monocoque_core::options::SocketOptions,
     ) -> io::Result<Self> {
+        let config = monocoque_core::config::BufferConfig {
+            read_buf_size: options.read_buffer_size,
+            write_buf_size: options.write_buffer_size,
+        };
         Ok(Self {
-            inner: InternalDealer::from_tcp_with_config(stream, config).await?,
+            inner: InternalDealer::with_options(stream, config, options).await?,
+            monitor: None,
+        })
+    }
+
+    /// Create a DEALER socket from any stream with custom options.
+    ///
+    /// This is the most flexible constructor - works with TCP, Unix, or in-memory streams.
+    /// Useful for testing with duplex streams.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use monocoque::zmq::{DealerSocket, SocketOptions};
+    /// use compio::io::duplex;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let (client, _server) = duplex(8192);
+    /// let socket = DealerSocket::with_options(
+    ///     client,
+    ///     SocketOptions::default().with_send_hwm(10)
+    /// ).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn with_options<Stream>(
+        stream: Stream,
+        options: monocoque_core::options::SocketOptions,
+    ) -> io::Result<DealerSocket<Stream>>
+    where
+        Stream: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+    {
+        let config = monocoque_core::config::BufferConfig {
+            read_buf_size: options.read_buffer_size,
+            write_buf_size: options.write_buffer_size,
+        };
+        Ok(DealerSocket {
+            inner: InternalDealer::with_options(stream, config, options).await?,
             monitor: None,
         })
     }
@@ -401,13 +536,17 @@ impl DealerSocket<compio::net::UnixStream> {
         })
     }
 
-    /// Create a DEALER socket from an existing Unix stream with custom buffer configuration.
-    pub async fn from_unix_stream_with_config(
+    /// Create a DEALER socket from an existing Unix stream with custom options.
+    pub async fn from_unix_stream_with_options(
         stream: compio::net::UnixStream,
-        config: monocoque_core::config::BufferConfig,
+        options: monocoque_core::options::SocketOptions,
     ) -> io::Result<Self> {
+        let config = monocoque_core::config::BufferConfig {
+            read_buf_size: options.read_buffer_size,
+            write_buf_size: options.write_buffer_size,
+        };
         Ok(Self {
-            inner: InternalDealer::with_config(stream, config).await?,
+            inner: InternalDealer::with_options(stream, config, options).await?,
             monitor: None,
         })
     }

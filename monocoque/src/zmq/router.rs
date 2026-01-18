@@ -90,7 +90,7 @@ impl RouterSocket {
     ) -> io::Result<(TcpListener, Self)> {
         let listener = TcpListener::bind(addr).await?;
         let (stream, _) = listener.accept().await?;
-        let socket = Self::from_stream(stream).await?;
+        let socket = Self::from_tcp(stream).await?;
         Ok((listener, socket))
     }
 
@@ -160,13 +160,35 @@ impl RouterSocket {
         })
     }
 
-    /// Create a ROUTER socket from a TCP stream with TCP_NODELAY and custom config.
-    pub async fn from_tcp_with_config(
+    /// Create a ROUTER socket from a TCP stream with custom options.
+    pub async fn from_tcp_with_options(
         stream: TcpStream,
-        config: monocoque_core::config::BufferConfig,
+        options: monocoque_core::options::SocketOptions,
     ) -> io::Result<Self> {
+        let config = monocoque_core::config::BufferConfig {
+            read_buf_size: options.read_buffer_size,
+            write_buf_size: options.write_buffer_size,
+        };
         Ok(Self {
-            inner: InternalRouter::from_tcp_with_config(stream, config).await?,
+            inner: InternalRouter::with_options(stream, config, options).await?,
+            monitor: None,
+        })
+    }
+
+    /// Create a ROUTER socket from any stream with custom options.
+    pub async fn with_options<Stream>(
+        stream: Stream,
+        options: monocoque_core::options::SocketOptions,
+    ) -> io::Result<RouterSocket<Stream>>
+    where
+        Stream: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+    {
+        let config = monocoque_core::config::BufferConfig {
+            read_buf_size: options.read_buffer_size,
+            write_buf_size: options.write_buffer_size,
+        };
+        Ok(RouterSocket {
+            inner: InternalRouter::with_options(stream, config, options).await?,
             monitor: None,
         })
     }
