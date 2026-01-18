@@ -161,11 +161,12 @@ impl DealerSocket {
     /// - For explicit stream control without reconnection, use `from_tcp()`
     /// - Reconnection only works for TCP streams
     pub async fn connect_with_reconnect(endpoint: &str) -> io::Result<Self> {
-        use monocoque_zmtp::SocketConfig;
+        use monocoque_zmtp::BufferConfig;
+        use monocoque_core::options::SocketOptions;
 
         // Use default config and options
-        let config = SocketConfig::default();
-        let options = monocoque_core::socket_options::SocketOptions::default();
+        let config = BufferConfig::default();
+        let options = SocketOptions::default();
 
         let inner = InternalDealer::connect(endpoint, config, options).await?;
         
@@ -208,11 +209,11 @@ impl DealerSocket {
     /// ```
     pub async fn connect_with_reconnect_and_options(
         endpoint: &str,
-        options: monocoque_core::socket_options::SocketOptions,
+        options: monocoque_core::options::SocketOptions,
     ) -> io::Result<Self> {
-        use monocoque_zmtp::SocketConfig;
+        use monocoque_zmtp::BufferConfig;
 
-        let config = SocketConfig::default();
+        let config = BufferConfig::default();
         let inner = InternalDealer::connect(endpoint, config, options).await?;
         
         // Parse endpoint for monitoring
