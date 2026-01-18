@@ -8,18 +8,16 @@
 //! SUB sockets receive messages from PUB sockets and filter them based on
 //! subscriptions.
 
+use crate::base::SocketBase;
 use bytes::{Bytes, BytesMut};
 use compio::io::{AsyncRead, AsyncWrite};
 use compio::net::TcpStream;
-use monocoque_core::alloc::IoArena;
-use monocoque_core::buffer::SegmentedBuffer;
 use monocoque_core::options::SocketOptions;
-use monocoque_core::poison::PoisonGuard;
 use smallvec::SmallVec;
 use std::io;
 use tracing::{debug, trace};
 
-use crate::{codec::ZmtpDecoder, handshake::perform_handshake_with_timeout, session::SocketType};
+use crate::{handshake::perform_handshake_with_timeout, session::SocketType};
 use monocoque_core::config::BufferConfig;
 
 /// Direct-stream SUB socket.
@@ -27,24 +25,12 @@ pub struct SubSocket<S = TcpStream>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    /// Underlying stream (TCP or Unix socket)
-    stream: S,
-    /// ZMTP decoder for decoding frames
-    decoder: ZmtpDecoder,
-    /// Arena for zero-copy allocation
-    arena: IoArena,
-    /// Segmented read buffer for incoming data
-    recv: SegmentedBuffer,
+    /// Base socket infrastructure (stream, buffers, options)
+    base: SocketBase<S>,
     /// Accumulated frames for current multipart message
     frames: SmallVec<[Bytes; 4]>,
     /// List of subscription prefixes (sorted for efficient matching)
     subscriptions: Vec<Bytes>,
-    /// Buffer configuration
-    config: BufferConfig,
-    /// Socket options (timeouts, limits, etc.)
-    options: SocketOptions,
-    /// Connection health flag (true if receive was cancelled mid-operation)
-    is_poisoned: bool,
 }
 
 impl<S> SubSocket<S>
@@ -96,27 +82,12 @@ where
             "[SUB] Handshake complete"
         );
 
-        // Create arena for zero-copy allocation
-        let arena = IoArena::new();
-
-        // Create ZMTP decoder
-        let decoder = ZmtpDecoder::new();
-
-        // Create buffers
-        let recv = SegmentedBuffer::new();
-
         debug!("[SUB] Socket initialized");
 
         Ok(Self {
-            stream,
-            decoder,
-            arena,
-            recv,
+            base: SocketBase::new(stream, config, options),
             frames: SmallVec::new(),
             subscriptions: Vec::new(),
-            config,
-            options,
-            is_poisoned: false,
         })
     }
 
@@ -147,7 +118,10 @@ where
         let buf = sub_msg.freeze();
         trace!("[SUB] Sending subscription message ({} bytes)", buf.len());
         
-        let BufResult(result, _) = AsyncWrite::write(&mut self.stream, IoBytes::new(buf)).await;
+        let stream = self.base.stream.as_mut().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
+        })?;
+        let BufResult(result, _) = AsyncWrite::write(stream, IoBytes::new(buf)).await;
         result?;
         
         trace!("[SUB] Subscription message sent successfully");
@@ -175,7 +149,10 @@ where
         let buf = unsub_msg.freeze();
         trace!("[SUB] Sending unsubscription message ({} bytes)", buf.len());
         
-        let BufResult(result, _) = AsyncWrite::write(&mut self.stream, IoBytes::new(buf)).await;
+        let stream = self.base.stream.as_mut().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
+        })?;
+        let BufResult(result, _) = AsyncWrite::write(stream, IoBytes::new(buf)).await;
         result?;
         
         trace!("[SUB] Unsubscription message sent successfully");
@@ -210,17 +187,6 @@ where
     /// This will keep reading and filtering messages until one matches
     /// the active subscriptions.
     pub async fn recv(&mut self) -> io::Result<Option<Vec<Bytes>>> {
-        // Check poison flag first
-        if self.is_poisoned {
-            return Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "Socket is poisoned from previous incomplete operation",
-            ));
-        }
-
-        // Create guard to poison socket if we panic or cancel mid-operation
-        let guard = PoisonGuard::new(&mut self.is_poisoned);
-
         'outer: loop {
             trace!("[SUB] Waiting for message");
 
@@ -228,7 +194,7 @@ where
             loop {
                 // Try to decode frames from buffer
                 loop {
-                    match self.decoder.decode(&mut self.recv)? {
+                    match self.base.decoder.decode(&mut self.base.recv)? {
                         Some(frame) => {
                             let more = frame.more();
                             self.frames.push(frame.payload);
@@ -239,7 +205,6 @@ where
                                 trace!("[SUB] Received {} frames", msg.len());
 
                                 // Check if message matches any subscription
-                                // Need to check subscriptions without borrowing self while guard is active
                                 let matches = {
                                     let subscriptions = &self.subscriptions;
                                     msg.first().map_or(false, |first_frame| {
@@ -251,7 +216,6 @@ where
                                 };
 
                                 if matches {
-                                    guard.disarm();
                                     return Ok(Some(msg));
                                 }
                                 trace!("[SUB] Message filtered out (no matching subscription)");
@@ -265,51 +229,14 @@ where
                     }
                 }
 
-                // Need more data - read from stream using reused buffer
-                use compio::buf::BufResult;
-
-                let slab = self.arena.alloc_mut(self.config.read_buf_size);
-                
-                // Apply recv timeout from options
-                let BufResult(result, slab) = match self.options.recv_timeout {
-                    None => {
-                        // Blocking mode - no timeout
-                        AsyncRead::read(&mut self.stream, slab).await
-                    }
-                    Some(dur) if dur.is_zero() => {
-                        // Non-blocking mode
-                        return Err(io::Error::new(
-                            io::ErrorKind::WouldBlock,
-                            "Socket is in non-blocking mode and no data is available",
-                        ));
-                    }
-                    Some(dur) => {
-                        // Timed mode - apply timeout
-                        use compio::time::timeout;
-                        match timeout(dur, AsyncRead::read(&mut self.stream, slab)).await {
-                            Ok(result) => result,
-                            Err(_) => {
-                                return Err(io::Error::new(
-                                    io::ErrorKind::TimedOut,
-                                    format!("Receive operation timed out after {:?}", dur),
-                                ));
-                            }
-                        }
-                    }
-                };
-                
-                let n = result?;
-
+                // Need more data - read raw bytes from stream
+                let n = self.base.read_raw().await?;
                 if n == 0 {
                     // EOF
                     trace!("[SUB] Connection closed");
-                    guard.disarm();
                     return Ok(None);
                 }
-
-                // Push bytes into segmented recv queue (zero-copy)
-                self.recv.push(slab.freeze());
-                println!("[SUB recv] Pushed {} bytes to buffer, total buffer len={}", n, self.recv.len());
+                // Continue decoding with new data
             }
         }
     }
@@ -326,19 +253,19 @@ where
     /// Get a reference to the socket options.
     #[inline]
     pub fn options(&self) -> &SocketOptions {
-        &self.options
+        &self.base.options
     }
 
     /// Get a mutable reference to the socket options.
     #[inline]
     pub fn options_mut(&mut self) -> &mut SocketOptions {
-        &mut self.options
+        &mut self.base.options
     }
 
     /// Set socket options (builder-style).
     #[inline]
     pub fn set_options(&mut self, options: SocketOptions) {
-        self.options = options;
+        self.base.options = options;
     }
 }
 
