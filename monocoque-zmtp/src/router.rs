@@ -8,21 +8,18 @@
 //! ROUTER sockets receive messages with sender identity and can route replies
 //! back to specific senders.
 
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use compio::io::{AsyncRead, AsyncWrite};
 use compio::net::TcpStream;
-use monocoque_core::alloc::IoArena;
-use monocoque_core::alloc::IoBytes;
 use monocoque_core::options::SocketOptions;
-use monocoque_core::poison::PoisonGuard;
 use smallvec::SmallVec;
 use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, trace};
 
-use crate::codec::{encode_multipart, ZmtpDecoder};
+use crate::base::SocketBase;
+use crate::codec::encode_multipart;
 use crate::{handshake::perform_handshake_with_timeout, session::SocketType};
-use monocoque_core::buffer::SegmentedBuffer;
 use monocoque_core::config::BufferConfig;
 
 static PEER_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -32,28 +29,12 @@ pub struct RouterSocket<S = TcpStream>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    /// Underlying stream (TCP or Unix socket)
-    stream: S,
-    /// ZMTP decoder for decoding frames
-    decoder: ZmtpDecoder,
-    /// Arena for zero-copy allocation
-    arena: IoArena,
-    /// Segmented read buffer for incoming data
-    recv: SegmentedBuffer,
-    /// Write buffer for outgoing data (reused to avoid allocations)
-    write_buf: BytesMut,
+    /// Base socket infrastructure (stream, buffers, options)
+    base: SocketBase<S>,
     /// Accumulated frames for current multipart message
     frames: SmallVec<[Bytes; 4]>,
     /// Peer identity (auto-generated or from handshake)
     peer_identity: Bytes,
-    /// Buffer configuration
-    config: BufferConfig,
-    /// Send buffer for batching (explicit flush control)
-    send_buffer: BytesMut,
-    /// Socket options (timeouts, limits, etc.)
-    options: SocketOptions,
-    /// Connection health flag (true if I/O was cancelled mid-operation)
-    is_poisoned: bool,
 }
 
 impl<S> RouterSocket<S>
@@ -117,30 +98,12 @@ where
             "[ROUTER] Handshake complete"
         );
 
-        // Create arena for zero-copy allocation
-        let arena = IoArena::new();
-
-        // Create ZMTP decoder
-        let decoder = ZmtpDecoder::new();
-
-        // Create buffers
-        let recv = SegmentedBuffer::new();
-        let write_buf = BytesMut::with_capacity(config.write_buf_size);
-
         debug!("[ROUTER] Socket initialized");
 
         Ok(Self {
-            stream,
-            decoder,
-            arena,
-            recv,
-            write_buf,
+            base: SocketBase::new(stream, config, options),
             frames: SmallVec::new(),
             peer_identity,
-            config,
-            send_buffer: BytesMut::new(),
-            options,
-            is_poisoned: false,
         })
     }
 
@@ -154,7 +117,7 @@ where
         loop {
             // Try to decode frames from buffer
             loop {
-                match self.decoder.decode(&mut self.recv)? {
+                match self.base.decoder.decode(&mut self.base.recv)? {
                     Some(frame) => {
                         let more = frame.more();
                         self.frames.push(frame.payload);
@@ -175,49 +138,18 @@ where
                 }
             }
 
-            // Need more data - read from stream using reused buffer
-            use compio::buf::BufResult;
-
-            let slab = self.arena.alloc_mut(self.config.read_buf_size);
-            
-            // Apply recv timeout from options
-            let BufResult(result, slab) = match self.options.recv_timeout {
+            // Need more data - delegate to base
+            match self.base.read_frame().await? {
+                Some(_frame) => {
+                    // Frame added to recv buffer, continue decoding
+                    continue;
+                }
                 None => {
-                    // Blocking mode - no timeout
-                    AsyncRead::read(&mut self.stream, slab).await
+                    // EOF - connection closed
+                    trace!("[ROUTER] Connection closed");
+                    return Ok(None);
                 }
-                Some(dur) if dur.is_zero() => {
-                    // Non-blocking mode
-                    return Err(io::Error::new(
-                        io::ErrorKind::WouldBlock,
-                        "Socket is in non-blocking mode and no data is available",
-                    ));
-                }
-                Some(dur) => {
-                    // Timed mode - apply timeout
-                    use compio::time::timeout;
-                    match timeout(dur, AsyncRead::read(&mut self.stream, slab)).await {
-                        Ok(result) => result,
-                        Err(_) => {
-                            return Err(io::Error::new(
-                                io::ErrorKind::TimedOut,
-                                format!("Receive operation timed out after {:?}", dur),
-                            ));
-                        }
-                    }
-                }
-            };
-            
-            let n = result?;
-
-            if n == 0 {
-                // EOF
-                trace!("[ROUTER] Connection closed");
-                return Ok(None);
             }
-
-            // Push bytes into segmented recv queue (zero-copy)
-            self.recv.push(slab.freeze());
         }
     }
 
@@ -230,63 +162,17 @@ where
     /// For high-throughput scenarios, consider using `send_buffered()` + `flush()`
     /// to batch multiple messages.
     pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
-        // Check health before attempting I/O
-        if self.is_poisoned {
-            return Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "Socket poisoned by cancelled I/O - reconnect required",
-            ));
-        }
-
         trace!("[ROUTER] Sending {} frames", msg.len());
 
         // Skip the first frame (identity) if present and send the rest
         let frames_to_send = if msg.len() > 1 { &msg[1..] } else { &msg[..] };
 
-        // Encode message - reuse write_buf to avoid allocation
-        self.write_buf.clear();
-        encode_multipart(frames_to_send, &mut self.write_buf);
+        // Encode message into write_buf
+        self.base.write_buf.clear();
+        encode_multipart(frames_to_send, &mut self.base.write_buf);
 
-        // Arm the guard - if dropped before disarm, socket remains poisoned
-        let guard = PoisonGuard::new(&mut self.is_poisoned);
-
-        // Write to stream using compio
-        use compio::buf::BufResult;
-
-        let buf = self.write_buf.split().freeze();
-        
-        // Apply send timeout from options
-        let BufResult(result, _) = match self.options.send_timeout {
-            None => {
-                // Blocking mode - no timeout
-                AsyncWrite::write(&mut self.stream, IoBytes::new(buf)).await
-            }
-            Some(dur) if dur.is_zero() => {
-                // Non-blocking mode
-                return Err(io::Error::new(
-                    io::ErrorKind::WouldBlock,
-                    "Socket is in non-blocking mode and cannot send immediately",
-                ));
-            }
-            Some(dur) => {
-                // Timed mode - apply timeout
-                use compio::time::timeout;
-                match timeout(dur, AsyncWrite::write(&mut self.stream, IoBytes::new(buf))).await {
-                    Ok(result) => result,
-                    Err(_) => {
-                        return Err(io::Error::new(
-                            io::ErrorKind::TimedOut,
-                            format!("Send operation timed out after {:?}", dur),
-                        ));
-                    }
-                }
-            }
-        };
-        
-        result?;
-
-        // Success - disarm the guard
-        guard.disarm();
+        // Delegate to base for writing
+        self.base.write_from_buf().await?;
 
         trace!("[ROUTER] Message sent successfully");
         Ok(())
@@ -301,65 +187,14 @@ where
 
         // Skip the first frame (identity) and encode the rest
         let frames_to_send = if msg.len() > 1 { &msg[1..] } else { &msg[..] };
-        encode_multipart(frames_to_send, &mut self.send_buffer);
+        encode_multipart(frames_to_send, &mut self.base.send_buffer);
         Ok(())
     }
 
     /// Flush all buffered messages to the network.
     pub async fn flush(&mut self) -> io::Result<()> {
-        // Check health before attempting I/O
-        if self.is_poisoned {
-            return Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "Socket poisoned by cancelled I/O - reconnect required",
-            ));
-        }
-
-        if self.send_buffer.is_empty() {
-            return Ok(());
-        }
-
-        trace!("[ROUTER] Flushing {} bytes", self.send_buffer.len());
-
-        // Arm the guard - if dropped before disarm, socket remains poisoned
-        let guard = PoisonGuard::new(&mut self.is_poisoned);
-
-        use compio::buf::BufResult;
-        let buf = self.send_buffer.split().freeze();
-        
-        // Apply send timeout from options
-        let BufResult(result, _) = match self.options.send_timeout {
-            None => {
-                // Blocking mode - no timeout
-                AsyncWrite::write(&mut self.stream, IoBytes::new(buf)).await
-            }
-            Some(dur) if dur.is_zero() => {
-                // Non-blocking mode
-                return Err(io::Error::new(
-                    io::ErrorKind::WouldBlock,
-                    "Socket is in non-blocking mode and cannot flush immediately",
-                ));
-            }
-            Some(dur) => {
-                // Timed mode - apply timeout
-                use compio::time::timeout;
-                match timeout(dur, AsyncWrite::write(&mut self.stream, IoBytes::new(buf))).await {
-                    Ok(result) => result,
-                    Err(_) => {
-                        return Err(io::Error::new(
-                            io::ErrorKind::TimedOut,
-                            format!("Flush operation timed out after {:?}", dur),
-                        ));
-                    }
-                }
-            }
-        };
-        
-        result?;
-
-        // Success - disarm the guard
-        guard.disarm();
-
+        trace!("[ROUTER] Flushing {} bytes", self.base.send_buffer.len());
+        self.base.flush_send_buffer().await?;
         trace!("[ROUTER] Flush completed");
         Ok(())
     }
@@ -370,7 +205,7 @@ where
 
         for msg in messages {
             let frames_to_send = if msg.len() > 1 { &msg[1..] } else { &msg[..] };
-            encode_multipart(frames_to_send, &mut self.send_buffer);
+            encode_multipart(frames_to_send, &mut self.base.send_buffer);
         }
 
         self.flush().await
@@ -379,7 +214,7 @@ where
     /// Get the number of bytes currently buffered.
     #[inline]
     pub fn buffered_bytes(&self) -> usize {
-        self.send_buffer.len()
+        self.base.send_buffer.len()
     }
 
     /// Close the socket gracefully, respecting the linger timeout.
@@ -391,22 +226,22 @@ where
     /// - `Some(duration)`: Try to flush buffered data within the timeout
     /// - `None`: Block indefinitely until all data is sent (default libzmq behavior)
     pub async fn close(mut self) -> io::Result<()> {
-        let linger = self.options.linger;
+        let linger = self.base.options.linger;
         
-        if self.send_buffer.is_empty() {
+        if self.base.send_buffer.is_empty() {
             trace!("[ROUTER] No buffered data, closing immediately");
             return Ok(());
         }
 
         trace!(
             "[ROUTER] Closing with {} bytes buffered, linger={:?}",
-            self.send_buffer.len(),
+            self.base.send_buffer.len(),
             linger
         );
 
         match linger {
             Some(dur) if dur.is_zero() => {
-                debug!("[ROUTER] Linger=0, discarding {} bytes", self.send_buffer.len());
+                debug!("[ROUTER] Linger=0, discarding {} bytes", self.base.send_buffer.len());
                 Ok(())
             }
             Some(dur) => {
@@ -436,19 +271,19 @@ where
     /// Get a reference to the socket options.
     #[inline]
     pub fn options(&self) -> &SocketOptions {
-        &self.options
+        &self.base.options
     }
 
     /// Get a mutable reference to the socket options.
     #[inline]
     pub fn options_mut(&mut self) -> &mut SocketOptions {
-        &mut self.options
+        &mut self.base.options
     }
 
     /// Set socket options (builder-style).
     #[inline]
     pub fn set_options(&mut self, options: SocketOptions) {
-        self.options = options;
+        self.base.options = options;
     }
 }
 

@@ -42,20 +42,17 @@
 //! }
 //! ```
 
+use crate::base::SocketBase;
+use crate::codec::encode_multipart;
 use crate::{
-    codec::{encode_multipart, ZmtpDecoder},
     handshake::perform_handshake_with_timeout,
     session::SocketType,
 };
 use monocoque_core::config::BufferConfig;
 use monocoque_core::options::SocketOptions;
-use monocoque_core::poison::PoisonGuard;
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use compio::io::{AsyncRead, AsyncWrite};
 use compio::net::TcpStream;
-use monocoque_core::alloc::IoArena;
-use monocoque_core::alloc::IoBytes;
-use monocoque_core::buffer::SegmentedBuffer;
 use smallvec::SmallVec;
 use std::io;
 use tracing::{debug, trace};
@@ -101,27 +98,13 @@ pub struct ReqSocket<S = TcpStream>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    /// Underlying stream (TCP or Unix socket)
-    stream: S,
-    /// ZMTP decoder for decoding frames
-    decoder: ZmtpDecoder,
-    /// Arena for zero-copy allocation
-    arena: IoArena,
-    /// Segmented read buffer for incoming data
-    recv: SegmentedBuffer,
-    /// Write buffer for outgoing data (reused to avoid allocations)
-    write_buf: BytesMut,
+    /// Base socket infrastructure (stream, buffers, options)
+    base: SocketBase<S>,
     /// Accumulated frames for current multipart message
     /// SmallVec avoids heap allocation for 1-4 frame messages (common case)
     frames: SmallVec<[Bytes; 4]>,
     /// Current state of the REQ state machine
     state: ReqState,
-    /// Buffer configuration
-    config: BufferConfig,
-    /// Socket options (timeouts, limits, etc.)
-    options: SocketOptions,
-    /// Connection health flag (true if I/O was cancelled mid-operation)
-    is_poisoned: bool,
 }
 
 impl<S> ReqSocket<S>
@@ -189,31 +172,12 @@ where
             "[REQ] Handshake complete"
         );
 
-        // Create arena for zero-copy allocation
-        let arena = IoArena::new();
-
-        // Create ZMTP decoder
-        let decoder = ZmtpDecoder::new();
-
-        // Create segmented recv buffer
-        let recv = SegmentedBuffer::new();
-
-        // Create write buffer (reused for sends)
-        let write_buf = BytesMut::with_capacity(config.write_buf_size);
-
         debug!("[REQ] Socket initialized");
 
         Ok(Self {
-            stream,
-            decoder,
-            arena,
-            recv,
-            write_buf,
+            base: SocketBase::new(stream, config, options),
             frames: SmallVec::new(),
             state: ReqState::Idle,
-            config,
-            options,
-            is_poisoned: false,
         })
     }
 
@@ -239,14 +203,6 @@ where
     /// # }
     /// ```
     pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
-        // Check health before attempting I/O
-        if self.is_poisoned {
-            return Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "Socket poisoned by cancelled I/O - reconnect required",
-            ));
-        }
-
         // Check state machine
         if self.state != ReqState::Idle {
             return Err(io::Error::new(
@@ -257,50 +213,12 @@ where
 
         trace!("[REQ] Sending {} frames", msg.len());
 
-        // Encode message - reuse write_buf to avoid allocation
-        self.write_buf.clear();
-        encode_multipart(&msg, &mut self.write_buf);
+        // Encode message into write_buf
+        self.base.write_buf.clear();
+        encode_multipart(&msg, &mut self.base.write_buf);
 
-        // Arm the guard - if dropped before disarm, socket remains poisoned
-        let guard = PoisonGuard::new(&mut self.is_poisoned);
-
-        // Write to stream using compio
-        use compio::buf::BufResult;
-
-        let buf = self.write_buf.split().freeze();
-        
-        // Apply send timeout from options
-        let BufResult(result, _) = match self.options.send_timeout {
-            None => {
-                // Blocking mode - no timeout
-                AsyncWrite::write(&mut self.stream, IoBytes::new(buf)).await
-            }
-            Some(dur) if dur.is_zero() => {
-                // Non-blocking mode
-                return Err(io::Error::new(
-                    io::ErrorKind::WouldBlock,
-                    "Socket is in non-blocking mode and cannot send immediately",
-                ));
-            }
-            Some(dur) => {
-                // Timed mode - apply timeout
-                use compio::time::timeout;
-                match timeout(dur, AsyncWrite::write(&mut self.stream, IoBytes::new(buf))).await {
-                    Ok(result) => result,
-                    Err(_) => {
-                        return Err(io::Error::new(
-                            io::ErrorKind::TimedOut,
-                            format!("Send operation timed out after {:?}", dur),
-                        ));
-                    }
-                }
-            }
-        };
-        
-        result?;
-
-        // Success - disarm the guard
-        guard.disarm();
+        // Delegate to base for writing
+        self.base.write_from_buf().await?;
 
         // Transition to awaiting reply
         self.state = ReqState::AwaitingReply;
@@ -352,7 +270,7 @@ where
         loop {
             // Try to decode frames from buffer
             loop {
-                match self.decoder.decode(&mut self.recv)? {
+                match self.base.decoder.decode(&mut self.base.recv)? {
                     Some(frame) => {
                         let more = frame.more();
                         self.frames.push(frame.payload);
@@ -369,50 +287,19 @@ where
                 }
             }
 
-            // Need more data - read from stream using reused buffer
-            use compio::buf::BufResult;
-
-            let slab = self.arena.alloc_mut(self.config.read_buf_size);
-            
-            // Apply recv timeout from options
-            let BufResult(result, slab) = match self.options.recv_timeout {
+            // Need more data - delegate to base
+            match self.base.read_frame().await? {
+                Some(_frame) => {
+                    // Frame added to recv buffer, continue decoding
+                    continue;
+                }
                 None => {
-                    // Blocking mode - no timeout
-                    AsyncRead::read(&mut self.stream, slab).await
+                    // EOF - connection closed
+                    trace!("[REQ] Connection closed");
+                    self.state = ReqState::Idle;
+                    return Ok(None);
                 }
-                Some(dur) if dur.is_zero() => {
-                    // Non-blocking mode
-                    return Err(io::Error::new(
-                        io::ErrorKind::WouldBlock,
-                        "Socket is in non-blocking mode and no data is available",
-                    ));
-                }
-                Some(dur) => {
-                    // Timed mode - apply timeout
-                    use compio::time::timeout;
-                    match timeout(dur, AsyncRead::read(&mut self.stream, slab)).await {
-                        Ok(result) => result,
-                        Err(_) => {
-                            return Err(io::Error::new(
-                                io::ErrorKind::TimedOut,
-                                format!("Receive operation timed out after {:?}", dur),
-                            ));
-                        }
-                    }
-                }
-            };
-            
-            let n = result?;
-
-            if n == 0 {
-                // EOF
-                trace!("[REQ] Connection closed");
-                self.state = ReqState::Idle;
-                return Ok(None);
             }
-
-            // Push bytes into segmented recv queue (zero-copy)
-            self.recv.push(slab.freeze());
         }
     }
 
@@ -424,13 +311,13 @@ where
     }
 
     /// Get a reference to the underlying stream.
-    pub const fn stream_ref(&self) -> &S {
-        &self.stream
+    pub fn stream_ref(&self) -> Option<&S> {
+        self.base.stream.as_ref()
     }
 
     /// Get a mutable reference to the underlying stream.
-    pub fn stream_mut(&mut self) -> &mut S {
-        &mut self.stream
+    pub fn stream_mut(&mut self) -> Option<&mut S> {
+        self.base.stream.as_mut()
     }
 
     /// Close the socket gracefully.
@@ -445,19 +332,19 @@ where
     /// Get a reference to the socket options.
     #[inline]
     pub fn options(&self) -> &SocketOptions {
-        &self.options
+        &self.base.options
     }
 
     /// Get a mutable reference to the socket options.
     #[inline]
     pub fn options_mut(&mut self) -> &mut SocketOptions {
-        &mut self.options
+        &mut self.base.options
     }
 
     /// Set socket options (builder-style).
     #[inline]
     pub fn set_options(&mut self, options: SocketOptions) {
-        self.options = options;
+        self.base.options = options;
     }
 }
 
