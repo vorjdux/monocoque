@@ -18,7 +18,7 @@ fn test_router_load_balancer_basic() {
             let (stream, _) = listener.accept().await.unwrap();
             
             // Create ROUTER socket
-            let mut router = RouterSocket::from_stream(stream).await.unwrap();
+            let mut router = RouterSocket::from_tcp(stream).await.unwrap();
 
             // Receive message from dealer
             let msg = router.recv().await.unwrap();

@@ -14,6 +14,7 @@ use compio::net::TcpStream;
 use monocoque_core::alloc::IoArena;
 use monocoque_core::buffer::SegmentedBuffer;
 use monocoque_core::options::SocketOptions;
+use monocoque_core::poison::PoisonGuard;
 use smallvec::SmallVec;
 use std::io;
 use tracing::{debug, trace};
@@ -42,9 +43,7 @@ where
     config: BufferConfig,
     /// Socket options (timeouts, limits, etc.)
     options: SocketOptions,
-    /// Connection health flag (true if I/O was cancelled mid-operation)
-    /// Note: SUB sockets are receive-only, so this field is reserved for consistency
-    #[allow(dead_code)]
+    /// Connection health flag (true if receive was cancelled mid-operation)
     is_poisoned: bool,
 }
 
@@ -211,7 +210,18 @@ where
     /// This will keep reading and filtering messages until one matches
     /// the active subscriptions.
     pub async fn recv(&mut self) -> io::Result<Option<Vec<Bytes>>> {
-        loop {
+        // Check poison flag first
+        if self.is_poisoned {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "Socket is poisoned from previous incomplete operation",
+            ));
+        }
+
+        // Create guard to poison socket if we panic or cancel mid-operation
+        let guard = PoisonGuard::new(&mut self.is_poisoned);
+
+        'outer: loop {
             trace!("[SUB] Waiting for message");
 
             // Read from stream until we have a complete message
@@ -229,15 +239,29 @@ where
                                 trace!("[SUB] Received {} frames", msg.len());
 
                                 // Check if message matches any subscription
-                                if self.matches_subscription(&msg) {
+                                // Need to check subscriptions without borrowing self while guard is active
+                                let matches = {
+                                    let subscriptions = &self.subscriptions;
+                                    msg.first().map_or(false, |first_frame| {
+                                        subscriptions.is_empty()
+                                            || subscriptions
+                                                .iter()
+                                                .any(|sub| first_frame.starts_with(sub))
+                                    })
+                                };
+
+                                if matches {
+                                    guard.disarm();
                                     return Ok(Some(msg));
                                 }
                                 trace!("[SUB] Message filtered out (no matching subscription)");
-                                // Continue to next message
-                                break;
+                                // Continue looking for next message in buffer
+                                continue 'outer;
                             }
                         }
-                        None => break, // Need more data
+                        None => {
+                            break; // Need more data
+                        }
                     }
                 }
 
@@ -279,11 +303,13 @@ where
                 if n == 0 {
                     // EOF
                     trace!("[SUB] Connection closed");
+                    guard.disarm();
                     return Ok(None);
                 }
 
                 // Push bytes into segmented recv queue (zero-copy)
                 self.recv.push(slab.freeze());
+                println!("[SUB recv] Pushed {} bytes to buffer, total buffer len={}", n, self.recv.len());
             }
         }
     }

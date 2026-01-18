@@ -37,16 +37,15 @@ fn monocoque_pubsub_fanout(c: &mut Criterion) {
                         let payload = Bytes::from(vec![0u8; MESSAGE_SIZE]);
 
                         // Start PUB server
-                        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-                        let server_addr = listener.local_addr().unwrap();
+                        let mut pub_socket = PubSocket::bind("127.0.0.1:0").await.unwrap();
+                        let server_addr = pub_socket.local_addr().unwrap();
 
-                        // Accept first connection and spawn pub task
+                        // Accept subscriber connections and spawn pub task
                         let pub_task = compio::runtime::spawn(async move {
-                            let (stream, _) = listener.accept().await.unwrap();
-                            let mut pub_socket =
-                                PubSocket::from_tcp_with_config(stream, BufferConfig::large())
-                                    .await
-                                    .unwrap();
+                            // Accept N subscribers
+                            for _ in 0..num_subs {
+                                pub_socket.accept_subscriber().await.unwrap();
+                            }
 
                             // Wait for subscriptions
                             compio::time::sleep(Duration::from_millis(50)).await;
@@ -166,12 +165,12 @@ fn monocoque_topic_filtering(c: &mut Criterion) {
             rt.block_on(async {
                 let payload = Bytes::from(vec![0u8; MESSAGE_SIZE]);
 
-                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-                let server_addr = listener.local_addr().unwrap();
+                let mut pub_socket = PubSocket::bind("127.0.0.1:0").await.unwrap();
+                let server_addr = pub_socket.local_addr().unwrap();
 
                 let pub_task = compio::runtime::spawn(async move {
-                    let (stream, _) = listener.accept().await.unwrap();
-                    let mut pub_socket = PubSocket::from_tcp(stream).await.unwrap();
+                    // Accept subscriber
+                    pub_socket.accept_subscriber().await.unwrap();
 
                     compio::time::sleep(Duration::from_millis(50)).await;
 

@@ -99,6 +99,22 @@ pub struct SocketOptions {
     /// - `None`: No limit (default)
     /// - `Some(size)`: Reject messages larger than size
     pub max_msg_size: Option<usize>,
+
+    /// Read buffer size (bytes)
+    ///
+    /// Size of arena-allocated buffers for reading from network.
+    /// - Default: 8192 (8KB) - balanced for most workloads
+    /// - Small: 4096 (4KB) - for low-latency with small messages
+    /// - Large: 16384 (16KB) - for high-throughput with large messages
+    pub read_buffer_size: usize,
+
+    /// Write buffer size (bytes)
+    ///
+    /// Initial capacity of write buffers for encoding messages.
+    /// - Default: 8192 (8KB) - balanced for most workloads
+    /// - Small: 4096 (4KB) - for small messages
+    /// - Large: 16384 (16KB) - for large messages
+    pub write_buffer_size: usize,
 }
 
 impl Default for SocketOptions {
@@ -115,6 +131,8 @@ impl Default for SocketOptions {
             send_hwm: 1000,
             immediate: false,
             max_msg_size: None, // No limit
+            read_buffer_size: 8192,  // 8KB - balanced default
+            write_buffer_size: 8192, // 8KB - balanced default
         }
     }
 }
@@ -201,6 +219,46 @@ impl SocketOptions {
     /// Set maximum message size.
     pub fn with_max_msg_size(mut self, size: Option<usize>) -> Self {
         self.max_msg_size = size;
+        self
+    }
+
+    /// Set read buffer size.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use monocoque_core::options::SocketOptions;
+    ///
+    /// // Small buffers for low latency
+    /// let opts = SocketOptions::new().with_read_buffer_size(4096);
+    ///
+    /// // Large buffers for throughput
+    /// let opts = SocketOptions::new().with_read_buffer_size(16384);
+    /// ```
+    pub fn with_read_buffer_size(mut self, size: usize) -> Self {
+        self.read_buffer_size = size;
+        self
+    }
+
+    /// Set write buffer size.
+    pub fn with_write_buffer_size(mut self, size: usize) -> Self {
+        self.write_buffer_size = size;
+        self
+    }
+
+    /// Set both read and write buffer sizes (convenience method).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use monocoque_core::options::SocketOptions;
+    ///
+    /// // Small buffers for both
+    /// let opts = SocketOptions::new().with_buffer_sizes(4096, 4096);
+    /// ```
+    pub fn with_buffer_sizes(mut self, read_size: usize, write_size: usize) -> Self {
+        self.read_buffer_size = read_size;
+        self.write_buffer_size = write_size;
         self
     }
 

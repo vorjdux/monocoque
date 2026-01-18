@@ -17,7 +17,7 @@ fn test_interop_pair() {
             let (stream, _) = listener.accept().await.unwrap();
             
             // Create DEALER socket (works as PAIR for point-to-point)
-            let mut dealer = DealerSocket::from_stream(stream).await.unwrap();
+            let mut dealer = DealerSocket::from_tcp(stream).await.unwrap();
 
             // Echo server logic
             let msg = dealer.recv().await.unwrap();

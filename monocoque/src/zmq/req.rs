@@ -176,55 +176,7 @@ impl ReqSocket {
         Ok(sock)
     }
 
-    /// Create a REQ socket from an existing TCP stream.
-    ///
-    /// **Deprecated**: Use [`ReqSocket::from_tcp()`] instead to enable TCP_NODELAY for optimal latency.
-    /// This method exists for compatibility but doesn't enable TCP_NODELAY.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// use monocoque::zmq::ReqSocket;
-    /// use compio::net::TcpStream;
-    ///
-    /// # async fn example() -> std::io::Result<()> {
-    /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
-    /// // Prefer this:
-    /// let socket = ReqSocket::from_tcp(stream).await?;
-    /// // Over this:
-    /// // let socket = ReqSocket::from_stream(stream).await;
-    /// # Ok(())
-    /// # }
-    /// ```
-    #[deprecated(
-        since = "0.1.0",
-        note = "Use `from_tcp()` instead to enable TCP_NODELAY"
-    )]
-    pub async fn from_stream(stream: TcpStream) -> io::Result<Self> {
-        Ok(Self {
-            inner: InternalReq::new(stream).await?,
-            monitor: None,
-        })
-    }
 
-    /// Create a REQ socket from an existing TCP stream with custom buffer configuration.
-    ///
-    /// # Buffer Configuration
-    /// - Use `BufferConfig::small()` (4KB) for low-latency request/reply with small messages (recommended)
-    /// - Use `BufferConfig::large()` (16KB) for high-throughput with large messages
-    #[deprecated(
-        since = "0.1.0",
-        note = "Use `from_tcp_with_config()` instead to enable TCP_NODELAY"
-    )]
-    pub async fn from_stream_with_config(
-        stream: TcpStream,
-        config: monocoque_core::config::BufferConfig,
-    ) -> io::Result<Self> {
-        Ok(Self {
-            inner: InternalReq::with_config(stream, config).await?,
-            monitor: None,
-        })
-    }
 
     /// Create a REQ socket from a TCP stream with TCP_NODELAY enabled.
     pub async fn from_tcp(stream: TcpStream) -> io::Result<Self> {
@@ -234,29 +186,35 @@ impl ReqSocket {
         })
     }
 
-    /// Create a REQ socket from a TCP stream with TCP_NODELAY and custom config.
-    pub async fn from_tcp_with_config(
-        stream: TcpStream,
-        config: monocoque_core::config::BufferConfig,
-    ) -> io::Result<Self> {
-        Ok(Self {
-            inner: InternalReq::from_tcp_with_config(stream, config).await?,
-            monitor: None,
-        })
-    }
-
     /// Create a REQ socket from a TCP stream with custom socket options.
     pub async fn from_tcp_with_options(
         stream: TcpStream,
         options: monocoque_core::options::SocketOptions,
     ) -> io::Result<Self> {
+        let config = monocoque_core::config::BufferConfig {
+            read_buf_size: options.read_buffer_size,
+            write_buf_size: options.write_buffer_size,
+        };
         Ok(Self {
-            inner: InternalReq::from_tcp_with_options(
-                stream,
-                monocoque_core::config::BufferConfig::small(),
-                options,
-            )
-            .await?,
+            inner: InternalReq::from_tcp_with_options(stream, config, options).await?,
+            monitor: None,
+        })
+    }
+
+    /// Create a REQ socket from any stream with custom options.
+    pub async fn with_options<Stream>(
+        stream: Stream,
+        options: monocoque_core::options::SocketOptions,
+    ) -> io::Result<ReqSocket<Stream>>
+    where
+        Stream: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+    {
+        let config = monocoque_core::config::BufferConfig {
+            read_buf_size: options.read_buffer_size,
+            write_buf_size: options.write_buffer_size,
+        };
+        Ok(ReqSocket {
+            inner: InternalReq::with_options(stream, config, options).await?,
             monitor: None,
         })
     }

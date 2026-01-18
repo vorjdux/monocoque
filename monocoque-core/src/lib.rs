@@ -31,6 +31,7 @@ pub mod poison;
 pub mod reconnect;
 pub mod router;
 pub mod tcp;
+pub mod timeout;
 
 #[cfg(unix)]
 pub mod ipc;
@@ -44,7 +45,7 @@ pub mod pubsub {
 // Keep it minimal to avoid API lock-in.
 pub mod prelude {
     pub use crate::alloc::{IoArena, SlabMut};
-    pub use crate::backpressure::{BytePermits, NoOpPermits, Permit};
+    pub use crate::backpressure::{BytePermits, NoOpPermits, Permit, SemaphorePermits};
     pub use crate::buffer::SegmentedBuffer;
     pub use crate::endpoint::Endpoint;
     pub use crate::monitor::{SocketEvent, SocketMonitor};
