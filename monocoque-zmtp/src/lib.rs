@@ -16,6 +16,9 @@
 //! - **REP**: Synchronous reply server (stateful envelope tracking)
 //! - **PUB**: Publisher for broadcasting events
 //! - **SUB**: Subscriber with topic-based filtering
+//! - **PUSH**: Pipeline push for task distribution
+//! - **PULL**: Pipeline pull for task reception
+//! - **PAIR**: Exclusive peer-to-peer communication
 //!
 //! ## For Application Development
 //!
@@ -75,7 +78,10 @@ pub mod session;
 
 // Socket implementations
 pub mod dealer;
+pub mod pair;
 pub mod publisher;
+pub mod pull;
+pub mod push;
 pub mod rep;
 pub mod req;
 pub mod router;
@@ -84,7 +90,10 @@ pub mod subscriber;
 // Re-export socket types for clean API
 pub use dealer::DealerSocket;
 pub use monocoque_core::config::BufferConfig;
+pub use pair::PairSocket;
 pub use publisher::PubSocket;
+pub use pull::PullSocket;
+pub use push::PushSocket;
 pub use rep::RepSocket;
 pub use req::ReqSocket;
 pub use router::RouterSocket;
@@ -100,6 +109,9 @@ pub use session::{SocketType, ZmtpSession};
 /// ```
 pub mod prelude {
     pub use super::session::SocketType;
-    pub use super::{DealerSocket, PubSocket, RepSocket, ReqSocket, RouterSocket, SubSocket};
+    pub use super::{
+        DealerSocket, PairSocket, PubSocket, PullSocket, PushSocket, RepSocket, ReqSocket,
+        RouterSocket, SubSocket,
+    };
     pub use bytes::Bytes;
 }
