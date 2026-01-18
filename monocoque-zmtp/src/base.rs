@@ -179,6 +179,71 @@ where
         })
     }
 
+    /// Read raw bytes from the stream into the recv buffer without decoding.
+    ///
+    /// This is the low-level read primitive used by socket implementations to
+    /// accumulate multipart messages. Callers should manually decode frames
+    /// from the recv buffer using `decoder.decode()`.
+    ///
+    /// Returns:
+    /// - `Ok(n)` where n is the number of bytes read (n > 0)
+    /// - `Ok(0)` if EOF was reached (connection closed)
+    /// - `Err(e)` on I/O error
+    ///
+    /// On EOF, sets `stream = None` to mark disconnection.
+    pub(crate) async fn read_raw(&mut self) -> io::Result<usize> {
+        // Ensure we're connected
+        if self.stream.is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "Socket not connected",
+            ));
+        }
+
+        // Read from stream
+        use compio::buf::BufResult;
+        let slab = self.arena.alloc_mut(self.config.read_buf_size);
+
+        // Get stream reference only for I/O
+        let stream = self.stream.as_mut().unwrap(); // Safe: checked above
+
+        // Apply recv timeout
+        let BufResult(result, slab) = match self.options.recv_timeout {
+            None => AsyncRead::read(stream, slab).await,
+            Some(dur) if dur.is_zero() => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "Socket is in non-blocking mode and no data is available",
+                ));
+            }
+            Some(dur) => {
+                use compio::time::timeout;
+                match timeout(dur, AsyncRead::read(stream, slab)).await {
+                    Ok(result) => result,
+                    Err(_) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            format!("Receive operation timed out after {:?}", dur),
+                        ));
+                    }
+                }
+            }
+        };
+
+        let n = result?;
+
+        if n == 0 {
+            // EOF - mark stream as disconnected
+            trace!("[SocketBase] Connection closed (EOF)");
+            self.stream = None;
+            return Ok(0);
+        }
+
+        // Push bytes into recv buffer
+        self.recv.push(slab.freeze());
+        Ok(n)
+    }
+
     /// Read a single ZMTP frame from the stream.
     ///
     /// Returns:
@@ -188,61 +253,18 @@ where
     ///
     /// On EOF, sets `stream = None` to mark disconnection.
     pub(crate) async fn read_frame(&mut self) -> io::Result<Option<ZmtpFrame>> {
-        // Ensure we're connected
-        if self.stream.is_none() {
-            return Err(io::Error::new(
-                io::ErrorKind::NotConnected,
-                "Socket not connected",
-            ));
-        }
-
         loop {
             // Try to decode a frame from buffered data
             if let Some(frame) = self.decoder.decode(&mut self.recv)? {
                 return Ok(Some(frame));
             }
 
-            // Need more data - read from stream
-            use compio::buf::BufResult;
-            let slab = self.arena.alloc_mut(self.config.read_buf_size);
-
-            // Get stream reference only for I/O
-            let stream = self.stream.as_mut().unwrap(); // Safe: checked above
-
-            // Apply recv timeout
-            let BufResult(result, slab) = match self.options.recv_timeout {
-                None => AsyncRead::read(stream, slab).await,
-                Some(dur) if dur.is_zero() => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::WouldBlock,
-                        "Socket is in non-blocking mode and no data is available",
-                    ));
-                }
-                Some(dur) => {
-                    use compio::time::timeout;
-                    match timeout(dur, AsyncRead::read(stream, slab)).await {
-                        Ok(result) => result,
-                        Err(_) => {
-                            return Err(io::Error::new(
-                                io::ErrorKind::TimedOut,
-                                format!("Receive operation timed out after {:?}", dur),
-                            ));
-                        }
-                    }
-                }
-            };
-
-            let n = result?;
-
+            // Need more data - read raw bytes
+            let n = self.read_raw().await?;
             if n == 0 {
-                // EOF - mark stream as disconnected
-                trace!("[SocketBase] Connection closed (EOF)");
-                self.stream = None;
+                // EOF
                 return Ok(None);
             }
-
-            // Push bytes into recv buffer
-            self.recv.push(slab.freeze());
         }
     }
 

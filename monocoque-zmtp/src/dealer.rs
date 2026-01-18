@@ -245,18 +245,14 @@ where
                 }
             }
 
-            // Need more data - delegate to base
-            match self.base.read_frame().await? {
-                Some(_frame) => {
-                    // Frame added to recv buffer, continue decoding
-                    continue;
-                }
-                None => {
-                    // EOF - connection closed
-                    trace!("[DEALER] Connection closed");
-                    return Ok(None);
-                }
+            // Need more data - read raw bytes from stream
+            let n = self.base.read_raw().await?;
+            if n == 0 {
+                // EOF - connection closed
+                trace!("[DEALER] Connection closed");
+                return Ok(None);
             }
+            // Continue decoding with new data
         }
     }
 
