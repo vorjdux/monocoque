@@ -93,6 +93,18 @@ required-features = ["zmq"]
 name = "interop_pubsub_libzmq"
 required-features = ["zmq"]
 
+[[example]]
+name = "xpub_subscription_logging"
+required-features = ["zmq"]
+
+[[example]]
+name = "xsub_dynamic_subscription"
+required-features = ["zmq"]
+
+[[example]]
+name = "xpub_xsub_broker"
+required-features = ["zmq"]
+
 # Integration tests with libzmq
 [[test]]
 name = "interop_load_balance"

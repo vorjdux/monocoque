@@ -5,7 +5,8 @@
 //!
 //! Run with: cargo run --package monocoque --features zmq --example hwm_enforcement_demo
 
-use monocoque::zmq::prelude::*;
+use monocoque::zmq::{DealerSocket, RouterSocket, SocketOptions};
+use bytes::Bytes;
 use std::io::ErrorKind;
 use compio::net::{TcpListener, TcpStream};
 

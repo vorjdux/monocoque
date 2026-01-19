@@ -25,11 +25,13 @@ pub mod buffer;
 pub mod config;
 pub mod endpoint;
 pub mod error;
+pub mod message;
 pub mod monitor;
 pub mod options;
 pub mod poison;
 pub mod reconnect;
 pub mod router;
+pub mod subscription;
 pub mod tcp;
 pub mod timeout;
 

@@ -64,7 +64,7 @@ Monocoque is built as a layered system, each layer providing clean abstractions:
 ┌─────────────────────────────────────────────────────────────────────┐
 │              Application Layer (monocoque)                          │
 │  Public API: DealerSocket, RouterSocket, ReqSocket, RepSocket,      │
-│              PubSocket, SubSocket                                   │
+│              PubSocket, SubSocket, XPubSocket, XSubSocket            │
 │  • High-level ergonomic API (monocoque::zmq::*)                     │
 │  • Convenient constructors (connect, bind, connect_ipc)             │
 │  • Clean error handling                                             │
@@ -200,13 +200,15 @@ Monocoque has **Phase 0-3 implementation complete** with integration testing in 
 -   **NULL Authentication**: Greeting + handshake with Socket-Type metadata (Phase 1)
 -   **Sans-IO State Machine**: `ZmtpSession` with deterministic testing (Phase 1)
 -   **Feature-Gated Architecture**: Protocol namespaces (`monocoque::zmq::*`), zero unused code
--   **All Socket Types**: DEALER, ROUTER, REQ, REP, PUB, SUB fully implemented (Phase 2-4)
+-   **All Core Socket Types**: DEALER, ROUTER, REQ, REP, PUB, SUB, PUSH, PULL, PAIR fully implemented (Phase 2-4)
+-   **Extended Socket Types**: XPUB, XSUB for broker patterns (Phase 6)
 -   **TCP and IPC Transport**: Full support for both TCP and Unix domain sockets across all socket types
 -   **Consistent SocketOptions API**: All socket types support `from_tcp_with_options()` and `from_unix_stream_with_options()` for unified configuration
 -   **Endpoint Parsing**: Unified `tcp://` and `ipc://` addressing with validation
 -   **Socket Monitoring**: Channel-based lifecycle events (Connected, Disconnected, etc.)
 -   **Generic Stream Architecture**: Zero-cost abstractions supporting any `AsyncRead + AsyncWrite` stream
 -   **Interop Examples**: Working examples demonstrating libzmq compatibility
+-   **Message Builder API**: Ergonomic message construction with `push()`, `push_str()`, `push_json()`
 
 ### 🧪 Integration Testing (Current Priority)
 
@@ -597,12 +599,18 @@ See [`docs/blueprints/07-project-roadmap-and-future-phases.md`](docs/blueprints/
 
 ## Documentation
 
+### Architecture & Design
 -   📘 **[Overview](docs/blueprints/00-overview.md)** - Project vision and architecture
 -   🔒 **[Safety Model](docs/blueprints/06-safety-model-and-unsafe-audit.md)** - Memory guarantees and unsafe audit
 -   🏗️ **[Phase 0: Memory & I/O](docs/blueprints/02-phase0-memory-and-io.md)** - Memory management and direct stream I/O
 -   📡 **[Phase 1: ZMTP](docs/blueprints/03-phase1-zmtp-framing-and-handshake.md)** - Protocol implementation
 -   🔀 **[Phase 2: Routing](docs/blueprints/04-phase2-router-dealer-and-load-balancing.md)** - ROUTER/DEALER semantics
 -   📢 **[Phase 3: PUB/SUB](docs/blueprints/05-phase3-pubsub-and-subscription-index.md)** - Subscription engine
+-   🛡️ **[Phase 5: Reliability](docs/RELIABILITY_AND_RESILIENCE.md)** - Reconnection, HWM, PoisonGuard
+
+### Compatibility & Roadmap
+-   🗺️ **[ZeroMQ Compatibility Roadmap](docs/ZEROMQ_COMPATIBILITY_ROADMAP.md)** - Complete libzmq feature analysis and implementation plan
+-   ⚡ **[Performance Roadmap](docs/PERFORMANCE_ROADMAP.md)** - Optimization phases and benchmarking strategy
 
 ---
 

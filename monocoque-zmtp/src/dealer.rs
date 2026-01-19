@@ -585,8 +585,26 @@ impl DealerSocket<TcpStream> {
     ///
     /// Returns Ok(()) if reconnection succeeded, Err otherwise.
     /// On success, resets the poisoned flag and reconnection state.
-    async fn try_reconnect(&mut self) -> io::Result<()> {
+    pub async fn try_reconnect(&mut self) -> io::Result<()> {
         self.base.try_reconnect(SocketType::Dealer).await
+    }
+
+    /// Check if the socket is poisoned (I/O was cancelled mid-operation).
+    #[inline]
+    pub fn is_poisoned(&self) -> bool {
+        self.base.is_poisoned()
+    }
+
+    /// Get the number of currently buffered messages.
+    #[inline]
+    pub fn buffered_messages(&self) -> usize {
+        self.base.buffered_messages()
+    }
+
+    /// Check if the socket is currently connected.
+    #[inline]
+    pub fn is_connected(&self) -> bool {
+        self.base.is_connected()
     }
 
     /// Receive a message with automatic reconnection.

@@ -65,6 +65,8 @@ pub use monocoque_core::config::BufferConfig;
 pub use monocoque_core::endpoint::{Endpoint, EndpointError};
 pub use monocoque_core::monitor::{SocketEvent, SocketMonitor};
 pub use monocoque_core::options::SocketOptions;
+pub use monocoque_core::subscription::{Subscription, SubscriptionEvent, SubscriptionTrie};
+pub use monocoque_zmtp::{XPubSocket, XSubSocket};
 pub use publisher::PubSocket;
 pub use rep::RepSocket;
 pub use req::ReqSocket;
@@ -82,11 +84,15 @@ pub use monocoque_core::ipc;
 /// use monocoque::zmq::prelude::*;
 ///
 /// // Now you have:
-/// // - DealerSocket, RouterSocket, ReqSocket, RepSocket, PubSocket, SubSocket
+/// // - DealerSocket, RouterSocket, ReqSocket, RepSocket
+/// // - PubSocket, SubSocket, XPubSocket, XSubSocket
 /// // - Bytes for zero-copy messages
 /// // - BufferConfig, SocketOptions for configuration
 /// ```
 pub mod prelude {
-    pub use super::{BufferConfig, DealerSocket, PubSocket, RepSocket, ReqSocket, RouterSocket, SocketOptions, SubSocket};
+    pub use super::{
+        BufferConfig, DealerSocket, PubSocket, RepSocket, ReqSocket, RouterSocket, SocketOptions,
+        SubSocket, Subscription, SubscriptionEvent, SubscriptionTrie, XPubSocket, XSubSocket,
+    };
     pub use bytes::Bytes;
 }

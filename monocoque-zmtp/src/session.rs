@@ -15,6 +15,8 @@ pub enum SocketType {
     Rep,
     Push,
     Pull,
+    Xpub,
+    Xsub,
 }
 
 impl SocketType {
@@ -30,6 +32,8 @@ impl SocketType {
             Self::Rep => "REP",
             Self::Push => "PUSH",
             Self::Pull => "PULL",
+            Self::Xpub => "XPUB",
+            Self::Xsub => "XSUB",
         }
     }
 }
