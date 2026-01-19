@@ -86,6 +86,8 @@ pub mod rep;
 pub mod req;
 pub mod router;
 pub mod subscriber;
+pub mod xpub;
+pub mod xsub;
 
 // Re-export socket types for clean API
 pub use dealer::DealerSocket;
@@ -98,6 +100,8 @@ pub use rep::RepSocket;
 pub use req::ReqSocket;
 pub use router::RouterSocket;
 pub use subscriber::SubSocket;
+pub use xpub::XPubSocket;
+pub use xsub::XSubSocket;
 
 // Re-export commonly used types
 pub use session::{SocketType, ZmtpSession};
@@ -111,7 +115,7 @@ pub mod prelude {
     pub use super::session::SocketType;
     pub use super::{
         DealerSocket, PairSocket, PubSocket, PullSocket, PushSocket, RepSocket, ReqSocket,
-        RouterSocket, SubSocket,
+        RouterSocket, SubSocket, XPubSocket, XSubSocket,
     };
     pub use bytes::Bytes;
 }

@@ -115,6 +115,61 @@ pub struct SocketOptions {
     /// - Small: 4096 (4KB) - for small messages
     /// - Large: 16384 (16KB) - for large messages
     pub write_buffer_size: usize,
+
+    /// Socket identity / routing ID (ZMQ_ROUTING_ID / ZMQ_IDENTITY)
+    ///
+    /// Identity for ROUTER addressing. If None, a random UUID is generated.
+    /// - Default: None (auto-generate)
+    /// - Custom: Set for stable identity across reconnections
+    pub routing_id: Option<bytes::Bytes>,
+
+    /// ROUTER mandatory mode (ZMQ_ROUTER_MANDATORY)
+    ///
+    /// - `false` (default): Silently drop messages to unknown peers
+    /// - `true`: Return error when sending to unknown peer
+    pub router_mandatory: bool,
+
+    /// ROUTER handover mode (ZMQ_ROUTER_HANDOVER)
+    ///
+    /// - `false` (default): Disconnect old peer when new peer with same identity connects
+    /// - `true`: Hand over pending messages to new peer with same identity
+    pub router_handover: bool,
+
+    /// Probe ROUTER on connect (ZMQ_PROBE_ROUTER)
+    ///
+    /// - `false` (default): Normal operation
+    /// - `true`: Send empty message on connect to probe ROUTER identity
+    pub probe_router: bool,
+
+    /// XPUB verbose mode (ZMQ_XPUB_VERBOSE)
+    ///
+    /// - `false` (default): Only report new subscriptions
+    /// - `true`: Report all subscription messages (including duplicates)
+    pub xpub_verbose: bool,
+
+    /// XPUB manual mode (ZMQ_XPUB_MANUAL)
+    ///
+    /// - `false` (default): Automatic subscription management
+    /// - `true`: Manual subscription control via send()
+    pub xpub_manual: bool,
+
+    /// XPUB welcome message (ZMQ_XPUB_WELCOME_MSG)
+    ///
+    /// Message to send to new subscribers on connection.
+    /// Useful for last value cache (LVC) patterns.
+    pub xpub_welcome_msg: Option<bytes::Bytes>,
+
+    /// XSUB verbose unsubscribe (ZMQ_XSUB_VERBOSE_UNSUBSCRIBE)
+    ///
+    /// - `false` (default): Don't send explicit unsubscribe messages
+    /// - `true`: Send unsubscribe messages upstream
+    pub xsub_verbose_unsubs: bool,
+
+    /// Conflate messages (ZMQ_CONFLATE)
+    ///
+    /// - `false` (default): Queue all messages
+    /// - `true`: Keep only last message (overwrite queue)
+    pub conflate: bool,
 }
 
 impl Default for SocketOptions {
@@ -133,6 +188,15 @@ impl Default for SocketOptions {
             max_msg_size: None, // No limit
             read_buffer_size: 8192,  // 8KB - balanced default
             write_buffer_size: 8192, // 8KB - balanced default
+            routing_id: None,
+            router_mandatory: false,
+            router_handover: false,
+            probe_router: false,
+            xpub_verbose: false,
+            xpub_manual: false,
+            xpub_welcome_msg: None,
+            xsub_verbose_unsubs: false,
+            conflate: false,
         }
     }
 }
@@ -259,6 +323,70 @@ impl SocketOptions {
     pub fn with_buffer_sizes(mut self, read_size: usize, write_size: usize) -> Self {
         self.read_buffer_size = read_size;
         self.write_buffer_size = write_size;
+        self
+    }
+
+    /// Set socket routing ID / identity.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use monocoque_core::options::SocketOptions;
+    /// use bytes::Bytes;
+    ///
+    /// let opts = SocketOptions::new()
+    ///     .with_routing_id(Bytes::from_static(b"worker-01"));
+    /// ```
+    pub fn with_routing_id(mut self, id: bytes::Bytes) -> Self {
+        self.routing_id = Some(id);
+        self
+    }
+
+    /// Enable ROUTER mandatory mode.
+    pub fn with_router_mandatory(mut self, enabled: bool) -> Self {
+        self.router_mandatory = enabled;
+        self
+    }
+
+    /// Enable ROUTER handover mode.
+    pub fn with_router_handover(mut self, enabled: bool) -> Self {
+        self.router_handover = enabled;
+        self
+    }
+
+    /// Enable ROUTER probe on connect.
+    pub fn with_probe_router(mut self, enabled: bool) -> Self {
+        self.probe_router = enabled;
+        self
+    }
+
+    /// Enable XPUB verbose mode.
+    pub fn with_xpub_verbose(mut self, enabled: bool) -> Self {
+        self.xpub_verbose = enabled;
+        self
+    }
+
+    /// Enable XPUB manual mode.
+    pub fn with_xpub_manual(mut self, enabled: bool) -> Self {
+        self.xpub_manual = enabled;
+        self
+    }
+
+    /// Set XPUB welcome message.
+    pub fn with_xpub_welcome_msg(mut self, msg: bytes::Bytes) -> Self {
+        self.xpub_welcome_msg = Some(msg);
+        self
+    }
+
+    /// Enable XSUB verbose unsubscribe.
+    pub fn with_xsub_verbose_unsubs(mut self, enabled: bool) -> Self {
+        self.xsub_verbose_unsubs = enabled;
+        self
+    }
+
+    /// Enable message conflation (keep only last message).
+    pub fn with_conflate(mut self, enabled: bool) -> Self {
+        self.conflate = enabled;
         self
     }
 

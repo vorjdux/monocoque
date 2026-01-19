@@ -4,6 +4,7 @@
 //! connection events like connects, disconnects, binds, etc.
 
 use monocoque::zmq::{SocketEvent, SocketMonitor};
+use monocoque_core::endpoint::Endpoint;
 use std::time::Duration;
 
 #[compio::main]
@@ -23,9 +24,9 @@ async fn main() -> std::io::Result<()> {
     // 3. Spawn a task to handle events
     
     println!("\nExample event types:");
-    let tcp_ep = monocoque::zmq::Endpoint::parse("tcp://127.0.0.1:5555").unwrap();
-    let bind_ep = monocoque::zmq::Endpoint::parse("tcp://0.0.0.0:6666").unwrap();
-    let peer_ep = monocoque::zmq::Endpoint::parse("tcp://192.168.1.100:12345").unwrap();
+    let tcp_ep = Endpoint::parse("tcp://127.0.0.1:5555").unwrap();
+    let bind_ep = Endpoint::parse("tcp://0.0.0.0:6666").unwrap();
+    let peer_ep = Endpoint::parse("tcp://192.168.1.100:12345").unwrap();
     
     println!("  {}", SocketEvent::Connected(tcp_ep.clone()));
     println!("  {}", SocketEvent::Bound(bind_ep.clone()));
@@ -58,7 +59,7 @@ fn create_example_monitor() -> SocketMonitor {
     let (sender, receiver) = flume::unbounded();
     
     // Simulate some events
-    let tcp_ep = monocoque::zmq::Endpoint::parse("tcp://127.0.0.1:5555").unwrap();
+    let tcp_ep = Endpoint::parse("tcp://127.0.0.1:5555").unwrap();
     let _ = sender.send(SocketEvent::Connected(tcp_ep.clone()));
     let _ = sender.send(SocketEvent::Disconnected(tcp_ep));
     
