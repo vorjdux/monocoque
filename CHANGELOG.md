@@ -8,46 +8,48 @@
 
 #### API Changes
 
-- **Added** `from_unix_stream_with_options()` to:
-  - `RepSocket` - Now has consistent Unix stream creation
-  - `ReqSocket` - Now has consistent Unix stream creation  
-  - `RouterSocket` - Now has consistent Unix stream creation
-  - `SubSocket` - Now has consistent Unix stream creation
+-   **Added** `from_unix_stream_with_options()` to:
 
-- **Pattern**: All methods convert `SocketOptions` to internal `BufferConfig`:
-  ```rust
-  pub async fn from_unix_stream_with_options(
-      stream: UnixStream,
-      options: SocketOptions,
-  ) -> io::Result<Self>
-  ```
+    -   `RepSocket` - Now has consistent Unix stream creation
+    -   `ReqSocket` - Now has consistent Unix stream creation
+    -   `RouterSocket` - Now has consistent Unix stream creation
+    -   `SubSocket` - Now has consistent Unix stream creation
+
+-   **Pattern**: All methods convert `SocketOptions` to internal `BufferConfig`:
+    ```rust
+    pub async fn from_unix_stream_with_options(
+        stream: UnixStream,
+        options: SocketOptions,
+    ) -> io::Result<Self>
+    ```
 
 #### Benchmark Fixes
 
-- **Updated** all 6 benchmark files to use `SocketOptions` API:
-  - `latency.rs` - Replaced `BufferConfig::small()` → `SocketOptions::default().with_buffer_sizes(4096, 4096)`
-  - `throughput.rs` - Updated Rep, Req, Router, Dealer socket creations
-  - `patterns.rs` - Fixed PUB/SUB subscribe() awaiting and error handling
-  - `pipelined_throughput.rs` - Updated to consistent SocketOptions usage
-  - `multithreaded.rs` - Updated DEALER/ROUTER creation
-  - `ipc_vs_tcp.rs` - Updated both TCP and Unix socket paths
+-   **Updated** all 6 benchmark files to use `SocketOptions` API:
 
-- **Fixed** deprecated API usage:
-  - Changed `from_stream_with_config()` → `from_tcp_with_options()`
-  - Ensured TCP_NODELAY enabled consistently
+    -   `latency.rs` - Replaced `BufferConfig::small()` → `SocketOptions::default().with_buffer_sizes(4096, 4096)`
+    -   `throughput.rs` - Updated Rep, Req, Router, Dealer socket creations
+    -   `patterns.rs` - Fixed PUB/SUB subscribe() awaiting and error handling
+    -   `pipelined_throughput.rs` - Updated to consistent SocketOptions usage
+    -   `multithreaded.rs` - Updated DEALER/ROUTER creation
+    -   `ipc_vs_tcp.rs` - Updated both TCP and Unix socket paths
+
+-   **Fixed** deprecated API usage:
+    -   Changed `from_stream_with_config()` → `from_tcp_with_options()`
+    -   Ensured TCP_NODELAY enabled consistently
 
 #### Debug Output Cleanup
 
-- **Changed** 17 `println!` statements → `debug!` macros in `handshake.rs`
-  - Eliminates console flooding during benchmarks
-  - Debug output now controlled via `RUST_LOG` environment variable
-  - Maintains structured logging infrastructure
+-   **Changed** 17 `println!` statements → `debug!` macros in `handshake.rs`
+    -   Eliminates console flooding during benchmarks
+    -   Debug output now controlled via `RUST_LOG` environment variable
+    -   Maintains structured logging infrastructure
 
 #### Consistency Improvements
 
-- **Ergonomics**: All socket types now have matching method signatures
-- **Backward Compatible**: Existing `from_unix_stream_with_config()` methods preserved
-- **Best Practices**: TCP_NODELAY enabled by default for optimal latency
+-   **Ergonomics**: All socket types now have matching method signatures
+-   **Backward Compatible**: Existing `from_unix_stream_with_config()` methods preserved
+-   **Best Practices**: TCP_NODELAY enabled by default for optimal latency
 
 ### 🏗️ SocketBase Refactoring: Zero-Cost Code Reuse (2026-01-18)
 
@@ -55,54 +57,55 @@
 
 #### Performance Impact
 
-- **Zero-cost abstraction**: Plain struct composition, no vtables or dynamic dispatch
-- **27.3% code reduction**: 784 lines eliminated across 5 refactored sockets
-- **All tests passing**: 100% backward compatible
+-   **Zero-cost abstraction**: Plain struct composition, no vtables or dynamic dispatch
+-   **27.3% code reduction**: 784 lines eliminated across 5 refactored sockets
+-   **All tests passing**: 100% backward compatible
 
 #### Refactored Socket Types
 
-- **DealerSocket**: 914→631 lines (-31.0%)
-- **RouterSocket**: 482→312 lines (-35.3%)
-- **RepSocket**: 504→388 lines (-23.0%)
-- **ReqSocket**: 513→395 lines (-23.0%)
-- **SubSocket**: 371→298 lines (-19.7%)
+-   **DealerSocket**: 914→631 lines (-31.0%)
+-   **RouterSocket**: 482→312 lines (-35.3%)
+-   **RepSocket**: 504→388 lines (-23.0%)
+-   **ReqSocket**: 513→395 lines (-23.0%)
+-   **SubSocket**: 371→298 lines (-19.7%)
 
 #### New Socket Implementations
 
-- **PairSocket** (203 lines) - Exclusive peer-to-peer bidirectional communication
-- **PushSocket** (164 lines) - Pipeline send-only endpoint for task distribution
-- **PullSocket** (186 lines) - Pipeline receive-only endpoint for task reception
+-   **PairSocket** (203 lines) - Exclusive peer-to-peer bidirectional communication
+-   **PushSocket** (164 lines) - Pipeline send-only endpoint for task distribution
+-   **PullSocket** (186 lines) - Pipeline receive-only endpoint for task reception
 
 #### Architecture
 
-- **SocketBase<S>**: Generic base infrastructure (534 lines)
-  - Stream management with reconnection support
-  - ZMTP decoder and buffers (arena, segmented recv, write buffers)
-  - Timeout handling (send_timeout, recv_timeout)
-  - Poison guard integration for cancellation safety
-  - Methods: `read_raw()`, `read_frame()`, `write_from_buf()`, `flush_send_buffer()`
+-   **`SocketBase<S>`**: Generic base infrastructure (534 lines)
+    -   Stream management with reconnection support
+    -   ZMTP decoder and buffers (arena, segmented recv, write buffers)
+    -   Timeout handling (send_timeout, recv_timeout)
+    -   Poison guard integration for cancellation safety
+    -   Methods: `read_raw()`, `read_frame()`, `write_from_buf()`, `flush_send_buffer()`
 
 #### Bug Fixes
 
-- **Fixed**: Double-decoding bug causing test hangs
-  - Issue: `read_frame()` decoded internally but sockets tried to decode again
-  - Solution: Added `read_raw()` for multipart message accumulation
-  - Result: Tests complete in 0.06s instead of hanging
+-   **Fixed**: Double-decoding bug causing test hangs
+    -   Issue: `read_frame()` decoded internally but sockets tried to decode again
+    -   Solution: Added `read_raw()` for multipart message accumulation
+    -   Result: Tests complete in 0.06s instead of hanging
 
 #### Complete Protocol Coverage
 
 Now supporting all 9 core ZMQ socket types:
-- Request-Reply: **REQ**, **REP**, **DEALER**, **ROUTER** ✅
-- Pub-Sub: **PUB**, **SUB** ✅
-- Pipeline: **PUSH**, **PULL** ✅ (NEW)
-- Exclusive: **PAIR** ✅ (NEW)
+
+-   Request-Reply: **REQ**, **REP**, **DEALER**, **ROUTER** ✅
+-   Pub-Sub: **PUB**, **SUB** ✅
+-   Pipeline: **PUSH**, **PULL** ✅ (NEW)
+-   Exclusive: **PAIR** ✅ (NEW)
 
 #### Implementation Details
 
-- All stream-based sockets use SocketBase composition
-- PubSocket remains worker-pool based (not applicable for SocketBase)
-- Generic over stream type: `S: AsyncRead + AsyncWrite + Unpin`
-- Maintains socket-specific logic (state machines, routing, filtering)
+-   All stream-based sockets use SocketBase composition
+-   PubSocket remains worker-pool based (not applicable for SocketBase)
+-   Generic over stream type: `S: AsyncRead + AsyncWrite + Unpin`
+-   Maintains socket-specific logic (state machines, routing, filtering)
 
 ---
 
@@ -112,44 +115,44 @@ Now supporting all 9 core ZMQ socket types:
 
 #### Breaking Changes
 
-- **Removed**: `MultiPubSocket` type - Use `PubSocket` (now uses worker pool by default)
-- **Removed**: Single-subscriber `PubSocket` implementation
-- **Changed**: `PubSocket` API now requires explicit subscriber management:
-  - `PubSocket::bind(addr)` - Bind and create worker pool
-  - `accept_subscriber()` - Accept new subscriber (assigns to worker)
-  - `send(Vec<Bytes>)` - Broadcast to all workers in parallel
-  - `subscriber_count()` - Get active subscriber count
-  - `local_addr()` - Get bound address
+-   **Removed**: `MultiPubSocket` type - Use `PubSocket` (now uses worker pool by default)
+-   **Removed**: Single-subscriber `PubSocket` implementation
+-   **Changed**: `PubSocket` API now requires explicit subscriber management:
+    -   `PubSocket::bind(addr)` - Bind and create worker pool
+    -   `accept_subscriber()` - Accept new subscriber (assigns to worker)
+    -   `send(Vec<Bytes>)` - Broadcast to all workers in parallel
+    -   `subscriber_count()` - Get active subscriber count
+    -   `local_addr()` - Get bound address
 
 #### New Features
 
-- **Worker Pool Architecture**: 
-  - Multiple OS threads (default: CPU core count)
-  - Each worker runs own compio runtime with io_uring
-  - Round-robin subscriber distribution
-  - Zero-copy broadcasting via `Arc<Bytes>`
-  - Background subscription reader per subscriber
+-   **Worker Pool Architecture**:
 
-- **New Examples**:
-  - `multi_pub_minimal.rs` - Minimal publisher example
-  - `multi_pub_test.rs` - Publisher with 3 subscribers
-  - `multi_sub_client.rs` - Test subscriber client
-  - `pubsub_events_new.rs` - Event distribution demo
+    -   Multiple OS threads (default: CPU core count)
+    -   Each worker runs own compio runtime with io_uring
+    -   Round-robin subscriber distribution
+    -   Zero-copy broadcasting via `Arc<Bytes>`
+    -   Background subscription reader per subscriber
+
+-   **New Examples**:
+    -   `multi_pub_minimal.rs` - Minimal publisher example
+    -   `multi_pub_test.rs` - Publisher with 3 subscribers
+    -   `multi_sub_client.rs` - Test subscriber client
+    -   `pubsub_events_new.rs` - Event distribution demo
 
 #### Updated
 
-- **All Examples**: Updated to use new PubSocket API
-  - `pubsub_events.rs` - Rewritten for worker pool
-  - `pubsub_multi_compio.rs` - Updated to new API
-  - `interop_pubsub_libzmq.rs` - Updated to `accept_subscriber()`
-  
-- **Tests**: Updated interop test to new API (marked `#[ignore]` due to compio runtime issues)
+-   **All Examples**: Updated to use new PubSocket API
+    -   `pubsub_events.rs` - Rewritten for worker pool
+    -   `pubsub_multi_compio.rs` - Updated to new API
+    -   `interop_pubsub_libzmq.rs` - Updated to `accept_subscriber()`
+-   **Tests**: Updated interop test to new API (marked `#[ignore]` due to compio runtime issues)
 
 #### Known Issues
 
-- Some pubsub examples experience compio task scheduling delays where `SubSocket::connect()` takes 3-4 seconds to return
-- This affects examples with complex task spawning patterns
-- Basic examples (`multi_pub_minimal`, `multi_pub_test`) work correctly
+-   Some pubsub examples experience compio task scheduling delays where `SubSocket::connect()` takes 3-4 seconds to return
+-   This affects examples with complex task spawning patterns
+-   Basic examples (`multi_pub_minimal`, `multi_pub_test`) work correctly
 
 ### �🚀 Phase 1 Complete: High-Performance API + Benchmarking (2026-01-14)
 
