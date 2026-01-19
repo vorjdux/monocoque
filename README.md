@@ -145,7 +145,8 @@ Monocoque is built as a layered system, each layer providing clean abstractions:
 -   **Buffer System**: `SegmentedBuffer` for efficient receive buffer management
 -   **Transport Utilities**: TCP options (`TCP_NODELAY`), IPC connection helpers
 -   **Endpoint Parsing**: `Endpoint::parse()` for `tcp://` and `ipc://` addressing
--   **Configuration**: `BufferConfig` for latency vs throughput tuning
+-   **Configuration**: `SocketOptions` for ergonomic socket configuration (buffer sizes, timeouts, etc.)
+-   **Legacy Support**: `BufferConfig` for internal buffer management
 -   **Routing Hubs**: Optional `RouterHub` and `PubSubHub` for advanced patterns (future use)
 
 #### 4. **IO Runtime** (Runtime Agnostic)
@@ -201,6 +202,7 @@ Monocoque has **Phase 0-3 implementation complete** with integration testing in 
 -   **Feature-Gated Architecture**: Protocol namespaces (`monocoque::zmq::*`), zero unused code
 -   **All Socket Types**: DEALER, ROUTER, REQ, REP, PUB, SUB fully implemented (Phase 2-4)
 -   **TCP and IPC Transport**: Full support for both TCP and Unix domain sockets across all socket types
+-   **Consistent SocketOptions API**: All socket types support `from_tcp_with_options()` and `from_unix_stream_with_options()` for unified configuration
 -   **Endpoint Parsing**: Unified `tcp://` and `ipc://` addressing with validation
 -   **Socket Monitoring**: Channel-based lifecycle events (Connected, Disconnected, etc.)
 -   **Generic Stream Architecture**: Zero-cost abstractions supporting any `AsyncRead + AsyncWrite` stream
@@ -363,10 +365,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### Example: Socket Options (Advanced Configuration)
+
+```rust
+use monocoque::zmq::{DealerSocket, SocketOptions};
+use std::time::Duration;
+
+#[compio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Configure socket with custom options
+    let options = SocketOptions::default()
+        .with_buffer_sizes(16384, 16384)  // 16KB buffers for high throughput
+        .with_send_timeout(Duration::from_secs(5))
+        .with_recv_timeout(Duration::from_secs(10));
+
+    // Use with TCP connection
+    let stream = compio::net::TcpStream::connect("127.0.0.1:5555").await?;
+    let mut socket = DealerSocket::from_tcp_with_options(stream, options).await?;
+
+    // Socket now uses custom configuration
+    socket.send(vec![b"test".into()]).await?;
+
+    Ok(())
+}
+```
+
 ### Example: DEALER Socket (IPC - Unix Only)
 
 ```rust
-use monocoque::zmq::DealerSocket;
+use monocoque::zmq::{DealerSocket, SocketOptions};
 
 #[cfg(unix)]
 #[compio::main]
@@ -378,6 +405,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Same API - send and receive work identically
     socket.send(vec![b"Hello".into()]).await?;
     let reply = socket.recv().await?;
+
+    // Or create from existing Unix stream with custom options
+    let stream = compio::net::UnixStream::connect("/tmp/dealer.sock").await?;
+    let options = SocketOptions::default().with_buffer_sizes(8192, 8192);
+    let mut socket = DealerSocket::from_unix_stream_with_options(stream, options).await?;
 
     Ok(())
 }
@@ -394,7 +426,7 @@ pub_socket.send(vec![b"topic.events".into(), b"data".into()]).await?;
 
 // Subscriber
 let mut sub_socket = SubSocket::connect("127.0.0.1:5556").await?;
-sub_socket.subscribe(b"topic");
+sub_socket.subscribe(b"topic").await?;  // subscribe is async
 let msg = sub_socket.recv().await?;
 ```
 
@@ -450,13 +482,13 @@ use monocoque::zmq::SubSocket;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Connect to TCP publisher
     let mut tcp_sub = SubSocket::connect("tcp://127.0.0.1:5555").await?;
-    tcp_sub.subscribe(b"topic");
+    tcp_sub.subscribe(b"topic").await?;  // subscribe is async
 
     // Connect to IPC publisher (Unix only)
     #[cfg(unix)]
     let mut ipc_sub = SubSocket::connect_ipc("/tmp/pub.sock").await?;
     #[cfg(unix)]
-    ipc_sub.subscribe(b"topic");
+    ipc_sub.subscribe(b"topic").await?;  // subscribe is async
 
     // Same receive API for both
     if let Some(msg) = tcp_sub.recv().await? {
@@ -514,6 +546,7 @@ Monocoque is in early development. Contributions are welcome, especially:
 | Socket Monitoring  | ZMQ Socket     | Via FFI           | ✅ Native Channels |
 | IPC Transport      | ✅ Yes         | Via FFI           | ✅ Native          |
 | Endpoint Parsing   | String-based   | String-based      | ✅ Validated       |
+| API Consistency    | C-style        | Varies by wrapper | ✅ Unified `SocketOptions` |
 | Protocol Evolution | Hard (C++)     | Impossible        | ✅ Sans-IO         |
 | Custom Protocols   | No             | No                | ✅ Yes             |
 | Runtime Coupling   | N/A            | Often Tokio-bound | ✅ Agnostic        |
@@ -536,6 +569,12 @@ Monocoque is in early development. Contributions are welcome, especially:
     -   [x] Comprehensive benchmark suite (6 benchmarks)
     -   [x] 21μs latency - **30% faster than libzmq**
     -   [x] 2M+ msg/sec throughput with batching
+-   [x] **API Consistency** - **Complete** ✅
+    -   [x] Unified `SocketOptions` configuration across all socket types
+    -   [x] Consistent `from_tcp_with_options()` for TCP streams
+    -   [x] Consistent `from_unix_stream_with_options()` for Unix domain sockets
+    -   [x] Replaced deprecated `BufferConfig` with ergonomic `SocketOptions`
+    -   [x] All benchmarks updated to use consistent API
 -   [ ] Multi-peer router architecture
 -   [ ] Connection pooling and load balancing patterns
 -   [ ] AddressSanitizer/ThreadSanitizer validation
