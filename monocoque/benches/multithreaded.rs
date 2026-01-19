@@ -18,7 +18,7 @@
 use bytes::Bytes;
 use compio::net::TcpListener;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use monocoque::zmq::{BufferConfig, DealerSocket, RouterSocket};
+use monocoque::zmq::{DealerSocket, RouterSocket, SocketOptions};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -69,9 +69,9 @@ fn monocoque_multithreaded_dealers(c: &mut Criterion) {
                                     let received_count = Arc::clone(&received_count);
 
                                     let handler = compio::runtime::spawn(async move {
-                                        let mut router = RouterSocket::from_tcp_with_config(
+                                        let mut router = RouterSocket::from_tcp_with_options(
                                             stream,
-                                            BufferConfig::large(),
+                                            SocketOptions::default().with_buffer_sizes(16384, 16384),
                                         )
                                         .await
                                         .unwrap();
@@ -112,9 +112,9 @@ fn monocoque_multithreaded_dealers(c: &mut Criterion) {
                                 rt.block_on(async {
                                     let stream =
                                         compio::net::TcpStream::connect(server_addr).await.unwrap();
-                                    let mut dealer = DealerSocket::from_tcp_with_config(
+                                    let mut dealer = DealerSocket::from_tcp_with_options(
                                         stream,
-                                        BufferConfig::large(),
+                                        SocketOptions::default().with_buffer_sizes(16384, 16384),
                                     )
                                     .await
                                     .unwrap();
@@ -191,9 +191,9 @@ fn monocoque_multithreaded_independent_pairs(c: &mut Criterion) {
                                 // Router task
                                 let router_task = compio::runtime::spawn(async move {
                                     let (stream, _) = listener.accept().await.unwrap();
-                                    let mut router = RouterSocket::from_tcp_with_config(
+                                    let mut router = RouterSocket::from_tcp_with_options(
                                         stream,
-                                        BufferConfig::large(),
+                                        SocketOptions::default().with_buffer_sizes(16384, 16384),
                                     )
                                     .await
                                     .unwrap();
@@ -208,9 +208,9 @@ fn monocoque_multithreaded_independent_pairs(c: &mut Criterion) {
                                 // Dealer task
                                 let stream =
                                     compio::net::TcpStream::connect(server_addr).await.unwrap();
-                                let mut dealer = DealerSocket::from_tcp_with_config(
+                                let mut dealer = DealerSocket::from_tcp_with_options(
                                     stream,
-                                    BufferConfig::large(),
+                                    SocketOptions::default().with_buffer_sizes(16384, 16384),
                                 )
                                 .await
                                 .unwrap();
@@ -290,9 +290,9 @@ fn monocoque_core_efficiency(c: &mut Criterion) {
 
                                 let router_task = compio::runtime::spawn(async move {
                                     let (stream, _) = listener.accept().await.unwrap();
-                                    let mut router = RouterSocket::from_tcp_with_config(
+                                    let mut router = RouterSocket::from_tcp_with_options(
                                         stream,
-                                        BufferConfig::large(),
+                                        SocketOptions::default().with_buffer_sizes(16384, 16384),
                                     )
                                     .await
                                     .unwrap();
@@ -306,9 +306,9 @@ fn monocoque_core_efficiency(c: &mut Criterion) {
 
                                 let stream =
                                     compio::net::TcpStream::connect(server_addr).await.unwrap();
-                                let mut dealer = DealerSocket::from_tcp_with_config(
+                                let mut dealer = DealerSocket::from_tcp_with_options(
                                     stream,
-                                    BufferConfig::large(),
+                                    SocketOptions::default().with_buffer_sizes(16384, 16384),
                                 )
                                 .await
                                 .unwrap();

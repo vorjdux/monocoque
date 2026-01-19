@@ -14,7 +14,7 @@
 use bytes::Bytes;
 use compio::net::TcpListener;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use monocoque::zmq::{BufferConfig, DealerSocket, RepSocket, ReqSocket, RouterSocket};
+use monocoque::zmq::{DealerSocket, RepSocket, ReqSocket, RouterSocket, SocketOptions};
 use std::time::Duration;
 
 const MESSAGE_SIZES: &[usize] = &[64, 256, 1024, 4096, 16384];
@@ -46,13 +46,13 @@ fn monocoque_req_rep_throughput(c: &mut Criterion) {
 
                     let accept_task = compio::runtime::spawn(async move {
                         let (stream, _) = listener.accept().await.unwrap();
-                        RepSocket::from_tcp_with_config(stream, BufferConfig::small())
+                        RepSocket::from_tcp_with_options(stream, SocketOptions::default().with_buffer_sizes(4096, 4096))
                             .await
                             .unwrap()
                     });
 
                     let stream = compio::net::TcpStream::connect(server_addr).await.unwrap();
-                    let mut req = ReqSocket::from_tcp_with_config(stream, BufferConfig::small())
+                    let mut req = ReqSocket::from_tcp_with_options(stream, SocketOptions::default().with_buffer_sizes(4096, 4096))
                         .await
                         .unwrap();
                     let rep = accept_task.await;
@@ -149,7 +149,7 @@ fn monocoque_dealer_router_throughput(c: &mut Criterion) {
                     let router_task = compio::runtime::spawn(async move {
                         let (stream, _) = listener.accept().await.unwrap();
                         let mut router =
-                            RouterSocket::from_tcp_with_config(stream, BufferConfig::large())
+                            RouterSocket::from_tcp_with_options(stream, SocketOptions::default().with_buffer_sizes(16384, 16384))
                                 .await
                                 .unwrap();
 
@@ -161,7 +161,7 @@ fn monocoque_dealer_router_throughput(c: &mut Criterion) {
 
                     let stream = compio::net::TcpStream::connect(server_addr).await.unwrap();
                     let mut dealer =
-                        DealerSocket::from_tcp_with_config(stream, BufferConfig::large())
+                        DealerSocket::from_tcp_with_options(stream, SocketOptions::default().with_buffer_sizes(16384, 16384))
                             .await
                             .unwrap();
 

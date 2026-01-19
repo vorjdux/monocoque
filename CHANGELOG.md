@@ -2,6 +2,53 @@
 
 ## Unreleased
 
+### 🔄 API Consistency: Unified SocketOptions Ergonomics (2026-01-19)
+
+**Summary**: Unified Unix domain socket API across all socket types to use `SocketOptions` consistently. Replaced debug output flooding with structured tracing. Fixed benchmark compilation and runtime issues.
+
+#### API Changes
+
+- **Added** `from_unix_stream_with_options()` to:
+  - `RepSocket` - Now has consistent Unix stream creation
+  - `ReqSocket` - Now has consistent Unix stream creation  
+  - `RouterSocket` - Now has consistent Unix stream creation
+  - `SubSocket` - Now has consistent Unix stream creation
+
+- **Pattern**: All methods convert `SocketOptions` to internal `BufferConfig`:
+  ```rust
+  pub async fn from_unix_stream_with_options(
+      stream: UnixStream,
+      options: SocketOptions,
+  ) -> io::Result<Self>
+  ```
+
+#### Benchmark Fixes
+
+- **Updated** all 6 benchmark files to use `SocketOptions` API:
+  - `latency.rs` - Replaced `BufferConfig::small()` → `SocketOptions::default().with_buffer_sizes(4096, 4096)`
+  - `throughput.rs` - Updated Rep, Req, Router, Dealer socket creations
+  - `patterns.rs` - Fixed PUB/SUB subscribe() awaiting and error handling
+  - `pipelined_throughput.rs` - Updated to consistent SocketOptions usage
+  - `multithreaded.rs` - Updated DEALER/ROUTER creation
+  - `ipc_vs_tcp.rs` - Updated both TCP and Unix socket paths
+
+- **Fixed** deprecated API usage:
+  - Changed `from_stream_with_config()` → `from_tcp_with_options()`
+  - Ensured TCP_NODELAY enabled consistently
+
+#### Debug Output Cleanup
+
+- **Changed** 17 `println!` statements → `debug!` macros in `handshake.rs`
+  - Eliminates console flooding during benchmarks
+  - Debug output now controlled via `RUST_LOG` environment variable
+  - Maintains structured logging infrastructure
+
+#### Consistency Improvements
+
+- **Ergonomics**: All socket types now have matching method signatures
+- **Backward Compatible**: Existing `from_unix_stream_with_config()` methods preserved
+- **Best Practices**: TCP_NODELAY enabled by default for optimal latency
+
 ### 🏗️ SocketBase Refactoring: Zero-Cost Code Reuse (2026-01-18)
 
 **Summary**: Eliminated code duplication across all stream-based sockets by extracting common infrastructure into `SocketBase<S>`. Implemented PAIR, PUSH, and PULL socket types to complete ZMQ protocol coverage. Reduced codebase by 784 lines while maintaining 100% API compatibility and zero runtime overhead.

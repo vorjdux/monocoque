@@ -26,7 +26,7 @@ use compio::net::{TcpListener, UnixListener};
 #[cfg(unix)]
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 #[cfg(unix)]
-use monocoque::zmq::{BufferConfig, DealerSocket, RepSocket, ReqSocket, RouterSocket};
+use monocoque::zmq::{DealerSocket, RepSocket, ReqSocket, RouterSocket, SocketOptions};
 #[cfg(unix)]
 use std::time::Duration;
 
@@ -62,9 +62,9 @@ fn monocoque_tcp_latency(c: &mut Criterion) {
 
                             let server_task = compio::runtime::spawn(async move {
                                 let (stream, _) = listener.accept().await.unwrap();
-                                let mut rep = RepSocket::from_tcp_with_config(
+                                let mut rep = RepSocket::from_tcp_with_options(
                                     stream,
-                                    BufferConfig::small(),
+                                    SocketOptions::default().with_buffer_sizes(4096, 4096),
                                 )
                                 .await
                                 .unwrap();
@@ -83,7 +83,7 @@ fn monocoque_tcp_latency(c: &mut Criterion) {
                             let stream =
                                 compio::net::TcpStream::connect(server_addr).await.unwrap();
                             let mut req =
-                                ReqSocket::from_tcp_with_config(stream, BufferConfig::small())
+                                ReqSocket::from_tcp_with_options(stream, SocketOptions::default().with_buffer_sizes(4096, 4096))
                                     .await
                                     .unwrap();
 
@@ -143,9 +143,9 @@ fn monocoque_ipc_latency(c: &mut Criterion) {
                                 let socket_path = socket_path.clone();
                                 async move {
                                     let (stream, _) = listener.accept().await.unwrap();
-                                    let mut rep = RepSocket::<compio::net::UnixStream>::from_unix_stream_with_config(
+                                    let mut rep = RepSocket::<compio::net::UnixStream>::from_unix_stream_with_options(
                                         stream,
-                                        BufferConfig::small(),
+                                        SocketOptions::default().with_buffer_sizes(4096, 4096),
                                     )
                                     .await
                                     .unwrap();
@@ -168,7 +168,7 @@ fn monocoque_ipc_latency(c: &mut Criterion) {
 
                             let stream = compio::net::UnixStream::connect(&socket_path).await.unwrap();
                             let mut req =
-                                ReqSocket::<compio::net::UnixStream>::from_unix_stream_with_config(stream, BufferConfig::small())
+                                ReqSocket::<compio::net::UnixStream>::from_unix_stream_with_options(stream, SocketOptions::default().with_buffer_sizes(4096, 4096))
                                     .await
                                     .unwrap();
 
@@ -221,9 +221,9 @@ fn monocoque_tcp_throughput(c: &mut Criterion) {
 
                         let router_task = compio::runtime::spawn(async move {
                             let (stream, _) = listener.accept().await.unwrap();
-                            let mut router = RouterSocket::from_tcp_with_config(
+                            let mut router = RouterSocket::from_tcp_with_options(
                                 stream,
-                                BufferConfig::large(),
+                                SocketOptions::default().with_buffer_sizes(16384, 16384),
                             )
                             .await
                             .unwrap();
@@ -236,9 +236,9 @@ fn monocoque_tcp_throughput(c: &mut Criterion) {
                         });
 
                         let stream = compio::net::TcpStream::connect(server_addr).await.unwrap();
-                        let mut dealer = DealerSocket::from_tcp_with_config(
+                        let mut dealer = DealerSocket::from_tcp_with_options(
                             stream,
-                            BufferConfig::large(),
+                            SocketOptions::default().with_buffer_sizes(16384, 16384),
                         )
                         .await
                         .unwrap();
@@ -289,9 +289,9 @@ fn monocoque_ipc_throughput(c: &mut Criterion) {
                             let socket_path = socket_path.clone();
                             async move {
                                 let (stream, _) = listener.accept().await.unwrap();
-                                let mut router = RouterSocket::<compio::net::UnixStream>::from_unix_stream_with_config(
+                                let mut router = RouterSocket::<compio::net::UnixStream>::from_unix_stream_with_options(
                                     stream,
-                                    BufferConfig::large(),
+                                    SocketOptions::default().with_buffer_sizes(16384, 16384),
                                 )
                                 .await
                                 .unwrap();
@@ -309,9 +309,9 @@ fn monocoque_ipc_throughput(c: &mut Criterion) {
                         compio::time::sleep(Duration::from_millis(10)).await;
 
                         let stream = compio::net::UnixStream::connect(&socket_path).await.unwrap();
-                        let mut dealer = DealerSocket::<compio::net::UnixStream>::from_unix_stream_with_config(
+                        let mut dealer = DealerSocket::<compio::net::UnixStream>::from_unix_stream_with_options(
                             stream,
-                            BufferConfig::large(),
+                            SocketOptions::default().with_buffer_sizes(16384, 16384),
                         )
                         .await
                         .unwrap();
