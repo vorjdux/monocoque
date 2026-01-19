@@ -8,7 +8,7 @@
 use bytes::Bytes;
 use compio::net::TcpListener;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use monocoque::zmq::{BufferConfig, RepSocket, ReqSocket};
+use monocoque::zmq::{RepSocket, ReqSocket, SocketOptions};
 use std::time::Duration;
 
 const MESSAGE_SIZES: &[usize] = &[64, 256, 1024]; // Various message sizes
@@ -52,7 +52,7 @@ fn monocoque_req_rep_latency(c: &mut Criterion) {
                             let server_task = compio::runtime::spawn(async move {
                                 let (stream, _) = listener.accept().await.unwrap();
                                 let mut rep =
-                                    RepSocket::from_tcp_with_config(stream, BufferConfig::small())
+                                    RepSocket::from_tcp_with_options(stream, SocketOptions::default().with_buffer_sizes(4096, 4096))
                                         .await
                                         .unwrap();
 
@@ -71,7 +71,7 @@ fn monocoque_req_rep_latency(c: &mut Criterion) {
                             let stream =
                                 compio::net::TcpStream::connect(server_addr).await.unwrap();
                             let mut req =
-                                ReqSocket::from_tcp_with_config(stream, BufferConfig::small())
+                                ReqSocket::from_tcp_with_options(stream, SocketOptions::default().with_buffer_sizes(4096, 4096))
                                     .await
                                     .unwrap();
 
@@ -178,7 +178,7 @@ fn monocoque_connection_latency(c: &mut Criterion) {
                 let accept_task = compio::runtime::spawn(async move {
                     for _ in 0..CONNECTIONS {
                         let (stream, _) = listener.accept().await.unwrap();
-                        let _ = RepSocket::from_tcp_with_config(stream, BufferConfig::small())
+                        let _ = RepSocket::from_tcp_with_options(stream, SocketOptions::default().with_buffer_sizes(4096, 4096))
                             .await
                             .unwrap();
                     }
@@ -186,7 +186,7 @@ fn monocoque_connection_latency(c: &mut Criterion) {
 
                 for _ in 0..CONNECTIONS {
                     let stream = compio::net::TcpStream::connect(server_addr).await.unwrap();
-                    let req = ReqSocket::from_tcp_with_config(stream, BufferConfig::small())
+                    let req = ReqSocket::from_tcp_with_options(stream, SocketOptions::default().with_buffer_sizes(4096, 4096))
                         .await
                         .unwrap();
                     black_box(req);

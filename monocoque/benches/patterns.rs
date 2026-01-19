@@ -6,9 +6,8 @@
 //! Tests the PUBLIC API from `monocoque::zmq` (user-facing ergonomics)
 
 use bytes::Bytes;
-use compio::net::TcpListener;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use monocoque::zmq::{BufferConfig, PubSocket, SubSocket};
+use monocoque::zmq::{PubSocket, SocketOptions, SubSocket};
 use std::time::Duration;
 
 // NOTE: Multi-subscriber fanout is currently not benchmarked here because the
@@ -54,6 +53,9 @@ fn monocoque_pubsub_fanout(c: &mut Criterion) {
                             for _ in 0..MESSAGE_COUNT {
                                 pub_socket.send(vec![payload.clone()]).await.ok();
                             }
+
+                            // Keep socket alive for subscribers to receive all messages
+                            compio::time::sleep(Duration::from_millis(200)).await;
                         });
 
                         // Start N subscribers
@@ -64,15 +66,17 @@ fn monocoque_pubsub_fanout(c: &mut Criterion) {
                                 let stream =
                                     compio::net::TcpStream::connect(server_addr).await.unwrap();
                                 let mut sub =
-                                    SubSocket::from_tcp_with_config(stream, BufferConfig::large())
+                                    SubSocket::from_tcp_with_options(stream, SocketOptions::default().with_buffer_sizes(16384, 16384))
                                         .await
                                         .unwrap();
-                                sub.subscribe(b""); // Subscribe to all
+                                sub.subscribe(b"").await.unwrap(); // Subscribe to all
 
                                 let mut count = 0;
                                 while count < MESSAGE_COUNT {
-                                    if sub.recv().await.ok().flatten().is_some() {
-                                        count += 1;
+                                    match sub.recv().await {
+                                        Ok(Some(_)) => count += 1,
+                                        Ok(None) => break, // Connection closed
+                                        Err(_) => break,   // Error occurred
                                     }
                                 }
                                 count
@@ -80,10 +84,10 @@ fn monocoque_pubsub_fanout(c: &mut Criterion) {
                             sub_tasks.push(task);
                         }
 
-                        // Wait for pub task
+                        // Wait for pub task first (ensures all messages sent + delay)
                         pub_task.await;
 
-                        // Wait for all subscribers to complete
+                        // Then wait for all subscribers to complete
                         for task in sub_tasks {
                             let _ = task.await;
                         }
@@ -188,13 +192,15 @@ fn monocoque_topic_filtering(c: &mut Criterion) {
                 let sub_task = compio::runtime::spawn(async move {
                     let stream = compio::net::TcpStream::connect(server_addr).await.unwrap();
                     let mut sub = SubSocket::from_tcp(stream).await.unwrap();
-                    sub.subscribe(b"match.");
+                    sub.subscribe(b"match.").await.unwrap();
 
                     let expected = (MESSAGE_COUNT as f64 * matched_ratio) as usize;
                     let mut count = 0;
                     while count < expected {
-                        if sub.recv().await.ok().flatten().is_some() {
-                            count += 1;
+                        match sub.recv().await {
+                            Ok(Some(_)) => count += 1,
+                            Ok(None) => break, // Connection closed
+                            Err(_) => break,   // Error occurred
                         }
                     }
                 });

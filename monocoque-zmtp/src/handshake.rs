@@ -74,30 +74,30 @@ pub async fn perform_handshake_with_timeout<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    println!("[HANDSHAKE] Starting handshake for {} (timeout: {:?})", 
+    debug!("[HANDSHAKE] Starting handshake for {} (timeout: {:?})", 
         local_socket_type.as_str(), timeout);
     debug!("[HANDSHAKE] Starting synchronous handshake for {} (timeout: {:?})", 
         local_socket_type.as_str(), timeout);
     
     // Step 1: Send our greeting
-    println!("[HANDSHAKE] Step 1: Sending greeting...");
+    debug!("[HANDSHAKE] Step 1: Sending greeting...");
     let greeting_bytes = build_greeting();
     let io_buf = IoBytes::new(greeting_bytes.clone());
     let BufResult(write_res, _) = write_all_with_timeout(stream, io_buf, timeout)
         .await
         .map_err(|_| ZmtpError::Protocol)?;
     write_res.map_err(|_| ZmtpError::Protocol)?;
-    println!("[HANDSHAKE] Step 1 DONE: Sent greeting ({} bytes)", greeting_bytes.len());
+    debug!("[HANDSHAKE] Step 1 DONE: Sent greeting ({} bytes)", greeting_bytes.len());
     debug!("[HANDSHAKE] Sent greeting ({} bytes)", greeting_bytes.len());
 
     // Step 2: Receive peer greeting
-    println!("[HANDSHAKE] Step 2: Receiving peer greeting...");
+    debug!("[HANDSHAKE] Step 2: Receiving peer greeting...");
     let greeting_buf = [0u8; 64];
     let BufResult(read_res, greeting_buf) = read_exact_with_timeout(stream, greeting_buf, timeout)
         .await
         .map_err(|_| ZmtpError::Protocol)?;
     read_res.map_err(|_| ZmtpError::Protocol)?;
-    println!("[HANDSHAKE] Step 2 DONE: Received peer greeting (64 bytes)");
+    debug!("[HANDSHAKE] Step 2 DONE: Received peer greeting (64 bytes)");
     debug!("[HANDSHAKE] Received peer greeting (64 bytes)");
     
     // Validate greeting
@@ -106,7 +106,7 @@ where
     }
 
     // Step 3: Send READY command
-    println!("[HANDSHAKE] Step 3: Sending READY command...");
+    debug!("[HANDSHAKE] Step 3: Sending READY command...");
     let ready_body = build_ready(local_socket_type.as_str(), identity);
     let ready_frame = encode_frame(FLAG_COMMAND, &ready_body);
     let io_buf = IoBytes::new(ready_frame.clone());
@@ -115,25 +115,25 @@ where
         .map_err(|_| ZmtpError::Protocol)?;
     write_res.map_err(|_| ZmtpError::Protocol)?;
     
-    println!("[HANDSHAKE] Step 3 DONE: Sent READY command ({} bytes)", ready_frame.len());
+    debug!("[HANDSHAKE] Step 3 DONE: Sent READY command ({} bytes)", ready_frame.len());
     debug!("[HANDSHAKE] Sent READY command ({} bytes)", ready_frame.len());
 
     // Step 4: Receive peer READY command
-    println!("[HANDSHAKE] Step 4: Receiving peer READY command...");
+    debug!("[HANDSHAKE] Step 4: Receiving peer READY command...");
     // Read the frame header first
-    println!("[HANDSHAKE] Step 4a: Reading READY frame header (2 bytes)...");
+    debug!("[HANDSHAKE] Step 4a: Reading READY frame header (2 bytes)...");
     let header_buf = [0u8; 2];
     let BufResult(read_res, header_buf) = read_exact_with_timeout(stream, header_buf, timeout)
         .await
         .map_err(|_| ZmtpError::Protocol)?;
     read_res.map_err(|_| ZmtpError::Protocol)?;
-    println!("[HANDSHAKE] Step 4a DONE: Read header [{:02x}, {:02x}]", header_buf[0], header_buf[1]);
+    debug!("[HANDSHAKE] Step 4a DONE: Read header [{:02x}, {:02x}]", header_buf[0], header_buf[1]);
     
     let flags = header_buf[0];
     let is_command = (flags & FLAG_COMMAND) != 0;
     let is_long = (flags & 0x02) != 0;
     
-    println!("[HANDSHAKE] Step 4b: Parsing header - flags={:02x}, is_command={}, is_long={}", flags, is_command, is_long);
+    debug!("[HANDSHAKE] Step 4b: Parsing header - flags={:02x}, is_command={}, is_long={}", flags, is_command, is_long);
     
     if !is_command {
         debug!("[HANDSHAKE] ERROR: Expected COMMAND frame, got data frame");
@@ -141,9 +141,9 @@ where
     }
 
     // Read body length
-    println!("[HANDSHAKE] Step 4c: Determining body length...");
+    debug!("[HANDSHAKE] Step 4c: Determining body length...");
     let body_len = if is_long {
-        println!("[HANDSHAKE] Step 4c: Reading 8-byte length...");
+        debug!("[HANDSHAKE] Step 4c: Reading 8-byte length...");
         let len_buf = [0u8; 8];
         let BufResult(read_res, len_buf) = read_exact_with_timeout(stream, len_buf, timeout)
             .await
@@ -153,33 +153,33 @@ where
     } else {
         header_buf[1] as usize
     };
-    println!("[HANDSHAKE] Step 4c DONE: body_len={}", body_len);
+    debug!("[HANDSHAKE] Step 4c DONE: body_len={}", body_len);
 
     // Read body
     // READY commands are typically small (~27 bytes), use stack buffer
-    println!("[HANDSHAKE] Step 4d: Reading body ({} bytes)...", body_len);
+    debug!("[HANDSHAKE] Step 4d: Reading body ({} bytes)...", body_len);
     const MAX_READY_SIZE: usize = 512; // Generous limit for READY command
     if body_len > MAX_READY_SIZE {
         debug!("[HANDSHAKE] ERROR: READY body too large: {} bytes", body_len);
         return Err(ZmtpError::Protocol);
     }
     let body_buf = vec![0u8; body_len];
-    println!("[HANDSHAKE] Step 4d: About to read {} bytes...", body_len);
+    debug!("[HANDSHAKE] Step 4d: About to read {} bytes...", body_len);
     let BufResult(read_res, body_buf) = read_exact_with_timeout(stream, body_buf, timeout)
         .await
         .map_err(|_| ZmtpError::Protocol)?;
     read_res.map_err(|_| ZmtpError::Protocol)?;
-    println!("[HANDSHAKE] Step 4d DONE: Read {} bytes of body", body_len);
+    debug!("[HANDSHAKE] Step 4d DONE: Read {} bytes of body", body_len);
     
-    println!("[HANDSHAKE] Step 4 DONE: Received full READY command ({} total bytes)", 2 + if is_long { 8 } else { 0 } + body_len);
+    debug!("[HANDSHAKE] Step 4 DONE: Received full READY command ({} total bytes)", 2 + if is_long { 8 } else { 0 } + body_len);
     debug!("[HANDSHAKE] Received READY command ({} total bytes)", 2 + if is_long { 8 } else { 0 } + body_len);
 
     // Parse READY command
-    println!("[HANDSHAKE] Parsing READY command...");
+    debug!("[HANDSHAKE] Parsing READY command...");
     let ready_bytes = Bytes::from(body_buf);
     let (peer_socket_type, peer_identity) = parse_ready_command(&ready_bytes)?;
     
-    println!("[HANDSHAKE] ✓ Handshake complete! Peer is {}", peer_socket_type.as_str());
+    debug!("[HANDSHAKE] ✓ Handshake complete! Peer is {}", peer_socket_type.as_str());
     debug!("[HANDSHAKE] Handshake complete! Peer is {}", peer_socket_type.as_str());
 
     Ok(HandshakeResult {

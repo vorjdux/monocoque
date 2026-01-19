@@ -252,4 +252,21 @@ impl SubSocket<compio::net::UnixStream> {
             monitor: None,
         })
     }
+
+    /// Create a SUB socket from an existing Unix stream with custom options.
+    ///
+    /// This method provides full control over socket behavior through SocketOptions.
+    pub async fn from_unix_stream_with_options(
+        stream: compio::net::UnixStream,
+        options: monocoque_core::options::SocketOptions,
+    ) -> io::Result<Self> {
+        let config = monocoque_core::config::BufferConfig {
+            read_buf_size: options.read_buffer_size,
+            write_buf_size: options.write_buffer_size,
+        };
+        Ok(Self {
+            inner: InternalSub::with_options(stream, config, options).await?,
+            monitor: None,
+        })
+    }
 }
