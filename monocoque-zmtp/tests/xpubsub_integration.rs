@@ -1,13 +1,12 @@
 //! Integration tests for XPUB and XSUB sockets
 //!
 //! Tests cover:
+//! - XPUB receiving subscription events from XSUB clients
 //! - Subscription event encoding/decoding
 //! - Subscription trie matching logic
-//! - SubscriptionEvent types
-//! - Basic socket creation
+//! - Socket creation and configuration
 //!
-//! Note: Full end-to-end broker tests require multiple async tasks
-//! which are complex to test. These tests focus on the core primitives.
+//! Architecture: XPUB (server/bind) <--> XSUB (client/connect)
 
 use bytes::Bytes;
 use monocoque_core::subscription::{SubscriptionEvent, SubscriptionTrie};
@@ -15,33 +14,116 @@ use monocoque_zmtp::xpub::XPubSocket;
 use monocoque_zmtp::xsub::XSubSocket;
 use std::time::Duration;
 
+/// Test XPUB receives subscriptions from XSUB
+#[compio::test]
+async fn test_xpub_xsub_subscription_flow() {
+    // 1. Create and bind XPUB server
+    let mut xpub = XPubSocket::bind("127.0.0.1:0").await.unwrap();
+    xpub.set_verbose(true); // Enable subscription event reporting
+    let addr = xpub.local_addr().unwrap();
+    
+    println!("[TEST] XPUB bound to {}", addr);
+
+    // 2. Spawn server task
+    let server_task = compio::runtime::spawn(async move {
+        println!("[SERVER] Waiting to accept connection...");
+        
+        // Accept the XSUB client
+        xpub.accept().await.expect("Failed to accept");
+        println!("[SERVER] Client connected, subscriber count: {}", xpub.subscriber_count());
+        
+        // Poll for subscription events
+        for attempt in 0..100 {
+            match xpub.recv_subscription().await {
+                Ok(Some(event)) => {
+                    println!("[SERVER] Received subscription event: {:?}", event);
+                    return Some(event);
+                }
+                Ok(None) => {
+                    if attempt % 10 == 0 {
+                        println!("[SERVER] No event yet, attempt {}/100", attempt);
+                    }
+                    compio::time::sleep(Duration::from_millis(50)).await;
+                }
+                Err(e) => {
+                    println!("[SERVER] Error: {}", e);
+                    return None;
+                }
+            }
+        }
+        println!("[SERVER] Timeout waiting for subscription");
+        None
+    });
+
+    // 3. Give server time to start listening
+    compio::time::sleep(Duration::from_millis(100)).await;
+
+    // 4. Connect XSUB client
+    println!("[CLIENT] Connecting to {}...", addr);
+    let mut xsub = XSubSocket::connect(&addr.to_string()).await.unwrap();
+    println!("[CLIENT] Connected successfully");
+
+    // 5. Send subscription
+    println!("[CLIENT] Sending subscription for 'weather.'");
+    xsub.subscribe(Bytes::from("weather.")).await.unwrap();
+    println!("[CLIENT] Subscription sent");
+
+    // 6. Wait for server result
+    let event_option = server_task.await;
+    assert!(event_option.is_some(), "Expected to receive subscription event");
+
+    let event = event_option.unwrap();
+    match event {
+        SubscriptionEvent::Subscribe(prefix) => {
+            assert_eq!(prefix, Bytes::from("weather."));
+            println!("[TEST] ✓ Successfully received subscription event");
+        }
+        SubscriptionEvent::Unsubscribe(_) => {
+            panic!("Expected Subscribe event, got Unsubscribe");
+        }
+    }
+}
+
 /// Test XPUB socket creation and configuration
 #[compio::test]
-async fn test_xpub_creation() {
+async fn test_xpub_creation_and_config() {
     let mut xpub = XPubSocket::bind("127.0.0.1:0").await.unwrap();
     
-    // Test configuration
+    // Test configuration methods
     xpub.set_verbose(true);
     xpub.set_manual(true);
     
     // Verify socket binds successfully
     let addr = xpub.local_addr().unwrap();
     assert!(addr.port() > 0);
+    
+    // Verify subscriber count tracking
+    assert_eq!(xpub.subscriber_count(), 0);
 }
 
-/// Test XSUB socket creation and connection
+/// Test XSUB socket subscription API
 #[compio::test]
-async fn test_xsub_creation() {
-    // Bind a dummy listener
-    let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
+async fn test_xsub_subscription_api() {
+    // Test subscription tracking without full connection
+    let mut trie = SubscriptionTrie::new();
     
-    // Create XSUB (it will try to connect but may fail without a real PUB socket)
-    // This just tests basic creation
-    let result = XSubSocket::connect(&addr.to_string()).await;
+    // Add subscriptions
+    trie.subscribe(Bytes::from("topic1."));
+    trie.subscribe(Bytes::from("topic2."));
+    trie.subscribe(Bytes::from("topic3."));
     
-    // Connection may fail since there's no actual publisher, but socket can be created
-    // In real usage, XSUB connects to PUB/XPUB sockets
+    // Verify matching
+    assert!(trie.matches(b"topic1.subtopic"));
+    assert!(trie.matches(b"topic2.subtopic"));
+    assert!(trie.matches(b"topic3.subtopic"));
+    
+    // Unsubscribe
+    trie.unsubscribe(&Bytes::from("topic2."));
+    
+    // Verify unsubscription
+    assert!(trie.matches(b"topic1.subtopic"));
+    assert!(!trie.matches(b"topic2.subtopic"));
+    assert!(trie.matches(b"topic3.subtopic"));
 }
 
 /// Test subscription trie matching logic

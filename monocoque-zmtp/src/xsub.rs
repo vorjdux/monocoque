@@ -202,11 +202,11 @@ where
     /// ```
     pub async fn send_subscription_event(&mut self, event: SubscriptionEvent) -> io::Result<()> {
         use compio::buf::BufResult;
-        use compio::io::AsyncWrite;
+        use compio::io::{AsyncWrite, AsyncWriteExt};
         use monocoque_core::alloc::IoBytes;
 
         let msg = event.to_message();
-        trace!("[XSUB] Sending subscription event ({} bytes)", msg.len());
+        trace!("[XSUB] Sending subscription event ({} bytes): {:?}", msg.len(), msg);
         
         let stream = self.base.stream.as_mut().ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
@@ -215,7 +215,10 @@ where
         let BufResult(result, _) = AsyncWrite::write(stream, IoBytes::new(msg)).await;
         result?;
         
-        trace!("[XSUB] Subscription event sent successfully");
+        // Flush to ensure message is sent immediately
+        stream.flush().await?;
+        
+        trace!("[XSUB] Subscription event sent and flushed successfully");
         Ok(())
     }
 

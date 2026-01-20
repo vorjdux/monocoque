@@ -206,14 +206,77 @@ impl XPubSocket {
     /// # }
     /// ```
     pub async fn recv_subscription(&mut self) -> io::Result<Option<SubscriptionEvent>> {
+        use compio::buf::BufResult;
+        use compio::io::AsyncRead;
+        use compio::time::timeout;
+        use std::time::Duration;
+        
         // Return pending events first
         if !self.pending_events.is_empty() {
             return Ok(Some(self.pending_events.remove(0)));
         }
 
+        // NOTE: Don't call accept() here - it blocks waiting for new connections
+        // The caller should call accept() separately to handle new connections
+
         // Poll all subscribers for subscription messages
-        // In a real implementation, this would use async I/O to read from subscribers
-        // For now, return None (no events)
+        // Subscription messages are 1 byte (0x00 or 0x01) + topic prefix
+        println!("[XPUB recv_subscription] Polling {} subscribers", self.subscribers.len());
+        for sub in self.subscribers.values_mut() {
+            // Try non-blocking read of subscription message with timeout
+            let buf = vec![0u8; 256];
+            println!("[XPUB recv_subscription] Reading from subscriber {} with timeout", sub.id);
+            
+            // Use a short timeout to avoid blocking
+            let read_result = timeout(Duration::from_millis(1), sub.stream.read(buf)).await;
+            
+            match read_result {
+                Ok(BufResult(Ok(n), buf)) if n > 0 => {
+                    println!("[XPUB recv_subscription] Received {} bytes: {:?}", n, &buf[..n]);
+                    // Parse subscription event
+                    if let Some(event) = SubscriptionEvent::from_message(&buf[..n]) {
+                        trace!("[XPUB] Received subscription event: {:?}", event);
+                        println!("[XPUB recv_subscription] Parsed event: {:?}", event);
+                        
+                        // Update subscriber's subscriptions
+                        match &event {
+                            SubscriptionEvent::Subscribe(prefix) => {
+                                sub.subscriptions.subscribe(prefix.clone());
+                            }
+                            SubscriptionEvent::Unsubscribe(prefix) => {
+                                sub.subscriptions.unsubscribe(&prefix);
+                            }
+                        }
+                        
+                        // Return event if in verbose mode
+                        if self.options.xpub_verbose {
+                            println!("[XPUB recv_subscription] Returning event (verbose=true)");
+                            return Ok(Some(event));
+                        } else {
+                            println!("[XPUB recv_subscription] NOT returning event (verbose=false)");
+                        }
+                    } else {
+                        println!("[XPUB recv_subscription] Failed to parse subscription event");
+                    }
+                }
+                Ok(BufResult(Ok(_), _)) => {
+                    println!("[XPUB recv_subscription] No data available (n=0)");
+                }
+                Ok(BufResult(Err(e), _)) => {
+                    println!("[XPUB recv_subscription] Read error: {}", e);
+                    if e.kind() != std::io::ErrorKind::WouldBlock {
+                        debug!("[XPUB] Error reading from subscriber: {}", e);
+                    }
+                }
+                Err(_) => {
+                    // Timeout - no data available
+                    println!("[XPUB recv_subscription] Read timeout (no data)");
+                    continue;
+                }
+            }
+        }
+        
+        println!("[XPUB recv_subscription] No subscription event found");
         Ok(None)
     }
 
