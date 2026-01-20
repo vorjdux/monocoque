@@ -296,6 +296,8 @@ const fn parse_socket_type(value: &[u8]) -> Result<SocketType, ZmtpError> {
         b"ROUTER" => Ok(SocketType::Router),
         b"PUB" => Ok(SocketType::Pub),
         b"SUB" => Ok(SocketType::Sub),
+        b"XPUB" => Ok(SocketType::Xpub),
+        b"XSUB" => Ok(SocketType::Xsub),
         b"REQ" => Ok(SocketType::Req),
         b"REP" => Ok(SocketType::Rep),
         b"PUSH" => Ok(SocketType::Push),
@@ -303,3 +305,4 @@ const fn parse_socket_type(value: &[u8]) -> Result<SocketType, ZmtpError> {
         _ => Err(ZmtpError::Protocol),
     }
 }
+
