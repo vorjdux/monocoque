@@ -123,6 +123,15 @@ pub struct SocketOptions {
     /// - Custom: Set for stable identity across reconnections
     pub routing_id: Option<bytes::Bytes>,
 
+    /// Connect routing ID (ZMQ_CONNECT_ROUTING_ID)
+    ///
+    /// Identity to assign to the next outgoing connection.
+    /// Used by ROUTER sockets to assign a specific identity to a peer.
+    /// - Default: None (auto-generate)
+    /// - Custom: Assign explicit identity to next connection
+    /// - Consumed after each connect operation
+    pub connect_routing_id: Option<bytes::Bytes>,
+
     /// ROUTER mandatory mode (ZMQ_ROUTER_MANDATORY)
     ///
     /// - `false` (default): Silently drop messages to unknown peers
@@ -189,6 +198,7 @@ impl Default for SocketOptions {
             read_buffer_size: 8192,  // 8KB - balanced default
             write_buffer_size: 8192, // 8KB - balanced default
             routing_id: None,
+            connect_routing_id: None,
             router_mandatory: false,
             router_handover: false,
             probe_router: false,
@@ -342,6 +352,25 @@ impl SocketOptions {
         self
     }
 
+    /// Set connect routing ID for the next connection.
+    ///
+    /// This option is consumed after each connect operation and must be set
+    /// again for subsequent connections.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use monocoque_core::options::SocketOptions;
+    /// use bytes::Bytes;
+    ///
+    /// let opts = SocketOptions::new()
+    ///     .with_connect_routing_id(Bytes::from_static(b"client-001"));
+    /// ```
+    pub fn with_connect_routing_id(mut self, id: bytes::Bytes) -> Self {
+        self.connect_routing_id = Some(id);
+        self
+    }
+
     /// Enable ROUTER mandatory mode.
     pub fn with_router_mandatory(mut self, enabled: bool) -> Self {
         self.router_mandatory = enabled;
@@ -398,6 +427,49 @@ impl SocketOptions {
     /// Check if send operation should be non-blocking.
     pub fn is_send_nonblocking(&self) -> bool {
         matches!(self.send_timeout, Some(d) if d.is_zero())
+    }
+
+    /// Validate routing ID for use with ROUTER sockets.
+    ///
+    /// ROUTER socket identities must:
+    /// - Be 1-255 bytes long
+    /// - Not start with null byte (0x00) which is reserved for auto-generated IDs
+    pub fn validate_router_identity(id: &[u8]) -> std::io::Result<()> {
+        if id.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "routing ID cannot be empty",
+            ));
+        }
+
+        if id.len() > 255 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("routing ID cannot exceed 255 bytes (got {})", id.len()),
+            ));
+        }
+
+        if id[0] == 0x00 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "routing ID cannot start with null byte (reserved for auto-generated IDs)",
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Validate general routing ID (for DEALER, REQ, REP).
+    ///
+    /// Less strict than ROUTER identities - allows null prefix.
+    pub fn validate_routing_id(id: &[u8]) -> std::io::Result<()> {
+        if id.len() > 255 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("routing ID cannot exceed 255 bytes (got {})", id.len()),
+            ));
+        }
+        Ok(())
     }
 
     /// Get the current reconnection interval with exponential backoff.
@@ -488,5 +560,53 @@ mod tests {
         assert_eq!(opts.next_reconnect_ivl(0), Duration::from_millis(100));
         assert_eq!(opts.next_reconnect_ivl(1), Duration::from_millis(100));
         assert_eq!(opts.next_reconnect_ivl(10), Duration::from_millis(100));
+    }
+
+    #[test]
+    fn test_routing_id_validation() {
+        // Valid ROUTER identities
+        assert!(SocketOptions::validate_router_identity(b"client-001").is_ok());
+        assert!(SocketOptions::validate_router_identity(&[0x01; 255]).is_ok());
+
+        // Invalid: empty
+        assert!(SocketOptions::validate_router_identity(b"").is_err());
+
+        // Invalid: too long
+        assert!(SocketOptions::validate_router_identity(&[0x01; 256]).is_err());
+
+        // Invalid: starts with null byte
+        assert!(SocketOptions::validate_router_identity(b"\x00client").is_err());
+    }
+
+    #[test]
+    fn test_general_routing_id_validation() {
+        // Valid
+        assert!(SocketOptions::validate_routing_id(b"").is_ok()); // Empty allowed
+        assert!(SocketOptions::validate_routing_id(b"\x00client").is_ok()); // Null prefix allowed
+        assert!(SocketOptions::validate_routing_id(&[0x00; 255]).is_ok());
+
+        // Invalid: too long
+        assert!(SocketOptions::validate_routing_id(&[0x01; 256]).is_err());
+    }
+
+    #[test]
+    fn test_connect_routing_id() {
+        let opts = SocketOptions::new()
+            .with_connect_routing_id(bytes::Bytes::from_static(b"peer-123"));
+
+        assert_eq!(
+            opts.connect_routing_id,
+            Some(bytes::Bytes::from_static(b"peer-123"))
+        );
+    }
+
+    #[test]
+    fn test_router_options() {
+        let opts = SocketOptions::new()
+            .with_router_mandatory(true)
+            .with_router_handover(true);
+
+        assert!(opts.router_mandatory);
+        assert!(opts.router_handover);
     }
 }
