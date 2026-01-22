@@ -338,6 +338,43 @@ impl XPubSocket {
         SocketType::Xpub
     }
 
+    /// Check if the last received message has more frames coming.
+    ///
+    /// For XPUB, subscription events are always single-frame.
+    ///
+    /// # ZeroMQ Compatibility
+    ///
+    /// Corresponds to `ZMQ_RCVMORE` (13) option.
+    #[inline]
+    pub fn has_more(&self) -> bool {
+        !self.pending_events.is_empty()
+    }
+
+    /// Get the event state of the socket.
+    ///
+    /// Returns a bitmask indicating ready-to-receive and ready-to-send states.
+    ///
+    /// # Returns
+    ///
+    /// - `1` (POLLIN) - Socket is ready to receive (has pending subscription events)
+    /// - `2` (POLLOUT) - Socket is ready to send (has active subscribers)
+    /// - `3` (POLLIN | POLLOUT) - Socket is ready for both
+    ///
+    /// # ZeroMQ Compatibility
+    ///
+    /// Corresponds to `ZMQ_EVENTS` (15) option.
+    #[inline]
+    pub fn events(&self) -> u32 {
+        let mut events = 0;
+        if !self.pending_events.is_empty() {
+            events |= 1; // POLLIN
+        }
+        if !self.subscribers.is_empty() {
+            events |= 2; // POLLOUT
+        }
+        events
+    }
+
     /// Set verbose mode.
     ///
     /// When enabled, all subscription messages are reported (including duplicates).

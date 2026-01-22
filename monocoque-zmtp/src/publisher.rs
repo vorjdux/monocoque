@@ -392,6 +392,16 @@ impl PubSocket {
     pub fn options_mut(&mut self) -> &mut SocketOptions {
         &mut self.options
     }
+
+    /// Get the socket type.
+    ///
+    /// # ZeroMQ Compatibility
+    ///
+    /// Corresponds to `ZMQ_TYPE` (16) option.
+    #[inline]
+    pub fn socket_type(&self) -> SocketType {
+        SocketType::Pub
+    }
 }
 
 impl Default for PubSocket {
