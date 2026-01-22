@@ -15,6 +15,8 @@ pub enum Endpoint {
     /// IPC transport (Unix domain socket): `ipc:///path/to/socket`
     #[cfg(unix)]
     Ipc(PathBuf),
+    /// In-process transport: `inproc://name`
+    Inproc(String),
 }
 
 impl Endpoint {
@@ -24,6 +26,7 @@ impl Endpoint {
     /// - `tcp://127.0.0.1:5555`
     /// - `tcp://[::1]:5555` (IPv6)
     /// - `ipc:///tmp/socket.sock` (Unix only)
+    /// - `inproc://name`
     ///
     /// # Examples
     ///
@@ -38,6 +41,9 @@ impl Endpoint {
     /// let endpoint = Endpoint::parse("ipc:///tmp/test.sock").unwrap();
     /// assert!(matches!(endpoint, Endpoint::Ipc(_)));
     /// # }
+    ///
+    /// let endpoint = Endpoint::parse("inproc://my-endpoint").unwrap();
+    /// assert!(matches!(endpoint, Endpoint::Inproc(_)));
     /// ```
     pub fn parse(s: &str) -> Result<Self, EndpointError> {
         s.parse()
@@ -52,6 +58,11 @@ impl Endpoint {
     #[cfg(unix)]
     pub fn is_ipc(&self) -> bool {
         matches!(self, Endpoint::Ipc(_))
+    }
+
+    /// Returns true if this is an inproc endpoint.
+    pub fn is_inproc(&self) -> bool {
+        matches!(self, Endpoint::Inproc(_))
     }
 }
 
@@ -73,6 +84,14 @@ impl FromStr for Endpoint {
             {
                 Err(EndpointError::IpcNotSupported)
             }
+        } else if let Some(name) = s.strip_prefix("inproc://") {
+            if name.is_empty() {
+                Err(EndpointError::InvalidInprocName(
+                    "inproc name cannot be empty".to_string(),
+                ))
+            } else {
+                Ok(Endpoint::Inproc(name.to_string()))
+            }
         } else {
             Err(EndpointError::InvalidScheme(s.to_string()))
         }
@@ -85,6 +104,7 @@ impl fmt::Display for Endpoint {
             Endpoint::Tcp(addr) => write!(f, "tcp://{}", addr),
             #[cfg(unix)]
             Endpoint::Ipc(path) => write!(f, "ipc://{}", path.display()),
+            Endpoint::Inproc(name) => write!(f, "inproc://{}", name),
         }
     }
 }
@@ -92,11 +112,14 @@ impl fmt::Display for Endpoint {
 /// Errors that can occur when parsing or using endpoints.
 #[derive(Debug, thiserror::Error)]
 pub enum EndpointError {
-    #[error("Invalid scheme in endpoint: {0} (expected tcp:// or ipc://)")]
+    #[error("Invalid scheme in endpoint: {0} (expected tcp://, ipc://, or inproc://)")]
     InvalidScheme(String),
 
     #[error("Invalid TCP address: {0}")]
     InvalidTcpAddress(String),
+
+    #[error("Invalid inproc name: {0}")]
+    InvalidInprocName(String),
 
     #[error("IPC transport not supported on this platform")]
     IpcNotSupported,
@@ -140,5 +163,18 @@ mod tests {
     fn test_invalid_tcp_address() {
         let result = Endpoint::parse("tcp://invalid:port");
         assert!(matches!(result, Err(EndpointError::InvalidTcpAddress(_))));
+    }
+
+    #[test]
+    fn test_parse_inproc() {
+        let endpoint = Endpoint::parse("inproc://my-endpoint").unwrap();
+        assert!(matches!(endpoint, Endpoint::Inproc(_)));
+        assert_eq!(endpoint.to_string(), "inproc://my-endpoint");
+    }
+
+    #[test]
+    fn test_invalid_inproc_empty() {
+        let result = Endpoint::parse("inproc://");
+        assert!(matches!(result, Err(EndpointError::InvalidInprocName(_))));
     }
 }
