@@ -173,6 +173,54 @@ where
 
 // Specialized implementation for TCP streams to enable TCP_NODELAY
 impl PairSocket<TcpStream> {
+    /// Bind to an address and accept the first connection.
+    ///
+    /// PAIR sockets form an exclusive pair with exactly one peer.
+    ///
+    /// # Returns
+    ///
+    /// A tuple of `(listener, socket)` where:
+    /// - `listener` can be used to accept additional connections if needed
+    /// - `socket` is ready to send/receive with the first peer
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use monocoque_zmtp::pair::PairSocket;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let (listener, mut socket) = PairSocket::bind("127.0.0.1:5555").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn bind(
+        addr: impl compio::net::ToSocketAddrsAsync,
+    ) -> io::Result<(compio::net::TcpListener, Self)> {
+        let listener = compio::net::TcpListener::bind(addr).await?;
+        let (stream, _) = listener.accept().await?;
+        let socket = Self::from_tcp(stream).await?;
+        Ok((listener, socket))
+    }
+
+    /// Connect to a remote PAIR socket.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use monocoque_zmtp::pair::PairSocket;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let mut socket = PairSocket::connect("127.0.0.1:5555").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn connect(
+        addr: impl compio::net::ToSocketAddrsAsync,
+    ) -> io::Result<Self> {
+        let stream = TcpStream::connect(addr).await?;
+        Self::from_tcp(stream).await
+    }
+
     /// Create a new PAIR socket from a TCP stream with TCP_NODELAY enabled.
     pub async fn from_tcp(stream: TcpStream) -> io::Result<Self> {
         Self::from_tcp_with_config(stream, BufferConfig::default()).await
