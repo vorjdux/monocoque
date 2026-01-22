@@ -71,6 +71,7 @@ mod base;
 mod codec;
 mod greeting;
 mod handshake;
+mod inproc_stream;
 mod utils;
 
 // Public protocol types
