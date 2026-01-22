@@ -5,6 +5,7 @@ use bytes::Bytes;
 use compio::net::TcpStream;
 use monocoque_core::monitor::{create_monitor, SocketEvent, SocketEventSender, SocketMonitor};
 use monocoque_zmtp::rep::RepSocket as InternalRep;
+use monocoque_zmtp::SocketType;
 use std::io;
 
 /// A REP socket for synchronous reply patterns.
@@ -149,6 +150,57 @@ where
     /// ```
     pub async fn recv(&mut self) -> Option<Vec<Bytes>> {
         self.inner.recv().await.ok().flatten()
+    }
+
+    /// Get the socket type.
+    ///
+    /// # ZeroMQ Compatibility
+    ///
+    /// Corresponds to `ZMQ_TYPE` (16) option.
+    #[inline]
+    pub fn socket_type() -> SocketType {
+        SocketType::Rep
+    }
+
+    /// Get the endpoint this socket is connected/bound to, if available.
+    ///
+    /// Returns `None` if the socket was created from a raw stream.
+    ///
+    /// # ZeroMQ Compatibility
+    ///
+    /// Corresponds to `ZMQ_LAST_ENDPOINT` (32) option.
+    #[inline]
+    pub fn last_endpoint(&self) -> Option<&monocoque_core::endpoint::Endpoint> {
+        self.inner.last_endpoint()
+    }
+
+    /// Check if the last received message has more frames coming.
+    ///
+    /// Returns `true` if there are more frames in the current multipart message.
+    ///\n    /// # ZeroMQ Compatibility
+    ///
+    /// Corresponds to `ZMQ_RCVMORE` (13) option.
+    #[inline]
+    pub fn has_more(&self) -> bool {
+        self.inner.has_more()
+    }
+
+    /// Get the event state of the socket.
+    ///
+    /// Returns a bitmask indicating ready-to-receive and ready-to-send states.
+    ///
+    /// # Returns
+    ///
+    /// - `1` (POLLIN) - Socket is ready to receive
+    /// - `2` (POLLOUT) - Socket is ready to send
+    /// - `3` (POLLIN | POLLOUT) - Socket is ready for both
+    ///
+    /// # ZeroMQ Compatibility
+    ///
+    /// Corresponds to `ZMQ_EVENTS` (15) option.
+    #[inline]
+    pub fn events(&self) -> u32 {
+        self.inner.events()
     }
 
     /// Send a reply message.

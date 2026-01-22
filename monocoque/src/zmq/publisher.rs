@@ -4,6 +4,7 @@ use bytes::Bytes;
 use compio::net::TcpListener;
 use monocoque_core::monitor::{create_monitor, SocketEvent, SocketEventSender, SocketMonitor};
 use monocoque_zmtp::publisher::PubSocket as InternalPub;
+use monocoque_zmtp::SocketType;
 use std::io;
 
 /// A PUB socket for broadcasting messages to multiple subscribers.
@@ -86,6 +87,16 @@ impl PubSocket {
     /// Get the local address this socket is bound to.
     pub fn local_addr(&self) -> io::Result<std::net::SocketAddr> {
         self.listener.local_addr()
+    }
+
+    /// Get the socket type.
+    ///
+    /// # ZeroMQ Compatibility
+    ///
+    /// Corresponds to `ZMQ_TYPE` (16) option.
+    #[inline]
+    pub fn socket_type() -> SocketType {
+        SocketType::Pub
     }
 
     /// Enable monitoring for this socket.
