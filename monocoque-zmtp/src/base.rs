@@ -169,6 +169,62 @@ where
         self.buffered_messages >= self.options.send_hwm
     }
 
+    /// Get the endpoint this socket is connected/bound to, if any.
+    ///
+    /// Returns `None` if the socket was created from a raw stream without
+    /// endpoint information.
+    ///
+    /// # ZeroMQ Compatibility
+    ///
+    /// Corresponds to `ZMQ_LAST_ENDPOINT` (32) option.
+    #[inline]
+    pub fn last_endpoint(&self) -> Option<&Endpoint> {
+        self.endpoint.as_ref()
+    }
+
+    /// Check if more message frames are expected.
+    ///
+    /// Returns `true` if the decoder has a partial multipart message buffered.
+    ///
+    /// # ZeroMQ Compatibility
+    ///
+    /// Corresponds to `ZMQ_RCVMORE` (13) option.
+    #[inline]
+    pub fn has_more(&self) -> bool {
+        self.decoder.has_more()
+    }
+
+    /// Get current socket events (read/write readiness).
+    ///
+    /// Returns a bitmask indicating which operations can proceed without blocking:
+    /// - `POLLIN` (1): Socket has messages ready to read
+    /// - `POLLOUT` (2): Socket can accept messages for sending
+    ///
+    /// # ZeroMQ Compatibility
+    ///
+    /// Corresponds to `ZMQ_EVENTS` (15) option.
+    ///
+    /// # Note
+    ///
+    /// This is a best-effort check based on current buffer state.
+    /// For true async readiness, use the async recv/send operations.
+    #[inline]
+    pub fn events(&self) -> u32 {
+        let mut events = 0u32;
+        
+        // POLLIN (1): Can receive if connected and buffers available
+        if self.is_connected() && !self.is_poisoned {
+            events |= 1; // POLLIN
+        }
+        
+        // POLLOUT (2): Can send if connected and HWM not reached
+        if self.is_connected() && !self.hwm_reached() && !self.is_poisoned {
+            events |= 2; // POLLOUT
+        }
+        
+        events
+    }
+
     /// Get a mutable reference to the stream, ensuring it's connected.
     ///
     /// Returns `NotConnected` error if the stream is None.

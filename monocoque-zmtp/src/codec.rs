@@ -73,6 +73,20 @@ impl ZmtpDecoder {
         }
     }
 
+    /// Check if more message frames are expected (partial multipart message).
+    ///
+    /// Returns `true` if the decoder is in the middle of reassembling a frame
+    /// or if the last decoded frame had the MORE flag set.
+    ///
+    /// # ZeroMQ Compatibility
+    ///
+    /// Corresponds to `ZMQ_RCVMORE` (13) - check if more frames in current message.
+    #[inline]
+    pub fn has_more(&self) -> bool {
+        // Decoder is expecting more data for current frame
+        self.pending_flags.is_some()
+    }
+
     /// Decode a single frame from `src`
     ///
     /// Returns:
