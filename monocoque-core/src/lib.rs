@@ -25,6 +25,7 @@ pub mod buffer;
 pub mod config;
 pub mod endpoint;
 pub mod error;
+pub mod inproc;
 pub mod message;
 pub mod monitor;
 pub mod options;
