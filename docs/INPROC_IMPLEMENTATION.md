@@ -115,40 +115,149 @@ static INPROC_REGISTRY: Lazy<DashMap<String, InprocSender>> = ...
 
 ### Remaining Work
 
-#### Phase 1: ZMTP Layer Integration
+#### Phase 1: ZMTP Layer Integration ⚠️ **BLOCKED**
 **Priority: HIGH**
-**Effort: 3-4 days**
+**Effort: 5-7 days** (increased from 3-4 days)
+**Status: In Progress - Architectural Challenge Discovered**
 
-Need to extend `monocoque-zmtp` to support inproc transport:
+**Challenge Discovered:** The current inproc design has fundamental limitations:
 
-1. Create inproc variants for socket types:
-   ```rust
-   // In monocoque-zmtp/src/dealer.rs (and others)
-   pub enum DealerTransport {
-       Tcp(TcpStream),
-       #[cfg(unix)]
-       Ipc(UnixStream),
-       Inproc {
-           sender: InprocSender,
-           receiver: InprocReceiver,
-       },
-   }
-   ```
+1. **Unidirectional Channels**: The `bind_inproc()` creates unidirectional channels
+   - Bind returns (sender, receiver)
+   - Connect returns only sender
+   - This works for unidirectional patterns (PUB→SUB, PUSH→PULL)
+   - **Doesn't work for bidirectional patterns** (PAIR, DEALER↔ROUTER, REQ↔REP)
 
-2. Update internal socket implementations:
-   - Add inproc handling in send/recv paths
-   - Skip ZMTP handshake for inproc (already in same process)
-   - Handle message framing without serialization
+2. **compio AsyncRead/AsyncWrite Incompatibility**: 
+   - Attempted to create `InprocStream` adapter
+   - compio's traits are different from tokio's (buffer-based vs poll-based)
+   - compio AsyncRead/AsyncWrite require different method signatures:
+     ```rust
+     async fn read<B: IoBufMut>(&mut self, buf: B) -> BufResult<usize, B>
+     async fn write<T: IoBuf>(&mut self, buf: T) -> BufResult<usize, T>
+     ```
+   - Cannot directly adapt flume channels to compio's async traits
 
-3. Modify connection logic:
-   ```rust
-   impl InternalDealer {
-       pub async fn connect_inproc(endpoint: &str) -> io::Result<Self> {
-           let sender = monocoque_core::inproc::connect_inproc(endpoint)?;
-           // Create socket with inproc transport
-       }
-   }
-   ```
+**Attempted Solutions:**
+- ✅ Created `InprocStream` wrapper around flume channels
+- ❌ Failed: compio traits require async methods, flume is sync
+- ❌ Failed: Unidirectional channels don't support PAIR semantics
+
+**Possible Solutions:**
+
+##### Solution A: Bidirectional Inproc Architecture (Recommended)
+Redesign inproc to support bidirectional communication:
+
+```rust
+// New inproc API
+pub struct InprocConnection {
+    tx: Sender<InprocMessage>,
+    rx: Receiver<InprocMessage>,
+}
+
+pub fn bind_inproc(endpoint: &str) -> io::Result<InprocConnection>;
+pub fn connect_inproc(endpoint: &str) -> io::Result<InprocConnection>;
+
+// Registry stores bidirectional connection points
+static INPROC_REGISTRY: Lazy<DashMap<String, (Sender<...>, Receiver<...>)>>
+```
+
+**Benefits:**
+- Supports all socket patterns
+- Clean bidirectional semantics
+- Still zero-copy with Arc
+
+**Drawbacks:**
+- Breaking change to inproc API
+- More complex registry management
+- Need channel pairing protocol
+
+**Effort:** 3-4 days
+
+##### Solution B: Bypass ZMTP for Inproc
+Create dedicated inproc socket implementations that don't use ZMTP layer:
+
+```rust
+// Direct channel-based socket (no ZMTP, no AsyncRead/AsyncWrite)
+pub struct InprocPairSocket {
+    tx: InprocSender,
+    rx: InprocReceiver,
+}
+
+impl InprocPairSocket {
+    pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()>;
+    pub async fn recv(&mut self) -> io::Result<Option<Vec<Bytes>>>;
+}
+```
+
+**Benefits:**
+- Simpler implementation
+- No compio trait compatibility issues
+- Can be implemented quickly
+- Still zero-copy
+
+**Drawbacks:**
+- Separate code path for inproc vs TCP/IPC
+- Code duplication for each socket type
+- Less elegant architecture
+
+**Effort:** 2-3 days per socket type
+
+##### Solution C: compio-Compatible InprocStream (Hard)
+Properly implement compio's AsyncRead/AsyncWrite:
+
+```rust
+impl AsyncRead for InprocStream {
+    async fn read<B: IoBufMut>(&mut self, mut buf: B) -> BufResult<usize, B> {
+        // Block on channel recv, then copy to buffer
+        match self.rx.recv() {
+            Ok(msg) => {
+                let data = msg.concat(); // Flatten frames
+                let n = buf.as_mut_slice().len().min(data.len());
+                buf.as_mut_slice()[..n].copy_from_slice(&data[..n]);
+                (Ok(n), buf)
+            }
+            Err(_) => (Ok(0), buf), // EOF
+        }
+    }
+}
+```
+
+**Benefits:**
+- Unified architecture (all sockets use SocketBase<S>)
+- Inproc works like any other transport
+- Clean abstraction
+
+**Drawbacks:**
+- Complex buffer management
+- May lose some zero-copy benefits
+- Still need bidirectional channel solution
+- compio's buffer ownership semantics are tricky
+
+**Effort:** 4-5 days
+
+**Recommendation:** Implement **Solution B** first for PAIR sockets as a proof of concept,
+then evaluate if **Solution A** is worth the effort for full bidirectional support.
+
+#### Phase 1.5: Current Work Status
+**Files Created:**
+- `monocoque-zmtp/src/inproc_stream.rs` - Attempted InprocStream adapter (doesn't compile)
+- `monocoque/examples/inproc_pair_demo.rs` - Demo showing bidirectional challenge
+
+**Files Modified:**
+- `monocoque-zmtp/src/pair.rs` - Added bind_inproc/connect_inproc stubs (incomplete)
+- `monocoque-zmtp/src/lib.rs` - Added inproc_stream module
+
+**Compilation Errors:**
+- InprocStream doesn't implement compio::AsyncRead/AsyncWrite correctly
+- Missing match arms for `Endpoint::Inproc` in dealer.rs and base.rs
+- Unused variables in incomplete pair.rs implementation
+
+**Next Steps:**
+1. Decide on architecture (Solution A, B, or C)
+2. Implement chosen solution
+3. Add tests
+4. Update documentation
 
 #### Phase 2: Socket API Integration
 **Priority: HIGH**

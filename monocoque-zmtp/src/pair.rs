@@ -18,6 +18,7 @@
 
 use crate::base::SocketBase;
 use crate::codec::encode_multipart;
+use crate::inproc_stream::InprocStream;
 use crate::{handshake::perform_handshake_with_timeout, session::SocketType};
 use bytes::Bytes;
 use compio::io::{AsyncRead, AsyncWrite};
@@ -300,5 +301,111 @@ impl PairSocket<TcpStream> {
         monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
         debug!("[PAIR] TCP_NODELAY enabled");
         Self::with_options(stream, config, options).await
+    }
+}
+
+// Specialized implementation for Inproc streams
+impl PairSocket<InprocStream> {
+    /// Bind to an inproc endpoint.
+    ///
+    /// Creates a new inproc endpoint that other sockets can connect to.
+    /// Inproc endpoints must be bound before they can be connected to.
+    ///
+    /// # Arguments
+    ///
+    /// * `endpoint` - Inproc URI (e.g., "inproc://my-endpoint")
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use monocoque_zmtp::pair::PairSocket;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let socket = PairSocket::bind_inproc("inproc://my-pair")?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn bind_inproc(endpoint: &str) -> io::Result<Self> {
+        Self::bind_inproc_with_options(endpoint, BufferConfig::default(), SocketOptions::default())
+    }
+
+    /// Bind to an inproc endpoint with custom configuration and options.
+    pub fn bind_inproc_with_options(
+        endpoint: &str,
+        config: BufferConfig,
+        options: SocketOptions,
+    ) -> io::Result<Self> {
+        debug!("[PAIR] Binding to inproc endpoint: {}", endpoint);
+
+        // Bind to inproc endpoint
+        let (tx, rx) = monocoque_core::inproc::bind_inproc(endpoint)?;
+        let stream = InprocStream::new(tx, rx);
+
+        // Parse endpoint for storage
+        let parsed_endpoint = Endpoint::parse(endpoint)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
+
+        debug!("[PAIR] Bound to {}", endpoint);
+
+        // For inproc, no handshake needed (same process)
+        Ok(Self {
+            base: SocketBase::with_endpoint(stream, parsed_endpoint, config, options),
+            frames: SmallVec::new(),
+        })
+    }
+
+    /// Connect to an inproc endpoint.
+    ///
+    /// Connects to a previously bound inproc endpoint.
+    ///
+    /// # Arguments
+    ///
+    /// * `endpoint` - Inproc URI (e.g., "inproc://my-endpoint")
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use monocoque_zmtp::pair::PairSocket;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let socket = PairSocket::connect_inproc("inproc://my-pair")?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn connect_inproc(endpoint: &str) -> io::Result<Self> {
+        Self::connect_inproc_with_options(endpoint, BufferConfig::default(), SocketOptions::default())
+    }
+
+    /// Connect to an inproc endpoint with custom configuration and options.
+    pub fn connect_inproc_with_options(
+        endpoint: &str,
+        config: BufferConfig,
+        options: SocketOptions,
+    ) -> io::Result<Self> {
+        debug!("[PAIR] Connecting to inproc endpoint: {}", endpoint);
+
+        // Connect to inproc endpoint
+        let tx = monocoque_core::inproc::connect_inproc(endpoint)?;
+        
+        // For inproc, we need to create a receiver channel
+        // The sender sends to the bound endpoint, we receive on our own channel
+        let (our_tx, our_rx) = flume::unbounded();
+        
+        // Register our receiver with the sender
+        // This is a bit tricky - we need bidirectional communication
+        // For now, create a stream with the connection sender and a new receiver
+        let stream = InprocStream::new(tx, our_rx);
+
+        // Parse endpoint for storage
+        let parsed_endpoint = Endpoint::parse(endpoint)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
+
+        debug!("[PAIR] Connected to {}", endpoint);
+
+        // For inproc, no handshake needed (same process)
+        Ok(Self {
+            base: SocketBase::with_endpoint(stream, parsed_endpoint, config, options),
+            frames: SmallVec::new(),
+        })
     }
 }
