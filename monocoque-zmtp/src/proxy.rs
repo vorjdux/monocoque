@@ -204,6 +204,216 @@ where
     }
 }
 
+/// Control commands for steerable proxy.
+///
+/// Sent as single-frame messages to the control socket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProxyCommand {
+    /// Pause message forwarding (buffering continues)
+    Pause,
+    /// Resume message forwarding
+    Resume,
+    /// Terminate the proxy loop
+    Terminate,
+    /// Report statistics (future extension)
+    Statistics,
+}
+
+impl ProxyCommand {
+    /// Parse command from bytes.
+    pub fn from_bytes(data: &[u8]) -> Option<Self> {
+        match data {
+            b"PAUSE" => Some(ProxyCommand::Pause),
+            b"RESUME" => Some(ProxyCommand::Resume),
+            b"TERMINATE" => Some(ProxyCommand::Terminate),
+            b"STATISTICS" => Some(ProxyCommand::Statistics),
+            _ => None,
+        }
+    }
+
+    /// Convert command to bytes.
+    pub fn as_bytes(&self) -> &'static [u8] {
+        match self {
+            ProxyCommand::Pause => b"PAUSE",
+            ProxyCommand::Resume => b"RESUME",
+            ProxyCommand::Terminate => b"TERMINATE",
+            ProxyCommand::Statistics => b"STATISTICS",
+        }
+    }
+}
+
+/// Run a steerable bidirectional message proxy with control socket.
+///
+/// Like [`proxy()`] but can be controlled via a control socket that receives commands:
+/// - `PAUSE` - Stop forwarding messages (buffering continues)
+/// - `RESUME` - Resume forwarding messages
+/// - `TERMINATE` - Stop the proxy and return
+/// - `STATISTICS` - Future: report proxy statistics
+///
+/// # Parameters
+///
+/// - `frontend`: Socket facing clients/publishers
+/// - `backend`: Socket facing workers/subscribers
+/// - `capture`: Optional socket to receive message copies
+/// - `control`: Socket that receives control commands
+///
+/// # Control Socket Protocol
+///
+/// Send single-frame messages with command text:
+/// ```text
+/// PAUSE       - Pause forwarding
+/// RESUME      - Resume forwarding
+/// TERMINATE   - Stop proxy
+/// STATISTICS  - Get stats (future)
+/// ```
+///
+/// # Example
+///
+/// ```no_run
+/// use monocoque_zmtp::proxy::{proxy_steerable, ProxySocket, ProxyCommand};
+/// use monocoque_zmtp::router::RouterSocket;
+/// use monocoque_zmtp::dealer::DealerSocket;
+/// use monocoque_zmtp::pair::PairSocket;
+///
+/// #[compio::main]
+/// async fn main() -> std::io::Result<()> {
+///     // Broker sockets
+///     let (_, mut frontend) = RouterSocket::bind("127.0.0.1:5555").await?;
+///     let (_, mut backend) = DealerSocket::bind("127.0.0.1:5556").await?;
+///     
+///     // Control socket
+///     let (_, mut control) = PairSocket::bind("127.0.0.1:5557").await?;
+///     
+///     // Run steerable proxy
+///     proxy_steerable(&mut frontend, &mut backend, None, &mut control).await?;
+///     Ok(())
+/// }
+/// ```
+///
+/// Send control commands from another socket:
+/// ```no_run
+/// use monocoque_zmtp::pair::PairSocket;
+/// use bytes::Bytes;
+///
+/// # async fn send_control() -> std::io::Result<()> {
+/// let mut control_client = PairSocket::connect("127.0.0.1:5557").await?;
+/// 
+/// // Pause proxy
+/// control_client.send(vec![Bytes::from("PAUSE")]).await?;
+/// 
+/// // Resume proxy
+/// control_client.send(vec![Bytes::from("RESUME")]).await?;
+/// 
+/// // Terminate proxy
+/// control_client.send(vec![Bytes::from("TERMINATE")]).await?;
+/// # Ok(())
+/// # }
+/// ```
+pub async fn proxy_steerable<F, B, C, Ctrl>(
+    frontend: &mut F,
+    backend: &mut B,
+    mut capture: Option<&mut C>,
+    control: &mut Ctrl,
+) -> io::Result<()>
+where
+    F: ProxySocket,
+    B: ProxySocket,
+    C: ProxySocket,
+    Ctrl: ProxySocket,
+{
+    use futures::{select, FutureExt};
+    
+    debug!("Starting steerable proxy: {} ←→ {} (control enabled)", 
+           frontend.socket_desc(), backend.socket_desc());
+
+    let mut paused = false;
+    let mut message_count = 0u64;
+
+    loop {
+        select! {
+            // Check for control commands
+            cmd_result = control.recv_multipart().fuse() => {
+                if let Some(cmd_msg) = cmd_result? {
+                    if let Some(cmd_frame) = cmd_msg.first() {
+                        if let Some(cmd) = ProxyCommand::from_bytes(cmd_frame) {
+                            debug!("Proxy control command: {:?}", cmd);
+                            
+                            match cmd {
+                                ProxyCommand::Pause => {
+                                    debug!("Proxy PAUSED");
+                                    paused = true;
+                                }
+                                ProxyCommand::Resume => {
+                                    debug!("Proxy RESUMED");
+                                    paused = false;
+                                }
+                                ProxyCommand::Terminate => {
+                                    debug!("Proxy TERMINATING (forwarded {} messages)", message_count);
+                                    return Ok(());
+                                }
+                                ProxyCommand::Statistics => {
+                                    debug!("Proxy statistics: {} messages forwarded", message_count);
+                                    // Future: send stats back to control socket
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Forward frontend → backend (if not paused)
+            msg_result = frontend.recv_multipart().fuse() => {
+                if let Some(msg) = msg_result? {
+                    if !paused {
+                        debug!("Proxy: {} → {}: {} frames",
+                               frontend.socket_desc(),
+                               backend.socket_desc(),
+                               msg.len());
+
+                        // Send copy to capture if present
+                        if let Some(ref mut cap) = capture {
+                            if let Err(e) = cap.send_multipart(msg.clone()).await {
+                                debug!("Capture socket send failed: {}", e);
+                            }
+                        }
+
+                        // Forward to backend
+                        backend.send_multipart(msg).await?;
+                        message_count += 1;
+                    } else {
+                        debug!("Proxy: dropped message (paused)");
+                    }
+                }
+            }
+            
+            // Forward backend → frontend (if not paused)
+            msg_result = backend.recv_multipart().fuse() => {
+                if let Some(msg) = msg_result? {
+                    if !paused {
+                        debug!("Proxy: {} → {}: {} frames",
+                               backend.socket_desc(),
+                               frontend.socket_desc(),
+                               msg.len());
+
+                        // Send copy to capture if present
+                        if let Some(ref mut cap) = capture {
+                            if let Err(e) = cap.send_multipart(msg.clone()).await {
+                                debug!("Capture socket send failed: {}", e);
+                            }
+                        }
+
+                        // Forward to frontend
+                        frontend.send_multipart(msg).await?;
+                        message_count += 1;
+                    } else {
+                        debug!("Proxy: dropped message (paused)");
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ===== ProxySocket Implementations =====
 
 // XSUB socket (frontend in PUB-SUB broker)

@@ -69,6 +69,10 @@ name = "proxy_broker"
 required-features = ["zmq"]
 
 [[example]]
+name = "proxy_steerable"
+required-features = ["zmq"]
+
+[[example]]
 name = "pubsub_multi_compio"
 required-features = ["zmq"]
 
