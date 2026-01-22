@@ -549,6 +549,48 @@ where
         self.inner.buffered_bytes()
     }
 
+    /// Get the socket type.
+    ///
+    /// # ZeroMQ Compatibility
+    ///
+    /// Corresponds to `ZMQ_TYPE` (16) option.
+    pub fn socket_type(&self) -> monocoque_zmtp::session::SocketType {
+        monocoque_zmtp::session::SocketType::Dealer
+    }
+
+    /// Get the endpoint this socket is connected/bound to, if available.
+    ///
+    /// Returns `None` if the socket was created from a raw stream.
+    ///
+    /// # ZeroMQ Compatibility
+    ///
+    /// Corresponds to `ZMQ_LAST_ENDPOINT` (32) option.
+    pub fn last_endpoint(&self) -> Option<&monocoque_core::endpoint::Endpoint> {
+        self.inner.last_endpoint()
+    }
+
+    /// Check if more message frames are expected (multipart message in progress).
+    ///
+    /// # ZeroMQ Compatibility
+    ///
+    /// Corresponds to `ZMQ_RCVMORE` (13) option.
+    pub fn has_more(&self) -> bool {
+        self.inner.has_more()
+    }
+
+    /// Get current socket events (read/write readiness).
+    ///
+    /// Returns a bitmask:
+    /// - `1` (POLLIN): Can receive without blocking
+    /// - `2` (POLLOUT): Can send without blocking
+    ///
+    /// # ZeroMQ Compatibility
+    ///
+    /// Corresponds to `ZMQ_EVENTS` (15) option.
+    pub fn events(&self) -> u32 {
+        self.inner.events()
+    }
+
     /// Receive a multipart message.
     ///
     /// Returns `None` if the connection is closed.
