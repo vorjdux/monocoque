@@ -79,6 +79,7 @@ pub mod session;
 // Socket implementations
 pub mod dealer;
 pub mod pair;
+pub mod proxy;
 pub mod publisher;
 pub mod pull;
 pub mod push;

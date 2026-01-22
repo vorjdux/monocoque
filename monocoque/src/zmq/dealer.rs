@@ -261,6 +261,49 @@ impl DealerSocket {
 
 
 
+    /// Bind to an address and accept the first connection.
+    ///
+    /// This creates a server-side DEALER socket that accepts incoming connections.
+    /// Useful for broker patterns where workers (REP sockets) connect to a DEALER backend.
+    ///
+    /// # Returns
+    ///
+    /// A tuple of `(listener, socket)` where:
+    /// - `listener` can be used to accept additional connections
+    /// - `socket` is ready to send/receive with the first peer
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The address is already in use
+    /// - Permission denied (e.g., binding to privileged port without root)
+    /// - Invalid address format
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use monocoque::zmq::DealerSocket;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// // Bind DEALER backend for worker connections
+    /// let (listener, socket) = DealerSocket::bind("127.0.0.1:5556").await?;
+    ///
+    /// // Use socket for first connection
+    /// // Accept more connections from listener if needed:
+    /// // let (stream, _) = listener.accept().await?;
+    /// // let socket2 = DealerSocket::from_tcp(stream).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn bind(
+        addr: impl compio::net::ToSocketAddrsAsync,
+    ) -> io::Result<(compio::net::TcpListener, Self)> {
+        let listener = compio::net::TcpListener::bind(addr).await?;
+        let (stream, _) = listener.accept().await?;
+        let socket = Self::from_tcp(stream).await?;
+        Ok((listener, socket))
+    }
+
     /// Create a DEALER socket from a TCP stream with TCP_NODELAY enabled.
     ///
     /// This method automatically enables TCP_NODELAY for optimal performance,
@@ -550,5 +593,33 @@ impl DealerSocket<compio::net::UnixStream> {
             inner: InternalDealer::with_options(stream, config, options).await?,
             monitor: None,
         })
+    }
+}
+
+// Implement ProxySocket for the high-level DealerSocket wrapper  
+impl monocoque_zmtp::proxy::ProxySocket for DealerSocket<TcpStream> {
+    fn recv_multipart<'life0, 'async_trait>(
+        &'life0 mut self,
+    ) -> ::core::pin::Pin<Box<dyn ::core::future::Future<Output = io::Result<Option<Vec<Bytes>>>> + 'async_trait>>
+    where
+        'life0: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move { Ok(self.recv().await) })
+    }
+
+    fn send_multipart<'life0, 'async_trait>(
+        &'life0 mut self,
+        msg: Vec<Bytes>,
+    ) -> ::core::pin::Pin<Box<dyn ::core::future::Future<Output = io::Result<()>> + 'async_trait>>
+    where
+        'life0: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async move { self.send(msg).await })
+    }
+
+    fn socket_desc(&self) -> &'static str {
+        "DEALER"
     }
 }

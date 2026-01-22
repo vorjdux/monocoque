@@ -25,6 +25,7 @@ tracing = "0.1"
 socket2 = "0.5"
 parking_lot = "0.12"
 num_cpus = "1.16"
+async-trait = "0.1"
 
 [dev-dependencies]
 zmq.workspace = true

@@ -66,6 +66,7 @@ pub use monocoque_core::endpoint::{Endpoint, EndpointError};
 pub use monocoque_core::monitor::{SocketEvent, SocketMonitor};
 pub use monocoque_core::options::SocketOptions;
 pub use monocoque_core::subscription::{Subscription, SubscriptionEvent, SubscriptionTrie};
+pub use monocoque_zmtp::proxy;
 pub use monocoque_zmtp::{XPubSocket, XSubSocket};
 pub use publisher::PubSocket;
 pub use rep::RepSocket;
@@ -90,6 +91,7 @@ pub use monocoque_core::ipc;
 /// // - BufferConfig, SocketOptions for configuration
 /// ```
 pub mod prelude {
+    pub use super::proxy::{proxy, ProxySocket};
     pub use super::{
         BufferConfig, DealerSocket, PubSocket, RepSocket, ReqSocket, RouterSocket, SocketOptions,
         SubSocket, Subscription, SubscriptionEvent, SubscriptionTrie, XPubSocket, XSubSocket,
