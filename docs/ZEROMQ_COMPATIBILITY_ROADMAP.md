@@ -10,7 +10,7 @@
 **Current Coverage**: 11/12 core socket types (92%)  
 **Protocol Version**: ZMTP 3.1 ✅  
 **Core Options**: 20+/60+ socket options (~33%)  
-**Advanced Features**: Security (0%), Transports (2/5), Devices (0/3)
+**Advanced Features**: Security (0%), Transports (2/5), Devices (1/3)
 
 ### Priority Classification
 - 🔴 **Critical** - Essential for production use
@@ -402,20 +402,33 @@ pub async fn connect_inproc(name: &str) -> InprocSocket {
 
 ## 5. Message Devices (Proxies)
 
-### ❌ **All Missing**
+### ✅ **Implemented (1/3)**
 
-#### 🟡 **zmq_proxy** - Message forwarder
+#### ~~🟡 **zmq_proxy** - Message forwarder~~ ✅ **IMPLEMENTED**
+**Status**: ✅ Complete (January 22, 2026)  
+**Location**: `monocoque-zmtp/src/proxy.rs`  
 **Priority**: Important  
-**Effort**: Medium (2-3 days)
+**Effort**: Completed
 
-**Description**: Forwards messages between frontend and backend sockets
+**Features Implemented**:
+- ✅ Bidirectional message forwarding using `futures::select!`
+- ✅ ProxySocket trait for generic socket handling
+- ✅ Support for all socket types (XSUB/XPUB, ROUTER/DEALER, PULL/PUSH, etc.)
+- ✅ Optional capture socket for message monitoring
+- ✅ Single-threaded runtime compatibility (compio)
+- ✅ Zero-copy message forwarding
 
+**Implementation**:
 ```rust
-pub async fn proxy(
-    frontend: &mut dyn Socket,
-    backend: &mut dyn Socket,
-    capture: Option<&mut dyn Socket>,
-) -> io::Result<()>;
+pub async fn proxy<F, B, C>(
+    frontend: &mut F,
+    backend: &mut B,
+    capture: Option<&mut C>,
+) -> io::Result<()>
+where
+    F: ProxySocket,
+    B: ProxySocket,
+    C: ProxySocket;
 
 // Common patterns:
 // - PUB-SUB: XSUB (frontend) ← → XPUB (backend)
@@ -423,12 +436,16 @@ pub async fn proxy(
 // - PUSH-PULL: PULL (frontend) ← → PUSH (backend)
 ```
 
-**Use Cases**:
-- Message broker
-- Load balancer
-- Message capture/logging
+**Examples**:
+- `examples/proxy_broker.rs` - ROUTER-DEALER load balancer
+- `examples/paranoid_pirate.rs` - Full Paranoid Pirate pattern
+- `examples/paranoid_pirate_proxy.rs` - Proxy-based reliability pattern
+
+**Testing**: Verified with multiple patterns, including Paranoid Pirate with heartbeating
 
 ---
+
+### ❌ **Missing (2/3)**
 
 #### 🟡 **zmq_proxy_steerable** - Controllable proxy
 **Priority**: Important  
@@ -601,7 +618,7 @@ socket.as_stream()
 - [x] Implement XPUB socket (2 days) ✅ **DONE**
 - [x] Implement XSUB socket (2 days) ✅ **DONE**
 - [x] Add XPUB/XSUB integration tests (1 day) ✅ **DONE** (14 tests passing)
-- [ ] Implement message proxy utility (2 days) - **DEFERRED to Phase 7**
+- [x] Implement message proxy utility (2 days) ✅ **DONE** (January 22, 2026)
 - [x] Documentation and examples (1 day) ✅ **DONE**
 
 **Week 3-4: Socket Options**
@@ -672,7 +689,7 @@ socket.as_stream()
 | **Socket Options** | 25+/60+ (42%) | 60+ | Core options covered |
 | **Security** | NULL only | NULL, PLAIN, CURVE, GSSAPI | Auth methods pending |
 | **Transports** | 2/5 (40%) | 5/5 | inproc, PGM, TIPC pending |
-| **Devices** | 0/3 (0%) | 3/3 | Proxies (Phase 7) |
+| **Devices** | 1/3 (33%) | 3/3 | Steerable proxy pending |
 | **Protocol** | ZMTP 3.1 ✅ | ZMTP 3.1 ✅ | Complete |
 | **Ergonomics** | Message API ✅ | Basic | Better in monocoque |
 
@@ -687,7 +704,7 @@ socket.as_stream()
 | XPUB/XSUB | 🔴 Critical | Medium | High | ✅ **DONE** (Jan 20, 2026) |
 | Message Builder | 🔴 Critical | Low | High | ✅ **DONE** |
 | Socket Options | 🟡 Important | Low | Medium | ✅ **DONE** |
-| Message Proxy | 🟡 Important | Medium | High | **TODO** (Phase 7) |
+| Message Proxy | 🟡 Important | Medium | High | ✅ **DONE** (Jan 22, 2026) |
 | PLAIN Auth | 🔴 Critical | Medium | High | **TODO** |
 | CURVE Security | 🔴 Critical | High | High | **TODO** |
 | STREAM Socket | 🟡 Important | High | Medium | **SKIP** (niche) |
@@ -709,17 +726,34 @@ socket.as_stream()
 
 ## 12. Success Metrics
 
-### **Phase 6 Goals** ✅ **ACHIEVED (January 20, 2026)**
+### **Phase 6 Goals** ✅ **FULLY ACHIEVED (January 22, 2026)**
 - ✅ 11/12 core socket types implemented (STREAM deferred as niche)
 - ✅ XPUB/XSUB fully functional with 14 passing integration tests
 - ✅ End-to-end subscription event communication verified
-- ⏭️ Message proxy deferred to Phase 7
+- ✅ Message proxy implemented with futures::select! (January 22, 2026)
 - ✅ Protocol-level interoperability with libzmq confirmed
+- ✅ Paranoid Pirate pattern examples created
 
-### **Phase 7 Goals**
-- ✅ PLAIN and CURVE security working
-- ✅ Security audit passed
-- ✅ TLS integration documented
+### **Next Priority Items** (Post-Phase 6)
+
+#### **Immediate Next Steps**:
+1. **🔴 PLAIN Authentication** (3-4 days) - Critical for production
+2. **🔴 CURVE Security** (7-10 days) - Critical for encryption
+3. **🟡 inproc Transport** (3-4 days) - Important for testing/performance
+4. **🟡 Steerable Proxy** (3-4 days) - Control socket for proxy
+5. **🟡 Socket Options** - Identity/routing, TCP keepalive, REQ modes
+
+#### **Optional Enhancements**:
+- Stream/Sink adapters for async ecosystem integration
+- Additional socket options (conflation, router mandatory, etc.)
+- STREAM socket (only if specific use case emerges)
+
+### **Phase 7 Goals** (Security - Next Phase)
+- ⏭️ PLAIN authentication mechanism
+- ⏭️ CURVE encryption with libsodium/curve25519-dalek
+- ⏭️ ZAP (ZeroMQ Authentication Protocol) support
+- ⏭️ Security audit and documentation
+- ⏭️ TLS integration documented
 
 ### **Long-term Goals**
 - ✅ 100% libzmq compatibility for documented features
@@ -739,6 +773,7 @@ socket.as_stream()
 
 ---
 
-**Last Updated**: January 20, 2026  
-**Phase 6 Status**: ✅ Complete - XPUB/XSUB implemented and tested  
+**Last Updated**: January 22, 2026  
+**Phase 6 Status**: ✅ Complete - XPUB/XSUB and proxy implemented and tested  
+**Current Phase**: Phase 6 complete, ready for Phase 7 (Security)  
 **Next Review**: Before Phase 7 (Security) kickoff
