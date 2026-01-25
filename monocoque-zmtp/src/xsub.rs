@@ -23,7 +23,6 @@ use crate::base::SocketBase;
 use bytes::Bytes;
 use compio::io::{AsyncRead, AsyncWrite};
 use compio::net::TcpStream;
-use monocoque_core::config::BufferConfig;
 use monocoque_core::endpoint::Endpoint;
 use monocoque_core::options::SocketOptions;
 use monocoque_core::subscription::{SubscriptionEvent, SubscriptionTrie};
@@ -86,18 +85,12 @@ where
 {
     /// Create a new XSUB socket from a stream.
     pub async fn new(stream: S) -> io::Result<Self> {
-        Self::with_options(stream, BufferConfig::large(), SocketOptions::default()).await
-    }
-
-    /// Create a new XSUB socket with custom configuration.
-    pub async fn with_config(stream: S, config: BufferConfig) -> io::Result<Self> {
-        Self::with_options(stream, config, SocketOptions::default()).await
+        Self::with_options(stream, SocketOptions::default()).await
     }
 
     /// Create a new XSUB socket with custom configuration and options.
     pub async fn with_options(
         mut stream: S,
-        config: BufferConfig,
         options: SocketOptions,
     ) -> io::Result<Self> {
         debug!("[XSUB] Creating new XSUB socket");
@@ -119,7 +112,7 @@ where
         );
 
         Ok(Self {
-            base: SocketBase::new(stream, config, options),
+            base: SocketBase::new(stream, SocketType::Xsub, options),
             frames: SmallVec::new(),
             subscriptions: SubscriptionTrie::new(),
         })
@@ -203,7 +196,7 @@ where
     /// ```
     pub async fn send_subscription_event(&mut self, event: SubscriptionEvent) -> io::Result<()> {
         use compio::buf::BufResult;
-        use compio::io::{AsyncWrite, AsyncWriteExt};
+        use compio::io::AsyncWrite;
         use monocoque_core::alloc::IoBytes;
 
         let msg = event.to_message();
@@ -332,7 +325,7 @@ impl XSubSocket<TcpStream> {
         options: SocketOptions,
     ) -> io::Result<Self> {
         let stream = TcpStream::connect(addr).await?;
-        Self::with_options(stream, BufferConfig::large(), options).await
+        Self::with_options(stream, options).await
     }
 }
 
@@ -358,3 +351,5 @@ mod tests {
         assert_eq!(&msg[1..], b"topic");
     }
 }
+
+crate::impl_socket_trait!(XSubSocket<S>, SocketType::Xsub);

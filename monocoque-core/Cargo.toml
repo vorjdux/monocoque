@@ -6,6 +6,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+publish = false  # Internal crate - not published to crates.io
 description = "Protocol-agnostic messaging kernel with io_uring-based I/O"
 keywords = ["messaging", "io_uring", "async", "zeromq", "kernel"]
 categories = ["network-programming", "asynchronous"]

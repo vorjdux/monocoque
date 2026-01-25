@@ -75,7 +75,13 @@ mod inproc_stream;
 mod utils;
 
 // Public protocol types
+pub mod adapters;
 pub mod session;
+pub mod socket_trait;
+pub mod stream_sink;
+
+// Security mechanisms
+pub mod security;
 
 // Socket implementations
 pub mod dealer;
@@ -93,7 +99,6 @@ pub mod xsub;
 
 // Re-export socket types for clean API
 pub use dealer::DealerSocket;
-pub use monocoque_core::config::BufferConfig;
 pub use pair::PairSocket;
 pub use publisher::PubSocket;
 pub use pull::PullSocket;
@@ -107,6 +112,7 @@ pub use xsub::XSubSocket;
 
 // Re-export commonly used types
 pub use session::{SocketType, ZmtpSession};
+pub use socket_trait::Socket;
 
 /// Prelude module for convenient imports
 ///
@@ -115,6 +121,8 @@ pub use session::{SocketType, ZmtpSession};
 /// ```
 pub mod prelude {
     pub use super::session::SocketType;
+    pub use super::socket_trait::Socket;
+    pub use super::stream_sink::{SocketStream, SocketSink, SocketStreamSink};
     pub use super::{
         DealerSocket, PairSocket, PubSocket, PullSocket, PushSocket, RepSocket, ReqSocket,
         RouterSocket, SubSocket, XPubSocket, XSubSocket,

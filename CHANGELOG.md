@@ -1,6 +1,141 @@
 # Changelog
 
 ## Unreleased
+
+### 🏗️ Project Reorganization (2026-01-25)
+
+**Summary**: Major restructuring to establish clear public API boundaries, consolidate scattered files, and improve project organization. All internal crates are now protected from publishing.
+
+#### Project Structure Changes
+
+-   **✅ Moved all examples to public crate** (`monocoque/examples/`)
+    -   Moved `examples/` (root) → `monocoque/examples/` (51 example files)
+    -   All examples now in one location for easy discovery
+    -   Added 12 new examples: `simple_rep_server`, `simple_req_client`, `debug_rep_server`, `rep_server`, `req_client`, `authenticated_req_rep`, `plain_auth_demo`, `curve_demo`, `zap_server_demo`, `router_identity`, `socket_introspection`, `stream_sink_adapters`
+
+-   **✅ Moved all benchmarks to public crate** (`monocoque/benches/`)
+    -   Moved `monocoque-zmtp/benches/` → `monocoque/benches/`
+    -   Added 3 benchmarks: `performance.rs`, `measure_latency.rs`, `simple_perf.rs`
+    -   Total benchmarks: 9 (throughput, latency, patterns, pipelined_throughput, ipc_vs_tcp, multithreaded, performance, measure_latency, simple_perf)
+    -   Moved `benchmarks/libzmq_throughput.py` → `monocoque/benches/interop/`
+
+-   **✅ Consolidated scripts** (`scripts/`)
+    -   Removed duplicates: `analyze_benchmarks.sh` (root), `monocoque/quick_bench.sh`, `monocoque/run_benchmarks.sh`, `monocoque/analyze_benchmarks.py`
+    -   Centralized in `scripts/`: `bench_all.sh`, `run_interop_tests.sh`
+    -   Added: `scripts/run_fuzzer.sh` for fuzzing infrastructure
+
+-   **✅ Organized documentation** (`docs/`)
+    -   User-facing docs remain in `docs/`: GETTING_STARTED, USER_GUIDE, SECURITY_GUIDE, COMPATIBILITY, PERFORMANCE, PRODUCTION_DEPLOYMENT, MIGRATION, PUBLISHING, FUZZING
+    -   Moved internal docs to `docs/internal/`: Implementation status, audits, analysis, phase summaries, proposals, refactor docs (17 files)
+    -   New docs: MIGRATION.md, SECURITY_GUIDE.md, USER_GUIDE.md, MONGODB_STYLE_SOCKET_API.md, PRODUCTION_DEPLOYMENT.md, ZAP_INTEGRATION_GUIDE.md, FUZZING.md, FUZZING_RESULTS.md
+
+-   **✅ Renamed fuzzing crate** (`monocoque-fuzz/`)
+    -   Renamed `fuzz/` → `monocoque-fuzz/` for naming consistency
+    -   All workspace crates now follow `monocoque-*` pattern
+    -   Updated workspace exclusion and gitignore
+
+-   **✅ Cleaned root directory**
+    -   Removed: `COMPLETION_REPORT.md`, `SESSION_SUMMARY.md`, `QUICK_START.md`, `analyze_benchmarks.sh`
+    -   Moved test scripts to `interop_tests/`: `test_interop.sh`, `simple_interop_test.py`, `test_libzmq_client.py`
+    -   Added: `PROJECT_STRUCTURE.md` documenting organization
+
+#### API Protection & Public Interface Fixes
+
+-   **✅ Internal crates now unpublishable**
+    -   Added `publish = false` to `monocoque-core/Cargo.toml`
+    -   Added `publish = false` to `monocoque-zmtp/Cargo.toml`
+    -   Only `monocoque` crate can be published to crates.io
+    -   Forces users to use public API, prevents direct internal crate usage
+
+-   **✅ Fixed public API wrappers** (2026-01-25)
+    -   Fixed all socket wrappers to use correct internal API (`SocketOptions` only, no redundant `BufferConfig`)
+    -   Fixed: `RepSocket`, `ReqSocket`, `DealerSocket`, `RouterSocket`, `SubSocket`
+    -   Removed deprecated methods: `from_stream_with_config`, `from_unix_stream_with_config` (use `from_tcp_with_options` instead)
+    -   All wrappers now correctly pass only `SocketOptions` to internal implementations
+
+-   **✅ Added missing socket types to public API**
+    -   Added `PushSocket` wrapper for pipeline push patterns
+    -   Added `PullSocket` wrapper for pipeline pull patterns
+    -   All 11 socket types now exposed: DEALER, ROUTER, REQ, REP, PUB, SUB, PUSH, PULL, PAIR, XPUB, XSUB
+
+-   **✅ Added convenience methods**
+    -   Added `DealerSocket::connect_with_options(endpoint, options)` - Connect with endpoint string and custom options
+    -   Simplifies common pattern of parsing endpoint, connecting TCP stream, and passing options
+
+#### Testing Infrastructure
+
+-   **✅ Interoperability tests** (`interop_tests/`)
+    -   Python ↔ Rust interop test suite
+    -   Tests: `test_req_rep_interop.py`, `test_pub_sub_interop.py`
+    -   Helper scripts: `run_all_tests.sh`, `test_interop.sh`
+    -   Verified: ZMTP handshake works perfectly with libzmq
+
+-   **✅ Fuzzing infrastructure** (`monocoque-fuzz/`)
+    -   cargo-fuzz 0.13.1 + nightly Rust setup
+    -   Protocol fuzzer: `fuzz_decoder.rs` (ZMTP greeting + command parsing)
+    -   Results: 14.4M+ iterations without crashes (~1.3M exec/sec)
+    -   Crash artifacts and corpus tracked in repo
+
+#### Configuration
+
+-   **✅ Updated `.gitignore`**
+    -   Added `.pytest_cache/` (Python test cache)
+    -   Added `monocoque-fuzz/target/` (fuzzing build artifacts)
+    -   Already had `__pycache__/`, `target/`, workspace artifacts
+
+-   **✅ Updated workspace** (`Cargo.toml`)
+    -   Excluded `monocoque-fuzz` from workspace
+    -   Three members: `monocoque-core`, `monocoque-zmtp`, `monocoque`
+    -   Default member: `monocoque` (public crate)
+
+#### Documentation Updates
+
+-   **✅ README.md**
+    -   Added "Project Structure" section with complete directory tree
+    -   Updated crate boundaries explanation
+    -   Added protection notes for internal crates
+    -   Clarified public API vs internal implementation
+
+-   **✅ PROJECT_STRUCTURE.md**
+    -   Comprehensive organization guide
+    -   Lists what was moved and cleaned up
+    -   Usage guidelines for users and contributors
+    -   Build commands reference
+
+-   **✅ Updated references**
+    -   All doc references to `fuzz/` changed to `monocoque-fuzz/`
+    -   Interop testing documentation expanded
+    -   Fuzzing results documented
+
+#### Workspace Layout
+
+```
+monocoque/
+├── monocoque/           # 🔓 Public crate (only publishable)
+│   ├── examples/        # 51 examples (consolidated)
+│   ├── benches/         # 9 benchmarks (consolidated)
+│   │   └── interop/     # Interop benchmarks
+│   └── tests/           # Integration tests
+├── monocoque-core/      # 🔒 Internal (publish = false)
+├── monocoque-zmtp/      # 🔒 Internal (publish = false)
+├── monocoque-fuzz/      # 🔧 Fuzzing (excluded from workspace)
+├── docs/                # User documentation
+│   └── internal/        # Dev/implementation docs (17 files)
+├── scripts/             # Centralized scripts (3 scripts)
+├── interop_tests/       # Interop test suite
+└── tests/               # Workspace integration tests
+```
+
+#### Benefits
+
+1. **Clear API boundary**: Users only see `monocoque` crate
+2. **Prevented misuse**: Internal crates cannot be published or directly imported
+3. **Organized examples**: All 51 examples in one discoverable location
+4. **Consolidated benchmarks**: All performance tests in one place
+5. **Clean documentation**: User docs vs internal implementation docs
+6. **No duplicates**: Single source of truth for scripts
+7. **Consistent naming**: All crates follow `monocoque-*` convention
+
 ### 🚀 Phase 6: Modern Usage Compatibility - XPUB/XSUB & Ergonomics (2026-01-19)
 
 **Summary**: Implemented XPUB/XSUB sockets for broker patterns, comprehensive socket options, Message builder API, and subscription infrastructure. Focused on modern ZeroMQ use cases rather than 100% libzmq compatibility.

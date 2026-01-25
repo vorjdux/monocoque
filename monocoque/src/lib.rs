@@ -89,9 +89,9 @@
 
 // Re-export core types
 pub use bytes::Bytes;
-pub use monocoque_core::config::BufferConfig;
 pub use monocoque_core::options::SocketOptions;
 pub use monocoque_core::reconnect::{ReconnectError, ReconnectState};
+pub use monocoque_core::socket_type::SocketType;
 
 // Protocol modules (opt-in via features)
 #[cfg(feature = "zmq")]

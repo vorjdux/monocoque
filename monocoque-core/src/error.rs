@@ -59,6 +59,52 @@ pub enum MonocoqueError {
 /// Result type alias for Monocoque operations
 pub type Result<T> = std::result::Result<T, MonocoqueError>;
 
+/// Extension trait for adding context to results
+pub trait ResultExt<T> {
+    /// Add context to an error
+    fn context(self, context: impl Into<String>) -> Result<T>;
+
+    /// Add context via a closure (lazy evaluation)
+    fn with_context<F>(self, f: F) -> Result<T>
+    where
+        F: FnOnce() -> String;
+}
+
+impl<T> ResultExt<T> for Result<T> {
+    fn context(self, context: impl Into<String>) -> Result<T> {
+        self.map_err(|e| {
+            let ctx = context.into();
+            match e {
+                MonocoqueError::Io(io_err) => {
+                    MonocoqueError::Io(io::Error::new(io_err.kind(), format!("{}: {}", ctx, io_err)))
+                }
+                MonocoqueError::Protocol(msg) => {
+                    MonocoqueError::Protocol(format!("{}: {}", ctx, msg))
+                }
+                other => other,
+            }
+        })
+    }
+
+    fn with_context<F>(self, f: F) -> Result<T>
+    where
+        F: FnOnce() -> String,
+    {
+        self.map_err(|e| {
+            let ctx = f();
+            match e {
+                MonocoqueError::Io(io_err) => {
+                    MonocoqueError::Io(io::Error::new(io_err.kind(), format!("{}: {}", ctx, io_err)))
+                }
+                MonocoqueError::Protocol(msg) => {
+                    MonocoqueError::Protocol(format!("{}: {}", ctx, msg))
+                }
+                other => other,
+            }
+        })
+    }
+}
+
 impl MonocoqueError {
     /// Create a protocol error with a message
     pub fn protocol(msg: impl Into<String>) -> Self {

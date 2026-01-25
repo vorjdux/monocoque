@@ -22,7 +22,6 @@ use crate::{handshake::perform_handshake_with_timeout, session::SocketType};
 use bytes::Bytes;
 use compio::io::{AsyncRead, AsyncWrite};
 use compio::net::TcpStream;
-use monocoque_core::config::BufferConfig;
 use monocoque_core::options::SocketOptions;
 use std::io;
 use tracing::{debug, trace};
@@ -45,18 +44,12 @@ where
 {
     /// Create a new PUSH socket from a stream with default buffer configuration.
     pub async fn new(stream: S) -> io::Result<Self> {
-        Self::with_options(stream, BufferConfig::default(), SocketOptions::default()).await
-    }
-
-    /// Create a new PUSH socket with custom buffer configuration.
-    pub async fn with_config(stream: S, config: BufferConfig) -> io::Result<Self> {
-        Self::with_options(stream, config, SocketOptions::default()).await
+        Self::with_options(stream, SocketOptions::default()).await
     }
 
     /// Create a new PUSH socket with custom buffer configuration and socket options.
     pub async fn with_options(
         mut stream: S,
-        config: BufferConfig,
         options: SocketOptions,
     ) -> io::Result<Self> {
         debug!("[PUSH] Creating new PUSH socket");
@@ -81,7 +74,7 @@ where
         debug!("[PUSH] Socket initialized");
 
         Ok(Self {
-            base: SocketBase::new(stream, config, options),
+            base: SocketBase::new(stream, SocketType::Push, options),
         })
     }
 
@@ -136,29 +129,18 @@ where
 impl PushSocket<TcpStream> {
     /// Create a new PUSH socket from a TCP stream with TCP_NODELAY enabled.
     pub async fn from_tcp(stream: TcpStream) -> io::Result<Self> {
-        Self::from_tcp_with_config(stream, BufferConfig::default()).await
-    }
-
-    /// Create a new PUSH socket from a TCP stream with TCP_NODELAY and custom config.
-    pub async fn from_tcp_with_config(
-        stream: TcpStream,
-        config: BufferConfig,
-    ) -> io::Result<Self> {
-        // Enable TCP_NODELAY for low latency
-        monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
-        debug!("[PUSH] TCP_NODELAY enabled");
-        Self::with_options(stream, config, SocketOptions::default()).await
+        Self::from_tcp_with_options(stream, SocketOptions::default()).await
     }
 
     /// Create a new PUSH socket from a TCP stream with TCP_NODELAY and custom options.
     pub async fn from_tcp_with_options(
         stream: TcpStream,
-        config: BufferConfig,
         options: SocketOptions,
     ) -> io::Result<Self> {
-        // Enable TCP_NODELAY for low latency
-        monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
-        debug!("[PUSH] TCP_NODELAY enabled");
-        Self::with_options(stream, config, options).await
+        // Configure TCP optimizations including keepalive
+        crate::utils::configure_tcp_stream(&stream, &options, "PUSH")?;
+        Self::with_options(stream, options).await
     }
 }
+
+crate::impl_socket_trait!(PushSocket<S>, SocketType::Push);

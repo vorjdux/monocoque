@@ -1,4 +1,8 @@
 use bytes::{BufMut, Bytes, BytesMut};
+use compio::net::TcpStream;
+use monocoque_core::options::SocketOptions;
+use std::io;
+use tracing::debug;
 
 /// ZMTP frame flags
 pub const FLAG_LONG: u8 = 0x02;
@@ -74,4 +78,50 @@ fn put_property(dst: &mut BytesMut, name: &str, value: &[u8]) {
 
     dst.put_u32(value.len() as u32);
     dst.extend_from_slice(value);
+}
+
+/// Configure TCP stream with optimizations (TCP_NODELAY, keepalive).
+///
+/// Applies TCP socket options based on SocketOptions configuration:
+/// - Always enables TCP_NODELAY for low latency
+/// - Configures TCP keepalive if enabled in options
+///
+/// # Arguments
+///
+/// * `stream` - The TCP stream to configure
+/// * `options` - Socket options containing TCP configuration
+/// * `socket_name` - Name for debug logging (e.g., "DEALER", "ROUTER")
+///
+/// # Errors
+///
+/// Returns an error if socket options cannot be applied.
+pub fn configure_tcp_stream(
+    stream: &TcpStream,
+    options: &SocketOptions,
+    socket_name: &str,
+) -> io::Result<()> {
+    // Enable TCP_NODELAY for low latency
+    monocoque_core::tcp::enable_tcp_nodelay(stream)?;
+    debug!("[{}] TCP_NODELAY enabled", socket_name);
+    
+    // Configure TCP keepalive if specified
+    monocoque_core::tcp::configure_tcp_keepalive(
+        stream,
+        options.tcp_keepalive,
+        options.tcp_keepalive_cnt,
+        options.tcp_keepalive_idle,
+        options.tcp_keepalive_intvl,
+    )?;
+    
+    if options.tcp_keepalive == 1 {
+        debug!(
+            "[{}] TCP keepalive enabled (cnt={}, idle={}s, intvl={}s)", 
+            socket_name,
+            options.tcp_keepalive_cnt, 
+            options.tcp_keepalive_idle, 
+            options.tcp_keepalive_intvl
+        );
+    }
+    
+    Ok(())
 }

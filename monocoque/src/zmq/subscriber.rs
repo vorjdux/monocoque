@@ -156,12 +156,8 @@ impl SubSocket {
         stream: TcpStream,
         options: monocoque_core::options::SocketOptions,
     ) -> io::Result<Self> {
-        let config = monocoque_core::config::BufferConfig {
-            read_buf_size: options.read_buffer_size,
-            write_buf_size: options.write_buffer_size,
-        };
         Ok(Self {
-            inner: InternalSub::with_options(stream, config, options).await?,
+            inner: InternalSub::from_tcp_with_options(stream, options).await?,
             monitor: None,
         })
     }
@@ -174,12 +170,8 @@ impl SubSocket {
     where
         Stream: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
     {
-        let config = monocoque_core::config::BufferConfig {
-            read_buf_size: options.read_buffer_size,
-            write_buf_size: options.write_buffer_size,
-        };
         Ok(SubSocket {
-            inner: InternalSub::with_options(stream, config, options).await?,
+            inner: InternalSub::with_options(stream, options).await?,
             monitor: None,
         })
     }
@@ -295,17 +287,6 @@ impl SubSocket<compio::net::UnixStream> {
         })
     }
 
-    /// Create a SUB socket from an existing Unix stream with custom buffer configuration.
-    pub async fn from_unix_stream_with_config(
-        stream: compio::net::UnixStream,
-        config: monocoque_core::config::BufferConfig,
-    ) -> io::Result<Self> {
-        Ok(Self {
-            inner: InternalSub::with_config(stream, config).await?,
-            monitor: None,
-        })
-    }
-
     /// Create a SUB socket from an existing Unix stream with custom options.
     ///
     /// This method provides full control over socket behavior through SocketOptions.
@@ -313,12 +294,8 @@ impl SubSocket<compio::net::UnixStream> {
         stream: compio::net::UnixStream,
         options: monocoque_core::options::SocketOptions,
     ) -> io::Result<Self> {
-        let config = monocoque_core::config::BufferConfig {
-            read_buf_size: options.read_buffer_size,
-            write_buf_size: options.write_buffer_size,
-        };
         Ok(Self {
-            inner: InternalSub::with_options(stream, config, options).await?,
+            inner: InternalSub::with_options(stream, options).await?,
             monitor: None,
         })
     }

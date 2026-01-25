@@ -8,7 +8,7 @@ use compio::net::{TcpListener, TcpStream};
 use monocoque_core::options::SocketOptions;
 use monocoque_zmtp::dealer::DealerSocket;
 use monocoque_zmtp::router::RouterSocket;
-use monocoque_zmtp::BufferConfig;
+use monocoque_core::config::BufferConfig;
 use std::io;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;

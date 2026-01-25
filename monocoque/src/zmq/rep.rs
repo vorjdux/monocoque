@@ -73,12 +73,8 @@ impl RepSocket {
         stream: TcpStream,
         options: monocoque_core::options::SocketOptions,
     ) -> io::Result<Self> {
-        let config = monocoque_core::config::BufferConfig {
-            read_buf_size: options.read_buffer_size,
-            write_buf_size: options.write_buffer_size,
-        };
         Ok(Self {
-            inner: InternalRep::with_options(stream, config, options).await?,
+            inner: InternalRep::with_options(stream, options).await?,
             monitor: None,
         })
     }
@@ -91,12 +87,8 @@ impl RepSocket {
     where
         Stream: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
     {
-        let config = monocoque_core::config::BufferConfig {
-            read_buf_size: options.read_buffer_size,
-            write_buf_size: options.write_buffer_size,
-        };
         Ok(RepSocket {
-            inner: InternalRep::with_options(stream, config, options).await?,
+            inner: InternalRep::with_options(stream, options).await?,
             monitor: None,
         })
     }
@@ -252,17 +244,6 @@ impl RepSocket<compio::net::UnixStream> {
         })
     }
 
-    /// Create a REP socket from an existing Unix stream with custom buffer configuration.
-    pub async fn from_unix_stream_with_config(
-        stream: compio::net::UnixStream,
-        config: monocoque_core::config::BufferConfig,
-    ) -> io::Result<Self> {
-        Ok(Self {
-            inner: InternalRep::with_config(stream, config).await?,
-            monitor: None,
-        })
-    }
-
     /// Create a REP socket from an existing Unix stream with custom options.
     ///
     /// This method provides full control over socket behavior through SocketOptions.
@@ -270,12 +251,8 @@ impl RepSocket<compio::net::UnixStream> {
         stream: compio::net::UnixStream,
         options: monocoque_core::options::SocketOptions,
     ) -> io::Result<Self> {
-        let config = monocoque_core::config::BufferConfig {
-            read_buf_size: options.read_buffer_size,
-            write_buf_size: options.write_buffer_size,
-        };
         Ok(Self {
-            inner: InternalRep::with_options(stream, config, options).await?,
+            inner: InternalRep::with_options(stream, options).await?,
             monitor: None,
         })
     }

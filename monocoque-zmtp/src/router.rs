@@ -20,7 +20,6 @@ use tracing::{debug, trace};
 use crate::base::SocketBase;
 use crate::codec::encode_multipart;
 use crate::{handshake::perform_handshake_with_timeout, session::SocketType};
-use monocoque_core::config::BufferConfig;
 use monocoque_core::endpoint::Endpoint;
 
 static PEER_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -42,34 +41,47 @@ impl<S> RouterSocket<S>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    /// Create a new ROUTER socket from a stream with large buffer configuration (16KB).
+    /// Create a new ROUTER socket from a stream using default options.
     ///
-    /// ROUTER sockets typically handle high-throughput workloads with message routing,
-    /// so large buffers provide optimal performance. Use `with_config()` for different workloads.
+    /// ROUTER sockets handle high-throughput workloads with message routing.
+    /// Uses default buffer sizes (8KB). For custom configuration, use `with_options()`.
     ///
-    /// Works with both TCP and Unix domain sockets.
+    /// # Example
+    /// ```rust,no_run
+    /// # use monocoque_zmtp::router::RouterSocket;
+    /// # use compio::net::TcpStream;
+    /// # async fn example() -> std::io::Result<()> {
+    /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
+    /// let socket = RouterSocket::new(stream).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn new(stream: S) -> io::Result<Self> {
-        Self::with_options(stream, BufferConfig::large(), SocketOptions::default()).await
+        Self::with_options(stream, SocketOptions::default()).await
     }
 
-    /// Create a new ROUTER socket from a stream with custom buffer configuration.
+    /// Create a new ROUTER socket with custom socket options.
     ///
     /// # Buffer Configuration
-    /// - Use `BufferConfig::small()` (4KB) for low-latency routing with small messages
-    /// - Use `BufferConfig::large()` (16KB) for high-throughput routing with large messages
+    /// - Use `SocketOptions::small()` (4KB) for low-latency with small messages
+    /// - Use `SocketOptions::large()` (16KB) for high-throughput with large messages
+    /// - Use `SocketOptions::default()` (8KB) for balanced workloads
     ///
-    /// Works with both TCP and Unix domain sockets.
-    ///
-    /// **Note**: For TCP streams, use `from_tcp_with_config()` instead to ensure TCP_NODELAY is enabled.
-    pub async fn with_config(stream: S, config: BufferConfig) -> io::Result<Self> {
-        Self::with_options(stream, config, SocketOptions::default()).await
-    }
-
-    /// Create a new ROUTER socket with custom buffer configuration and socket options.
+    /// # Example
+    /// ```rust,no_run
+    /// # use monocoque_zmtp::router::RouterSocket;
+    /// # use monocoque_core::options::SocketOptions;
+    /// # use compio::net::TcpStream;
+    /// # async fn example() -> std::io::Result<()> {
+    /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
+    /// let opts = SocketOptions::large(); // 16KB buffers for throughput
+    /// let socket = RouterSocket::with_options(stream, opts).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn with_options(
         mut stream: S,
-        config: BufferConfig,
-        options: SocketOptions,
+        mut options: SocketOptions,
     ) -> io::Result<Self> {
         debug!("[ROUTER] Creating new direct ROUTER socket");
 
@@ -84,13 +96,24 @@ where
         .await
         .map_err(|e| io::Error::other(format!("Handshake failed: {}", e)))?;
 
-        // Get or generate peer identity
-        let peer_identity = if let Some(id) = handshake_result.peer_identity {
+        // Determine peer identity (priority order):
+        // 1. connect_routing_id (explicitly assigned by ROUTER)
+        // 2. peer_identity from handshake (peer's self-reported identity)
+        // 3. Auto-generate
+        let peer_identity = if let Some(id) = options.connect_routing_id.take() {
+            // Use the explicitly assigned identity
+            debug!("[ROUTER] Using assigned identity: {:?}", id);
+            id
+        } else if let Some(id) = handshake_result.peer_identity {
+            // Use peer's self-reported identity
+            debug!("[ROUTER] Using peer-reported identity: {:?}", id);
             id
         } else {
             // Auto-generate identity using counter
             let peer_id = PEER_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
-            Bytes::from(format!("peer-{}", peer_id))
+            let id = Bytes::from(format!("\0peer-{}", peer_id));
+            debug!("[ROUTER] Auto-generated identity: {:?}", id);
+            id
         };
 
         debug!(
@@ -102,7 +125,7 @@ where
         debug!("[ROUTER] Socket initialized");
 
         Ok(Self {
-            base: SocketBase::new(stream, config, options),
+            base: SocketBase::new(stream, SocketType::Router, options),
             frames: SmallVec::new(),
             peer_identity,
         })
@@ -334,32 +357,67 @@ where
     pub fn events(&self) -> u32 {
         self.base.events()
     }
+
+    /// Get the peer identity.
+    ///
+    /// Returns the identity of the connected peer.
+    ///
+    /// # ZeroMQ Compatibility
+    ///
+    /// This identity is used as the first frame in received messages
+    /// and as the routing address in sent messages.
+    #[inline]
+    pub fn peer_identity(&self) -> &Bytes {
+        &self.peer_identity
+    }
 }
 
 // Specialized implementation for TCP streams to enable TCP_NODELAY
 impl RouterSocket<TcpStream> {
-    /// Create a new ROUTER socket from a TCP stream with TCP_NODELAY enabled.
+    /// Create a ROUTER socket from a TCP stream with default options.
+    ///
+    /// Automatically enables TCP_NODELAY and applies TCP keepalive settings.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use monocoque_zmtp::router::RouterSocket;
+    /// # use compio::net::TcpStream;
+    /// # async fn example() -> std::io::Result<()> {
+    /// let stream = TcpStream::connect(\"127.0.0.1:5555\").await?;
+    /// let socket = RouterSocket::from_tcp(stream).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn from_tcp(stream: TcpStream) -> io::Result<Self> {
-        Self::from_tcp_with_config(stream, BufferConfig::large()).await
+        Self::from_tcp_with_options(stream, SocketOptions::default()).await
     }
 
-    /// Create a new ROUTER socket from a TCP stream with TCP_NODELAY and custom config.
-    pub async fn from_tcp_with_config(stream: TcpStream, config: BufferConfig) -> io::Result<Self> {
-        // Enable TCP_NODELAY for low latency
-        monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
-        debug!("[ROUTER] TCP_NODELAY enabled");
-        Self::with_options(stream, config, SocketOptions::default()).await
-    }
-
-    /// Create a new ROUTER socket from a TCP stream with full configuration.
+    /// Create a ROUTER socket from a TCP stream with custom socket options.
+    ///
+    /// Automatically enables TCP_NODELAY and applies TCP keepalive settings from options.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use monocoque_zmtp::router::RouterSocket;
+    /// # use monocoque_core::options::SocketOptions;
+    /// # use compio::net::TcpStream;
+    /// # async fn example() -> std::io::Result<()> {
+    /// let stream = TcpStream::connect(\"127.0.0.1:5555\").await?;
+    /// let mut opts = SocketOptions::large();
+    /// opts.tcp_keepalive = Some(true);
+    /// let socket = RouterSocket::from_tcp_with_options(stream, opts).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn from_tcp_with_options(
         stream: TcpStream,
-        config: BufferConfig,
         options: SocketOptions,
     ) -> io::Result<Self> {
-        // Enable TCP_NODELAY for low latency
-        monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
-        debug!("[ROUTER] TCP_NODELAY enabled");
-        Self::with_options(stream, config, options).await
+        // Apply TCP-specific configuration
+        crate::utils::configure_tcp_stream(&stream, &options, "ROUTER")?;
+
+        Self::with_options(stream, options).await
     }
 }
+
+crate::impl_socket_trait!(RouterSocket<S>, SocketType::Router);

@@ -597,6 +597,93 @@ See [`docs/blueprints/07-project-roadmap-and-future-phases.md`](docs/blueprints/
 
 ---
 
+## Project Structure
+
+Monocoque is organized as a workspace with a clear separation between public and internal crates:
+
+```
+monocoque/                        # Workspace root
+├── monocoque/                    # 🔓 PUBLIC CRATE - The only crate users import
+│   ├── src/
+│   │   ├── lib.rs               # Public API exports
+│   │   └── zmq/                 # High-level socket API (feature-gated)
+│   ├── examples/                # 50+ examples showing all features
+│   │   ├── simple_req_rep.rs   # Basic request-reply
+│   │   ├── curve_demo.rs       # CURVE encryption
+│   │   ├── proxy_steerable.rs  # Advanced patterns
+│   │   └── ...
+│   ├── benches/                 # Performance benchmarks
+│   │   ├── throughput.rs       # Message throughput tests
+│   │   ├── latency.rs          # Latency measurements
+│   │   ├── performance.rs      # Protocol-level benchmarks
+│   │   └── interop/            # Interop tests with libzmq
+│   │       └── libzmq_throughput.py
+│   └── tests/                   # Integration tests
+│       ├── interop_router.rs   # Test ROUTER interop with libzmq
+│       └── zap_integration.rs  # ZAP authentication tests
+│
+├── monocoque-core/              # 🔒 INTERNAL - Protocol-agnostic primitives
+│   └── src/
+│       ├── message.rs          # Zero-copy message type
+│       ├── options.rs          # Socket configuration
+│       └── socket_type.rs      # Socket type enum
+│
+├── monocoque-zmtp/              # 🔒 INTERNAL - ZMTP 3.1 implementation
+│   └── src/
+│       ├── req.rs              # REQ socket
+│       ├── rep.rs              # REP socket  
+│       ├── dealer.rs           # DEALER socket
+│       ├── router.rs           # ROUTER socket
+│       ├── publisher.rs        # PUB socket
+│       ├── subscriber.rs       # SUB socket
+│       ├── handshake.rs        # ZMTP handshake
+│       ├── codec.rs            # Frame encoding/decoding
+│       └── security/           # NULL, PLAIN, CURVE mechanisms
+│
+├── docs/                        # User-facing documentation
+│   ├── GETTING_STARTED.md      # Quick start guide
+│   ├── USER_GUIDE.md           # Comprehensive usage guide
+│   ├── SECURITY_GUIDE.md       # Security best practices
+│   ├── MIGRATION.md            # Migrating from libzmq
+│   ├── COMPATIBILITY.md        # ZeroMQ compatibility status
+│   ├── PERFORMANCE.md          # Performance characteristics
+│   ├── PRODUCTION_DEPLOYMENT.md # Production deployment guide
+│   ├── blueprints/             # Design documents
+│   └── internal/               # Development/implementation docs
+│
+├── scripts/                     # Development scripts
+│   ├── bench_all.sh            # Run all benchmarks
+│   └── run_interop_tests.sh    # Test interop with libzmq
+│
+├── interop_tests/               # Interoperability test suite
+│   ├── test_req_rep_interop.py # Python ↔ Rust interop tests
+│   └── test_pub_sub_interop.py # PUB/SUB interop
+│
+├── monocoque-fuzz/              # Fuzzing targets (cargo-fuzz)
+│   └── fuzz_targets/
+│       └── fuzz_decoder.rs     # Protocol fuzzing
+│
+└── Cargo.toml                   # Workspace manifest
+```
+
+### Crate Boundaries
+
+**Public API** (`monocoque` crate):
+```rust
+use monocoque::zmq::DealerSocket;  // ✅ Public
+use monocoque::SocketOptions;       // ✅ Public
+```
+
+**Internal crates** (not published - cannot be used directly):
+```rust
+use monocoque_zmtp::RepSocket;     // ❌ Not on crates.io
+use monocoque_core::Message;       // ❌ Not on crates.io
+```
+
+**Note**: `monocoque-core` and `monocoque-zmtp` have `publish = false` in their Cargo.toml, preventing them from being published to crates.io. Users must use the `monocoque` crate, which re-exports all necessary types.
+
+---
+
 ## Documentation
 
 ### Architecture & Design

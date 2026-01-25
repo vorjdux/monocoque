@@ -16,7 +16,6 @@ use compio::io::{AsyncRead, AsyncWrite};
 use compio::net::TcpStream;
 use monocoque_core::alloc::{IoArena, IoBytes};
 use monocoque_core::buffer::SegmentedBuffer;
-use monocoque_core::config::BufferConfig;
 use monocoque_core::endpoint::Endpoint;
 use monocoque_core::options::SocketOptions;
 use monocoque_core::poison::PoisonGuard;
@@ -74,11 +73,14 @@ where
     /// Send buffer for message batching
     pub(crate) send_buffer: BytesMut,
     
-    /// Buffer configuration (sizes, HWM, etc.)
-    pub(crate) config: BufferConfig,
-    
-    /// Socket options (timeouts, limits, identity)
+    /// Socket options (timeouts, limits, identity, buffer sizes)
     pub(crate) options: SocketOptions,
+    
+    /// Socket type for introspection
+    pub(crate) socket_type: SocketType,
+    
+    /// Last connected/bound endpoint
+    pub(crate) last_endpoint: Option<String>,
     
     /// Connection health flag (true if I/O was cancelled mid-operation)
     pub(crate) is_poisoned: bool,
@@ -91,12 +93,19 @@ impl<S> SocketBase<S>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    /// Create a new SocketBase with the given stream, config, and options.
+    /// Create a new SocketBase with the given stream and options.
     ///
     /// This is used when the socket is created from an existing stream
     /// (e.g., `from_tcp`, `from_unix_stream`). No endpoint or reconnection
     /// state is stored.
-    pub fn new(stream: S, config: BufferConfig, options: SocketOptions) -> Self {
+    ///
+    /// Buffer sizes are taken from `options.read_buffer_size` and `options.write_buffer_size`.
+    pub fn new(
+        stream: S,
+        socket_type: SocketType,
+        options: SocketOptions,
+    ) -> Self {
+        let write_capacity = options.write_buffer_size;
         Self {
             stream: Some(stream),
             endpoint: None,
@@ -104,10 +113,11 @@ where
             decoder: ZmtpDecoder::new(),
             arena: IoArena::new(),
             recv: SegmentedBuffer::new(),
-            write_buf: BytesMut::with_capacity(config.write_buf_size),
-            send_buffer: BytesMut::with_capacity(config.write_buf_size),
-            config,
+            write_buf: BytesMut::with_capacity(write_capacity),
+            send_buffer: BytesMut::with_capacity(write_capacity),
             options,
+            socket_type,
+            last_endpoint: None,
             is_poisoned: false,
             buffered_messages: 0,
         }
@@ -117,12 +127,16 @@ where
     ///
     /// This is used when the socket is created via `connect(endpoint)` and
     /// automatic reconnection is desired.
+    ///
+    /// Buffer sizes are taken from `options.read_buffer_size` and `options.write_buffer_size`.
     pub fn with_endpoint(
         stream: S,
+        socket_type: SocketType,
         endpoint: Endpoint,
-        config: BufferConfig,
         options: SocketOptions,
     ) -> Self {
+        let endpoint_str = endpoint.to_string();
+        let write_capacity = options.write_buffer_size;
         Self {
             stream: Some(stream),
             endpoint: Some(endpoint),
@@ -130,10 +144,11 @@ where
             decoder: ZmtpDecoder::new(),
             arena: IoArena::new(),
             recv: SegmentedBuffer::new(),
-            write_buf: BytesMut::with_capacity(config.write_buf_size),
-            send_buffer: BytesMut::with_capacity(config.write_buf_size),
-            config,
+            write_buf: BytesMut::with_capacity(write_capacity),
+            send_buffer: BytesMut::with_capacity(write_capacity),
             options,
+            socket_type,
+            last_endpoint: Some(endpoint_str),
             is_poisoned: false,
             buffered_messages: 0,
         }
@@ -182,9 +197,30 @@ where
         self.endpoint.as_ref()
     }
 
-    /// Check if more message frames are expected.
+    /// Get the last endpoint as a string.
     ///
-    /// Returns `true` if the decoder has a partial multipart message buffered.
+    /// # ZeroMQ Compatibility
+    ///
+    /// Corresponds to `ZMQ_LAST_ENDPOINT` (32) option.
+    #[inline]
+    pub fn last_endpoint_string(&self) -> Option<&str> {
+        self.last_endpoint.as_deref()
+    }
+
+    /// Get the socket type.
+    ///
+    /// # ZeroMQ Compatibility
+    ///
+    /// Corresponds to `ZMQ_TYPE` (16) option.
+    #[inline]
+    pub fn socket_type(&self) -> SocketType {
+        self.socket_type
+    }
+
+    /// Check if more message frames are expected (for multipart messages).
+    ///
+    /// This indicates whether the last received message has more frames
+    /// coming after it. Always returns `false` for single-frame messages.
     ///
     /// # ZeroMQ Compatibility
     ///
@@ -258,7 +294,7 @@ where
 
         // Read from stream
         use compio::buf::BufResult;
-        let slab = self.arena.alloc_mut(self.config.read_buf_size);
+        let slab = self.arena.alloc_mut(self.options.read_buffer_size);
 
         // Get stream reference only for I/O
         let stream = self.stream.as_mut().unwrap(); // Safe: checked above
@@ -543,6 +579,12 @@ impl SocketBase<TcpStream> {
                 return Err(io::Error::new(
                     io::ErrorKind::Unsupported,
                     "IPC reconnection not supported for TcpStream base",
+                ));
+            }
+            Endpoint::Inproc(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "Inproc reconnection not supported for TcpStream base",
                 ));
             }
         };

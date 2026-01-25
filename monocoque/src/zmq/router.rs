@@ -137,21 +137,9 @@ impl RouterSocket {
     /// Create a ROUTER socket from an existing TCP stream with custom buffer configuration.
     ///
     /// # Buffer Configuration
-    /// - Use `BufferConfig::small()` (4KB) for low-latency routing with small messages
-    /// - Use `BufferConfig::large()` (16KB) for high-throughput routing with large messages (recommended)
-    #[deprecated(
-        since = "0.1.0",
-        note = "Use `from_tcp_with_config()` instead to enable TCP_NODELAY"
-    )]
-    pub async fn from_stream_with_config(
-        stream: TcpStream,
-        config: monocoque_core::config::BufferConfig,
-    ) -> io::Result<Self> {
-        Ok(Self {
-            inner: InternalRouter::with_config(stream, config).await?,
-            monitor: None,
-        })
-    }
+    /// - Use `SocketOptions` with `with_buffer_sizes()` instead
+    /// - Small buffers (4KB) for low-latency routing with small messages
+    /// - Large buffers (16KB) for high-throughput routing with large messages (recommended)
 
     /// Create a ROUTER socket from a TCP stream with TCP_NODELAY enabled.
     pub async fn from_tcp(stream: TcpStream) -> io::Result<Self> {
@@ -166,12 +154,8 @@ impl RouterSocket {
         stream: TcpStream,
         options: monocoque_core::options::SocketOptions,
     ) -> io::Result<Self> {
-        let config = monocoque_core::config::BufferConfig {
-            read_buf_size: options.read_buffer_size,
-            write_buf_size: options.write_buffer_size,
-        };
         Ok(Self {
-            inner: InternalRouter::with_options(stream, config, options).await?,
+            inner: InternalRouter::from_tcp_with_options(stream, options).await?,
             monitor: None,
         })
     }
@@ -184,12 +168,8 @@ impl RouterSocket {
     where
         Stream: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
     {
-        let config = monocoque_core::config::BufferConfig {
-            read_buf_size: options.read_buffer_size,
-            write_buf_size: options.write_buffer_size,
-        };
         Ok(RouterSocket {
-            inner: InternalRouter::with_options(stream, config, options).await?,
+            inner: InternalRouter::with_options(stream, options).await?,
             monitor: None,
         })
     }
@@ -339,6 +319,128 @@ where
         self.inner.events()
     }
 
+    /// Set the routing identity for the next accepted connection.
+    ///
+    /// This identity will be used for the next peer that connects to this ROUTER.
+    /// The option is consumed after the connection and must be set again for
+    /// subsequent connections.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The identity to assign (1-255 bytes, cannot start with null byte)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the identity is invalid (empty, too long, or starts
+    /// with null byte).
+    ///
+    /// # ZeroMQ Compatibility
+    ///
+    /// Corresponds to `ZMQ_CONNECT_ROUTING_ID` (62).
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use monocoque::zmq::RouterSocket;
+    /// use bytes::Bytes;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let (_listener, mut router) = RouterSocket::bind("tcp://0.0.0.0:5555").await?;
+    /// 
+    /// // Assign explicit identity to next connection
+    /// router.set_connect_routing_id(b"worker-001".to_vec())?;
+    /// 
+    /// // When a peer connects, it will be identified as "worker-001"
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn set_connect_routing_id(&mut self, id: Vec<u8>) -> io::Result<()> {
+        // Validate identity for ROUTER socket
+        monocoque_core::options::SocketOptions::validate_router_identity(&id)?;
+        self.inner.options_mut().connect_routing_id = Some(Bytes::from(id));
+        Ok(())
+    }
+
+    /// Enable or disable ROUTER_MANDATORY mode.
+    ///
+    /// When enabled, sending to an unknown identity returns an error.
+    /// When disabled (default), messages to unknown identities are silently dropped.
+    ///
+    /// **Note**: The current single-peer ROUTER implementation doesn't have a
+    /// routing table yet, so this option affects future multi-peer support.
+    ///
+    /// # ZeroMQ Compatibility
+    ///
+    /// Corresponds to `ZMQ_ROUTER_MANDATORY` (33).
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use monocoque::zmq::RouterSocket;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let (_listener, mut router) = RouterSocket::bind("tcp://0.0.0.0:5555").await?;
+    /// 
+    /// // Fail fast if routing to unknown peer
+    /// router.set_router_mandatory(true);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn set_router_mandatory(&mut self, enabled: bool) {
+        self.inner.options_mut().router_mandatory = enabled;
+    }
+
+    /// Enable or disable ROUTER_HANDOVER mode.
+    ///
+    /// When enabled, a new connection with an existing identity will take over
+    /// that identity, closing the old connection.
+    /// When disabled (default), duplicate identities are rejected.
+    ///
+    /// **Note**: The current single-peer ROUTER implementation doesn't have a
+    /// routing table yet, so this option affects future multi-peer support.
+    ///
+    /// # ZeroMQ Compatibility
+    ///
+    /// Corresponds to `ZMQ_ROUTER_HANDOVER` (56).
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use monocoque::zmq::RouterSocket;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let (_listener, mut router) = RouterSocket::bind("tcp://0.0.0.0:5555").await?;
+    /// 
+    /// // Allow identity takeover for reconnecting clients
+    /// router.set_router_handover(true);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn set_router_handover(&mut self, enabled: bool) {
+        self.inner.options_mut().router_handover = enabled;
+    }
+
+    /// Get the peer identity for this connection.
+    ///
+    /// Returns the identity of the connected peer. This is either:
+    /// - The identity set via `set_connect_routing_id()`
+    /// - The peer's self-reported identity from the handshake
+    /// - An auto-generated identity
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use monocoque::zmq::RouterSocket;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let (_listener, router) = RouterSocket::bind("tcp://0.0.0.0:5555").await?;
+    /// 
+    /// let identity = router.peer_identity();
+    /// println!("Peer identity: {:?}", identity);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn peer_identity(&self) -> &Bytes {
+        self.inner.peer_identity()
+    }
+
     /// Receive a multipart message.
     ///
     /// The returned message will have the sender's identity as the first frame,
@@ -375,17 +477,6 @@ impl RouterSocket<compio::net::UnixStream> {
         })
     }
 
-    /// Create a ROUTER socket from an existing Unix stream with custom buffer configuration.
-    pub async fn from_unix_stream_with_config(
-        stream: compio::net::UnixStream,
-        config: monocoque_core::config::BufferConfig,
-    ) -> io::Result<Self> {
-        Ok(Self {
-            inner: InternalRouter::with_config(stream, config).await?,
-            monitor: None,
-        })
-    }
-
     /// Create a ROUTER socket from an existing Unix stream with custom options.
     ///
     /// This method provides full control over socket behavior through SocketOptions.
@@ -393,12 +484,8 @@ impl RouterSocket<compio::net::UnixStream> {
         stream: compio::net::UnixStream,
         options: monocoque_core::options::SocketOptions,
     ) -> io::Result<Self> {
-        let config = monocoque_core::config::BufferConfig {
-            read_buf_size: options.read_buffer_size,
-            write_buf_size: options.write_buffer_size,
-        };
         Ok(Self {
-            inner: InternalRouter::with_options(stream, config, options).await?,
+            inner: InternalRouter::with_options(stream, options).await?,
             monitor: None,
         })
     }

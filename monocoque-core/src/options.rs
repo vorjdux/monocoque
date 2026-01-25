@@ -8,7 +8,8 @@ use std::time::Duration;
 /// Socket configuration options.
 ///
 /// These options control socket behavior including timeouts, buffer sizes,
-/// and reliability features.
+/// and reliability features. This struct consolidates all socket configuration
+/// in one place, following the MongoDB Rust driver pattern.
 ///
 /// # Examples
 ///
@@ -16,12 +17,33 @@ use std::time::Duration;
 /// use monocoque_core::options::SocketOptions;
 /// use std::time::Duration;
 ///
+/// // Simple case: use defaults
+/// let opts = SocketOptions::default();
+///
+/// // Customize timeouts and buffers
 /// let opts = SocketOptions::default()
 ///     .with_recv_timeout(Duration::from_secs(5))
-///     .with_send_timeout(Duration::from_secs(5));
+///     .with_send_timeout(Duration::from_secs(5))
+///     .with_buffer_sizes(16384, 16384);  // 16KB buffers for high-throughput
 /// ```
 #[derive(Debug, Clone)]
 pub struct SocketOptions {
+    /// Read buffer size (bytes)
+    ///
+    /// Size of arena-allocated buffer for receiving data.
+    /// - Default: 8192 (8KB) - balanced for most workloads
+    /// - Small (4KB): Low-latency with small messages (< 1KB)
+    /// - Large (16KB): High-throughput with large messages (> 8KB)
+    pub read_buffer_size: usize,
+
+    /// Write buffer size (bytes)
+    ///
+    /// Initial capacity of BytesMut buffer for sending data.
+    /// - Default: 8192 (8KB) - balanced for most workloads
+    /// - Small (4KB): Low-latency with small messages
+    /// - Large (16KB): High-throughput with large messages
+    pub write_buffer_size: usize,
+
     /// Receive timeout (ZMQ_RCVTIMEO)
     ///
     /// Maximum time to wait for a receive operation.
@@ -100,22 +122,6 @@ pub struct SocketOptions {
     /// - `Some(size)`: Reject messages larger than size
     pub max_msg_size: Option<usize>,
 
-    /// Read buffer size (bytes)
-    ///
-    /// Size of arena-allocated buffers for reading from network.
-    /// - Default: 8192 (8KB) - balanced for most workloads
-    /// - Small: 4096 (4KB) - for low-latency with small messages
-    /// - Large: 16384 (16KB) - for high-throughput with large messages
-    pub read_buffer_size: usize,
-
-    /// Write buffer size (bytes)
-    ///
-    /// Initial capacity of write buffers for encoding messages.
-    /// - Default: 8192 (8KB) - balanced for most workloads
-    /// - Small: 4096 (4KB) - for small messages
-    /// - Large: 16384 (16KB) - for large messages
-    pub write_buffer_size: usize,
-
     /// Socket identity / routing ID (ZMQ_ROUTING_ID / ZMQ_IDENTITY)
     ///
     /// Identity for ROUTER addressing. If None, a random UUID is generated.
@@ -179,6 +185,172 @@ pub struct SocketOptions {
     /// - `false` (default): Queue all messages
     /// - `true`: Keep only last message (overwrite queue)
     pub conflate: bool,
+
+    /// TCP keepalive (ZMQ_TCP_KEEPALIVE)
+    ///
+    /// - `-1` (default): Use OS default
+    /// - `0`: Disable TCP keepalive
+    /// - `1`: Enable TCP keepalive
+    pub tcp_keepalive: i32,
+
+    /// TCP keepalive count (ZMQ_TCP_KEEPALIVE_CNT)
+    ///
+    /// Number of keepalive probes before considering connection dead.
+    /// - `-1` (default): Use OS default
+    /// - `> 0`: Number of probes
+    pub tcp_keepalive_cnt: i32,
+
+    /// TCP keepalive idle (ZMQ_TCP_KEEPALIVE_IDLE)
+    ///
+    /// Time in seconds before starting keepalive probes.
+    /// - `-1` (default): Use OS default
+    /// - `> 0`: Idle time in seconds
+    pub tcp_keepalive_idle: i32,
+
+    /// TCP keepalive interval (ZMQ_TCP_KEEPALIVE_INTVL)
+    ///
+    /// Time in seconds between keepalive probes.
+    /// - `-1` (default): Use OS default
+    /// - `> 0`: Interval in seconds
+    pub tcp_keepalive_intvl: i32,
+
+    /// REQ correlate mode (ZMQ_REQ_CORRELATE)
+    ///
+    /// Match replies to requests using message envelope.
+    /// - `false` (default): Accept any reply
+    /// - `true`: Match reply envelope to request
+    pub req_correlate: bool,
+
+    /// REQ relaxed mode (ZMQ_REQ_RELAXED)
+    ///
+    /// Allow multiple outstanding requests without strict alternation.
+    /// - `false` (default): Strict send-recv-send-recv pattern
+    /// - `true`: Allow send-send-recv-recv pattern
+    pub req_relaxed: bool,
+
+    /// Multicast rate in kilobits per second (ZMQ_RATE)
+    ///
+    /// Maximum send or receive data rate for multicast transports (PGM/EPGM).
+    /// - Default: 100 kbps
+    pub rate: i32,
+
+    /// Multicast recovery interval (ZMQ_RECOVERY_IVL)
+    ///
+    /// Maximum time to recover lost messages on multicast transports.
+    /// - Default: 10 seconds
+    pub recovery_ivl: Duration,
+
+    /// OS-level send buffer size (ZMQ_SNDBUF)
+    ///
+    /// Size of kernel send buffer. 0 = OS default.
+    /// - Default: 0 (use OS default)
+    pub sndbuf: i32,
+
+    /// OS-level receive buffer size (ZMQ_RCVBUF)
+    ///
+    /// Size of kernel receive buffer. 0 = OS default.
+    /// - Default: 0 (use OS default)
+    pub rcvbuf: i32,
+
+    /// Multicast TTL (ZMQ_MULTICAST_HOPS)
+    ///
+    /// Time-to-live for multicast packets.
+    /// - Default: 1 (local network only)
+    pub multicast_hops: i32,
+
+    /// IP Type of Service (ZMQ_TOS)
+    ///
+    /// Sets the ToS field in IP headers for QoS.
+    /// - Default: 0 (normal service)
+    pub tos: i32,
+
+    /// Maximum multicast transmission unit (ZMQ_MULTICAST_MAXTPDU)
+    ///
+    /// Maximum transport data unit for multicast.
+    /// - Default: 1500 bytes
+    pub multicast_maxtpdu: i32,
+
+    /// IPv6 support (ZMQ_IPV6)
+    ///
+    /// Enable IPv6 on socket.
+    /// - `false` (default): IPv4 only
+    /// - `true`: IPv6 support enabled
+    pub ipv6: bool,
+
+    /// Bind to device (ZMQ_BINDTODEVICE)
+    ///
+    /// Bind socket to specific network interface (Linux only).
+    /// - Default: None (bind to all interfaces)
+    pub bind_to_device: Option<String>,
+
+    // --- Security Options ---
+
+    /// PLAIN server mode (ZMQ_PLAIN_SERVER)
+    ///
+    /// Enable PLAIN authentication as server.
+    /// - `false` (default): Client mode
+    /// - `true`: Server mode (validate credentials)
+    pub plain_server: bool,
+
+    /// PLAIN username (ZMQ_PLAIN_USERNAME)
+    ///
+    /// Username for PLAIN authentication (client side).
+    /// - Default: None (no authentication)
+    pub plain_username: Option<String>,
+
+    /// PLAIN password (ZMQ_PLAIN_PASSWORD)
+    ///
+    /// Password for PLAIN authentication (client side).
+    /// - Default: None (no authentication)
+    pub plain_password: Option<String>,
+
+    /// CURVE server mode (ZMQ_CURVE_SERVER)
+    ///
+    /// Enable CURVE encryption as server.
+    /// - `false` (default): Client mode
+    /// - `true`: Server mode (provide server key)
+    pub curve_server: bool,
+
+    /// CURVE public key (ZMQ_CURVE_PUBLICKEY)
+    ///
+    /// Local public key for CURVE (32 bytes).
+    /// - Default: None (no encryption)
+    pub curve_publickey: Option<[u8; 32]>,
+
+    /// CURVE secret key (ZMQ_CURVE_SECRETKEY)
+    ///
+    /// Local secret key for CURVE (32 bytes).
+    /// - Default: None (no encryption)
+    pub curve_secretkey: Option<[u8; 32]>,
+
+    /// CURVE server key (ZMQ_CURVE_SERVERKEY)
+    ///
+    /// Server's public key for CURVE client (32 bytes).
+    /// - Default: None (no encryption)
+    /// - Client must set this to verify server identity
+    pub curve_serverkey: Option<[u8; 32]>,
+
+    /// ZAP domain (ZMQ_ZAP_DOMAIN)
+    ///
+    /// Security domain for ZAP authentication.
+    /// - Default: "" (global domain)
+    pub zap_domain: String,
+
+    /// Subscriptions (ZMQ_SUBSCRIBE)
+    ///
+    /// Subscription filters for SUB/XSUB sockets.
+    /// - Empty vec: No subscriptions (default) - won't receive any messages
+    /// - vec![b""] or vec![Bytes::new()]: Subscribe to all messages
+    /// - vec![b"topic1", b"topic2"]: Subscribe to specific topics
+    ///
+    /// Note: SUB sockets MUST subscribe to at least one topic to receive messages.
+    pub subscriptions: Vec<bytes::Bytes>,
+
+    /// Unsubscriptions (ZMQ_UNSUBSCRIBE)
+    ///
+    /// Subscription filters to remove for SUB/XSUB sockets.
+    /// Applied after subscriptions during socket configuration.
+    pub unsubscriptions: Vec<bytes::Bytes>,
 }
 
 impl Default for SocketOptions {
@@ -207,14 +379,78 @@ impl Default for SocketOptions {
             xpub_welcome_msg: None,
             xsub_verbose_unsubs: false,
             conflate: false,
+            tcp_keepalive: -1,      // OS default
+            tcp_keepalive_cnt: -1,  // OS default
+            tcp_keepalive_idle: -1, // OS default
+            tcp_keepalive_intvl: -1, // OS default
+            req_correlate: false,
+            req_relaxed: false,
+            rate: 100,              // 100 kbps
+            recovery_ivl: Duration::from_secs(10),
+            sndbuf: 0,              // OS default
+            rcvbuf: 0,              // OS default
+            multicast_hops: 1,      // Local network only
+            tos: 0,                 // Normal service
+            multicast_maxtpdu: 1500, // Standard MTU
+            ipv6: false,            // IPv4 only
+            bind_to_device: None,   // All interfaces
+            // Security
+            plain_server: false,
+            plain_username: None,
+            plain_password: None,
+            curve_server: false,
+            curve_publickey: None,
+            curve_secretkey: None,
+            curve_serverkey: None,
+            zap_domain: String::new(), // Global domain
+            subscriptions: Vec::new(),     // No subscriptions
+            unsubscriptions: Vec::new(),   // No unsubscriptions
         }
     }
 }
 
 impl SocketOptions {
-    /// Create new socket options with default values.
+    /// Create new socket options with default values (8KB buffers).
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Create socket options optimized for small messages (< 1KB).
+    ///
+    /// Sets 4KB buffers, suitable for low-latency request-reply patterns.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use monocoque_core::options::SocketOptions;
+    ///
+    /// let opts = SocketOptions::small();  // 4KB buffers for REQ/REP
+    /// ```
+    pub fn small() -> Self {
+        Self {
+            read_buffer_size: 4096,
+            write_buffer_size: 4096,
+            ..Self::default()
+        }
+    }
+
+    /// Create socket options optimized for large messages (> 8KB).
+    ///
+    /// Sets 16KB buffers, suitable for high-throughput async patterns.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use monocoque_core::options::SocketOptions;
+    ///
+    /// let opts = SocketOptions::large();  // 16KB buffers for DEALER/ROUTER
+    /// ```
+    pub fn large() -> Self {
+        Self {
+            read_buffer_size: 16384,
+            write_buffer_size: 16384,
+            ..Self::default()
+        }
     }
 
     /// Set receive timeout.
@@ -419,6 +655,270 @@ impl SocketOptions {
         self
     }
 
+    /// Set TCP keepalive mode.
+    ///
+    /// # Arguments
+    ///
+    /// * `mode` - `-1` for OS default, `0` to disable, `1` to enable
+    pub fn with_tcp_keepalive(mut self, mode: i32) -> Self {
+        self.tcp_keepalive = mode;
+        self
+    }
+
+    /// Set TCP keepalive count (number of probes before timeout).
+    ///
+    /// # Arguments
+    ///
+    /// * `count` - `-1` for OS default, `> 0` for specific count
+    pub fn with_tcp_keepalive_cnt(mut self, count: i32) -> Self {
+        self.tcp_keepalive_cnt = count;
+        self
+    }
+
+    /// Set TCP keepalive idle time (seconds before first probe).
+    ///
+    /// # Arguments
+    ///
+    /// * `seconds` - `-1` for OS default, `> 0` for specific idle time
+    pub fn with_tcp_keepalive_idle(mut self, seconds: i32) -> Self {
+        self.tcp_keepalive_idle = seconds;
+        self
+    }
+
+    /// Set TCP keepalive interval (seconds between probes).
+    ///
+    /// # Arguments
+    ///
+    /// * `seconds` - `-1` for OS default, `> 0` for specific interval
+    pub fn with_tcp_keepalive_intvl(mut self, seconds: i32) -> Self {
+        self.tcp_keepalive_intvl = seconds;
+        self
+    }
+
+    /// Enable REQ correlation mode (match replies to requests).
+    pub fn with_req_correlate(mut self, enabled: bool) -> Self {
+        self.req_correlate = enabled;
+        self
+    }
+
+    /// Enable REQ relaxed mode (allow multiple outstanding requests).
+    pub fn with_req_relaxed(mut self, enabled: bool) -> Self {
+        self.req_relaxed = enabled;
+        self
+    }
+
+    /// Set multicast rate (ZMQ_RATE).
+    pub fn with_rate(mut self, rate: i32) -> Self {
+        self.rate = rate;
+        self
+    }
+
+    /// Set multicast recovery interval (ZMQ_RECOVERY_IVL).
+    pub fn with_recovery_ivl(mut self, interval: Duration) -> Self {
+        self.recovery_ivl = interval;
+        self
+    }
+
+    /// Set OS send buffer size (ZMQ_SNDBUF).
+    pub fn with_sndbuf(mut self, size: i32) -> Self {
+        self.sndbuf = size;
+        self
+    }
+
+    /// Set OS receive buffer size (ZMQ_RCVBUF).
+    pub fn with_rcvbuf(mut self, size: i32) -> Self {
+        self.rcvbuf = size;
+        self
+    }
+
+    /// Set multicast TTL/hops (ZMQ_MULTICAST_HOPS).
+    pub fn with_multicast_hops(mut self, hops: i32) -> Self {
+        self.multicast_hops = hops;
+        self
+    }
+
+    /// Set IP Type of Service (ZMQ_TOS).
+    pub fn with_tos(mut self, tos: i32) -> Self {
+        self.tos = tos;
+        self
+    }
+
+    /// Set multicast maximum TPU (ZMQ_MULTICAST_MAXTPDU).
+    pub fn with_multicast_maxtpdu(mut self, mtu: i32) -> Self {
+        self.multicast_maxtpdu = mtu;
+        self
+    }
+
+    /// Enable IPv6 support (ZMQ_IPV6).
+    pub fn with_ipv6(mut self, enabled: bool) -> Self {
+        self.ipv6 = enabled;
+        self
+    }
+
+    /// Bind to specific device (ZMQ_BINDTODEVICE) - Linux only.
+    pub fn with_bind_to_device(mut self, device: impl Into<String>) -> Self {
+        self.bind_to_device = Some(device.into());
+        self
+    }
+
+    // --- Security Options ---
+
+    /// Enable PLAIN server mode.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use monocoque_core::options::SocketOptions;
+    ///
+    /// let opts = SocketOptions::new().with_plain_server(true);
+    /// ```
+    pub fn with_plain_server(mut self, enabled: bool) -> Self {
+        self.plain_server = enabled;
+        self
+    }
+
+    /// Set PLAIN client credentials.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use monocoque_core::options::SocketOptions;
+    ///
+    /// let opts = SocketOptions::new()
+    ///     .with_plain_credentials("admin", "secret123");
+    /// ```
+    pub fn with_plain_credentials(mut self, username: impl Into<String>, password: impl Into<String>) -> Self {
+        self.plain_username = Some(username.into());
+        self.plain_password = Some(password.into());
+        self
+    }
+
+    /// Enable CURVE server mode.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use monocoque_core::options::SocketOptions;
+    ///
+    /// let opts = SocketOptions::new().with_curve_server(true);
+    /// ```
+    pub fn with_curve_server(mut self, enabled: bool) -> Self {
+        self.curve_server = enabled;
+        self
+    }
+
+    /// Set CURVE client keys (public + secret).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use monocoque_core::options::SocketOptions;
+    ///
+    /// let public = [0u8; 32];  // Replace with actual key
+    /// let secret = [0u8; 32];  // Replace with actual key
+    /// let opts = SocketOptions::new().with_curve_keypair(public, secret);
+    /// ```
+    pub fn with_curve_keypair(mut self, publickey: [u8; 32], secretkey: [u8; 32]) -> Self {
+        self.curve_publickey = Some(publickey);
+        self.curve_secretkey = Some(secretkey);
+        self
+    }
+
+    /// Set CURVE server public key (for client).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use monocoque_core::options::SocketOptions;
+    ///
+    /// let server_key = [0u8; 32];  // Server's public key
+    /// let opts = SocketOptions::new().with_curve_serverkey(server_key);
+    /// ```
+    pub fn with_curve_serverkey(mut self, serverkey: [u8; 32]) -> Self {
+        self.curve_serverkey = Some(serverkey);
+        self
+    }
+
+    /// Set ZAP domain for authentication.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use monocoque_core::options::SocketOptions;
+    ///
+    /// let opts = SocketOptions::new().with_zap_domain("production");
+    /// ```
+    pub fn with_zap_domain(mut self, domain: impl Into<String>) -> Self {
+        self.zap_domain = domain.into();
+        self
+    }
+
+    /// Add a subscription filter for SUB/XSUB sockets (ZMQ_SUBSCRIBE).
+    ///
+    /// SUB sockets MUST subscribe to at least one topic to receive messages.
+    /// An empty filter (b"" or Bytes::new()) subscribes to all messages.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use monocoque_core::options::SocketOptions;
+    /// use bytes::Bytes;
+    ///
+    /// // Subscribe to all messages
+    /// let opts = SocketOptions::new().with_subscribe(Bytes::new());
+    ///
+    /// // Subscribe to specific topics
+    /// let opts = SocketOptions::new()
+    ///     .with_subscribe(Bytes::from("weather."))
+    ///     .with_subscribe(Bytes::from("stocks."));
+    /// ```
+    pub fn with_subscribe(mut self, filter: bytes::Bytes) -> Self {
+        self.subscriptions.push(filter);
+        self
+    }
+
+    /// Add multiple subscription filters for SUB/XSUB sockets.
+    ///
+    /// Convenience method to subscribe to multiple topics at once.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use monocoque_core::options::SocketOptions;
+    /// use bytes::Bytes;
+    ///
+    /// let opts = SocketOptions::new()
+    ///     .with_subscriptions(vec![
+    ///         Bytes::from("weather."),
+    ///         Bytes::from("stocks."),
+    ///     ]);
+    /// ```
+    pub fn with_subscriptions(mut self, filters: Vec<bytes::Bytes>) -> Self {
+        self.subscriptions.extend(filters);
+        self
+    }
+
+    /// Add an unsubscription filter for SUB/XSUB sockets (ZMQ_UNSUBSCRIBE).
+    ///
+    /// Removes a previously added subscription filter.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use monocoque_core::options::SocketOptions;
+    /// use bytes::Bytes;
+    ///
+    /// let opts = SocketOptions::new()
+    ///     .with_subscribe(Bytes::new())  // Subscribe to all
+    ///     .with_unsubscribe(Bytes::from("admin.")); // Except admin topics
+    /// ```
+    pub fn with_unsubscribe(mut self, filter: bytes::Bytes) -> Self {
+        self.unsubscriptions.push(filter);
+        self
+    }
+
+    // --- Query Methods ---
+
     /// Check if receive operation should be non-blocking.
     pub fn is_recv_nonblocking(&self) -> bool {
         matches!(self.recv_timeout, Some(d) if d.is_zero())
@@ -608,5 +1108,33 @@ mod tests {
 
         assert!(opts.router_mandatory);
         assert!(opts.router_handover);
+    }
+
+    #[test]
+    fn test_subscription_options() {
+        // Test with_subscribe
+        let opts = SocketOptions::new()
+            .with_subscribe(bytes::Bytes::new())  // Subscribe to all
+            .with_subscribe(bytes::Bytes::from("weather."))
+            .with_subscribe(bytes::Bytes::from("stocks."));
+
+        assert_eq!(opts.subscriptions.len(), 3);
+        assert_eq!(opts.subscriptions[0], bytes::Bytes::new());
+        assert_eq!(opts.subscriptions[1], bytes::Bytes::from("weather."));
+        assert_eq!(opts.subscriptions[2], bytes::Bytes::from("stocks."));
+
+        // Test with_subscriptions
+        let opts2 = SocketOptions::new()
+            .with_subscriptions(vec![
+                bytes::Bytes::from("topic1"),
+                bytes::Bytes::from("topic2"),
+            ]);
+
+        assert_eq!(opts2.subscriptions.len(), 2);
+
+        // Test with_unsubscribe
+        let opts3 = opts.with_unsubscribe(bytes::Bytes::from("admin."));
+        assert_eq!(opts3.unsubscriptions.len(), 1);
+        assert_eq!(opts3.unsubscriptions[0], bytes::Bytes::from("admin."));
     }
 }

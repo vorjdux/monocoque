@@ -23,9 +23,7 @@ use crate::{
     handshake::perform_handshake_with_timeout,
     session::SocketType,
 };
-use monocoque_core::config::BufferConfig;
 use monocoque_core::endpoint::Endpoint;
-use std::fmt;
 
 /// Direct-stream DEALER socket with optional auto-reconnection support.
 pub struct DealerSocket<S = TcpStream>
@@ -43,63 +41,61 @@ impl<S> DealerSocket<S>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    /// Create a new DEALER socket from a stream with large buffer configuration (16KB).
+    /// Create a new DEALER socket from a stream with default options.
     ///
-    /// DEALER sockets typically handle high-throughput workloads with larger messages,
-    /// so large buffers provide optimal performance. Use `with_config()` for different workloads.
-    ///
-    /// Works with both TCP and Unix domain sockets.
-    pub async fn new(stream: S) -> io::Result<Self> {
-        Self::with_options(stream, BufferConfig::large(), SocketOptions::default()).await
-    }
-
-    /// Create a new DEALER socket from a stream with custom buffer configuration.
-    ///
-    /// # Buffer Configuration
-    /// - Use `BufferConfig::small()` (4KB) for low-latency with small messages
-    /// - Use `BufferConfig::large()` (16KB) for high-throughput with large messages
-    /// - Use `BufferConfig::custom(read, write)` for fine-grained control
+    /// Uses default buffer sizes (8KB) optimized for balanced workloads.
+    /// For high-throughput, use `SocketOptions::large()`.
     ///
     /// Works with both TCP and Unix domain sockets.
-    ///
-    /// **Note**: For TCP streams, use `from_tcp_with_config()` instead to ensure TCP_NODELAY is enabled.
-    pub async fn with_config(stream: S, config: BufferConfig) -> io::Result<Self> {
-        Self::with_options(stream, config, SocketOptions::default()).await
-    }
-
-    /// Create a new DEALER socket with custom buffer configuration and socket options.
-    ///
-    /// # Arguments
-    ///
-    /// * `stream` - The underlying stream (TCP or Unix socket)
-    /// * `config` - Buffer configuration for read/write operations
-    /// * `options` - Socket options (timeouts, limits, etc.)
     ///
     /// # Examples
     ///
     /// ```rust,no_run
     /// use monocoque_zmtp::DealerSocket;
-    /// use monocoque_core::config::BufferConfig;
+    /// use compio::net::TcpStream;
+    ///
+    /// # async fn example() -> std::io::Result<()> {
+    /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
+    /// let socket = DealerSocket::new(stream).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn new(stream: S) -> io::Result<Self> {
+        Self::with_options(stream, SocketOptions::default()).await
+    }
+
+    /// Create a new DEALER socket with custom options.
+    ///
+    /// This provides full control over buffer sizes, timeouts, and all socket options.
+    /// Follows the MongoDB Rust driver pattern for ergonomic configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `stream` - The underlying stream (TCP or Unix socket)
+    /// * `options` - Socket options (buffers, timeouts, limits, etc.)
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use monocoque_zmtp::DealerSocket;
     /// use monocoque_core::options::SocketOptions;
     /// use std::time::Duration;
     /// use compio::net::TcpStream;
     ///
     /// # async fn example() -> std::io::Result<()> {
     /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
-    /// let options = SocketOptions::default()
+    /// 
+    /// // High-throughput configuration
+    /// let options = SocketOptions::large()
     ///     .with_recv_timeout(Duration::from_secs(5))
     ///     .with_send_timeout(Duration::from_secs(5));
-    /// let socket = DealerSocket::with_options(
-    ///     stream,
-    ///     BufferConfig::large(),
-    ///     options
-    /// ).await?;
+    ///     
+    /// let socket = DealerSocket::with_options(stream, options).await?;
     /// # Ok(())
     /// # }
     /// ```
     pub async fn with_options(
         mut stream: S,
-        config: BufferConfig,
         options: SocketOptions,
     ) -> io::Result<Self> {
         debug!("[DEALER] Creating new direct DEALER socket");
@@ -124,102 +120,13 @@ where
         debug!("[DEALER] Socket initialized");
 
         Ok(Self {
-            base: SocketBase::new(stream, config, options),
+            base: SocketBase::new(stream, SocketType::Dealer, options),
             frames: SmallVec::new(),
         })
     }
 
     /// Connect to an endpoint with automatic reconnection support.
-    ///
-    /// This is the recommended way to create a DEALER socket when you want
-    /// automatic reconnection on connection failures.
-    ///
-    /// # Arguments
-    ///
-    /// * `endpoint` - Connection string (e.g., "tcp://127.0.0.1:5555", "ipc:///tmp/socket.sock")
-    /// * `config` - Buffer configuration for read/write operations
-    /// * `options` - Socket options including reconnection settings
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use monocoque_zmtp::DealerSocket;
-    /// use monocoque_core::config::BufferConfig;
-    /// use monocoque_core::options::SocketOptions;
-    /// use std::time::Duration;
-    /// use compio::net::TcpStream;
-    ///
-    /// # async fn example() -> std::io::Result<()> {
-    /// let options = SocketOptions::default()
-    ///     .with_reconnect_ivl(Duration::from_millis(100))
-    ///     .with_reconnect_ivl_max(Duration::from_secs(10));
-    ///
-    /// let mut socket = DealerSocket::<TcpStream>::connect(
-    ///     "tcp://127.0.0.1:5555",
-    ///     BufferConfig::large(),
-    ///     options
-    /// ).await?;
-    ///
-    /// // Automatically reconnects on failure
-    /// socket.send(vec![bytes::Bytes::from("Hello")]).await?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn connect(
-        endpoint: &str,
-        config: BufferConfig,
-        options: SocketOptions,
-    ) -> io::Result<Self>
-    where
-        S: From<TcpStream> + fmt::Debug,
-    {
-        use compio::net::TcpStream;
 
-        debug!("[DEALER] Connecting to endpoint: {}", endpoint);
-
-        // Parse endpoint
-        let parsed_endpoint = Endpoint::parse(endpoint)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
-
-        // Connect based on endpoint type
-        let mut stream = match &parsed_endpoint {
-            Endpoint::Tcp(addr) => {
-                let tcp_stream = TcpStream::connect(addr).await?;
-                S::from(tcp_stream)
-            }
-            #[cfg(unix)]
-            Endpoint::Ipc(path) => {
-                use compio::net::UnixStream;
-                let _unix_stream = UnixStream::connect(path).await?;
-                // This won't work for all S types, but works for TcpStream
-                // For Unix streams, user should call with_options directly
-                return Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    "IPC endpoints require explicit UnixStream - use from_unix_stream_with_options()"
-                ));
-            }
-        };
-
-        // Perform handshake
-        let handshake_result = perform_handshake_with_timeout(
-            &mut stream as &mut S,
-            SocketType::Dealer,
-            None,
-            Some(options.handshake_timeout),
-        )
-        .await
-        .map_err(|e| io::Error::other(format!("Handshake failed: {}", e)))?;
-
-        debug!(
-            peer_identity = ?handshake_result.peer_identity,
-            "[DEALER] Connected to {}", endpoint
-        );
-
-        Ok(Self {
-            base: SocketBase::with_endpoint(stream, parsed_endpoint, config, options),
-            frames: SmallVec::new(),
-        })
-    }
 
     /// Receive a message.
     pub async fn recv(&mut self) -> io::Result<Option<Vec<Bytes>>> {
@@ -575,6 +482,12 @@ where
         self.base.last_endpoint()
     }
 
+    /// Get the endpoint as a string, if available.
+    #[inline]
+    pub fn last_endpoint_string(&self) -> Option<&str> {
+        self.base.last_endpoint_string()
+    }
+
     /// Check if the last received message has more frames coming.
     ///
     /// Returns `true` if there are more frames in the current multipart message.
@@ -608,29 +521,111 @@ where
 
 // Specialized implementation for TCP streams to enable TCP_NODELAY
 impl DealerSocket<TcpStream> {
-    /// Create a new DEALER socket from a TCP stream with TCP_NODELAY enabled.
+    /// Bind to an address and accept the first connection.
+    ///
+    /// Creates a TCP listener and waits for the first incoming connection.
+    /// Returns both the listener (for accepting additional connections) and
+    /// the socket connected to the first peer.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use monocoque_zmtp::DealerSocket;
+    /// use monocoque_core::options::SocketOptions;
+    ///
+    /// # async fn example() -> std::io::Result<()> {
+    /// let (listener, mut socket) = DealerSocket::bind("127.0.0.1:5555").await?;
+    ///
+    /// // Use the socket for first connection
+    /// let msg = socket.recv().await?;
+    ///
+    /// // Accept additional connections if needed
+    /// let (stream, _) = listener.accept().await?;
+    /// let socket2 = DealerSocket::from_tcp(stream).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn bind(
+        addr: impl compio::net::ToSocketAddrsAsync,
+    ) -> io::Result<(compio::net::TcpListener, Self)> {
+        let listener = compio::net::TcpListener::bind(addr).await?;
+        let (stream, _) = listener.accept().await?;
+        let socket = Self::from_tcp(stream).await?;
+        Ok((listener, socket))
+    }
+
+    /// Connect to a remote DEALER socket.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use monocoque_zmtp::DealerSocket;
+    ///
+    /// # async fn example() -> std::io::Result<()> {
+    /// let mut socket = DealerSocket::connect("127.0.0.1:5555").await?;
+    /// socket.send(vec![bytes::Bytes::from("Hello")]).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn connect(
+        addr: impl compio::net::ToSocketAddrsAsync,
+    ) -> io::Result<Self> {
+        let stream = TcpStream::connect(addr).await?;
+        Self::from_tcp(stream).await
+    }
+
+    /// Create a new DEALER socket from a TCP stream with default options.
+    ///
+    /// Automatically enables TCP_NODELAY for low latency and applies
+    /// TCP keepalive if configured in options.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use monocoque_zmtp::DealerSocket;
+    /// use compio::net::TcpStream;
+    ///
+    /// # async fn example() -> std::io::Result<()> {
+    /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
+    /// let socket = DealerSocket::from_tcp(stream).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn from_tcp(stream: TcpStream) -> io::Result<Self> {
-        Self::from_tcp_with_config(stream, BufferConfig::large()).await
+        Self::from_tcp_with_options(stream, SocketOptions::default()).await
     }
 
-    /// Create a new DEALER socket from a TCP stream with TCP_NODELAY and custom config.
-    pub async fn from_tcp_with_config(stream: TcpStream, config: BufferConfig) -> io::Result<Self> {
-        // Enable TCP_NODELAY for low latency
-        monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
-        debug!("[DEALER] TCP_NODELAY enabled");
-        Self::with_options(stream, config, SocketOptions::default()).await
-    }
-
-    /// Create a new DEALER socket from a TCP stream with full configuration.
+    /// Create a new DEALER socket from a TCP stream with custom options.
+    ///
+    /// Automatically enables TCP_NODELAY and applies TCP keepalive settings.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use monocoque_zmtp::DealerSocket;
+    /// use monocoque_core::options::SocketOptions;
+    /// use compio::net::TcpStream;
+    /// use std::time::Duration;
+    ///
+    /// # async fn example() -> std::io::Result<()> {
+    /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
+    /// 
+    /// let options = SocketOptions::large()  // 16KB buffers
+    ///     .with_tcp_keepalive(1)
+    ///     .with_tcp_keepalive_idle(60)
+    ///     .with_recv_timeout(Duration::from_secs(5));
+    ///     
+    /// let socket = DealerSocket::from_tcp_with_options(stream, options).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn from_tcp_with_options(
         stream: TcpStream,
-        config: BufferConfig,
         options: SocketOptions,
     ) -> io::Result<Self> {
-        // Enable TCP_NODELAY for low latency
-        monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
-        debug!("[DEALER] TCP_NODELAY enabled");
-        Self::with_options(stream, config, options).await
+        // Configure TCP optimizations
+        crate::utils::configure_tcp_stream(&stream, &options, "DEALER")?;
+        Self::with_options(stream, options).await
     }
 
     /// Try to reconnect to the stored endpoint.
@@ -697,5 +692,117 @@ impl DealerSocket<TcpStream> {
 
         // Now call the regular send
         self.send(msg).await
+    }
+}
+
+// Implement Socket trait for DealerSocket
+crate::impl_socket_trait!(DealerSocket<S>, SocketType::Dealer);
+
+// Specialized implementation for Inproc streams
+use crate::inproc_stream::InprocStream;
+
+impl DealerSocket<InprocStream> {
+    /// Bind to an inproc endpoint.
+    ///
+    /// Creates a new inproc endpoint that other sockets can connect to.
+    /// Inproc endpoints must be bound before they can be connected to.
+    ///
+    /// # Arguments
+    ///
+    /// * `endpoint` - Inproc URI (e.g., "inproc://zeromq.zap.01")
+    /// * `options` - Socket options
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use monocoque_zmtp::DealerSocket;
+    /// use monocoque_zmtp::inproc_stream::InprocStream;
+    /// use monocoque_core::options::SocketOptions;
+    ///
+    /// # async fn example() -> std::io::Result<()> {
+    /// let options = SocketOptions::default();
+    /// let mut socket = DealerSocket::<InprocStream>::bind_inproc(
+    ///     "inproc://zeromq.zap.01",
+    ///     options
+    /// )?;
+    ///
+    /// // ZAP handler logic here
+    /// let request = socket.recv().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn bind_inproc(
+        endpoint: &str,
+        options: SocketOptions,
+    ) -> io::Result<Self> {
+        use crate::inproc_stream::InprocStream;
+        use monocoque_core::inproc::bind_inproc;
+
+        debug!("[DEALER] Binding to inproc endpoint: {}", endpoint);
+
+        // Bind to inproc endpoint
+        let (tx, rx) = bind_inproc(endpoint)?;
+        let stream = InprocStream::new(tx, rx);
+
+        debug!("[DEALER] Bound to inproc endpoint: {}", endpoint);
+
+        // Create socket from the stream (inproc doesn't need handshake)
+        Ok(Self {
+            base: SocketBase::new(stream, SocketType::Dealer, options),
+            frames: SmallVec::new(),
+        })
+    }
+
+    /// Connect to an inproc endpoint.
+    ///
+    /// Connects to a previously bound inproc endpoint.
+    ///
+    /// # Arguments
+    ///
+    /// * `endpoint` - Inproc URI (e.g., "inproc://zeromq.zap.01")
+    /// * `options` - Socket options
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use monocoque_zmtp::DealerSocket;
+    /// use monocoque_zmtp::inproc_stream::InprocStream;
+    /// use monocoque_core::options::SocketOptions;
+    ///
+    /// # async fn example() -> std::io::Result<()> {
+    /// let options = SocketOptions::default();
+    /// let mut socket = DealerSocket::<InprocStream>::connect_inproc(
+    ///     "inproc://zeromq.zap.01",
+    ///     options
+    /// )?;
+    ///
+    /// // Send ZAP request
+    /// socket.send(vec![bytes::Bytes::from("request")]).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn connect_inproc(
+        endpoint: &str,
+        options: SocketOptions,
+    ) -> io::Result<Self> {
+        use crate::inproc_stream::InprocStream;
+        use monocoque_core::inproc::connect_inproc;
+
+        debug!("[DEALER] Connecting to inproc endpoint: {}", endpoint);
+
+        // Connect to the inproc endpoint
+        let tx = connect_inproc(endpoint)?;
+
+        // Create receiver for bidirectional communication
+        let (_our_tx, our_rx) = flume::unbounded();
+        let stream = InprocStream::new(tx, our_rx);
+
+        debug!("[DEALER] Connected to inproc endpoint: {}", endpoint);
+
+        // Create socket from the stream
+        Ok(Self {
+            base: SocketBase::new(stream, SocketType::Dealer, options),
+            frames: SmallVec::new(),
+        })
     }
 }
