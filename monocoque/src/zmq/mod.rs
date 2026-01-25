@@ -10,6 +10,11 @@
 //! - [`RepSocket`] - Synchronous reply server (stateful envelope tracking)
 //! - [`PubSocket`] - Publisher (broadcast to subscribers)
 //! - [`SubSocket`] - Subscriber (receive filtered messages)
+//! - [`PushSocket`] - Pipeline push (distribute tasks)
+//! - [`PullSocket`] - Pipeline pull (receive tasks)
+//! - [`PairSocket`] - Exclusive pair connection
+//! - [`XPubSocket`] - Extended publisher (subscription events)
+//! - [`XSubSocket`] - Extended subscriber (subscription forwarding)
 //!
 //! # Features
 //!
@@ -54,6 +59,8 @@
 mod common;
 mod dealer;
 mod publisher;
+mod pull;
+mod push;
 mod rep;
 mod req;
 mod router;
@@ -65,10 +72,13 @@ pub use monocoque_core::config::BufferConfig;
 pub use monocoque_core::endpoint::{Endpoint, EndpointError};
 pub use monocoque_core::monitor::{SocketEvent, SocketMonitor};
 pub use monocoque_core::options::SocketOptions;
+pub use monocoque_core::socket_type::SocketType;
 pub use monocoque_core::subscription::{Subscription, SubscriptionEvent, SubscriptionTrie};
 pub use monocoque_zmtp::proxy;
 pub use monocoque_zmtp::{PairSocket, XPubSocket, XSubSocket};
 pub use publisher::PubSocket;
+pub use pull::PullSocket;
+pub use push::PushSocket;
 pub use rep::RepSocket;
 pub use req::ReqSocket;
 pub use router::RouterSocket;
@@ -87,15 +97,17 @@ pub use monocoque_core::ipc;
 /// // Now you have:
 /// // - DealerSocket, RouterSocket, ReqSocket, RepSocket
 /// // - PubSocket, SubSocket, XPubSocket, XSubSocket
+/// // - PushSocket, PullSocket, PairSocket
 /// // - Bytes for zero-copy messages
-/// // - BufferConfig, SocketOptions for configuration
+/// // - BufferConfig, SocketOptions, SocketType for configuration
 /// ```
 pub mod prelude {
     pub use super::proxy::{proxy, proxy_steerable, ProxyCommand, ProxySocket};
     pub use super::{
-        BufferConfig, DealerSocket, PairSocket, PubSocket, RepSocket, ReqSocket, RouterSocket,
-        SocketOptions, SubSocket, Subscription, SubscriptionEvent, SubscriptionTrie, XPubSocket,
-        XSubSocket,
+        BufferConfig, DealerSocket, PairSocket, PubSocket, PullSocket, PushSocket, RepSocket,
+        ReqSocket, RouterSocket, SocketOptions, SubSocket, Subscription, SubscriptionEvent,
+        SubscriptionTrie, XPubSocket, XSubSocket,
     };
     pub use bytes::Bytes;
+    pub use monocoque_core::socket_type::SocketType;
 }

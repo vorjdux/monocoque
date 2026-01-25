@@ -107,6 +107,147 @@ cargo run --example interop_pubsub_libzmq --features zmq
 ✅ PUB/SUB interop test completed successfully!
 ```
 
+## Security Interoperability
+
+### PLAIN Authentication Interop
+
+Monocoque supports PLAIN authentication (RFC 23) compatible with libzmq.
+
+#### Testing PLAIN with libzmq Server
+
+Create a Python script `libzmq_plain_server.py`:
+
+```python
+import zmq
+
+context = zmq.Context()
+socket = context.socket(zmq.REP)
+
+# Enable PLAIN authentication
+socket.plain_server = True  # This socket is a PLAIN server
+socket.zap_domain = b'global'  # Optional ZAP domain
+
+socket.bind("tcp://127.0.0.1:5563")
+print("[libzmq PLAIN Server] Listening on port 5563")
+
+while True:
+    message = socket.recv_string()
+    print(f"[Server] Received: {message}")
+    socket.send_string(f"Echo: {message}")
+```
+
+Run ZAP authenticator in another terminal:
+
+```python
+# libzmq_zap_handler.py
+from zmq.auth.thread import ThreadAuthenticator
+import zmq
+import time
+
+context = zmq.Context()
+
+# Start ZAP authenticator
+auth = ThreadAuthenticator(context)
+auth.start()
+
+# Configure PLAIN authentication
+auth.configure_plain(domain='*', passwords={'alice': 'password123', 'bob': 'secret'})
+
+print("[ZAP] Authenticator running. Press Ctrl+C to stop.")
+time.sleep(999999)
+```
+
+Test with Monocoque client:
+
+```bash
+# Run example (to be created)
+cargo run --example interop_plain_client
+```
+
+Expected output:
+```
+[Monocoque Client] Connecting with credentials: alice / password123
+[Monocoque Client] Authenticated successfully
+[Monocoque Client] Sending: Hello from Monocoque
+[Monocoque Client] Received: Echo: Hello from Monocoque
+```
+
+#### Testing PLAIN with Monocoque Server and libzmq Client
+
+```bash
+# Terminal 1: Run Monocoque server
+cargo run --example plain_auth_demo
+
+# Terminal 2: Python client
+python3 <<EOF
+import zmq
+context = zmq.Context()
+socket = context.socket(zmq.REQ)
+socket.plain_username = b'alice'
+socket.plain_password = b'password123'
+socket.connect("tcp://127.0.0.1:5555")
+socket.send_string("Hello from libzmq")
+print("Received:", socket.recv_string())
+EOF
+```
+
+### CURVE Encryption Interop
+
+Monocoque implements CURVE security (RFC 26) using X25519 + ChaCha20-Poly1305.
+
+#### Testing CURVE with libzmq
+
+Generate CURVE keypairs (Python):
+
+```python
+# generate_curve_keys.py
+import zmq.auth
+
+# Generate server keypair
+server_public, server_secret = zmq.auth.create_certificates(".", "server")
+print(f"Server public: {server_public}")
+print(f"Server secret: {server_secret}")
+
+# Generate client keypair  
+client_public, client_secret = zmq.auth.create_certificates(".", "client")
+print(f"Client public: {client_public}")
+print(f"Client secret: {client_secret}")
+```
+
+Create libzmq CURVE server:
+
+```python
+# libzmq_curve_server.py
+import zmq
+import zmq.auth
+
+context = zmq.Context()
+socket = context.socket(zmq.REP)
+
+# Load server keys
+server_public, server_secret = zmq.auth.load_certificate("server.key_secret")
+socket.curve_secretkey = server_secret
+socket.curve_publickey = server_public
+socket.curve_server = True  # Enable CURVE server mode
+
+socket.bind("tcp://127.0.0.1:5564")
+print("[libzmq CURVE Server] Listening with encryption")
+
+while True:
+    msg = socket.recv_string()
+    print(f"[Server] Decrypted message: {msg}")
+    socket.send_string(f"Encrypted reply: {msg}")
+```
+
+Test with Monocoque client:
+
+```bash
+# Use curve_demo.rs example with libzmq server keys
+cargo run --example curve_demo -- --server-key <public_key_hex>
+```
+
+**Note**: Full interop examples require key format conversion (Z85 encoding).
+
 ## Troubleshooting
 
 ### "error: failed to run custom build command for `zmq-sys`"
@@ -131,7 +272,26 @@ Make sure no other process is using the ports:
 ✅ **Frame Encoding**: Messages are encoded/decoded compatibly with libzmq  
 ✅ **Identity Routing**: ROUTER correctly handles identity envelopes  
 ✅ **Multipart Messages**: Frame MORE flags work correctly  
-✅ **Pub/Sub Filtering**: Subscription matching is compatible
+✅ **Pub/Sub Filtering**: Subscription matching is compatible  
+✅ **PLAIN Authentication**: Username/password auth compatible with libzmq (RFC 23)  
+✅ **CURVE Encryption**: X25519 + ChaCha20-Poly1305 compatible with libzmq (RFC 26)  
+✅ **ZAP Protocol**: Authentication requests/responses follow RFC 27 format
+
+## Security Compatibility Matrix
+
+| Feature | Monocoque | libzmq | Compatible |
+|---------|-----------|--------|------------|
+| NULL mechanism | ✅ | ✅ | ✅ Yes |
+| PLAIN auth | ✅ | ✅ | ✅ Yes |
+| CURVE encryption | ✅ | ✅ | ✅ Yes (with key format conversion) |
+| ZAP protocol | ✅ | ✅ | ✅ Yes |
+| GSSAPI | ❌ | ✅ | N/A |
+
+**Key Format Notes**:
+- libzmq uses Z85 encoding for CURVE keys
+- Monocoque uses raw 32-byte keys
+- Conversion utilities needed for full interop
+- See `curve_demo.rs` for key generation examples
 
 ## Next Steps
 

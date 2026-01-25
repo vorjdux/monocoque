@@ -48,7 +48,6 @@ use crate::{
     handshake::perform_handshake_with_timeout,
     session::SocketType,
 };
-use monocoque_core::config::BufferConfig;
 use monocoque_core::endpoint::Endpoint;
 use monocoque_core::options::SocketOptions;
 use bytes::Bytes;
@@ -106,24 +105,22 @@ where
     frames: SmallVec<[Bytes; 4]>,
     /// Current state of the REQ state machine
     state: ReqState,
+    /// Request ID counter for correlation tracking
+    request_id: u32,
+    /// Expected request ID for correlation mode (when req_correlate is enabled)
+    expected_request_id: Option<u32>,
 }
 
 impl<S> ReqSocket<S>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    /// Create a new REQ socket from a stream.
+    /// Create a new REQ socket from a stream using default options.
     ///
     /// This performs the ZMTP handshake and initializes the socket.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - Handshake fails
-    /// - Connection is closed during handshake
+    /// Uses default buffer sizes (8KB) for balanced performance.
     ///
     /// # Example
-    ///
     /// ```rust,no_run
     /// use monocoque_zmtp::req::ReqSocket;
     /// use compio::net::TcpStream;
@@ -135,23 +132,31 @@ where
     /// # }
     /// ```
     pub async fn new(stream: S) -> io::Result<Self> {
-        // REQ sockets typically handle low-latency RPC with small messages
-        Self::with_options(stream, BufferConfig::small(), SocketOptions::default()).await
+        Self::with_options(stream, SocketOptions::default()).await
     }
 
-    /// Create a new REQ socket from a stream with custom buffer configuration.
+    /// Create a new REQ socket with custom socket options.
     ///
     /// # Buffer Configuration
-    /// - Use `BufferConfig::small()` (4KB) for low-latency request/reply with small messages
-    /// - Use `BufferConfig::large()` (16KB) for high-throughput with large messages
-    pub async fn with_config(stream: S, config: BufferConfig) -> io::Result<Self> {
-        Self::with_options(stream, config, SocketOptions::default()).await
-    }
-
-    /// Create a new REQ socket with custom buffer configuration and socket options.
+    /// - Use `SocketOptions::small()` (4KB) for low-latency request/reply with small messages
+    /// - Use `SocketOptions::large()` (16KB) for high-throughput with large messages
+    /// - Use `SocketOptions::default()` (8KB) for balanced workloads
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use monocoque_zmtp::req::ReqSocket;
+    /// # use monocoque_core::options::SocketOptions;
+    /// # use compio::net::TcpStream;
+    /// # async fn example() -> std::io::Result<()> {
+    /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
+    /// let mut opts = SocketOptions::small(); // 4KB for low latency
+    /// opts.req_correlate = true; // Enable request ID correlation
+    /// let socket = ReqSocket::with_options(stream, opts).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn with_options(
         mut stream: S,
-        config: BufferConfig,
         options: SocketOptions,
     ) -> io::Result<Self> {
         debug!("[REQ] Creating new direct REQ socket");
@@ -176,9 +181,11 @@ where
         debug!("[REQ] Socket initialized");
 
         Ok(Self {
-            base: SocketBase::new(stream, config, options),
+            base: SocketBase::new(stream, SocketType::Req, options),
             frames: SmallVec::new(),
             state: ReqState::Idle,
+            request_id: 0,
+            expected_request_id: None,
         })
     }
 
@@ -204,24 +211,41 @@ where
     /// # }
     /// ```
     pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
-        // Check state machine
-        if self.state != ReqState::Idle {
+        // Check state machine (unless in relaxed mode)
+        if !self.base.options.req_relaxed && self.state != ReqState::Idle {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "Cannot send while awaiting reply - must call recv() first",
+                "Cannot send while awaiting reply - must call recv() first (use req_relaxed mode to allow multiple outstanding requests)",
             ));
         }
 
         trace!("[REQ] Sending {} frames", msg.len());
 
+        // If correlation is enabled, prepend request ID as an envelope
+        let frames_to_send = if self.base.options.req_correlate {
+            // Increment request ID
+            self.request_id = self.request_id.wrapping_add(1);
+            self.expected_request_id = Some(self.request_id);
+            
+            trace!("[REQ] Correlation enabled, prepending request ID: {}", self.request_id);
+            
+            // Prepend request ID as first frame (4 bytes, big-endian)
+            let mut correlated_msg = Vec::with_capacity(msg.len() + 1);
+            correlated_msg.push(Bytes::copy_from_slice(&self.request_id.to_be_bytes()));
+            correlated_msg.extend(msg);
+            correlated_msg
+        } else {
+            msg
+        };
+
         // Encode message into write_buf
         self.base.write_buf.clear();
-        encode_multipart(&msg, &mut self.base.write_buf);
+        encode_multipart(&frames_to_send, &mut self.base.write_buf);
 
         // Delegate to base for writing
         self.base.write_from_buf().await?;
 
-        // Transition to awaiting reply
+        // Transition to awaiting reply (unless already there in relaxed mode)
         self.state = ReqState::AwaitingReply;
 
         trace!("[REQ] Message sent successfully");
@@ -280,8 +304,51 @@ where
                             // Complete message received
                             let msg: Vec<Bytes> = self.frames.drain(..).collect();
                             trace!("[REQ] Received {} frames", msg.len());
+                            
+                            // If correlation is enabled, validate request ID
+                            let validated_msg = if self.base.options.req_correlate {
+                                if msg.is_empty() {
+                                    return Err(io::Error::new(
+                                        io::ErrorKind::InvalidData,
+                                        "Correlation enabled but received empty message",
+                                    ));
+                                }
+                                
+                                // First frame should be the request ID (4 bytes)
+                                let id_frame = &msg[0];
+                                if id_frame.len() != 4 {
+                                    return Err(io::Error::new(
+                                        io::ErrorKind::InvalidData,
+                                        format!("Correlation frame has invalid length: {} (expected 4)", id_frame.len()),
+                                    ));
+                                }
+                                
+                                let received_id = u32::from_be_bytes([
+                                    id_frame[0], id_frame[1], id_frame[2], id_frame[3]
+                                ]);
+                                
+                                trace!("[REQ] Received correlation ID: {}", received_id);
+                                
+                                // Validate against expected ID
+                                if let Some(expected) = self.expected_request_id {
+                                    if received_id != expected {
+                                        return Err(io::Error::new(
+                                            io::ErrorKind::InvalidData,
+                                            format!("Request ID mismatch: expected {}, got {}", expected, received_id),
+                                        ));
+                                    }
+                                    trace!("[REQ] Correlation ID validated successfully");
+                                }
+                                
+                                // Strip correlation frame and return rest
+                                msg[1..].to_vec()
+                            } else {
+                                msg
+                            };
+                            
                             self.state = ReqState::Idle;
-                            return Ok(Some(msg));
+                            self.expected_request_id = None;
+                            return Ok(Some(validated_msg));
                         }
                     }
                     None => break, // Need more data
@@ -418,31 +485,39 @@ mod tests {
 
 // Specialized implementation for TCP streams to enable TCP_NODELAY
 impl ReqSocket<TcpStream> {
-    /// Create a new REQ socket from a TCP stream with TCP_NODELAY enabled.
+    /// Create a REQ socket from a TCP stream with default options.
+    ///
+    /// Automatically enables TCP_NODELAY and applies TCP keepalive settings.
     pub async fn from_tcp(stream: TcpStream) -> io::Result<Self> {
-        Self::from_tcp_with_config(stream, BufferConfig::large()).await
+        Self::from_tcp_with_options(stream, SocketOptions::default()).await
     }
 
-    /// Create a new REQ socket from a TCP stream with TCP_NODELAY and custom config.
-    pub async fn from_tcp_with_config(
-        stream: TcpStream,
-        config: BufferConfig,
-    ) -> io::Result<Self> {
-        // Enable TCP_NODELAY for low latency
-        monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
-        debug!("[REQ] TCP_NODELAY enabled");
-        Self::with_options(stream, config, SocketOptions::default()).await
-    }
-
-    /// Create a new REQ socket from a TCP stream with TCP_NODELAY and custom options.
+    /// Create a REQ socket from a TCP stream with custom socket options.
+    ///
+    /// Automatically enables TCP_NODELAY and applies TCP keepalive settings from options.
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use monocoque_zmtp::req::ReqSocket;
+    /// # use monocoque_core::options::SocketOptions;
+    /// # use compio::net::TcpStream;
+    /// # async fn example() -> std::io::Result<()> {
+    /// let stream = TcpStream::connect(\"127.0.0.1:5555\").await?;
+    /// let mut opts = SocketOptions::small();
+    /// opts.req_correlate = true; // Enable request ID correlation
+    /// let socket = ReqSocket::from_tcp_with_options(stream, opts).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn from_tcp_with_options(
         stream: TcpStream,
-        config: BufferConfig,
         options: SocketOptions,
     ) -> io::Result<Self> {
-        // Enable TCP_NODELAY for low latency
-        monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
-        debug!("[REQ] TCP_NODELAY enabled");
-        Self::with_options(stream, config, options).await
+        // Apply TCP-specific configuration
+        crate::utils::configure_tcp_stream(&stream, &options, "REQ")?;
+
+        Self::with_options(stream, options).await
     }
 }
+
+crate::impl_socket_trait!(ReqSocket<S>, SocketType::Req);

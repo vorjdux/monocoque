@@ -161,18 +161,12 @@ impl DealerSocket {
     /// - For explicit stream control without reconnection, use `from_tcp()`
     /// - Reconnection only works for TCP streams
     pub async fn connect_with_reconnect(endpoint: &str) -> io::Result<Self> {
-        use monocoque_zmtp::BufferConfig;
-        use monocoque_core::options::SocketOptions;
-
-        // Use default config and options
-        let config = BufferConfig::default();
-        let options = SocketOptions::default();
-
-        let inner = InternalDealer::connect(endpoint, config, options).await?;
-        
-        // Parse endpoint for monitoring
+        // Parse endpoint for connecting
         let parsed = monocoque_core::endpoint::Endpoint::parse(endpoint)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        
+        // Connect using the internal simple connect
+        let inner = InternalDealer::connect(endpoint).await?;
         
         let sock = Self {
             inner,
@@ -211,22 +205,42 @@ impl DealerSocket {
         endpoint: &str,
         options: monocoque_core::options::SocketOptions,
     ) -> io::Result<Self> {
-        use monocoque_zmtp::BufferConfig;
-
-        let config = BufferConfig::default();
-        let inner = InternalDealer::connect(endpoint, config, options).await?;
-        
-        // Parse endpoint for monitoring
+        // Parse endpoint
         let parsed = monocoque_core::endpoint::Endpoint::parse(endpoint)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        
+        // For now, only TCP is supported for connect with options
+        let addr = match parsed {
+            monocoque_core::endpoint::Endpoint::Tcp(addr) => addr,
+            _ => return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "connect_with_options only supports TCP endpoints"
+            )),
+        };
+        
+        // Connect TCP stream manually
+        let stream = compio::net::TcpStream::connect(addr).await?;
+        
+        // Create socket with options
+        let inner = InternalDealer::from_tcp_with_options(stream, options).await?;
         
         let sock = Self {
             inner,
             monitor: None,
         };
         
-        sock.emit_event(SocketEvent::Connected(parsed));
+        sock.emit_event(SocketEvent::Connected(monocoque_core::endpoint::Endpoint::Tcp(addr)));
         Ok(sock)
+    }
+
+    /// Alias for `connect_with_reconnect_and_options` for convenience.
+    ///
+    /// Connects to an endpoint with custom socket options.
+    pub async fn connect_with_options(
+        endpoint: &str,
+        options: monocoque_core::options::SocketOptions,
+    ) -> io::Result<Self> {
+        Self::connect_with_reconnect_and_options(endpoint, options).await
     }
 
     /// Connect to a ZeroMQ peer via IPC (Unix domain sockets).
@@ -372,12 +386,8 @@ impl DealerSocket {
         stream: TcpStream,
         options: monocoque_core::options::SocketOptions,
     ) -> io::Result<Self> {
-        let config = monocoque_core::config::BufferConfig {
-            read_buf_size: options.read_buffer_size,
-            write_buf_size: options.write_buffer_size,
-        };
         Ok(Self {
-            inner: InternalDealer::with_options(stream, config, options).await?,
+            inner: InternalDealer::from_tcp_with_options(stream, options).await?,
             monitor: None,
         })
     }
@@ -409,12 +419,8 @@ impl DealerSocket {
     where
         Stream: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
     {
-        let config = monocoque_core::config::BufferConfig {
-            read_buf_size: options.read_buffer_size,
-            write_buf_size: options.write_buffer_size,
-        };
         Ok(DealerSocket {
-            inner: InternalDealer::with_options(stream, config, options).await?,
+            inner: InternalDealer::with_options(stream, options).await?,
             monitor: None,
         })
     }
@@ -552,32 +558,6 @@ where
     /// Get the socket type.
     ///
     /// # ZeroMQ Compatibility
-    ///
-    /// Corresponds to `ZMQ_TYPE` (16) option.
-    pub fn socket_type(&self) -> monocoque_zmtp::session::SocketType {
-        monocoque_zmtp::session::SocketType::Dealer
-    }
-
-    /// Get the endpoint this socket is connected/bound to, if available.
-    ///
-    /// Returns `None` if the socket was created from a raw stream.
-    ///
-    /// # ZeroMQ Compatibility
-    ///
-    /// Corresponds to `ZMQ_LAST_ENDPOINT` (32) option.
-    pub fn last_endpoint(&self) -> Option<&monocoque_core::endpoint::Endpoint> {
-        self.inner.last_endpoint()
-    }
-
-    /// Check if more message frames are expected (multipart message in progress).
-    ///
-    /// # ZeroMQ Compatibility
-    ///
-    /// Corresponds to `ZMQ_RCVMORE` (13) option.
-    pub fn has_more(&self) -> bool {
-        self.inner.has_more()
-    }
-
     /// Get current socket events (read/write readiness).
     ///
     /// Returns a bitmask:
@@ -611,6 +591,61 @@ where
     }
 }
 
+impl<S> DealerSocket<S>
+where
+    S: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+{
+    /// Get the socket type.
+    ///
+    /// Always returns `SocketType::Dealer` for DEALER sockets.
+    ///
+    /// # ZeroMQ Compatibility
+    ///
+    /// Corresponds to `ZMQ_TYPE` (16) socket option.
+    #[inline]
+    pub fn socket_type(&self) -> monocoque_zmtp::session::SocketType {
+        self.inner.socket_type()
+    }
+
+    /// Get the last connected endpoint as a string.
+    ///
+    /// Returns the endpoint this socket connected to, if any.
+    ///
+    /// # ZeroMQ Compatibility
+    ///
+    /// Corresponds to `ZMQ_LAST_ENDPOINT` (32) socket option.
+    #[inline]
+    pub fn last_endpoint(&self) -> Option<&str> {
+        self.inner.last_endpoint_string()
+    }
+
+    /// Check if more message frames are expected.
+    ///
+    /// For multipart messages, this indicates if more frames follow.
+    ///
+    /// # ZeroMQ Compatibility
+    ///
+    /// Corresponds to `ZMQ_RCVMORE` (13) socket option.
+    #[inline]
+    pub fn has_more(&self) -> bool {
+        self.inner.has_more()
+    }
+
+    /// Get mutable access to socket options.
+    ///
+    /// Allows runtime modification of socket behavior.
+    #[inline]
+    pub fn options_mut(&mut self) -> &mut monocoque_core::options::SocketOptions {
+        self.inner.options_mut()
+    }
+
+    /// Get immutable access to socket options.
+    #[inline]
+    pub fn options(&self) -> &monocoque_core::options::SocketOptions {
+        self.inner.options()
+    }
+}
+
 // Unix-specific impl for IPC support
 #[cfg(unix)]
 impl DealerSocket<compio::net::UnixStream> {
@@ -627,12 +662,8 @@ impl DealerSocket<compio::net::UnixStream> {
         stream: compio::net::UnixStream,
         options: monocoque_core::options::SocketOptions,
     ) -> io::Result<Self> {
-        let config = monocoque_core::config::BufferConfig {
-            read_buf_size: options.read_buffer_size,
-            write_buf_size: options.write_buffer_size,
-        };
         Ok(Self {
-            inner: InternalDealer::with_options(stream, config, options).await?,
+            inner: InternalDealer::with_options(stream, options).await?,
             monitor: None,
         })
     }

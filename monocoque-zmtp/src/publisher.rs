@@ -266,7 +266,7 @@ impl PubSocket {
     pub async fn accept_subscriber(&mut self, listener: &TcpListener) -> io::Result<SubscriberId> {
         let (stream, addr) = listener.accept().await?;
 
-        monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
+        crate::utils::configure_tcp_stream(&stream, &self.options, "PUB")?;
         debug!("[PUB] Accepted connection from {}", addr);
 
         let mut stream = stream;
@@ -416,5 +416,24 @@ impl Drop for PubSocket {
         for worker in &self.workers {
             let _ = worker.send(WorkerCommand::Shutdown);
         }
+    }
+}
+
+// Implement Socket trait for PubSocket (non-generic)
+#[async_trait::async_trait(?Send)]
+impl crate::Socket for PubSocket {
+    async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
+        self.send(msg).await
+    }
+
+    async fn recv(&mut self) -> io::Result<Option<Vec<Bytes>>> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "PUB sockets do not support receive operations",
+        ))
+    }
+
+    fn socket_type(&self) -> SocketType {
+        SocketType::Pub
     }
 }

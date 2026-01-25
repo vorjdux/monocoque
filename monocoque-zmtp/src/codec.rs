@@ -19,11 +19,21 @@ pub enum ZmtpError {
 
     #[error("Protocol violation")]
     Protocol,
+
+    #[error("Authentication failed")]
+    AuthenticationFailed,
 }
 
 impl From<ZmtpError> for io::Error {
     fn from(err: ZmtpError) -> Self {
         Self::new(io::ErrorKind::InvalidData, err)
+    }
+}
+
+impl From<io::Error> for ZmtpError {
+    fn from(_err: io::Error) -> Self {
+        // Convert IO errors to Protocol errors for now
+        ZmtpError::Protocol
     }
 }
 

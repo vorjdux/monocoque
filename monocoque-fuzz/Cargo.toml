@@ -1,0 +1,24 @@
+[package]
+name = "monocoque-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+monocoque-zmtp = { path = "../monocoque-zmtp" }
+bytes = "1.5"
+futures = "0.3"
+compio = "0.13"
+
+[[bin]]
+name = "fuzz_decoder"
+path = "fuzz_targets/fuzz_decoder.rs"
+test = false
+doc = false
+
+[profile.release]
+debug = 1

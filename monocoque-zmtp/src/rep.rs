@@ -25,7 +25,6 @@ use crate::{
     handshake::perform_handshake_with_timeout,
     session::SocketType,
 };
-use monocoque_core::config::BufferConfig;
 use monocoque_core::endpoint::Endpoint;
 use monocoque_core::options::SocketOptions;
 
@@ -106,18 +105,7 @@ where
     /// - Connection is closed during handshake
     pub async fn new(stream: S) -> io::Result<Self> {
         // REP sockets typically handle low-latency RPC with small messages
-        Self::with_options(stream, BufferConfig::small(), SocketOptions::default()).await
-    }
-
-    /// Create a new REP socket from a stream with custom buffer configuration.
-    ///
-    /// # Buffer Configuration
-    /// - Use `BufferConfig::small()` (4KB) for low-latency request/reply with small messages
-    /// - Use `BufferConfig::large()` (16KB) for high-throughput with large messages
-    ///
-    /// Works with both TCP and Unix domain sockets.
-    pub async fn with_config(stream: S, config: BufferConfig) -> io::Result<Self> {
-        Self::with_options(stream, config, SocketOptions::default()).await
+        Self::with_options(stream, SocketOptions::default()).await
     }
 
     /// Create a new REP socket from a stream with custom buffer configuration and socket options.
@@ -127,7 +115,6 @@ where
     /// Works with both TCP and Unix domain sockets.
     pub async fn with_options(
         mut stream: S,
-        config: BufferConfig,
         options: SocketOptions,
     ) -> io::Result<Self> {
         debug!("[REP] Creating new direct REP socket");
@@ -152,7 +139,7 @@ where
         debug!("[REP] Socket initialized");
 
         Ok(Self {
-            base: SocketBase::new(stream, config, options),
+            base: SocketBase::new(stream, SocketType::Rep, options),
             frames: SmallVec::new(),
             state: RepState::AwaitingRequest,
         })
@@ -413,29 +400,21 @@ mod tests {
 impl RepSocket<TcpStream> {
     /// Create a new REP socket from a TCP stream with TCP_NODELAY enabled.
     pub async fn from_tcp(stream: TcpStream) -> io::Result<Self> {
-        Self::from_tcp_with_config(stream, BufferConfig::small()).await
+        Self::from_tcp_with_options(stream, SocketOptions::default()).await
     }
 
     /// Create a new REP socket from a TCP stream with TCP_NODELAY and custom config.
-    pub async fn from_tcp_with_config(
-        stream: TcpStream,
-        config: BufferConfig,
-    ) -> io::Result<Self> {
-        // Enable TCP_NODELAY for low latency
-        monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
-        debug!("[REP] TCP_NODELAY enabled");
-        Self::with_options(stream, config, SocketOptions::default()).await
-    }
+
 
     /// Create a new REP socket from a TCP stream with TCP_NODELAY and custom options.
     pub async fn from_tcp_with_options(
         stream: TcpStream,
-        config: BufferConfig,
         options: SocketOptions,
     ) -> io::Result<Self> {
-        // Enable TCP_NODELAY for low latency
-        monocoque_core::tcp::enable_tcp_nodelay(&stream)?;
-        debug!("[REP] TCP_NODELAY enabled");
-        Self::with_options(stream, config, options).await
+        // Configure TCP optimizations including keepalive
+        crate::utils::configure_tcp_stream(&stream, &options, "REP")?;
+        Self::with_options(stream, options).await
     }
 }
+
+crate::impl_socket_trait!(RepSocket<S>, SocketType::Rep);

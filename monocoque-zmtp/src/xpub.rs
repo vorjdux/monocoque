@@ -439,3 +439,24 @@ mod tests {
         assert_eq!(parsed, event);
     }
 }
+
+// Implement Socket trait for XPubSocket (non-generic)
+#[async_trait::async_trait(?Send)]
+impl crate::Socket for XPubSocket {
+    async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
+        self.send(msg).await
+    }
+
+    async fn recv(&mut self) -> io::Result<Option<Vec<Bytes>>> {
+        // XPUB receives subscription events
+        self.recv_subscription().await.map(|opt| {
+            opt.map(|event| {
+                vec![event.to_message()]
+            })
+        })
+    }
+
+    fn socket_type(&self) -> SocketType {
+        SocketType::Xpub
+    }
+}

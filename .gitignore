@@ -100,3 +100,16 @@ bench_results/
 flamegraph.svg
 perf.data
 perf.data.old
+
+# Python virtual environments
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.python-version
+.pytest_cache/
+
+# Fuzzing
+monocoque-fuzz/target/

@@ -56,6 +56,21 @@ name = "multithreaded"
 harness = false
 required-features = ["zmq"]
 
+[[bench]]
+name = "performance"
+harness = false
+required-features = ["zmq"]
+
+[[bench]]
+name = "measure_latency"
+harness = false
+required-features = ["zmq"]
+
+[[bench]]
+name = "simple_perf"
+harness = false
+required-features = ["zmq"]
+
 [[example]]
 name = "protocol_namespaces"
 required-features = ["zmq"]
@@ -113,6 +128,14 @@ required-features = ["zmq"]
 name = "xpub_xsub_broker"
 required-features = ["zmq"]
 
+[[example]]
+name = "plain_auth_demo"
+required-features = ["zmq"]
+
+[[example]]
+name = "curve_demo"
+required-features = ["zmq"]
+
 # Integration tests with libzmq
 [[test]]
 name = "interop_load_balance"
@@ -149,6 +172,7 @@ criterion = { workspace = true }
 tokio = { workspace = true }
 num_cpus = "1.16"
 portpicker = "0.1"
+hex = "0.4"
 
 [features]
 default = []
