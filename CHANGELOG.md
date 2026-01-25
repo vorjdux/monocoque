@@ -19,6 +19,11 @@
     -   Total benchmarks: 9 (throughput, latency, patterns, pipelined_throughput, ipc_vs_tcp, multithreaded, performance, measure_latency, simple_perf)
     -   Moved `benchmarks/libzmq_throughput.py` → `monocoque/benches/interop/`
 
+-   **✅ Moved all tests to public crate** (`monocoque/tests/`)
+    -   Integration tests for public API now in `monocoque/tests/`
+    -   Removed workspace root `tests/` folder
+    -   Tests: interop_pair, interop_pubsub, interop_router, interop_load_balance, req_state_machine, zap_integration
+
 -   **✅ Consolidated scripts** (`scripts/`)
     -   Removed duplicates: `analyze_benchmarks.sh` (root), `monocoque/quick_bench.sh`, `monocoque/run_benchmarks.sh`, `monocoque/analyze_benchmarks.py`
     -   Centralized in `scripts/`: `bench_all.sh`, `run_interop_tests.sh`
