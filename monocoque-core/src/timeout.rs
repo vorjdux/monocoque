@@ -106,7 +106,7 @@ where
     }
 }
 
-/// Execute an async read_exact operation with a timeout.
+/// Execute an async `read_exact` operation with a timeout.
 ///
 /// Reads exactly the full buffer or returns an error.
 pub async fn read_exact_with_timeout<S, B>(
@@ -143,7 +143,7 @@ where
     }
 }
 
-/// Execute an async write_all operation with a timeout.
+/// Execute an async `write_all` operation with a timeout.
 ///
 /// Writes the entire buffer or returns an error.
 pub async fn write_all_with_timeout<S, B>(

@@ -49,7 +49,7 @@ pub struct ReconnectState {
 
 impl ReconnectState {
     /// Create a new reconnection state tracker from socket options.
-    pub fn new(options: &SocketOptions) -> Self {
+    pub const fn new(options: &SocketOptions) -> Self {
         Self {
             base_interval: options.reconnect_ivl,
             max_interval: options.reconnect_ivl_max,
@@ -92,24 +92,28 @@ impl ReconnectState {
 
     /// Get the current attempt number.
     #[inline]
+    #[must_use] 
     pub const fn attempt(&self) -> u32 {
         self.attempt
     }
 
     /// Get the base reconnection interval.
     #[inline]
+    #[must_use] 
     pub const fn base_interval(&self) -> Duration {
         self.base_interval
     }
 
     /// Get the maximum reconnection interval.
     #[inline]
+    #[must_use] 
     pub const fn max_interval(&self) -> Duration {
         self.max_interval
     }
 
     /// Get the current reconnection interval.
     #[inline]
+    #[must_use] 
     pub const fn current_interval(&self) -> Duration {
         self.current_interval
     }
@@ -130,10 +134,10 @@ impl std::fmt::Display for ReconnectError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::MaxAttemptsReached { attempts } => {
-                write!(f, "Maximum reconnection attempts reached: {}", attempts)
+                write!(f, "Maximum reconnection attempts reached: {attempts}")
             }
             Self::ConnectionFailed { message } => {
-                write!(f, "Connection failed: {}", message)
+                write!(f, "Connection failed: {message}")
             }
             Self::Cancelled => {
                 write!(f, "Reconnection cancelled")

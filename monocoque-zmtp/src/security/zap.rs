@@ -46,19 +46,19 @@ pub enum ZapMechanism {
 }
 
 impl ZapMechanism {
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
-            ZapMechanism::Null => "NULL",
-            ZapMechanism::Plain => "PLAIN",
-            ZapMechanism::Curve => "CURVE",
+            Self::Null => "NULL",
+            Self::Plain => "PLAIN",
+            Self::Curve => "CURVE",
         }
     }
 
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
-            "NULL" => Some(ZapMechanism::Null),
-            "PLAIN" => Some(ZapMechanism::Plain),
-            "CURVE" => Some(ZapMechanism::Curve),
+            "NULL" => Some(Self::Null),
+            "PLAIN" => Some(Self::Plain),
+            "CURVE" => Some(Self::Curve),
             _ => None,
         }
     }
@@ -78,21 +78,21 @@ pub enum ZapStatus {
 }
 
 impl ZapStatus {
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
-            ZapStatus::Success => "200",
-            ZapStatus::TemporaryError => "300",
-            ZapStatus::Failure => "400",
-            ZapStatus::InternalError => "500",
+            Self::Success => "200",
+            Self::TemporaryError => "300",
+            Self::Failure => "400",
+            Self::InternalError => "500",
         }
     }
 
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
-            "200" => Some(ZapStatus::Success),
-            "300" => Some(ZapStatus::TemporaryError),
-            "400" => Some(ZapStatus::Failure),
-            "500" => Some(ZapStatus::InternalError),
+            "200" => Some(Self::Success),
+            "300" => Some(Self::TemporaryError),
+            "400" => Some(Self::Failure),
+            "500" => Some(Self::InternalError),
             _ => None,
         }
     }

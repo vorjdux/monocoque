@@ -28,7 +28,7 @@ impl Subscription {
         }
 
         // Check if topic starts with prefix
-        topic.len() >= self.prefix.len() && &topic[..self.prefix.len()] == &self.prefix[..]
+        topic.len() >= self.prefix.len() && topic[..self.prefix.len()] == self.prefix[..]
     }
 }
 
@@ -61,7 +61,7 @@ impl SubscriptionTrie {
 
     /// Remove a subscription
     pub fn unsubscribe(&mut self, prefix: &Bytes) {
-        self.subscriptions.retain(|s| &s.prefix != prefix);
+        self.subscriptions.retain(|s| s.prefix != prefix);
     }
 
     /// Check if a topic matches any subscription
@@ -145,7 +145,7 @@ impl SubscriptionEvent {
 
     /// Get the topic prefix
     #[must_use]
-    pub fn prefix(&self) -> &Bytes {
+    pub const fn prefix(&self) -> &Bytes {
         match self {
             Self::Subscribe(p) | Self::Unsubscribe(p) => p,
         }

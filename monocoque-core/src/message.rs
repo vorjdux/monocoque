@@ -1,6 +1,6 @@
 //! Message builder for ergonomic multipart message construction.
 //!
-//! Provides a fluent API for building ZeroMQ multipart messages with
+//! Provides a fluent API for building `ZeroMQ` multipart messages with
 //! automatic frame management.
 
 use bytes::Bytes;

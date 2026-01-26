@@ -13,6 +13,7 @@ repository = "https://github.com/vorjdux/monocoque"
 rust-version = "1.75"
 
 [workspace.dependencies]
+# Core dependencies
 bytes = "1.5"
 compio = { version = "0.10", features = ["runtime", "macros", "time"] }
 flume = "0.11"
@@ -20,10 +21,35 @@ futures = "0.3"
 async-trait = "0.1"
 thiserror = "1"
 hashbrown = "0.14"
-smallvec = "1.11"
+smallvec = "1.13"
+
+# Async utilities
+async-lock = "3.3"
+dashmap = "6.0"
+once_cell = "1.19"
+parking_lot = "0.12"
+
+# Networking
+socket2 = "0.5"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Cryptography
+x25519-dalek = { version = "2.0", features = ["static_secrets"] }
+chacha20poly1305 = "0.10"
+rand = "0.8"
+
+# System utilities
+num_cpus = "1.16"
+
+# Testing
 zmq = "0.10"
 criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+portpicker = "0.1"
+hex = "0.4"
 
 [profile.dev]
 debug = 2

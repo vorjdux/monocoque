@@ -76,7 +76,8 @@ where
     /// Socket options (timeouts, limits, identity, buffer sizes)
     pub(crate) options: SocketOptions,
     
-    /// Socket type for introspection
+    /// Socket type for introspection (used internally for reconnection)
+    #[allow(dead_code)]
     pub(crate) socket_type: SocketType,
     
     /// Last connected/bound endpoint
@@ -156,19 +157,19 @@ where
 
     /// Check if the socket is connected.
     #[inline]
-    pub fn is_connected(&self) -> bool {
+    pub const fn is_connected(&self) -> bool {
         self.stream.is_some()
     }
 
     /// Check if the socket is poisoned (I/O was cancelled mid-operation).
     #[inline]
-    pub fn is_poisoned(&self) -> bool {
+    pub const fn is_poisoned(&self) -> bool {
         self.is_poisoned
     }
 
     /// Get the number of buffered messages.
     #[inline]
-    pub fn buffered_messages(&self) -> usize {
+    pub const fn buffered_messages(&self) -> usize {
         self.buffered_messages
     }
 
@@ -180,7 +181,7 @@ where
 
     /// Check if send HWM has been reached.
     #[inline]
-    pub fn hwm_reached(&self) -> bool {
+    pub const fn hwm_reached(&self) -> bool {
         self.buffered_messages >= self.options.send_hwm
     }
 
@@ -193,7 +194,7 @@ where
     ///
     /// Corresponds to `ZMQ_LAST_ENDPOINT` (32) option.
     #[inline]
-    pub fn last_endpoint(&self) -> Option<&Endpoint> {
+    pub const fn last_endpoint(&self) -> Option<&Endpoint> {
         self.endpoint.as_ref()
     }
 
@@ -213,10 +214,8 @@ where
     ///
     /// Corresponds to `ZMQ_TYPE` (16) option.
     #[inline]
-    pub fn socket_type(&self) -> SocketType {
-        self.socket_type
-    }
-
+    // socket_type field is used internally for reconnection logic
+    // Each socket implementation provides its own public socket_type() method
     /// Check if more message frames are expected (for multipart messages).
     ///
     /// This indicates whether the last received message has more frames
@@ -225,7 +224,6 @@ where
     /// # ZeroMQ Compatibility
     ///
     /// Corresponds to `ZMQ_RCVMORE` (13) option.
-    #[inline]
     pub fn has_more(&self) -> bool {
         self.decoder.has_more()
     }
@@ -265,6 +263,8 @@ where
     ///
     /// Returns `NotConnected` error if the stream is None.
     #[inline]
+    // Internal utility method for direct stream access in advanced scenarios
+    #[allow(dead_code)]
     pub(crate) fn stream_mut(&mut self) -> io::Result<&mut S> {
         self.stream.as_mut().ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
@@ -344,6 +344,8 @@ where
     /// - `Err(e)` on I/O error
     ///
     /// On EOF, sets `stream = None` to mark disconnection.
+    // Low-level frame reader utility - may be used for protocol extensions
+    #[allow(dead_code)]
     pub(crate) async fn read_frame(&mut self) -> io::Result<Option<ZmtpFrame>> {
         loop {
             // Try to decode a frame from buffered data
@@ -437,6 +439,8 @@ where
     ///
     /// Uses PoisonGuard for cancellation safety. On write failure,
     /// sets `stream = None` to mark disconnection.
+    // Low-level direct write utility - bypasses send_buffer for special cases
+    #[allow(dead_code)]
     pub(crate) async fn write_direct(&mut self, data: &[u8]) -> io::Result<()> {
         // Check health
         if self.is_poisoned {

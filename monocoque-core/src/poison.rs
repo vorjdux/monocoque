@@ -87,7 +87,7 @@ impl<'a> PoisonGuard<'a> {
     /// Create a new guard, immediately marking the connection as poisoned.
     ///
     /// The connection will remain poisoned unless `disarm()` is called.
-    #[inline(always)]
+    #[inline]
     pub fn new(flag: &'a mut bool) -> Self {
         *flag = true;
         Self { flag }
@@ -113,7 +113,7 @@ impl<'a> PoisonGuard<'a> {
     /// # Ok(())
     /// # }
     /// ```
-    #[inline(always)]
+    #[inline]
     pub fn disarm(self) {
         *self.flag = false;
         // self is dropped here, but since we updated the reference,

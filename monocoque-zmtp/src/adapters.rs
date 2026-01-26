@@ -36,7 +36,7 @@ pub struct SocketStream<S> {
 
 impl<S> SocketStream<S> {
     /// Create a new stream adapter for a socket
-    pub fn new(socket: S) -> Self {
+    pub const fn new(socket: S) -> Self {
         Self { socket }
     }
 
@@ -46,7 +46,7 @@ impl<S> SocketStream<S> {
     }
 
     /// Get a reference to the underlying socket
-    pub fn get_ref(&self) -> &S {
+    pub const fn get_ref(&self) -> &S {
         &self.socket
     }
 
@@ -87,7 +87,7 @@ pub struct SocketSink<S> {
 
 impl<S> SocketSink<S> {
     /// Create a new sink adapter for a socket
-    pub fn new(socket: S) -> Self {
+    pub const fn new(socket: S) -> Self {
         Self {
             socket,
             pending: None,
@@ -100,7 +100,7 @@ impl<S> SocketSink<S> {
     }
 
     /// Get a reference to the underlying socket
-    pub fn get_ref(&self) -> &S {
+    pub const fn get_ref(&self) -> &S {
         &self.socket
     }
 
@@ -173,7 +173,7 @@ pub struct SocketStreamSink<S> {
 
 impl<S> SocketStreamSink<S> {
     /// Create a new stream+sink adapter for a socket
-    pub fn new(socket: S) -> Self {
+    pub const fn new(socket: S) -> Self {
         Self {
             socket,
             pending: None,
@@ -186,7 +186,7 @@ impl<S> SocketStreamSink<S> {
     }
 
     /// Get a reference to the underlying socket
-    pub fn get_ref(&self) -> &S {
+    pub const fn get_ref(&self) -> &S {
         &self.socket
     }
 

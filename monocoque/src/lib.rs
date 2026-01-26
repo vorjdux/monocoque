@@ -86,6 +86,13 @@
 #![allow(clippy::future_not_send)] // Runtime-agnostic design
 #![allow(clippy::missing_errors_doc)] // Will add gradually
 #![allow(clippy::doc_markdown)] // Too many false positives
+#![allow(clippy::return_self_not_must_use)] // Builder patterns are obvious
+#![allow(clippy::missing_panics_doc)] // Most panics are unreachable
+#![allow(clippy::missing_const_for_fn)] // Not always an optimization
+#![allow(clippy::multiple_crate_versions)] // Transitive dependencies
+#![allow(clippy::doc_lazy_continuation)] // Doc formatting is intentional
+#![allow(clippy::manual_let_else)] // Match expressions sometimes clearer
+#![allow(clippy::empty_line_after_outer_attr)] // Spacing is intentional
 
 // Re-export core types
 pub use bytes::Bytes;

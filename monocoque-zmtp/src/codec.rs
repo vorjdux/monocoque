@@ -33,7 +33,7 @@ impl From<ZmtpError> for io::Error {
 impl From<io::Error> for ZmtpError {
     fn from(_err: io::Error) -> Self {
         // Convert IO errors to Protocol errors for now
-        ZmtpError::Protocol
+        Self::Protocol
     }
 }
 
@@ -92,7 +92,7 @@ impl ZmtpDecoder {
     ///
     /// Corresponds to `ZMQ_RCVMORE` (13) - check if more frames in current message.
     #[inline]
-    pub fn has_more(&self) -> bool {
+    pub const fn has_more(&self) -> bool {
         // Decoder is expecting more data for current frame
         self.pending_flags.is_some()
     }

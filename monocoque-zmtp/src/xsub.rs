@@ -26,7 +26,6 @@ use compio::net::TcpStream;
 use monocoque_core::endpoint::Endpoint;
 use monocoque_core::options::SocketOptions;
 use monocoque_core::subscription::{SubscriptionEvent, SubscriptionTrie};
-use smallvec::SmallVec;
 use std::io;
 use tracing::{debug, trace};
 
@@ -73,9 +72,7 @@ where
 {
     /// Base socket infrastructure
     base: SocketBase<S>,
-    /// Accumulated frames for current multipart message
-    frames: SmallVec<[Bytes; 4]>,
-    /// Local subscription tracking
+    /// Local subscription tracking (XSUB manages subscriptions locally)
     subscriptions: SubscriptionTrie,
 }
 
@@ -113,7 +110,6 @@ where
 
         Ok(Self {
             base: SocketBase::new(stream, SocketType::Xsub, options),
-            frames: SmallVec::new(),
             subscriptions: SubscriptionTrie::new(),
         })
     }
@@ -255,7 +251,7 @@ where
     }
 
     /// Get the socket type.
-    pub fn socket_type(&self) -> SocketType {
+    pub const fn socket_type(&self) -> SocketType {
         SocketType::Xsub
     }
 

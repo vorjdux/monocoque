@@ -229,7 +229,7 @@ where
     ///
     /// Corresponds to `ZMQ_TYPE` (16) option.
     #[inline]
-    pub fn socket_type() -> SocketType {
+    pub const fn socket_type() -> SocketType {
         SocketType::Sub
     }
 

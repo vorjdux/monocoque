@@ -375,7 +375,7 @@ where
     }
 
     /// Get a reference to the underlying stream.
-    pub fn stream_ref(&self) -> Option<&S> {
+    pub const fn stream_ref(&self) -> Option<&S> {
         self.base.stream.as_ref()
     }
 
@@ -395,7 +395,7 @@ where
 
     /// Get a reference to the socket options.
     #[inline]
-    pub fn options(&self) -> &SocketOptions {
+    pub const fn options(&self) -> &SocketOptions {
         &self.base.options
     }
 
@@ -417,7 +417,7 @@ where
     ///
     /// Corresponds to `ZMQ_TYPE` (16) option.
     #[inline]
-    pub fn socket_type(&self) -> SocketType {
+    pub const fn socket_type(&self) -> SocketType {
         SocketType::Req
     }
 

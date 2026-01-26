@@ -8,7 +8,7 @@
 //! - **Zero-copy**: Messages are shared via `Arc<Vec<Bytes>>` between sockets
 //! - **Thread-safe**: Global registry protected by `DashMap`
 //! - **Fast**: No serialization, network, or syscall overhead
-//! - **ZeroMQ compatible**: Uses `inproc://` URI scheme
+//! - **`ZeroMQ` compatible**: Uses `inproc://` URI scheme
 //!
 //! # Usage
 //!
@@ -102,7 +102,7 @@ pub fn bind_inproc(endpoint: &str) -> io::Result<(InprocSender, InprocReceiver)>
     if INPROC_REGISTRY.insert(name.to_string(), tx.clone()).is_some() {
         return Err(io::Error::new(
             io::ErrorKind::AddrInUse,
-            format!("inproc endpoint '{}' is already bound", name),
+            format!("inproc endpoint '{name}' is already bound"),
         ));
     }
 
@@ -156,7 +156,7 @@ pub fn connect_inproc(endpoint: &str) -> io::Result<InprocSender> {
 
     Err(io::Error::new(
         io::ErrorKind::NotFound,
-        format!("inproc endpoint '{}' not found (must bind before connect)", name),
+        format!("inproc endpoint '{name}' not found (must bind before connect)"),
     ))
 }
 
@@ -207,7 +207,7 @@ pub fn list_inproc_endpoints() -> Vec<String> {
 ///
 /// # Arguments
 ///
-/// * `endpoint` - The full endpoint URI (e.g., "inproc://my-endpoint")
+/// * `endpoint` - The full endpoint URI (e.g., "<inproc://my-endpoint>")
 ///
 /// # Returns
 ///
@@ -223,8 +223,7 @@ fn validate_and_extract_name(endpoint: &str) -> io::Result<&str> {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(
-                "inproc endpoint must start with '{}', got: '{}'",
-                PREFIX, endpoint
+                "inproc endpoint must start with '{PREFIX}', got: '{endpoint}'"
             ),
         ));
     }

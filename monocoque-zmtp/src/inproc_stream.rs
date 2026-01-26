@@ -37,12 +37,12 @@ impl InprocStream {
     }
 
     /// Get a reference to the sender channel.
-    pub fn sender(&self) -> &InprocSender {
+    pub const fn sender(&self) -> &InprocSender {
         &self.tx
     }
 
     /// Get a reference to the receiver channel.
-    pub fn receiver(&self) -> &InprocReceiver {
+    pub const fn receiver(&self) -> &InprocReceiver {
         &self.rx
     }
 }
@@ -65,7 +65,7 @@ impl AsyncRead for InprocStream {
                     // Copy data using safe slice API
                     let dest_slice = unsafe {
                         std::slice::from_raw_parts_mut(
-                            (buf.as_slice().as_ptr() as *mut u8).add(total),
+                            buf.as_slice().as_ptr().cast_mut().add(total),
                             to_copy,
                         )
                     };

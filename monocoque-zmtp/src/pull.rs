@@ -130,7 +130,7 @@ where
 
     /// Get a reference to the socket options.
     #[inline]
-    pub fn options(&self) -> &SocketOptions {
+    pub const fn options(&self) -> &SocketOptions {
         &self.base.options
     }
 

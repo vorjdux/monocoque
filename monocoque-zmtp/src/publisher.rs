@@ -92,7 +92,7 @@ impl WorkerSubscriber {
         if let Some(first_frame) = msg.first() {
             for sub in subs.iter() {
                 if sub.is_empty()
-                    || (first_frame.len() >= sub.len() && &first_frame[..sub.len()] == &sub[..])
+                    || (first_frame.len() >= sub.len() && first_frame[..sub.len()] == sub[..])
                 {
                     return true;
                 }
@@ -377,13 +377,13 @@ impl PubSocket {
 
     /// Get subscriber count
     #[inline]
-    pub fn subscriber_count(&self) -> usize {
+    pub const fn subscriber_count(&self) -> usize {
         self.subscriber_count
     }
 
     /// Get socket options
     #[inline]
-    pub fn options(&self) -> &SocketOptions {
+    pub const fn options(&self) -> &SocketOptions {
         &self.options
     }
 
@@ -399,7 +399,7 @@ impl PubSocket {
     ///
     /// Corresponds to `ZMQ_TYPE` (16) option.
     #[inline]
-    pub fn socket_type(&self) -> SocketType {
+    pub const fn socket_type(&self) -> SocketType {
         SocketType::Pub
     }
 }
