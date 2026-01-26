@@ -40,17 +40,17 @@ pub enum SocketEvent {
 impl fmt::Display for SocketEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SocketEvent::Connected(ep) => write!(f, "Connected to {}", ep),
-            SocketEvent::Disconnected(ep) => write!(f, "Disconnected from {}", ep),
-            SocketEvent::Bound(ep) => write!(f, "Bound to {}", ep),
-            SocketEvent::BindFailed { endpoint, reason } => {
-                write!(f, "Bind failed for {}: {}", endpoint, reason)
+            Self::Connected(ep) => write!(f, "Connected to {ep}"),
+            Self::Disconnected(ep) => write!(f, "Disconnected from {ep}"),
+            Self::Bound(ep) => write!(f, "Bound to {ep}"),
+            Self::BindFailed { endpoint, reason } => {
+                write!(f, "Bind failed for {endpoint}: {reason}")
             }
-            SocketEvent::ConnectFailed { endpoint, reason } => {
-                write!(f, "Connect failed for {}: {}", endpoint, reason)
+            Self::ConnectFailed { endpoint, reason } => {
+                write!(f, "Connect failed for {endpoint}: {reason}")
             }
-            SocketEvent::Listening(ep) => write!(f, "Listening on {}", ep),
-            SocketEvent::Accepted(ep) => write!(f, "Accepted connection from {}", ep),
+            Self::Listening(ep) => write!(f, "Listening on {ep}"),
+            Self::Accepted(ep) => write!(f, "Accepted connection from {ep}"),
         }
     }
 }
@@ -68,6 +68,7 @@ pub type SocketEventSender = flume::Sender<SocketEvent>;
 /// Creates a new monitoring channel pair.
 ///
 /// This is exposed publicly to allow socket implementations to create monitors.
+#[must_use] 
 pub fn create_monitor() -> (SocketEventSender, SocketMonitor) {
     flume::unbounded()
 }

@@ -290,7 +290,7 @@ where
 
     /// Get a reference to the socket options.
     #[inline]
-    pub fn options(&self) -> &SocketOptions {
+    pub const fn options(&self) -> &SocketOptions {
         &self.base.options
     }
 
@@ -312,7 +312,7 @@ where
     ///
     /// Corresponds to `ZMQ_TYPE` (16) option.
     #[inline]
-    pub fn socket_type(&self) -> SocketType {
+    pub const fn socket_type(&self) -> SocketType {
         SocketType::Router
     }
 
@@ -367,7 +367,7 @@ where
     /// This identity is used as the first frame in received messages
     /// and as the routing address in sent messages.
     #[inline]
-    pub fn peer_identity(&self) -> &Bytes {
+    pub const fn peer_identity(&self) -> &Bytes {
         &self.peer_identity
     }
 }

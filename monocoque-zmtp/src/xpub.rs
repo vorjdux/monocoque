@@ -244,7 +244,7 @@ impl XPubSocket {
                                 sub.subscriptions.subscribe(prefix.clone());
                             }
                             SubscriptionEvent::Unsubscribe(prefix) => {
-                                sub.subscriptions.unsubscribe(&prefix);
+                                sub.subscriptions.unsubscribe(prefix);
                             }
                         }
                         
@@ -252,9 +252,8 @@ impl XPubSocket {
                         if self.options.xpub_verbose {
                             println!("[XPUB recv_subscription] Returning event (verbose=true)");
                             return Ok(Some(event));
-                        } else {
-                            println!("[XPUB recv_subscription] NOT returning event (verbose=false)");
                         }
+                        println!("[XPUB recv_subscription] NOT returning event (verbose=false)");
                     } else {
                         println!("[XPUB recv_subscription] Failed to parse subscription event");
                     }
@@ -271,7 +270,6 @@ impl XPubSocket {
                 Err(_) => {
                     // Timeout - no data available
                     println!("[XPUB recv_subscription] Read timeout (no data)");
-                    continue;
                 }
             }
         }
@@ -334,7 +332,7 @@ impl XPubSocket {
     }
 
     /// Get the socket type.
-    pub fn socket_type(&self) -> SocketType {
+    pub const fn socket_type(&self) -> SocketType {
         SocketType::Xpub
     }
 

@@ -21,18 +21,18 @@ flume.workspace = true
 futures.workspace = true
 compio.workspace = true
 monocoque-core = { version = "0.1.0", path = "../monocoque-core" }
-smallvec = "1.13"
-tracing = "0.1"
-tracing-subscriber = "0.3"
-socket2 = "0.5"
-parking_lot = "0.12"
-num_cpus = "1.16"
-async-trait = "0.1"
+smallvec.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+socket2.workspace = true
+parking_lot.workspace = true
+num_cpus.workspace = true
+async-trait.workspace = true
 
 # Security / Cryptography
-x25519-dalek = { version = "2.0", features = ["static_secrets"] }
-chacha20poly1305 = "0.10"
-rand = "0.8"
+x25519-dalek.workspace = true
+chacha20poly1305.workspace = true
+rand.workspace = true
 
 [dev-dependencies]
 zmq.workspace = true

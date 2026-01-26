@@ -50,19 +50,22 @@ impl Endpoint {
     }
 
     /// Returns true if this is a TCP endpoint.
-    pub fn is_tcp(&self) -> bool {
-        matches!(self, Endpoint::Tcp(_))
+    #[must_use] 
+    pub const fn is_tcp(&self) -> bool {
+        matches!(self, Self::Tcp(_))
     }
 
     /// Returns true if this is an IPC endpoint.
     #[cfg(unix)]
-    pub fn is_ipc(&self) -> bool {
-        matches!(self, Endpoint::Ipc(_))
+    #[must_use] 
+    pub const fn is_ipc(&self) -> bool {
+        matches!(self, Self::Ipc(_))
     }
 
     /// Returns true if this is an inproc endpoint.
-    pub fn is_inproc(&self) -> bool {
-        matches!(self, Endpoint::Inproc(_))
+    #[must_use] 
+    pub const fn is_inproc(&self) -> bool {
+        matches!(self, Self::Inproc(_))
     }
 }
 
@@ -74,11 +77,11 @@ impl FromStr for Endpoint {
             let socket_addr = addr
                 .parse::<SocketAddr>()
                 .map_err(|_| EndpointError::InvalidTcpAddress(addr.to_string()))?;
-            Ok(Endpoint::Tcp(socket_addr))
+            Ok(Self::Tcp(socket_addr))
         } else if let Some(path) = s.strip_prefix("ipc://") {
             #[cfg(unix)]
             {
-                Ok(Endpoint::Ipc(PathBuf::from(path)))
+                Ok(Self::Ipc(PathBuf::from(path)))
             }
             #[cfg(not(unix))]
             {
@@ -90,7 +93,7 @@ impl FromStr for Endpoint {
                     "inproc name cannot be empty".to_string(),
                 ))
             } else {
-                Ok(Endpoint::Inproc(name.to_string()))
+                Ok(Self::Inproc(name.to_string()))
             }
         } else {
             Err(EndpointError::InvalidScheme(s.to_string()))
@@ -101,10 +104,10 @@ impl FromStr for Endpoint {
 impl fmt::Display for Endpoint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Endpoint::Tcp(addr) => write!(f, "tcp://{}", addr),
+            Self::Tcp(addr) => write!(f, "tcp://{addr}"),
             #[cfg(unix)]
-            Endpoint::Ipc(path) => write!(f, "ipc://{}", path.display()),
-            Endpoint::Inproc(name) => write!(f, "inproc://{}", name),
+            Self::Ipc(path) => write!(f, "ipc://{}", path.display()),
+            Self::Inproc(name) => write!(f, "inproc://{name}"),
         }
     }
 }

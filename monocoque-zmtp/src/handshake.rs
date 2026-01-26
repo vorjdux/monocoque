@@ -43,6 +43,8 @@ pub struct HandshakeResult {
 /// 2. READY command exchange is complete
 ///
 /// Only after this completes should the stream be handed to `SocketActor`.
+// Convenience wrapper without timeout - kept for API completeness
+#[allow(dead_code)]
 pub async fn perform_handshake<S>(
     stream: &mut S,
     local_socket_type: SocketType,

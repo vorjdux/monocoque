@@ -57,7 +57,7 @@ impl Permit {
         }
     }
 
-    fn semaphore(sem: Arc<Semaphore>, n_bytes: usize) -> Self {
+    const fn semaphore(sem: Arc<Semaphore>, n_bytes: usize) -> Self {
         Self {
             inner: Some(PermitInner::Semaphore(sem, n_bytes)),
         }
@@ -109,6 +109,7 @@ impl SemaphorePermits {
     /// # Arguments
     ///
     /// * `max_bytes` - Maximum number of bytes that can be buffered
+    #[must_use] 
     pub fn new(max_bytes: usize) -> Self {
         Self {
             semaphore: Arc::new(Semaphore::new(max_bytes)),

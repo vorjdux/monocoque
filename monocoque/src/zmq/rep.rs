@@ -58,8 +58,7 @@ where
 
 impl RepSocket {
     /// Create a REP socket from an existing TCP stream.
-
-
+    ///
     /// Create a REP socket from a TCP stream with TCP_NODELAY enabled.
     pub async fn from_tcp(stream: TcpStream) -> io::Result<Self> {
         Ok(Self {
@@ -150,7 +149,7 @@ where
     ///
     /// Corresponds to `ZMQ_TYPE` (16) option.
     #[inline]
-    pub fn socket_type() -> SocketType {
+    pub const fn socket_type() -> SocketType {
         SocketType::Rep
     }
 

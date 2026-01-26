@@ -71,22 +71,22 @@ pub trait ResultExt<T> {
 }
 
 impl<T> ResultExt<T> for Result<T> {
-    fn context(self, context: impl Into<String>) -> Result<T> {
+    fn context(self, context: impl Into<String>) -> Self {
         self.map_err(|e| {
             let ctx = context.into();
             match e {
                 MonocoqueError::Io(io_err) => {
-                    MonocoqueError::Io(io::Error::new(io_err.kind(), format!("{}: {}", ctx, io_err)))
+                    MonocoqueError::Io(io::Error::new(io_err.kind(), format!("{ctx}: {io_err}")))
                 }
                 MonocoqueError::Protocol(msg) => {
-                    MonocoqueError::Protocol(format!("{}: {}", ctx, msg))
+                    MonocoqueError::Protocol(format!("{ctx}: {msg}"))
                 }
                 other => other,
             }
         })
     }
 
-    fn with_context<F>(self, f: F) -> Result<T>
+    fn with_context<F>(self, f: F) -> Self
     where
         F: FnOnce() -> String,
     {
@@ -94,10 +94,10 @@ impl<T> ResultExt<T> for Result<T> {
             let ctx = f();
             match e {
                 MonocoqueError::Io(io_err) => {
-                    MonocoqueError::Io(io::Error::new(io_err.kind(), format!("{}: {}", ctx, io_err)))
+                    MonocoqueError::Io(io::Error::new(io_err.kind(), format!("{ctx}: {io_err}")))
                 }
                 MonocoqueError::Protocol(msg) => {
-                    MonocoqueError::Protocol(format!("{}: {}", ctx, msg))
+                    MonocoqueError::Protocol(format!("{ctx}: {msg}"))
                 }
                 other => other,
             }

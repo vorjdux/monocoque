@@ -1,13 +1,13 @@
-//! Socket type enumeration for ZeroMQ socket types.
+//! Socket type enumeration for `ZeroMQ` socket types.
 //!
 //! This module provides the `SocketType` enum which represents the different
-//! types of ZeroMQ sockets according to ZMTP 3.1 specification.
+//! types of `ZeroMQ` sockets according to ZMTP 3.1 specification.
 
 use std::fmt;
 
-/// ZeroMQ socket types.
+/// `ZeroMQ` socket types.
 ///
-/// Corresponds to ZMQ_TYPE socket option (16).
+/// Corresponds to `ZMQ_TYPE` socket option (16).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum SocketType {
@@ -50,7 +50,8 @@ pub enum SocketType {
 
 impl SocketType {
     /// Get the socket type as a string name.
-    pub fn as_str(&self) -> &'static str {
+    #[must_use] 
+    pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Pair => "PAIR",
             Self::Pub => "PUB",
@@ -68,26 +69,16 @@ impl SocketType {
     }
     
     /// Check if this socket type is compatible with the given peer type.
-    pub fn is_compatible(&self, peer: SocketType) -> bool {
+    #[must_use] 
+    pub const fn is_compatible(&self, peer: Self) -> bool {
         matches!(
             (self, peer),
-            (Self::Pair, Self::Pair)
-                | (Self::Pub, Self::Sub)
-                | (Self::Sub, Self::Pub)
-                | (Self::Req, Self::Rep)
-                | (Self::Rep, Self::Req)
-                | (Self::Req, Self::Router)
-                | (Self::Router, Self::Req)
-                | (Self::Dealer, Self::Rep)
-                | (Self::Rep, Self::Dealer)
-                | (Self::Dealer, Self::Router)
-                | (Self::Router, Self::Dealer)
-                | (Self::Dealer, Self::Dealer)
-                | (Self::Router, Self::Router)
-                | (Self::Push, Self::Pull)
-                | (Self::Pull, Self::Push)
-                | (Self::XPub, Self::XSub)
-                | (Self::XSub, Self::XPub)
+            (Self::Pair, Self::Pair) | (Self::Pub, Self::Sub) | (Self::Sub, Self::Pub) |
+(Self::Req | Self::Dealer, Self::Rep) | (Self::Rep | Self::Router, Self::Req)
+| (Self::Req | Self::Dealer | Self::Router, Self::Router) |
+(Self::Rep | Self::Router | Self::Dealer, Self::Dealer) |
+(Self::Push, Self::Pull) | (Self::Pull, Self::Push) | (Self::XPub, Self::XSub)
+| (Self::XSub, Self::XPub)
         )
     }
 }

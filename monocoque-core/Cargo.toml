@@ -15,16 +15,16 @@ documentation = "https://docs.rs/monocoque-core"
 readme = "../README.md"
 
 [dependencies]
-async-lock = "3.3"
+async-lock.workspace = true
 bytes.workspace = true
 compio.workspace = true
-dashmap = "6.0"
+dashmap.workspace = true
 flume.workspace = true
 futures.workspace = true
 async-trait.workspace = true
 hashbrown.workspace = true
-once_cell = "1.19"
+once_cell.workspace = true
 smallvec.workspace = true
-socket2 = "0.5"
+socket2.workspace = true
 thiserror.workspace = true
-tracing = "0.1"
+tracing.workspace = true

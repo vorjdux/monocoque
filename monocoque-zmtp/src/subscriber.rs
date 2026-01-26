@@ -148,27 +148,7 @@ where
         Ok(())
     }
 
-    /// Check if a message matches any subscription.
-    fn matches_subscription(&self, msg: &[Bytes]) -> bool {
-        // If no subscriptions, nothing matches
-        if self.subscriptions.is_empty() {
-            return false;
-        }
-
-        // Empty subscription matches everything
-        if self.subscriptions.iter().any(bytes::Bytes::is_empty) {
-            return true;
-        }
-
-        // Check if first frame starts with any subscription prefix
-        if let Some(first_frame) = msg.first() {
-            self.subscriptions
-                .iter()
-                .any(|sub| first_frame.len() >= sub.len() && first_frame[..sub.len()] == sub[..])
-        } else {
-            false
-        }
-    }
+    // Subscription matching logic is implemented inline in recv() for better performance
 
     /// Receive a message that matches subscriptions.
     ///
@@ -195,7 +175,7 @@ where
                                 // Check if message matches any subscription
                                 let matches = {
                                     let subscriptions = &self.subscriptions;
-                                    msg.first().map_or(false, |first_frame| {
+                                    msg.first().is_some_and(|first_frame| {
                                         subscriptions.is_empty()
                                             || subscriptions
                                                 .iter()
@@ -240,7 +220,7 @@ where
 
     /// Get a reference to the socket options.
     #[inline]
-    pub fn options(&self) -> &SocketOptions {
+    pub const fn options(&self) -> &SocketOptions {
         &self.base.options
     }
 
@@ -262,7 +242,7 @@ where
     ///
     /// Corresponds to `ZMQ_TYPE` (16) option.
     #[inline]
-    pub fn socket_type(&self) -> SocketType {
+    pub const fn socket_type(&self) -> SocketType {
         SocketType::Sub
     }
 

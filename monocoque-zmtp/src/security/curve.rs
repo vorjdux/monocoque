@@ -63,6 +63,8 @@ const CURVE_WELCOME: &[u8] = b"\x07WELCOME";
 const CURVE_INITIATE: &[u8] = b"\x08INITIATE";
 const CURVE_READY: &[u8] = b"\x05READY";
 const CURVE_MESSAGE: &[u8] = b"\x07MESSAGE";
+// CURVE ERROR command - reserved for protocol error reporting
+#[allow(dead_code)]
 const CURVE_ERROR: &[u8] = b"\x05ERROR";
 
 /// CURVE key sizes
@@ -76,12 +78,12 @@ pub struct CurvePublicKey([u8; CURVE_KEY_SIZE]);
 
 impl CurvePublicKey {
     /// Create from bytes
-    pub fn from_bytes(bytes: [u8; CURVE_KEY_SIZE]) -> Self {
+    pub const fn from_bytes(bytes: [u8; CURVE_KEY_SIZE]) -> Self {
         Self(bytes)
     }
 
     /// Get raw bytes
-    pub fn as_bytes(&self) -> &[u8; CURVE_KEY_SIZE] {
+    pub const fn as_bytes(&self) -> &[u8; CURVE_KEY_SIZE] {
         &self.0
     }
 
@@ -157,7 +159,7 @@ impl CurveKeyPair {
     }
 
     /// Create from existing keys
-    pub fn from_keys(public: CurvePublicKey, secret: CurveSecretKey) -> Self {
+    pub const fn from_keys(public: CurvePublicKey, secret: CurveSecretKey) -> Self {
         Self { public, secret }
     }
 }
@@ -216,7 +218,8 @@ pub enum CurveError {
 pub struct CurveClient {
     /// Client's long-term key pair
     client_keypair: CurveKeyPair,
-    /// Server's long-term public key
+    /// Server's long-term public key (used in handshake verification)
+    #[allow(dead_code)]
     server_public: CurvePublicKey,
     /// Client's short-term (ephemeral) key pair
     client_short_keypair: CurveKeyPair,
@@ -224,7 +227,8 @@ pub struct CurveClient {
     server_short_public: Option<CurvePublicKey>,
     /// Send nonce counter
     send_nonce: u64,
-    /// Receive nonce counter
+    /// Receive nonce counter (for message authentication)
+    #[allow(dead_code)]
     recv_nonce: u64,
     /// Encryption box for messages (after READY)
     message_box: Option<CurveBox>,
@@ -456,7 +460,8 @@ impl CurveClient {
 
 /// CURVE server state machine
 pub struct CurveServer {
-    /// Server's long-term key pair
+    /// Server's long-term key pair (for signing responses)
+    #[allow(dead_code)]
     server_keypair: CurveKeyPair,
     /// Server's short-term (ephemeral) key pair
     server_short_keypair: CurveKeyPair,
@@ -466,7 +471,8 @@ pub struct CurveServer {
     client_public: Option<CurvePublicKey>,
     /// Send nonce counter
     send_nonce: u64,
-    /// Receive nonce counter
+    /// Receive nonce counter (for message authentication)
+    #[allow(dead_code)]
     recv_nonce: u64,
     /// Encryption box for messages (after READY)
     message_box: Option<CurveBox>,

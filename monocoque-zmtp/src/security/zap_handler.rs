@@ -40,7 +40,7 @@ impl<H: PlainAuthHandler> DefaultZapHandler<H> {
     /// # Arguments
     /// * `plain_handler` - Handler for PLAIN authentication
     /// * `accept_curve` - Whether to accept CURVE connections (default: true)
-    pub fn new(plain_handler: Arc<H>, accept_curve: bool) -> Self {
+    pub const fn new(plain_handler: Arc<H>, accept_curve: bool) -> Self {
         Self {
             plain_handler,
             accept_curve,
@@ -177,9 +177,8 @@ impl<H: ZapHandler> ZapServer<H> {
     pub async fn start(&mut self) -> io::Result<()> {
         loop {
             // Receive ZAP request
-            let msg = match self.socket.recv().await? {
-                Some(frames) => frames,
-                None => continue,
+            let Some(msg) = self.socket.recv().await? else {
+                continue;
             };
 
             // Decode the request

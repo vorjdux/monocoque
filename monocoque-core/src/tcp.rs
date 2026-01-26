@@ -12,7 +12,7 @@
 
 use std::io;
 
-/// Enable TCP_NODELAY on a compio TcpStream for minimal latency.
+/// Enable `TCP_NODELAY` on a compio `TcpStream` for minimal latency.
 ///
 /// This disables Nagle's algorithm, trading bandwidth efficiency for lower latency.
 /// Essential for request-reply patterns and real-time messaging.
@@ -53,7 +53,7 @@ pub fn enable_tcp_nodelay(stream: &compio::net::TcpStream) -> io::Result<()> {
     }
 }
 
-/// Configure TCP keepalive settings on a compio TcpStream.
+/// Configure TCP keepalive settings on a compio `TcpStream`.
 ///
 /// This enables connection monitoring for long-lived connections, helping detect
 /// dead peers and network failures.

@@ -43,6 +43,20 @@
 //!
 //! - **Zero-copy**: Messages use `Bytes` for efficient sharing
 //! - **`io_uring`**: High-performance async I/O via `compio`
+
+// Pedantic lints configuration
+#![allow(clippy::module_name_repetitions)]
+#![allow(clippy::return_self_not_must_use)] // Builder patterns are self-documenting
+#![allow(clippy::missing_errors_doc)] // Error types are self-explanatory
+#![allow(clippy::missing_panics_doc)] // Most panics are in unreachable paths or debug code
+#![allow(clippy::missing_const_for_fn)] // Const fn optimization not always beneficial
+#![allow(clippy::multiple_crate_versions)] // Transitive dependency management
+#![allow(clippy::future_not_send)] // Intentional: tied to compio runtime
+#![allow(clippy::missing_fields_in_debug)] // Debug impls are simplified for brevity
+#![allow(clippy::should_implement_trait)] // Custom method names are intentional
+#![allow(clippy::doc_lazy_continuation)] // Doc formatting false positives
+#![allow(clippy::empty_line_after_doc_comments)] // Doc spacing is intentional
+#![allow(clippy::duplicated_attributes)] // Allow duplicates for clarity
 //! - **Sans-IO protocol**: Testable, runtime-agnostic design
 //! - **Type-safe**: No unsafe code in protocol layer
 //! - **Interoperable**: Compatible with libzmq

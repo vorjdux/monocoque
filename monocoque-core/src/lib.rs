@@ -11,6 +11,8 @@
 
 // The tcp module needs raw fd/socket access for socket configuration
 #![cfg_attr(not(test), deny(unsafe_code))]
+// Allow future features for serialization support
+#![allow(unexpected_cfgs)]
 // Allow some pedantic lints that are intentional in this crate
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::cast_sign_loss)]
@@ -18,6 +20,17 @@
 #![allow(clippy::module_name_repetitions)]
 #![allow(clippy::needless_pass_by_value)]
 #![allow(clippy::needless_pass_by_ref_mut)]
+// Pedantic lints that add noise without value
+#![allow(clippy::return_self_not_must_use)] // Builder patterns are self-documenting
+#![allow(clippy::missing_errors_doc)] // Error types are self-explanatory
+#![allow(clippy::missing_panics_doc)] // Most panics are in unreachable paths
+#![allow(clippy::missing_const_for_fn)] // Const fn is not always beneficial
+#![allow(clippy::future_not_send)] // Runtime design: futures are not required to be Send
+#![allow(clippy::multiple_crate_versions)] // Transitive dependencies, will resolve later
+#![allow(clippy::struct_excessive_bools)] // Options struct legitimately needs multiple bools
+#![allow(clippy::question_mark)] // Some code patterns are more explicit without ?
+#![allow(clippy::needless_continue)] // Continue statements can improve readability
+#![allow(clippy::manual_let_else)] // Match expressions can be clearer in some contexts
 #![allow(clippy::match_same_arms)]
 pub mod alloc;
 pub mod backpressure;

@@ -140,8 +140,8 @@ impl RouterSocket {
     /// - Use `SocketOptions` with `with_buffer_sizes()` instead
     /// - Small buffers (4KB) for low-latency routing with small messages
     /// - Large buffers (16KB) for high-throughput routing with large messages (recommended)
-
-    /// Create a ROUTER socket from a TCP stream with TCP_NODELAY enabled.
+    ///
+    ///   Create a ROUTER socket from a TCP stream with TCP_NODELAY enabled.
     pub async fn from_tcp(stream: TcpStream) -> io::Result<Self> {
         Ok(Self {
             inner: InternalRouter::from_tcp(stream).await?,
@@ -273,7 +273,7 @@ where
     ///
     /// Corresponds to `ZMQ_TYPE` (16) option.
     #[inline]
-    pub fn socket_type() -> SocketType {
+    pub const fn socket_type() -> SocketType {
         SocketType::Router
     }
 
@@ -437,7 +437,7 @@ where
     /// # Ok(())
     /// # }
     /// ```
-    pub fn peer_identity(&self) -> &Bytes {
+    pub const fn peer_identity(&self) -> &Bytes {
         self.inner.peer_identity()
     }
 

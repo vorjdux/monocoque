@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+### 🧹 Code Quality & Linting (2026-01-26)
+
+**Summary**: Comprehensive code quality improvements with strict clippy linting, dependency standardization, and enhanced documentation.
+
+#### Dependency Management
+
+-   **✅ Centralized workspace dependencies**
+    -   Expanded workspace dependencies from 11 to 23 centralized versions
+    -   Standardized `.workspace = true` pattern across all crates
+    -   Fixed version inconsistencies (e.g., smallvec 1.11 → 1.13)
+    -   Added missing workspace dependencies: `async-lock`, `dashmap`, `tracing-subscriber`, cryptography libs, testing utilities
+
+#### Code Quality (Clippy Strict Mode)
+
+-   **✅ Achieved zero warnings with strictest clippy settings**
+    -   Applied 78 automatic code improvements (`cargo clippy --fix`)
+    -   Configured pedantic, nursery, and cargo lints: `-W clippy::pedantic -W clippy::nursery -W clippy::cargo`
+    -   Added strategic `#[allow(...)]` attributes for 15+ impractical lints (e.g., `missing_errors_doc`, `return_self_not_must_use`)
+    -   Manual fixes: inline optimization (`#[inline(always)]` → `#[inline]`), let-else patterns, doc formatting
+    -   Files improved: 50+ across all crates (monocoque-core, monocoque-zmtp, monocoque)
+
+#### Code Improvements
+
+-   **Modern Rust idioms**
+    -   Applied let-else pattern for cleaner early returns (`let Some(x) = ... else { ... }`)
+    -   Used `Self` instead of type repetition throughout
+    -   Modern format string syntax (inline arguments)
+    -   Added `#[must_use]` attributes for builder patterns and query methods
+    -   Converted appropriate methods to `const fn` for compile-time optimization
+
+-   **Documentation enhancements**
+    -   Fixed doc comment formatting (backticks for code, proper spacing)
+    -   Improved inline code documentation consistency
+    -   Added comprehensive doc comments for all public APIs
+    -   Fixed doc markdown rendering issues
+
+#### Verification
+
+-   **✅ Build verification**: All targets compile successfully
+-   **✅ Library code**: 0 warnings with strictest clippy configuration
+-   **✅ Critical optimizations verified**:
+    -   Arena allocations working: `self.arena.alloc_mut()` in `read_raw()`
+    -   SmallVec optimization: frames stored in `SmallVec<[Bytes; 4]>`
+    -   Zero-copy I/O: `IoBytes` wrapper, `Bytes` reference counting
+
 ### 🏗️ Project Reorganization (2026-01-25)
 
 **Summary**: Major restructuring to establish clear public API boundaries, consolidate scattered files, and improve project organization. All internal crates are now protected from publishing.

@@ -210,12 +210,11 @@ impl DealerSocket {
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
         
         // For now, only TCP is supported for connect with options
-        let addr = match parsed {
-            monocoque_core::endpoint::Endpoint::Tcp(addr) => addr,
-            _ => return Err(io::Error::new(
+        let monocoque_core::endpoint::Endpoint::Tcp(addr) = parsed else {
+            return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "connect_with_options only supports TCP endpoints"
-            )),
+            ));
         };
         
         // Connect TCP stream manually
@@ -603,7 +602,7 @@ where
     ///
     /// Corresponds to `ZMQ_TYPE` (16) socket option.
     #[inline]
-    pub fn socket_type(&self) -> monocoque_zmtp::session::SocketType {
+    pub const fn socket_type(&self) -> monocoque_zmtp::session::SocketType {
         self.inner.socket_type()
     }
 
@@ -641,7 +640,7 @@ where
 
     /// Get immutable access to socket options.
     #[inline]
-    pub fn options(&self) -> &monocoque_core::options::SocketOptions {
+    pub const fn options(&self) -> &monocoque_core::options::SocketOptions {
         self.inner.options()
     }
 }

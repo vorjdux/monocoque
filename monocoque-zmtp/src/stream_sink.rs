@@ -61,12 +61,12 @@ pub struct SocketStream<S> {
 
 impl<S> SocketStream<S> {
     /// Create a new stream adapter for a socket.
-    pub fn new(socket: S) -> Self {
+    pub const fn new(socket: S) -> Self {
         Self { socket }
     }
 
     /// Get a reference to the underlying socket.
-    pub fn get_ref(&self) -> &S {
+    pub const fn get_ref(&self) -> &S {
         &self.socket
     }
 
@@ -84,9 +84,8 @@ impl<S> SocketStream<S> {
 impl<S: Socket + Unpin> Stream for SocketStream<S> {
     type Item = io::Result<Vec<Bytes>>;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // We need to box the future since async_trait returns Box<dyn Future>
-        // For now, return Poll::Pending as a placeholder
+    fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        // Placeholder Stream implementation - not yet fully integrated with Socket trait
         // A full implementation would require storing a pinned future in the struct
         Poll::Pending
     }
@@ -118,12 +117,12 @@ pub struct SocketSink<S> {
 
 impl<S> SocketSink<S> {
     /// Create a new sink adapter for a socket.
-    pub fn new(socket: S) -> Self {
+    pub const fn new(socket: S) -> Self {
         Self { socket }
     }
 
     /// Get a reference to the underlying socket.
-    pub fn get_ref(&self) -> &S {
+    pub const fn get_ref(&self) -> &S {
         &self.socket
     }
 
@@ -146,8 +145,8 @@ impl<S: Socket + Unpin> Sink<Vec<Bytes>> for SocketSink<S> {
         Poll::Ready(Ok(()))
     }
 
-    fn start_send(self: Pin<&mut Self>, item: Vec<Bytes>) -> Result<(), Self::Error> {
-        // Store message to send on flush
+    fn start_send(self: Pin<&mut Self>, _item: Vec<Bytes>) -> Result<(), Self::Error> {
+        // Placeholder Sink implementation - not yet fully integrated with Socket trait
         // For a complete implementation, this would need a buffer field in the struct
         Ok(())
     }
@@ -196,7 +195,7 @@ pub struct SocketStreamSink<S> {
 
 impl<S> SocketStreamSink<S> {
     /// Create a new combined stream/sink adapter.
-    pub fn new(socket: S) -> Self {
+    pub const fn new(socket: S) -> Self {
         Self {
             socket,
             pending_send: None,
@@ -204,7 +203,7 @@ impl<S> SocketStreamSink<S> {
     }
 
     /// Get a reference to the underlying socket.
-    pub fn get_ref(&self) -> &S {
+    pub const fn get_ref(&self) -> &S {
         &self.socket
     }
 

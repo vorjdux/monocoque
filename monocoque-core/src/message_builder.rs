@@ -1,11 +1,11 @@
-//! Ergonomic message builder for constructing ZeroMQ multipart messages.
+//! Ergonomic message builder for constructing `ZeroMQ` multipart messages.
 //!
 //! This module provides a fluent API for building multipart messages with
 //! automatic frame handling and type conversions.
 
 use bytes::Bytes;
 
-/// Builder for constructing ZeroMQ multipart messages.
+/// Builder for constructing `ZeroMQ` multipart messages.
 ///
 /// Provides a fluent API for adding frames to a message with automatic
 /// conversions from common types (strings, bytes, JSON, etc.).
@@ -59,7 +59,8 @@ impl Message {
     ///
     /// let msg = Message::new();
     /// ```
-    pub fn new() -> Self {
+    #[must_use] 
+    pub const fn new() -> Self {
         Self { frames: Vec::new() }
     }
 
@@ -78,6 +79,7 @@ impl Message {
     ///     .push_str("frame3")
     ///     .push_str("frame4");
     /// ```
+    #[must_use] 
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             frames: Vec::with_capacity(capacity),
@@ -115,6 +117,7 @@ impl Message {
     ///     .push_str("Hello")
     ///     .push_str("World");
     /// ```
+    #[must_use] 
     pub fn push_str(mut self, s: &str) -> Self {
         self.frames.push(Bytes::copy_from_slice(s.as_bytes()));
         self
@@ -122,7 +125,7 @@ impl Message {
 
     /// Add an empty frame.
     ///
-    /// Empty frames are often used as delimiters in ZeroMQ envelope patterns.
+    /// Empty frames are often used as delimiters in `ZeroMQ` envelope patterns.
     ///
     /// # Examples
     ///
@@ -135,6 +138,7 @@ impl Message {
     ///     .push_empty()
     ///     .push_str("Hello");
     /// ```
+    #[must_use] 
     pub fn push_empty(mut self) -> Self {
         self.frames.push(Bytes::new());
         self
@@ -204,12 +208,14 @@ impl Message {
     ///     .push_u32(12345) // Message ID
     ///     .push_str("payload");
     /// ```
+    #[must_use] 
     pub fn push_u32(mut self, value: u32) -> Self {
         self.frames.push(Bytes::copy_from_slice(&value.to_be_bytes()));
         self
     }
 
     /// Add a frame containing a big-endian u64.
+    #[must_use] 
     pub fn push_u64(mut self, value: u64) -> Self {
         self.frames.push(Bytes::copy_from_slice(&value.to_be_bytes()));
         self
@@ -228,11 +234,13 @@ impl Message {
     ///
     /// assert_eq!(msg.len(), 2);
     /// ```
+    #[must_use] 
     pub fn len(&self) -> usize {
         self.frames.len()
     }
 
     /// Check if the message is empty (has no frames).
+    #[must_use] 
     pub fn is_empty(&self) -> bool {
         self.frames.is_empty()
     }
@@ -258,11 +266,13 @@ impl Message {
     /// # Ok(())
     /// # }
     /// ```
+    #[must_use] 
     pub fn into_frames(self) -> Vec<Bytes> {
         self.frames
     }
 
     /// Get a reference to the frames without consuming the builder.
+    #[must_use] 
     pub fn frames(&self) -> &[Bytes] {
         &self.frames
     }
@@ -283,7 +293,8 @@ impl Message {
     /// let msg = Message::from_frames(frames);
     /// assert_eq!(msg.len(), 2);
     /// ```
-    pub fn from_frames(frames: Vec<Bytes>) -> Self {
+    #[must_use] 
+    pub const fn from_frames(frames: Vec<Bytes>) -> Self {
         Self { frames }
     }
 }

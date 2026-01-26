@@ -13,7 +13,7 @@ pub const DEFAULT_READ_BUF_SIZE: usize = 8192;
 
 /// Default write buffer size (8KB)
 ///
-/// Used for BytesMut write buffers. Should match typical encoded message size.
+/// Used for `BytesMut` write buffers. Should match typical encoded message size.
 pub const DEFAULT_WRITE_BUF_SIZE: usize = 8192;
 
 /// Small read buffer size (4KB)
@@ -47,7 +47,7 @@ pub const STAGING_BUF_INITIAL_CAP: usize = 256;
 pub struct BufferConfig {
     /// Read buffer size (arena allocation)
     pub read_buf_size: usize,
-    /// Write buffer size (BytesMut capacity)
+    /// Write buffer size (`BytesMut` capacity)
     pub write_buf_size: usize,
 }
 

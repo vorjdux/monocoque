@@ -221,23 +221,23 @@ pub enum ProxyCommand {
 
 impl ProxyCommand {
     /// Parse command from bytes.
-    pub fn from_bytes(data: &[u8]) -> Option<Self> {
+    pub const fn from_bytes(data: &[u8]) -> Option<Self> {
         match data {
-            b"PAUSE" => Some(ProxyCommand::Pause),
-            b"RESUME" => Some(ProxyCommand::Resume),
-            b"TERMINATE" => Some(ProxyCommand::Terminate),
-            b"STATISTICS" => Some(ProxyCommand::Statistics),
+            b"PAUSE" => Some(Self::Pause),
+            b"RESUME" => Some(Self::Resume),
+            b"TERMINATE" => Some(Self::Terminate),
+            b"STATISTICS" => Some(Self::Statistics),
             _ => None,
         }
     }
 
     /// Convert command to bytes.
-    pub fn as_bytes(&self) -> &'static [u8] {
+    pub const fn as_bytes(&self) -> &'static [u8] {
         match self {
-            ProxyCommand::Pause => b"PAUSE",
-            ProxyCommand::Resume => b"RESUME",
-            ProxyCommand::Terminate => b"TERMINATE",
-            ProxyCommand::Statistics => b"STATISTICS",
+            Self::Pause => b"PAUSE",
+            Self::Resume => b"RESUME",
+            Self::Terminate => b"TERMINATE",
+            Self::Statistics => b"STATISTICS",
         }
     }
 }
@@ -364,7 +364,9 @@ where
             // Forward frontend → backend (if not paused)
             msg_result = frontend.recv_multipart().fuse() => {
                 if let Some(msg) = msg_result? {
-                    if !paused {
+                    if paused {
+                        debug!("Proxy: dropped message (paused)");
+                    } else {
                         debug!("Proxy: {} → {}: {} frames",
                                frontend.socket_desc(),
                                backend.socket_desc(),
@@ -380,8 +382,6 @@ where
                         // Forward to backend
                         backend.send_multipart(msg).await?;
                         message_count += 1;
-                    } else {
-                        debug!("Proxy: dropped message (paused)");
                     }
                 }
             }
@@ -389,7 +389,9 @@ where
             // Forward backend → frontend (if not paused)
             msg_result = backend.recv_multipart().fuse() => {
                 if let Some(msg) = msg_result? {
-                    if !paused {
+                    if paused {
+                        debug!("Proxy: dropped message (paused)");
+                    } else {
                         debug!("Proxy: {} → {}: {} frames",
                                backend.socket_desc(),
                                frontend.socket_desc(),
@@ -405,8 +407,6 @@ where
                         // Forward to frontend
                         frontend.send_multipart(msg).await?;
                         message_count += 1;
-                    } else {
-                        debug!("Proxy: dropped message (paused)");
                     }
                 }
             }
