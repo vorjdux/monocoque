@@ -10,7 +10,7 @@
 /// - Topics are prefix-matched (e.g., "trade." matches "trade.BTC", "trade.ETH")
 use bytes::Bytes;
 use monocoque::zmq::{PubSocket, SubSocket};
-use std::time::Duration;
+use std::sync::mpsc;
 use tracing::{error, info};
 
 #[compio::main]
@@ -30,28 +30,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("[Publisher] Bound to port {}", port);
 
     // Start subscriber in background FIRST (before accept)
+    let (ready_tx, ready_rx) = mpsc::channel();
     let subscriber_handle = compio::runtime::spawn(async move {
-        if let Err(e) = run_subscriber(port).await {
+        if let Err(e) = run_subscriber(port, ready_tx).await {
             error!("[Subscriber] Error: {e}");
         }
     });
-
-    // Small delay to allow subscriber to start connecting
-    std::thread::sleep(Duration::from_millis(100));
 
     // Accept subscriber connection (this will block until subscriber connects)
     pub_socket.accept_subscriber().await?;
     info!("[Publisher] Subscriber connected");
 
-    // CRITICAL: Wait for subscriber to complete its handshake AND send subscription
-    // The accept_subscriber() only completes the publisher's side of handshake.
-    // The subscriber still needs time to:
-    // 1. Complete its side of the handshake
-    // 2. Send subscription message
-    // 3. Be ready to receive messages
-    //
-    // TODO: Implement proper ready signaling (e.g., wait for subscription message)
-    std::thread::sleep(Duration::from_millis(2000));
+    // Wait until the subscriber has completed its handshake and sent its subscription.
+    ready_rx.recv()?;
 
     info!("[Publisher] Publishing events immediately...");
 
@@ -82,7 +73,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 
 
-async fn run_subscriber(port: u16) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_subscriber(
+    port: u16,
+    ready_tx: mpsc::Sender<()>,
+) -> Result<(), Box<dyn std::error::Error>> {
     info!("[Subscriber] Connecting to port {}...", port);
     let mut socket = SubSocket::connect(&format!("127.0.0.1:{}", port)).await?;
     info!("[Subscriber] Connected!");
@@ -91,6 +85,7 @@ async fn run_subscriber(port: u16) -> Result<(), Box<dyn std::error::Error>> {
     info!("[Subscriber] Subscribing to 'trade.' prefix");
     socket.subscribe(b"trade.").await?;
     info!("[Subscriber] Subscribed!");
+    ready_tx.send(())?;
 
     info!("[Subscriber] Waiting for events...\n");
 
