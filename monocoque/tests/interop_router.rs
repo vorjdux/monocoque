@@ -1,55 +1,54 @@
 use monocoque::zmq::RouterSocket;
 use bytes::Bytes;
 use std::thread;
+use std::time::Duration;
 
-// TODO: These interop tests hang due to compio runtime not exiting cleanly in test harness
 #[test]
-#[ignore = "compio runtime lifecycle issues in test harness"]
 fn test_router_explicit_routing() {
-    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<std::net::SocketAddr>();
+    let (result_tx, result_rx) = std::sync::mpsc::channel::<Result<(), String>>();
 
     thread::spawn(move || {
         compio::runtime::Runtime::new().unwrap().block_on(async {
-            let listener = compio::net::TcpListener::bind("127.0.0.1:5558").await.unwrap();
-            ready_tx.send(()).unwrap();
+            let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let local_addr = listener.local_addr().unwrap();
+            ready_tx.send(local_addr).unwrap();
 
             let (stream, _) = listener.accept().await.unwrap();
-            
-            // Create ROUTER socket
+
             let mut router = RouterSocket::from_tcp(stream).await.unwrap();
 
-            // Receive message with identity envelope
             let msg = router.recv().await.unwrap();
-            eprintln!(
-                "[Router] Received from: {:?}, body: {:?}",
-                std::str::from_utf8(&msg[0]).unwrap_or("???"),
-                std::str::from_utf8(&msg[1]).unwrap_or("???")
-            );
-            
-            // Verify identity and message
-            assert_eq!(&msg[0][..], b"CLIENT_A");
-            assert_eq!(&msg[1][..], b"Hello");
+            if msg[0] != b"CLIENT_A"[..] {
+                result_tx.send(Err(format!("Expected CLIENT_A identity, got {:?}", msg[0]))).unwrap();
+                return;
+            }
+            if msg[1] != b"Hello"[..] {
+                result_tx.send(Err(format!("Expected Hello, got {:?}", msg[1]))).unwrap();
+                return;
+            }
 
-            // Send reply to specific peer (identity + body)
             router.send(vec![
-                msg[0].clone(), // CLIENT_A identity
+                msg[0].clone(),
                 Bytes::from_static(b"World"),
             ]).await.unwrap();
-            
-            drop(router);
+
+            result_tx.send(Ok(())).unwrap();
         });
     });
 
-    ready_rx.recv().unwrap();
+    let local_addr = ready_rx.recv().unwrap();
 
     let ctx = zmq::Context::new();
     let dealer = ctx.socket(zmq::DEALER).unwrap();
     dealer.set_identity(b"CLIENT_A").unwrap();
-    dealer.connect("tcp://127.0.0.1:5558").unwrap();
+    dealer.connect(&format!("tcp://{}", local_addr)).unwrap();
 
     dealer.send("Hello", 0).unwrap();
 
+    dealer.set_rcvtimeo(5000).unwrap();
     let msg = dealer.recv_string(0).unwrap().unwrap();
     assert_eq!(msg, "World");
-}
 
+    result_rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+}

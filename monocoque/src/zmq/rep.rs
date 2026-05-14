@@ -35,7 +35,7 @@ use std::io;
 /// // Bind and accept
 /// let listener = TcpListener::bind("127.0.0.1:5555").await?;
 /// let (stream, _) = listener.accept().await?;
-/// let mut socket = RepSocket::from_stream(stream).await?;
+/// let mut socket = RepSocket::from_tcp(stream).await?;
 ///
 /// loop {
 ///     // Receive request

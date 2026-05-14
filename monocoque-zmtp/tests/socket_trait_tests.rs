@@ -1,29 +1,12 @@
 //! Integration tests for Socket trait API
 
-use monocoque_zmtp::{DealerSocket, RouterSocket, Socket};
-use monocoque_core::options::SocketOptions;
+use monocoque_zmtp::Socket;
 use bytes::Bytes;
 
 #[compio::test]
-async fn test_socket_trait_polymorphism() {
-    // Test that we can use Socket trait for polymorphic handling
-    async fn get_socket_type<S: Socket>(socket: &S) -> monocoque_zmtp::session::SocketType {
-        socket.socket_type()
-    }
-
-    let dealer = DealerSocket::new();
-    let socket_type = get_socket_type(&dealer).await;
-    assert_eq!(
-        format!("{:?}", socket_type),
-        "Dealer"
-    );
-}
-
-#[compio::test]
 async fn test_socket_trait_send_recv_signature() {
-    // Test that Socket trait methods have correct signatures
-    // This is a compile-time test - if it compiles, it works
-    
+    // Verify the Socket trait's send/recv method signatures compile correctly.
+    // This test is primarily a compile-time check.
     async fn send_message<S: Socket>(socket: &mut S, msg: Vec<Bytes>) -> std::io::Result<()> {
         socket.send(msg).await
     }
@@ -32,18 +15,48 @@ async fn test_socket_trait_send_recv_signature() {
         socket.recv().await
     }
 
-    // If this compiles, the trait works correctly
-    let mut dealer = DealerSocket::new();
-    
-    // These should compile without errors
-    let _ = send_message(&mut dealer, vec![Bytes::from("test")]);
-    let _ = recv_message(&mut dealer);
+    // Verify socket_type via trait
+    fn check_type<S: Socket>(socket: &S) -> monocoque_zmtp::session::SocketType {
+        socket.socket_type()
+    }
+
+    // Test that the trait is implemented correctly by using real connected sockets
+    let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let server_task = compio::runtime::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        monocoque_zmtp::RouterSocket::from_tcp(stream).await.unwrap()
+    });
+
+    let mut dealer = monocoque_zmtp::DealerSocket::connect(addr).await.unwrap();
+    let mut router = server_task.await;
+
+    // Verify types via trait
+    assert_eq!(check_type(&dealer), monocoque_zmtp::session::SocketType::Dealer);
+    assert_eq!(check_type(&router), monocoque_zmtp::session::SocketType::Router);
+
+    // Verify send/recv compile with the trait
+    send_message(&mut dealer, vec![Bytes::from("hello")]).await.unwrap();
+    let msg = recv_message(&mut router).await.unwrap();
+    assert!(msg.is_some());
 }
 
 #[compio::test]
 async fn test_multiple_socket_types() {
     use monocoque_zmtp::session::SocketType;
-    
-    // DealerSocket and RouterSocket require streams - test skipped
-    return;
+
+    let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let server_task = compio::runtime::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        monocoque_zmtp::RouterSocket::from_tcp(stream).await.unwrap()
+    });
+
+    let dealer = monocoque_zmtp::DealerSocket::connect(addr).await.unwrap();
+    let router = server_task.await;
+
+    assert_eq!(dealer.socket_type(), SocketType::Dealer);
+    assert_eq!(router.socket_type(), SocketType::Router);
 }
