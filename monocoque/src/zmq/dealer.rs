@@ -196,7 +196,6 @@ impl DealerSocket {
     ///     "tcp://127.0.0.1:5555",
     ///     SocketOptions::default()
     ///         .with_send_hwm(100)
-    ///         .with_identity(Some(Bytes::from("worker-1")))
     /// ).await?;
     /// # Ok(())
     /// # }
@@ -400,12 +399,12 @@ impl DealerSocket {
     ///
     /// ```rust,no_run
     /// use monocoque::zmq::{DealerSocket, SocketOptions};
-    /// use compio::io::duplex;
+    /// use compio::net::TcpStream;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let (client, _server) = duplex(8192);
+    /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
     /// let socket = DealerSocket::with_options(
-    ///     client,
+    ///     stream,
     ///     SocketOptions::default().with_send_hwm(10)
     /// ).await?;
     /// # Ok(())
@@ -506,7 +505,7 @@ where
     /// # async fn example(mut socket: DealerSocket) -> Result<(), Box<dyn std::error::Error>> {
     /// // Batch 100 messages
     /// for i in 0..100 {
-    ///     socket.send_buffered(vec![Bytes::from(format!("msg {}", i))]).await?;
+    ///     socket.send_buffered(vec![Bytes::from(format!("msg {}", i))])?;
     /// }
     /// // Single I/O operation for all 100 messages
     /// socket.flush().await?;

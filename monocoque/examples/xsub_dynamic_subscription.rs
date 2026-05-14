@@ -76,8 +76,7 @@ async fn main() -> io::Result<()> {
                     xsub.subscribe(Bytes::new()).await?;
                 } else if next_action_idx == 2 {
                     // Unsubscribe example
-                    let topic_bytes = Bytes::from_static(b"events.");
-                    xsub.unsubscribe(&topic_bytes).await?;
+                    xsub.unsubscribe(Bytes::from_static(b"events.")).await?;
                 } else {
                     // Normal subscribe
                     xsub.subscribe(Bytes::from(*topic)).await?;

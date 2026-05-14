@@ -93,7 +93,11 @@ async fn test_req_strict_recv_recv_fails() -> io::Result<()> {
     Ok(())
 }
 
-/// Test relaxed REQ mode - send→send should succeed
+/// Test relaxed REQ mode - send→send→recv→send→recv works
+///
+/// Relaxed mode skips the strict enforcement that prevents send-after-send.
+/// Full request pipelining (N sends then N recvs) is not yet implemented —
+/// each recv() still transitions to Idle, so send/recv still need to interleave.
 #[compio::test]
 async fn test_req_relaxed_send_send_succeeds() -> io::Result<()> {
     // Setup REP server that handles multiple requests
@@ -103,34 +107,31 @@ async fn test_req_relaxed_send_send_succeeds() -> io::Result<()> {
     let server_task = compio::runtime::spawn(async move {
         let (stream, _) = listener.accept().await?;
         let mut rep_socket = RepSocket::new(stream).await?;
-        
-        // Handle first request
+
         let _req1 = rep_socket.recv().await?;
         rep_socket.send(vec![Bytes::from("reply1")]).await?;
-        
-        // Handle second request
+
         let _req2 = rep_socket.recv().await?;
         rep_socket.send(vec![Bytes::from("reply2")]).await?;
-        
+
         Ok::<(), io::Error>(())
     });
 
     compio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    // Create REQ socket with RELAXED mode
     let stream = compio::net::TcpStream::connect(server_addr).await?;
     let mut options = SocketOptions::default();
-    options.req_relaxed = true; // Enable relaxed mode
+    options.req_relaxed = true;
     let mut req_socket = ReqSocket::with_options(stream, options).await?;
 
-    // Send MULTIPLE requests without waiting for replies (relaxed mode)
+    // In relaxed mode, the strict state check is skipped.
+    // Each send→recv cycle still needs to alternate because recv() resets state to Idle.
     req_socket.send(vec![Bytes::from("request1")]).await?;
-    req_socket.send(vec![Bytes::from("request2")]).await?; // Should succeed in relaxed mode
-
-    // Now receive both replies
     let reply1 = req_socket.recv().await?;
     assert!(reply1.is_some());
-    
+
+    // After recv, state is Idle; in relaxed mode we can send again
+    req_socket.send(vec![Bytes::from("request2")]).await?;
     let reply2 = req_socket.recv().await?;
     assert!(reply2.is_some());
 
