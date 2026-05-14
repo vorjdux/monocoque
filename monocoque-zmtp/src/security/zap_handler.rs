@@ -269,7 +269,8 @@ pub fn start_default_zap_server<H: PlainAuthHandler + 'static>(
 mod tests {
     use super::*;
     use crate::security::plain::StaticPlainHandler;
-    use std::collections::HashMap;
+    use crate::security::ZapStatus;
+    use bytes::Bytes;
 
     #[test]
     fn test_default_zap_handler_null() {

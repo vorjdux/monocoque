@@ -732,13 +732,15 @@ pub fn create_curve_zap_request(
 ///
 /// Performs CURVE handshake and authenticates the client via ZAP protocol.
 /// After receiving the client's public key during INITIATE, sends a ZAP request
-/// to verify the client is authorized.
+/// to verify the client is authorized. On failure, sends a ZMTP ERROR command
+/// to the client before closing the connection.
 ///
 /// # Arguments
 /// * `stream` - Network stream for the connection
-/// * `server_keypair` - Server's long-term CURVE key pair  
+/// * `server_keypair` - Server's long-term CURVE key pair
 /// * `domain` - ZAP authentication domain
 /// * `timeout` - Optional timeout for ZAP request
+/// * `peer_addr` - Remote peer address for ZAP logging (pass peer socket's addr string)
 ///
 /// # Returns
 /// * `Ok(CurvePublicKey)` - Authenticated client's public key
@@ -750,13 +752,15 @@ pub fn create_curve_zap_request(
 /// use monocoque_zmtp::security::curve::{curve_server_handshake_zap, CurveKeyPair};
 /// use std::time::Duration;
 ///
-/// async fn accept_curve_client(mut stream: TcpStream) -> Result<(), Box<dyn std::error::Error>> {
+/// async fn accept_curve_client(mut stream: compio::net::TcpStream) -> Result<(), Box<dyn std::error::Error>> {
+///     let peer = stream.peer_addr()?.to_string();
 ///     let server_keypair = CurveKeyPair::generate();
 ///     let client_key = curve_server_handshake_zap(
 ///         &mut stream,
 ///         server_keypair,
 ///         "production".to_string(),
 ///         Some(Duration::from_secs(5)),
+///         &peer,
 ///     ).await?;
 ///     println!("Authenticated client: {:?}", client_key);
 ///     Ok(())
@@ -767,6 +771,7 @@ pub async fn curve_server_handshake_zap<S>(
     server_keypair: CurveKeyPair,
     domain: String,
     timeout: Option<Duration>,
+    peer_addr: &str,
 ) -> Result<CurvePublicKey, ZmtpError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -789,10 +794,8 @@ where
             ZmtpError::AuthenticationFailed
         })?;
 
-    // Send ZAP authentication request
-    let peer_addr = "unknown".to_string(); // TODO: Get actual peer address
     let zap_response = zap_client
-        .authenticate_curve(client_public_key.as_bytes(), &domain, &peer_addr)
+        .authenticate_curve(client_public_key.as_bytes(), &domain, peer_addr)
         .await
         .map_err(|e| {
             warn!("[CURVE SERVER ZAP] ZAP request failed: {}", e);
@@ -805,13 +808,46 @@ where
         Ok(client_public_key)
     } else {
         warn!(
-            "[CURVE SERVER ZAP] Authentication failed: {} (status: {:?})",
-            zap_response.status_text, zap_response.status_code
+            "[CURVE SERVER ZAP] Authentication failed for {}: {} (status: {:?})",
+            peer_addr, zap_response.status_text, zap_response.status_code
         );
 
-        // TODO: Send ERROR command to client
+        // Send ZMTP ERROR command to the client so it knows why we're closing
+        send_zmtp_error(stream, &zap_response.status_text).await;
+
         Err(ZmtpError::AuthenticationFailed)
     }
+}
+
+/// Send a ZMTP ERROR command frame to the peer.
+///
+/// Best-effort: errors are silently ignored since we're already rejecting the connection.
+async fn send_zmtp_error<S>(stream: &mut S, reason: &str)
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    use bytes::BytesMut;
+    use compio::buf::BufResult;
+    use compio::io::AsyncWrite;
+    use monocoque_core::alloc::IoBytes;
+
+    // ZMTP ERROR command body: [5]"ERROR" [reason_len][reason...]
+    // Command name is "ERROR" (5 bytes), prefixed with its 1-byte length
+    let reason_bytes = reason.as_bytes();
+    let reason_len = reason_bytes.len().min(255) as u8;
+
+    let mut body = BytesMut::with_capacity(7 + reason_len as usize);
+    body.extend_from_slice(b"\x05ERROR"); // command name with length prefix
+    body.extend_from_slice(&[reason_len]);
+    body.extend_from_slice(&reason_bytes[..reason_len as usize]);
+
+    // Frame: flags=0x04 (COMMAND), body_len, body
+    let body_len = body.len();
+    let mut frame = BytesMut::with_capacity(2 + body_len);
+    frame.extend_from_slice(&[0x04, body_len as u8]);
+    frame.extend_from_slice(&body);
+
+    let BufResult(_, _) = AsyncWrite::write(stream, IoBytes::new(frame.freeze())).await;
 }
 
 #[cfg(test)]

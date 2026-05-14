@@ -158,9 +158,18 @@ impl XPubSocket {
                 self.next_id += 1;
 
                 // Send welcome message if configured
-                if let Some(ref _welcome_msg) = self.options.xpub_welcome_msg {
-                    // TODO: Send welcome message
-                    trace!("[XPUB] Would send welcome message to subscriber {}", id);
+                if let Some(ref welcome_msg) = self.options.xpub_welcome_msg {
+                    use bytes::BytesMut;
+                    use compio::buf::BufResult;
+                    use compio::io::AsyncWriteExt;
+
+                    let mut buf = BytesMut::new();
+                    crate::codec::encode_multipart(&[welcome_msg.clone()], &mut buf);
+                    let data = buf.freeze().to_vec();
+                    let BufResult(result, _) = stream.write_all(data).await;
+                    if let Err(e) = result {
+                        trace!("[XPUB] Failed to send welcome message to subscriber {}: {}", id, e);
+                    }
                 }
 
                 self.subscribers.insert(
@@ -221,24 +230,19 @@ impl XPubSocket {
 
         // Poll all subscribers for subscription messages
         // Subscription messages are 1 byte (0x00 or 0x01) + topic prefix
-        println!("[XPUB recv_subscription] Polling {} subscribers", self.subscribers.len());
+        trace!("[XPUB] Polling {} subscribers for subscription events", self.subscribers.len());
         for sub in self.subscribers.values_mut() {
-            // Try non-blocking read of subscription message with timeout
             let buf = vec![0u8; 256];
-            println!("[XPUB recv_subscription] Reading from subscriber {} with timeout", sub.id);
-            
+
             // Use a short timeout to avoid blocking
             let read_result = timeout(Duration::from_millis(1), sub.stream.read(buf)).await;
-            
+
             match read_result {
                 Ok(BufResult(Ok(n), buf)) if n > 0 => {
-                    println!("[XPUB recv_subscription] Received {} bytes: {:?}", n, &buf[..n]);
-                    // Parse subscription event
+                    trace!("[XPUB] Received {} bytes from subscriber {}", n, sub.id);
                     if let Some(event) = SubscriptionEvent::from_message(&buf[..n]) {
-                        trace!("[XPUB] Received subscription event: {:?}", event);
-                        println!("[XPUB recv_subscription] Parsed event: {:?}", event);
-                        
-                        // Update subscriber's subscriptions
+                        trace!("[XPUB] Subscription event from subscriber {}: {:?}", sub.id, event);
+
                         match &event {
                             SubscriptionEvent::Subscribe(prefix) => {
                                 sub.subscriptions.subscribe(prefix.clone());
@@ -247,34 +251,24 @@ impl XPubSocket {
                                 sub.subscriptions.unsubscribe(prefix);
                             }
                         }
-                        
-                        // Return event if in verbose mode
+
                         if self.options.xpub_verbose {
-                            println!("[XPUB recv_subscription] Returning event (verbose=true)");
                             return Ok(Some(event));
                         }
-                        println!("[XPUB recv_subscription] NOT returning event (verbose=false)");
-                    } else {
-                        println!("[XPUB recv_subscription] Failed to parse subscription event");
                     }
                 }
-                Ok(BufResult(Ok(_), _)) => {
-                    println!("[XPUB recv_subscription] No data available (n=0)");
-                }
+                Ok(BufResult(Ok(_), _)) => {}
                 Ok(BufResult(Err(e), _)) => {
-                    println!("[XPUB recv_subscription] Read error: {}", e);
                     if e.kind() != std::io::ErrorKind::WouldBlock {
-                        debug!("[XPUB] Error reading from subscriber: {}", e);
+                        debug!("[XPUB] Error reading from subscriber {}: {}", sub.id, e);
                     }
                 }
                 Err(_) => {
-                    // Timeout - no data available
-                    println!("[XPUB recv_subscription] Read timeout (no data)");
+                    // Timeout — no data available from this subscriber
                 }
             }
         }
-        
-        println!("[XPUB recv_subscription] No subscription event found");
+
         Ok(None)
     }
 
@@ -297,22 +291,32 @@ impl XPubSocket {
     /// # }
     /// ```
     pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
+        use bytes::BytesMut;
+        use compio::buf::BufResult;
+        use compio::io::AsyncWriteExt;
+
         trace!("[XPUB] Broadcasting message with {} frames", msg.len());
 
-        let dead_subs = Vec::new();
+        let mut dead_subs = Vec::new();
 
         for sub in self.subscribers.values_mut() {
-            // Skip non-matching subscribers
             if !sub.matches(&msg) {
                 continue;
             }
 
-            // TODO: Actually send the message to the subscriber
-            // For now, just track that we would send it
-            trace!("[XPUB] Would send to subscriber {}", sub.id);
+            let mut buf = BytesMut::new();
+            crate::codec::encode_multipart(&msg, &mut buf);
+            let data = buf.freeze().to_vec();
+
+            let BufResult(result, _) = sub.stream.write_all(data).await;
+            if let Err(e) = result {
+                debug!("[XPUB] Failed to send to subscriber {}: {}", sub.id, e);
+                dead_subs.push(sub.id);
+            } else {
+                trace!("[XPUB] Sent to subscriber {}", sub.id);
+            }
         }
 
-        // Remove dead subscribers
         for id in dead_subs {
             self.subscribers.remove(&id);
             debug!("[XPUB] Removed dead subscriber {}", id);

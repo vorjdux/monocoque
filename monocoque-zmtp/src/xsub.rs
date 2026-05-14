@@ -26,6 +26,7 @@ use compio::net::TcpStream;
 use monocoque_core::endpoint::Endpoint;
 use monocoque_core::options::SocketOptions;
 use monocoque_core::subscription::{SubscriptionEvent, SubscriptionTrie};
+use smallvec::SmallVec;
 use std::io;
 use tracing::{debug, trace};
 
@@ -230,9 +231,29 @@ where
     /// # }
     /// ```
     pub async fn recv(&mut self) -> io::Result<Option<Vec<Bytes>>> {
-        // TODO: Implement actual message reception
-        // For now, return None
-        Ok(None)
+        let mut frames: SmallVec<[Bytes; 4]> = SmallVec::new();
+
+        loop {
+            loop {
+                match self.base.decoder.decode(&mut self.base.recv)? {
+                    Some(frame) => {
+                        let more = frame.more();
+                        frames.push(frame.payload);
+                        if !more {
+                            trace!("[XSUB] Received {} frames", frames.len());
+                            return Ok(Some(frames.into_vec()));
+                        }
+                    }
+                    None => break,
+                }
+            }
+
+            let n = self.base.read_raw().await?;
+            if n == 0 {
+                trace!("[XSUB] Connection closed");
+                return Ok(None);
+            }
+        }
     }
 
     /// Get the number of active subscriptions.
