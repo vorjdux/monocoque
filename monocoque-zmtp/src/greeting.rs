@@ -7,26 +7,8 @@ pub const GREETING_SIZE: usize = 64;
 const SIGNATURE_HEAD: u8 = 0xFF;
 const SIGNATURE_TAIL: u8 = 0x7F;
 
-/// Supported security mechanisms
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Mechanism {
-    Null,
-    Plain,
-    Curve,
-    Unknown(String),
-}
-
-/// Parsed greeting information
-#[derive(Debug, Clone)]
-pub struct ZmtpGreeting {
-    #[allow(dead_code)] // Used in future auth implementations
-    pub mechanism: Mechanism,
-    #[allow(dead_code)] // Used in future auth implementations
-    pub as_server: bool,
-}
-
 impl ZmtpGreeting {
-    /// Parse a 64-byte ZMTP greeting
+    /// Validate a 64-byte ZMTP greeting.
     ///
     /// Layout (ZMTP 3.x):
     /// ```text
@@ -64,26 +46,10 @@ impl ZmtpGreeting {
             return Err(ZmtpError::Protocol);
         }
 
-        // Mechanism (bytes 12..32)
-        let mech_raw = &src[12..32];
-        let mech_str = match std::str::from_utf8(mech_raw) {
-            Ok(s) => s.trim_matches(char::from(0)),
-            Err(_) => return Err(ZmtpError::Protocol),
-        };
-
-        let mechanism = match mech_str {
-            "NULL" => Mechanism::Null,
-            "PLAIN" => Mechanism::Plain,
-            "CURVE" => Mechanism::Curve,
-            other => Mechanism::Unknown(other.to_string()),
-        };
-
-        // As-Server flag (bit 0)
-        let as_server = (src[32] & 0x01) != 0;
-
-        Ok(Self {
-            mechanism,
-            as_server,
-        })
+        Ok(Self {})
     }
 }
+
+/// Parsed greeting information (validation result).
+#[derive(Debug, Clone)]
+pub struct ZmtpGreeting {}

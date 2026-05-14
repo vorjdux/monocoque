@@ -2,7 +2,7 @@
 
 use bytes::Bytes;
 use compio::net::TcpListener;
-use monocoque_core::monitor::{create_monitor, SocketEvent, SocketEventSender, SocketMonitor};
+use monocoque_core::monitor::{create_monitor, SocketEventSender, SocketMonitor};
 use monocoque_zmtp::publisher::PubSocket as InternalPub;
 use monocoque_zmtp::SocketType;
 use std::io;
@@ -108,11 +108,4 @@ impl PubSocket {
         receiver
     }
 
-    /// Helper to emit monitoring events (if monitoring is enabled).
-    #[allow(dead_code)]
-    fn emit_event(&self, event: SocketEvent) {
-        if let Some(monitor) = &self.monitor {
-            let _ = monitor.send(event);
-        }
-    }
 }

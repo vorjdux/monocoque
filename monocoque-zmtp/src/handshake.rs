@@ -36,26 +36,6 @@ pub struct HandshakeResult {
     pub peer_socket_type: SocketType,
 }
 
-/// Performs the complete ZMTP handshake synchronously on the stream.
-///
-/// This function blocks until:
-/// 1. Greeting exchange is complete
-/// 2. READY command exchange is complete
-///
-/// Only after this completes should the stream be handed to `SocketActor`.
-// Convenience wrapper without timeout - kept for API completeness
-#[allow(dead_code)]
-pub async fn perform_handshake<S>(
-    stream: &mut S,
-    local_socket_type: SocketType,
-    identity: Option<&[u8]>,
-) -> Result<HandshakeResult, ZmtpError>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
-    perform_handshake_with_timeout(stream, local_socket_type, identity, None).await
-}
-
 /// Performs the complete ZMTP handshake with a configurable timeout.
 ///
 /// # Arguments

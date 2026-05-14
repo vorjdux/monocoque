@@ -3,7 +3,7 @@
 use super::common::channel_to_io_error;
 use bytes::Bytes;
 use compio::net::{TcpListener, TcpStream};
-use monocoque_core::monitor::{create_monitor, SocketEvent, SocketEventSender, SocketMonitor};
+use monocoque_core::monitor::{create_monitor, SocketEventSender, SocketMonitor};
 use monocoque_zmtp::router::RouterSocket as InternalRouter;
 use monocoque_zmtp::SocketType;
 use std::io;
@@ -207,14 +207,6 @@ where
         let (sender, receiver) = create_monitor();
         self.monitor = Some(sender);
         receiver
-    }
-
-    /// Helper to emit monitoring events (if monitoring is enabled).
-    #[allow(dead_code)]
-    fn emit_event(&self, event: SocketEvent) {
-        if let Some(monitor) = &self.monitor {
-            let _ = monitor.send(event); // Ignore errors if receiver dropped
-        }
     }
 
     /// Send a multipart message.
