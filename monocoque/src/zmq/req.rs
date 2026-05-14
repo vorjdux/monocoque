@@ -228,7 +228,6 @@ where
     }
 
     /// Helper to emit monitoring events (if monitoring is enabled).
-    #[allow(dead_code)]
     fn emit_event(&self, event: SocketEvent) {
         if let Some(monitor) = &self.monitor {
             let _ = monitor.send(event);

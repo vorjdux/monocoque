@@ -63,9 +63,6 @@ const CURVE_WELCOME: &[u8] = b"\x07WELCOME";
 const CURVE_INITIATE: &[u8] = b"\x08INITIATE";
 const CURVE_READY: &[u8] = b"\x05READY";
 const CURVE_MESSAGE: &[u8] = b"\x07MESSAGE";
-// CURVE ERROR command - reserved for protocol error reporting
-#[allow(dead_code)]
-const CURVE_ERROR: &[u8] = b"\x05ERROR";
 
 /// CURVE key sizes
 pub const CURVE_KEY_SIZE: usize = 32;
@@ -218,18 +215,18 @@ pub enum CurveError {
 pub struct CurveClient {
     /// Client's long-term key pair
     client_keypair: CurveKeyPair,
-    /// Server's long-term public key (used in handshake verification)
-    #[allow(dead_code)]
-    server_public: CurvePublicKey,
+    /// Server's long-term public key — needed to verify the WELCOME message signature
+    /// when full CurveZMQ server authentication is implemented.
+    _server_public: CurvePublicKey,
     /// Client's short-term (ephemeral) key pair
     client_short_keypair: CurveKeyPair,
     /// Server's short-term public key (received in WELCOME)
     server_short_public: Option<CurvePublicKey>,
     /// Send nonce counter
     send_nonce: u64,
-    /// Receive nonce counter (for message authentication)
-    #[allow(dead_code)]
-    recv_nonce: u64,
+    /// Receive nonce counter — needed for replay-attack detection when message
+    /// authentication is fully implemented.
+    _recv_nonce: u64,
     /// Encryption box for messages (after READY)
     message_box: Option<CurveBox>,
 }
@@ -239,11 +236,11 @@ impl CurveClient {
     pub fn new(client_keypair: CurveKeyPair, server_public: CurvePublicKey) -> Self {
         Self {
             client_keypair,
-            server_public,
+            _server_public: server_public,
             client_short_keypair: CurveKeyPair::generate(),
             server_short_public: None,
             send_nonce: 0,
-            recv_nonce: 0,
+            _recv_nonce: 0,
             message_box: None,
         }
     }
@@ -460,9 +457,9 @@ impl CurveClient {
 
 /// CURVE server state machine
 pub struct CurveServer {
-    /// Server's long-term key pair (for signing responses)
-    #[allow(dead_code)]
-    server_keypair: CurveKeyPair,
+    /// Server's long-term key pair — needed to sign the WELCOME message nonce
+    /// when full CurveZMQ server authentication is implemented.
+    _server_keypair: CurveKeyPair,
     /// Server's short-term (ephemeral) key pair
     server_short_keypair: CurveKeyPair,
     /// Client's short-term public key (received in HELLO)
@@ -471,9 +468,9 @@ pub struct CurveServer {
     client_public: Option<CurvePublicKey>,
     /// Send nonce counter
     send_nonce: u64,
-    /// Receive nonce counter (for message authentication)
-    #[allow(dead_code)]
-    recv_nonce: u64,
+    /// Receive nonce counter — needed for replay-attack detection when message
+    /// authentication is fully implemented.
+    _recv_nonce: u64,
     /// Encryption box for messages (after READY)
     message_box: Option<CurveBox>,
 }
@@ -482,12 +479,12 @@ impl CurveServer {
     /// Create new CURVE server
     pub fn new(server_keypair: CurveKeyPair) -> Self {
         Self {
-            server_keypair,
+            _server_keypair: server_keypair,
             server_short_keypair: CurveKeyPair::generate(),
             client_short_public: None,
             client_public: None,
             send_nonce: 0,
-            recv_nonce: 0,
+            _recv_nonce: 0,
             message_box: None,
         }
     }
