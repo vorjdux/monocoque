@@ -383,7 +383,7 @@ impl RouterSocket<TcpStream> {
     /// # use monocoque_zmtp::router::RouterSocket;
     /// # use compio::net::TcpStream;
     /// # async fn example() -> std::io::Result<()> {
-    /// let stream = TcpStream::connect(\"127.0.0.1:5555\").await?;
+    /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
     /// let socket = RouterSocket::from_tcp(stream).await?;
     /// # Ok(())
     /// # }
@@ -402,7 +402,7 @@ impl RouterSocket<TcpStream> {
     /// # use monocoque_core::options::SocketOptions;
     /// # use compio::net::TcpStream;
     /// # async fn example() -> std::io::Result<()> {
-    /// let stream = TcpStream::connect(\"127.0.0.1:5555\").await?;
+    /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
     /// let mut opts = SocketOptions::large();
     /// opts.tcp_keepalive = Some(true);
     /// let socket = RouterSocket::from_tcp_with_options(stream, opts).await?;

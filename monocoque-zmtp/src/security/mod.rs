@@ -5,7 +5,9 @@
 pub mod zap;
 pub mod plain;
 pub mod curve;
+/// ZAP handler infrastructure and server implementation.
 pub mod zap_handler;
+/// ZAP client for sending authentication requests.
 pub mod zap_client;
 
 pub use zap::{ZapMechanism, ZapRequest, ZapResponse, ZapStatus, ZAP_ENDPOINT, ZAP_VERSION};

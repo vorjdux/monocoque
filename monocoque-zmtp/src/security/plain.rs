@@ -50,11 +50,14 @@ const PLAIN_ERROR: &[u8] = b"\x05ERROR";
 /// PLAIN client credentials
 #[derive(Debug, Clone)]
 pub struct PlainCredentials {
+    /// Plaintext username.
     pub username: String,
+    /// Plaintext password.
     pub password: String,
 }
 
 impl PlainCredentials {
+    /// Create new credentials from the given username and password.
     pub fn new(username: impl Into<String>, password: impl Into<String>) -> Self {
         Self {
             username: username.into(),
@@ -99,12 +102,14 @@ pub struct StaticPlainHandler {
 }
 
 impl StaticPlainHandler {
+    /// Create a new handler with an empty credential map.
     pub fn new() -> Self {
         Self {
             credentials: std::collections::HashMap::new(),
         }
     }
 
+    /// Register a username/password pair in the credential map.
     pub fn add_user(&mut self, username: impl Into<String>, password: impl Into<String>) {
         self.credentials.insert(username.into(), password.into());
     }

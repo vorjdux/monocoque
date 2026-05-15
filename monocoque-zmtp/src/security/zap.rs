@@ -1,6 +1,6 @@
 //! ZeroMQ Authentication Protocol (ZAP) implementation
 //!
-//! ZAP is defined in RFC 27: https://rfc.zeromq.org/spec/27/
+//! ZAP is defined in RFC 27: <https://rfc.zeromq.org/spec/27/>
 //!
 //! ## Protocol Overview
 //!
@@ -40,12 +40,16 @@ pub const ZAP_ENDPOINT: &str = "inproc://zeromq.zap.01";
 /// Authentication mechanism
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ZapMechanism {
+    /// No authentication (NULL mechanism).
     Null,
+    /// Username/password authentication (PLAIN mechanism).
     Plain,
+    /// Public-key authentication (CURVE mechanism).
     Curve,
 }
 
 impl ZapMechanism {
+    /// Return the wire-format mechanism name string.
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Null => "NULL",
@@ -54,6 +58,7 @@ impl ZapMechanism {
         }
     }
 
+    /// Parse a mechanism from its wire-format name string.
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "NULL" => Some(Self::Null),
@@ -78,6 +83,7 @@ pub enum ZapStatus {
 }
 
 impl ZapStatus {
+    /// Return the numeric status code as a string.
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Success => "200",
@@ -87,6 +93,7 @@ impl ZapStatus {
         }
     }
 
+    /// Parse a `ZapStatus` from its numeric string representation.
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "200" => Some(Self::Success),

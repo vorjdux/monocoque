@@ -90,6 +90,7 @@ mod utils;
 
 // Public protocol types
 pub mod adapters;
+/// Sans-IO ZMTP session and related types.
 pub mod session;
 pub mod socket_trait;
 pub mod stream_sink;
@@ -101,6 +102,7 @@ pub mod security;
 pub mod dealer;
 pub mod pair;
 pub mod proxy;
+/// PUB socket implementation.
 pub mod publisher;
 pub mod pull;
 pub mod push;
