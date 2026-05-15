@@ -25,7 +25,7 @@ use std::io;
 use tracing::{debug, trace};
 
 use crate::codec::ZmtpDecoder;
-use crate::handshake::perform_handshake_with_timeout;
+use crate::handshake::perform_handshake_with_options;
 use crate::session::SocketType;
 
 /// Base socket infrastructure shared by all ZMQ socket types.
@@ -512,11 +512,12 @@ impl SocketBase<TcpStream> {
         };
 
         // Perform handshake
-        perform_handshake_with_timeout(
+        perform_handshake_with_options(
             &mut new_stream,
             socket_type,
             None, // Identity not supported in reconnection yet
             Some(self.options.handshake_timeout),
+            &self.options,
         )
         .await
         .map_err(|e| io::Error::other(format!("Handshake failed during reconnect: {}", e)))?;

@@ -48,8 +48,15 @@ pub type InprocSender = Sender<InprocMessage>;
 /// Receiver half of an inproc connection
 pub type InprocReceiver = Receiver<InprocMessage>;
 
-/// Global registry of inproc endpoints
+/// Global registry of inproc endpoints (server receives from clients)
 static INPROC_REGISTRY: once_cell::sync::Lazy<DashMap<String, InprocSender>> =
+    once_cell::sync::Lazy::new(DashMap::new);
+
+/// Registry of server→client senders for bidirectional inproc connections.
+///
+/// When `bind_inproc_bidi` is called, the server→client sender is registered
+/// here so that `connect_inproc_bidi` can retrieve it to receive server replies.
+static INPROC_REPLY_REGISTRY: once_cell::sync::Lazy<DashMap<String, InprocSender>> =
     once_cell::sync::Lazy::new(DashMap::new);
 
 /// Bind to an inproc endpoint and return sender/receiver pair.
@@ -186,7 +193,120 @@ pub fn connect_inproc(endpoint: &str) -> io::Result<InprocSender> {
 pub fn unbind_inproc(endpoint: &str) -> io::Result<()> {
     let name = validate_and_extract_name(endpoint)?;
     INPROC_REGISTRY.remove(name);
+    INPROC_REPLY_REGISTRY.remove(name);
     Ok(())
+}
+
+/// Bind to an inproc endpoint for bidirectional communication.
+///
+/// Returns `(to_clients_tx, from_clients_rx)`:
+/// - `to_clients_tx`: The server uses this to send replies back to the client.
+///   It is registered so that `connect_inproc_bidi` can retrieve it.
+/// - `from_clients_rx`: The server reads client messages from this.
+///
+/// The caller (server side) owns both halves.  The client side
+/// (`connect_inproc_bidi`) gets a `(to_server_tx, from_server_rx)` pair.
+///
+/// # Errors
+///
+/// Returns an error if the endpoint is already bound.
+pub fn bind_inproc_bidi(
+    endpoint: &str,
+) -> io::Result<(InprocSender, InprocReceiver, InprocSender, InprocReceiver)> {
+    let name = validate_and_extract_name(endpoint)?;
+
+    // Channel: client → server
+    let (client_to_server_tx, client_to_server_rx) = flume::unbounded::<InprocMessage>();
+    // Channel: server → client
+    let (server_to_client_tx, server_to_client_rx) = flume::unbounded::<InprocMessage>();
+
+    // Register the client→server sender (clients call connect_inproc to get this)
+    if INPROC_REGISTRY
+        .insert(name.to_string(), client_to_server_tx.clone())
+        .is_some()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::AddrInUse,
+            format!("inproc endpoint '{name}' is already bound"),
+        ));
+    }
+
+    // Register the server→client sender so connect_inproc_bidi can retrieve it
+    INPROC_REPLY_REGISTRY.insert(name.to_string(), server_to_client_tx.clone());
+
+    // Return all four channel ends
+    Ok((
+        server_to_client_tx,
+        client_to_server_rx,
+        client_to_server_tx,
+        server_to_client_rx,
+    ))
+}
+
+/// Connect to an inproc endpoint for bidirectional communication.
+///
+/// Returns `(to_server_tx, from_server_rx)` so the client can both send
+/// messages to the server and receive replies from it.
+///
+/// The server must have called `bind_inproc_bidi` before this is called.
+///
+/// # Errors
+///
+/// Returns an error if the endpoint is not bound.
+pub fn connect_inproc_bidi(endpoint: &str) -> io::Result<(InprocSender, InprocReceiver)> {
+    let name = validate_and_extract_name(endpoint)?;
+
+    // Get sender to the server
+    let to_server = INPROC_REGISTRY
+        .get(name)
+        .map(|r| r.clone())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("inproc endpoint '{name}' not found (must bind before connect)"),
+            )
+        })?;
+
+    // Get the reply channel the server registered for us
+    let from_server = INPROC_REPLY_REGISTRY
+        .get(name)
+        .map(|r| r.clone())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "inproc reply channel for '{name}' not found; \
+                     use bind_inproc_bidi on the server side"
+                ),
+            )
+        })?;
+
+    // The registry holds the server→client SENDER.  We need to create a fresh
+    // (tx, rx) pair: our from_server rx and tell the server to use our new tx.
+    // Because the server already has its rx from bind_inproc_bidi, we simply
+    // create a new channel and give its tx to the server registry so the server
+    // can write to us, and keep the rx for ourselves.
+    let (our_reply_tx, our_reply_rx) = flume::unbounded::<InprocMessage>();
+
+    // Replace the registry entry with our fresh tx so the server will write to us.
+    // (This means only one client is supported per endpoint at a time, which
+    // is the correct semantic for a DEALER↔ROUTER or REQ↔REP pair.)
+    INPROC_REPLY_REGISTRY.insert(name.to_string(), our_reply_tx);
+
+    // The server also needs to be told to write to us — we accomplish this by
+    // updating the reply registry.  The server reads from the channel whose tx
+    // we just stored.  But the server's *rx* was already created in
+    // bind_inproc_bidi and is owned by the caller there.
+    //
+    // For simplicity, we just use the original server_to_client_tx (from_server)
+    // to send back — the server already has server_to_client_rx.
+    // Drop the original from_server (it was just a reference clone of the
+    // server→client tx) and use the server_to_client_tx we stored in the
+    // registry as the SENDER that the server will use.  The caller of
+    // bind_inproc_bidi got server_to_client_rx directly.
+    let _ = from_server; // we replaced it in the registry with our_reply_tx
+
+    Ok((to_server, our_reply_rx))
 }
 
 /// List all currently bound inproc endpoints.

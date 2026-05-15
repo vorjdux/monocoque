@@ -20,7 +20,7 @@ use tracing::{debug, trace};
 use crate::{
     base::SocketBase,
     codec::encode_multipart,
-    handshake::perform_handshake_with_timeout,
+    handshake::perform_handshake_with_options,
     session::SocketType,
 };
 use monocoque_core::endpoint::Endpoint;
@@ -102,11 +102,12 @@ where
 
         // Perform ZMTP handshake with timeout
         debug!("[DEALER] Performing ZMTP handshake...");
-        let handshake_result = perform_handshake_with_timeout(
+        let handshake_result = perform_handshake_with_options(
             &mut stream,
             SocketType::Dealer,
             None,
             Some(options.handshake_timeout),
+            &options,
         )
         .await
         .map_err(|e| io::Error::other(format!("Handshake failed: {}", e)))?;
@@ -587,11 +588,12 @@ impl DealerSocket<TcpStream> {
         crate::utils::configure_tcp_stream(&stream, &options, "DEALER")?;
 
         let mut stream = stream;
-        let handshake_result = perform_handshake_with_timeout(
+        let handshake_result = perform_handshake_with_options(
             &mut stream,
             SocketType::Dealer,
             None,
             Some(options.handshake_timeout),
+            &options,
         )
         .await
         .map_err(|e| io::Error::other(format!("Handshake failed: {}", e)))?;

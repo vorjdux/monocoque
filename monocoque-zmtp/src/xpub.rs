@@ -31,7 +31,7 @@ use std::fmt;
 use std::io;
 use tracing::{debug, trace};
 
-use crate::handshake::perform_handshake_with_timeout;
+use crate::handshake::perform_handshake_with_options;
 use crate::session::SocketType;
 use crate::xsub::XSubSocket;
 
@@ -147,11 +147,12 @@ impl XPubSocket {
                 debug!("[XPUB] New subscriber from {}", addr);
 
                 // Perform ZMTP handshake
-                let handshake_result = perform_handshake_with_timeout(
+                let handshake_result = perform_handshake_with_options(
                     &mut stream,
                     SocketType::Xpub,
                     None,
                     Some(self.options.handshake_timeout),
+                    &self.options,
                 )
                 .await?;
 

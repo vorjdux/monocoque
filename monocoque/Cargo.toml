@@ -277,6 +277,10 @@ required-features = ["zmq"]
 name = "interop_router"
 required-features = ["zmq"]
 
+[[test]]
+name = "interop_push_pull"
+required-features = ["zmq"]
+
 [dependencies]
 # Internal implementation crates (not exposed)
 monocoque-core = { version = "0.1.0", path = "../monocoque-core" }

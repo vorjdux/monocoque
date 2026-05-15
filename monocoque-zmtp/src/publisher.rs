@@ -41,7 +41,7 @@ use compio::net::{OwnedReadHalf, OwnedWriteHalf, TcpListener, TcpStream};
 use flume::{Receiver, Sender};
 use monocoque_core::subscription::SubscriptionEvent;
 
-use crate::handshake::perform_handshake_with_timeout;
+use crate::handshake::perform_handshake_with_options;
 use crate::session::SocketType;
 use monocoque_core::options::SocketOptions;
 use monocoque_core::poison::PoisonGuard;
@@ -362,11 +362,12 @@ impl PubSocket {
         debug!("[PUB] Accepted connection from {}", addr);
 
         let mut stream = stream;
-        let handshake_result = perform_handshake_with_timeout(
+        let handshake_result = perform_handshake_with_options(
             &mut stream,
             SocketType::Pub,
             None,
             Some(self.options.handshake_timeout),
+            &self.options,
         )
         .await
         .map_err(|e| io::Error::other(format!("Handshake failed: {}", e)))?;
