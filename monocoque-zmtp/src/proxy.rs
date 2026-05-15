@@ -215,7 +215,7 @@ pub enum ProxyCommand {
     Resume,
     /// Terminate the proxy loop
     Terminate,
-    /// Report statistics (future extension)
+    /// Report statistics — replies with `"messages_forwarded=N"` on the control socket.
     Statistics,
 }
 
@@ -353,7 +353,8 @@ where
                                 }
                                 ProxyCommand::Statistics => {
                                     debug!("Proxy statistics: {} messages forwarded", message_count);
-                                    // Future: send stats back to control socket
+                                    let stats = format!("messages_forwarded={}", message_count);
+                                    let _ = control.send_multipart(vec![bytes::Bytes::from(stats)]).await;
                                 }
                             }
                         }

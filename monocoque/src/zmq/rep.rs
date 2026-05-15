@@ -2,8 +2,9 @@
 
 use super::common::channel_to_io_error;
 use bytes::Bytes;
-use compio::net::TcpStream;
+use compio::net::{TcpListener, TcpStream};
 use monocoque_core::monitor::{create_monitor, SocketEventSender, SocketMonitor};
+use monocoque_core::options::SocketOptions;
 use monocoque_zmtp::rep::RepSocket as InternalRep;
 use monocoque_zmtp::SocketType;
 use std::io;
@@ -57,6 +58,42 @@ where
 }
 
 impl RepSocket {
+    /// Bind to `addr`, accept one connection, and return a ready REP socket.
+    ///
+    /// Returns the `TcpListener` so the caller can accept further connections.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use monocoque::zmq::RepSocket;
+    /// use bytes::Bytes;
+    ///
+    /// # async fn example() -> std::io::Result<()> {
+    /// let (_listener, mut socket) = RepSocket::bind("127.0.0.1:5555").await?;
+    /// if let Some(req) = socket.recv().await {
+    ///     socket.send(vec![Bytes::from("PONG")]).await?;
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn bind(addr: impl compio::net::ToSocketAddrsAsync) -> io::Result<(TcpListener, Self)> {
+        let listener = TcpListener::bind(addr).await?;
+        let (stream, _) = listener.accept().await?;
+        let socket = Self::from_tcp(stream).await?;
+        Ok((listener, socket))
+    }
+
+    /// Bind with custom socket options.
+    pub async fn bind_with_options(
+        addr: impl compio::net::ToSocketAddrsAsync,
+        options: SocketOptions,
+    ) -> io::Result<(TcpListener, Self)> {
+        let listener = TcpListener::bind(addr).await?;
+        let (stream, _) = listener.accept().await?;
+        let socket = Self::from_tcp_with_options(stream, options).await?;
+        Ok((listener, socket))
+    }
+
     /// Create a REP socket from an existing TCP stream.
     ///
     /// Create a REP socket from a TCP stream with TCP_NODELAY enabled.
@@ -221,6 +258,12 @@ where
     /// ```
     pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
         channel_to_io_error(self.inner.send(msg).await)
+    }
+
+    /// Get a mutable reference to this socket's options.
+    #[inline]
+    pub fn options_mut(&mut self) -> &mut SocketOptions {
+        self.inner.options_mut()
     }
 }
 
