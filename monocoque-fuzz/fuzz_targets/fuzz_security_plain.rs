@@ -2,7 +2,7 @@
 
 use bytes::Bytes;
 use libfuzzer_sys::fuzz_target;
-use monocoque_zmtp::security::{PlainCredentials, StaticPlainHandler};
+use monocoque_zmtp::security::PlainCredentials;
 use monocoque_zmtp::security::zap::{ZapMechanism, ZapRequest, ZapResponse};
 use monocoque_zmtp::security::plain::create_plain_zap_request;
 
