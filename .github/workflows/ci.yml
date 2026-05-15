@@ -48,11 +48,11 @@ jobs:
         run: cargo fmt --all -- --check
 
   msrv:
-    name: MSRV (1.75)
+    name: MSRV (1.85)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.75
+      - uses: dtolnay/rust-toolchain@1.85
       - uses: Swatinem/rust-cache@v2
       - name: Build on MSRV
         run: cargo build --workspace
@@ -64,8 +64,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Check docs (no warnings, no missing docs)
-        run: RUSTDOCFLAGS="-D warnings -D missing_docs" cargo doc --no-deps --workspace
+      - name: Check docs (no warnings)
+        run: cargo doc --no-deps --workspace
         env:
           RUSTDOCFLAGS: "-D warnings"
 

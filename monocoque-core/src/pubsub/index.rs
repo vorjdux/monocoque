@@ -34,8 +34,7 @@ impl SubscriptionIndex {
 
     #[inline]
     #[must_use]
-    #[allow(clippy::incompatible_msrv)] // is_empty in const context requires 1.87
-    pub const fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.subs.is_empty()
     }
 
