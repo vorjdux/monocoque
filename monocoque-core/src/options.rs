@@ -351,6 +351,13 @@ pub struct SocketOptions {
     /// Subscription filters to remove for SUB/XSUB sockets.
     /// Applied after subscriptions during socket configuration.
     pub unsubscriptions: Vec<bytes::Bytes>,
+
+    /// Maximum reconnection attempts (`ZMQ_RECONNECT_STOP`)
+    ///
+    /// Maximum number of times to attempt reconnection after a disconnect.
+    /// - `None`: Retry indefinitely (default, matches libzmq behaviour)
+    /// - `Some(n)`: Give up and return `NotConnected` after n attempts
+    pub max_reconnect_attempts: Option<u32>,
 }
 
 impl Default for SocketOptions {
@@ -405,6 +412,7 @@ impl Default for SocketOptions {
             zap_domain: String::new(), // Global domain
             subscriptions: Vec::new(),     // No subscriptions
             unsubscriptions: Vec::new(),   // No unsubscriptions
+            max_reconnect_attempts: None,  // Retry indefinitely
         }
     }
 }
@@ -502,6 +510,14 @@ impl SocketOptions {
     /// Set maximum reconnection interval for exponential backoff.
     pub const fn with_reconnect_ivl_max(mut self, max: Duration) -> Self {
         self.reconnect_ivl_max = max;
+        self
+    }
+
+    /// Set maximum number of reconnection attempts.
+    ///
+    /// `None` retries indefinitely (default); `Some(n)` gives up after n attempts.
+    pub const fn with_max_reconnect_attempts(mut self, max: Option<u32>) -> Self {
+        self.max_reconnect_attempts = max;
         self
     }
 

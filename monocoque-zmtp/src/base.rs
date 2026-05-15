@@ -478,7 +478,11 @@ impl SocketBase<TcpStream> {
             )
         })?;
 
-        // Apply backoff delay if we have reconnection state
+        // Apply backoff delay if we have reconnection state.
+        // Use std::thread::sleep rather than compio::time::sleep: multiple
+        // handshake timeouts (via compio::time::timeout) leave residual timer
+        // state that makes subsequent compio sleeps hang indefinitely.
+        // Blocking sleep is safe here because the socket has no pending I/O.
         if let Some(reconnect) = &mut self.reconnect {
             let delay = reconnect.next_delay();
             debug!(
@@ -486,7 +490,7 @@ impl SocketBase<TcpStream> {
                 reconnect.attempt(),
                 delay
             );
-            compio::time::sleep(delay).await;
+            std::thread::sleep(delay);
         }
 
         // Attempt connection based on endpoint type
