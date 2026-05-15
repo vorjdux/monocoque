@@ -37,8 +37,9 @@
 /// - O(n) topic matching where n=topic prefix length
 /// - Zero-copy via Arc<Bytes> for message data
 use bytes::Bytes;
-use compio::net::{TcpListener, TcpStream};
+use compio::net::{OwnedReadHalf, OwnedWriteHalf, TcpListener, TcpStream};
 use flume::{Receiver, Sender};
+use monocoque_core::subscription::SubscriptionEvent;
 
 use crate::handshake::perform_handshake_with_timeout;
 use crate::session::SocketType;
@@ -54,7 +55,7 @@ use tracing::{debug, error, trace, warn};
 /// Unique identifier for each subscriber connection
 type SubscriberId = u64;
 
-/// Shared subscription state (updated by subscription reader, read by sender)
+/// Shared subscription state (updated by subscription reader, read by broadcast sender)
 type SubscriptionState = Arc<RwLock<Vec<Bytes>>>;
 
 /// Commands sent from main thread to worker threads
@@ -74,7 +75,7 @@ enum WorkerCommand {
 /// Per-subscriber state managed by worker
 struct WorkerSubscriber {
     id: SubscriberId,
-    stream: TcpStream,
+    stream: OwnedWriteHalf<TcpStream>,
     subscriptions: SubscriptionState,
 }
 
@@ -102,6 +103,61 @@ impl WorkerSubscriber {
     }
 }
 
+/// Background task that reads subscription messages from a subscriber.
+///
+/// Subscription messages are raw bytes: `\x01prefix` (subscribe) or `\x00prefix` (unsubscribe).
+/// These are sent by SubSocket after handshake and on each subscribe()/unsubscribe() call.
+async fn subscription_reader(
+    id: SubscriberId,
+    mut reader: OwnedReadHalf<TcpStream>,
+    subscriptions: SubscriptionState,
+) {
+    use compio::buf::BufResult;
+    use compio::io::AsyncRead;
+
+    trace!("[PUB] Subscription reader started for subscriber {}", id);
+
+    loop {
+        let buf = vec![0u8; 256];
+        let BufResult(result, buf) = reader.read(buf).await;
+
+        match result {
+            Ok(0) => {
+                // EOF — subscriber disconnected
+                debug!("[PUB] Subscriber {} disconnected (subscription reader)", id);
+                break;
+            }
+            Ok(n) => {
+                // Parse subscription message
+                if let Some(event) = SubscriptionEvent::from_message(&buf[..n]) {
+                    let mut subs = subscriptions.write();
+                    match event {
+                        SubscriptionEvent::Subscribe(prefix) => {
+                            if !subs.contains(&prefix) {
+                                trace!("[PUB] Subscriber {} subscribed to {:?}", id, prefix);
+                                subs.push(prefix);
+                            }
+                        }
+                        SubscriptionEvent::Unsubscribe(prefix) => {
+                            trace!("[PUB] Subscriber {} unsubscribed from {:?}", id, prefix);
+                            subs.retain(|s| s != &prefix);
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                debug!(
+                    "[PUB] Subscription reader for subscriber {} error: {}",
+                    id, e
+                );
+                break;
+            }
+        }
+    }
+
+    trace!("[PUB] Subscription reader exiting for subscriber {}", id);
+}
+
 /// Worker thread that handles multiple subscribers
 fn worker_thread(worker_id: usize, rx: Receiver<WorkerCommand>) {
     debug!("[Worker {}] Starting", worker_id);
@@ -126,50 +182,67 @@ fn worker_thread(worker_id: usize, rx: Receiver<WorkerCommand>) {
                 }) => {
                     debug!("[Worker {}] Adding subscriber {}", worker_id, id);
 
+                    // Split stream into read half (subscriptions) and write half (broadcasts)
+                    let (read_half, write_half) = stream.into_split();
+
+                    // Spawn background task to read subscription messages.
+                    // Runs concurrently within this worker's compio runtime.
+                    let sub_state = Arc::clone(&subscriptions);
+                    compio::runtime::spawn(subscription_reader(id, read_half, sub_state))
+                        .detach();
+
                     subscribers.insert(
                         id,
                         WorkerSubscriber {
                             id,
-                            stream,
+                            stream: write_half,
                             subscriptions,
                         },
                     );
                 }
                 Ok(WorkerCommand::Broadcast { message }) => {
-                    trace!("[Worker {}] Broadcasting to {} subscribers", worker_id, subscribers.len());
-                    
-                    // Professional concurrent broadcast with per-subscriber timeout
-                    // Strategy: Process subscribers sequentially with individual timeouts
-                    // This provides fault isolation without stream cloning complexity
-                    
+                    trace!(
+                        "[Worker {}] Broadcasting to {} subscribers",
+                        worker_id,
+                        subscribers.len()
+                    );
+
                     let mut dead_subs = Vec::new();
                     for sub in subscribers.values_mut() {
                         // Skip non-matching subscribers
                         if !sub.matches(&message) {
                             continue;
                         }
-                        
+
                         // Send with 5-second timeout for fault isolation
                         let send_result = compio::time::timeout(
                             std::time::Duration::from_secs(5),
-                            send_message_to_stream(&mut sub.stream, &message)
-                        ).await;
-                        
+                            send_message_to_stream(&mut sub.stream, &message),
+                        )
+                        .await;
+
                         match send_result {
                             Ok(Ok(())) => {
                                 trace!("[Worker {}] Sent to subscriber {}", worker_id, sub.id);
                             }
                             Ok(Err(e)) => {
-                                debug!("[Worker {}] Subscriber {} send error: {}", worker_id, sub.id, e);
+                                debug!(
+                                    "[Worker {}] Subscriber {} send error: {}",
+                                    worker_id, sub.id, e
+                                );
                                 dead_subs.push(sub.id);
                             }
                             Err(_) => {
-                                warn!("[Worker {}] Subscriber {} timed out", worker_id, sub.id);
+                                warn!(
+                                    "[Worker {}] Subscriber {} timed out",
+                                    worker_id,
+                                    sub.id
+                                );
                                 dead_subs.push(sub.id);
                             }
                         }
                     }
-                    
+
                     // Clean up failed subscribers
                     for id in dead_subs {
                         subscribers.remove(&id);
@@ -192,21 +265,24 @@ fn worker_thread(worker_id: usize, rx: Receiver<WorkerCommand>) {
 }
 
 /// Send a message to a subscriber stream with proper ZMTP framing
-async fn send_message_to_stream(stream: &mut TcpStream, msg: &[Bytes]) -> io::Result<()> {
+async fn send_message_to_stream(
+    stream: &mut OwnedWriteHalf<TcpStream>,
+    msg: &[Bytes],
+) -> io::Result<()> {
     use compio::buf::BufResult;
     use compio::io::AsyncWriteExt;
     use bytes::BytesMut;
-    
+
     // Encode message to buffer using proper ZMTP framing
     let mut write_buf = BytesMut::new();
     crate::codec::encode_multipart(msg, &mut write_buf);
-    
+
     // Write the entire message at once
     let buf = write_buf.freeze();
-    let data = buf.to_vec();  // Convert to Vec for IoBuf
+    let data = buf.to_vec();
     let BufResult(res, _) = stream.write_all(data).await;
     res?;
-    
+
     Ok(())
 }
 
@@ -263,6 +339,8 @@ impl PubSocket {
     /// Accept a new subscriber connection
     ///
     /// Performs ZMTP handshake and assigns subscriber to a worker thread (round-robin).
+    /// A background subscription reader task is spawned in the worker to handle
+    /// subscribe/unsubscribe messages from this subscriber.
     pub async fn accept_subscriber(&mut self, listener: &TcpListener) -> io::Result<SubscriberId> {
         let (stream, addr) = listener.accept().await?;
 
@@ -284,7 +362,7 @@ impl PubSocket {
         let id = self.next_id;
         self.next_id += 1;
 
-        // Create subscription state for this subscriber
+        // Create subscription state for this subscriber (starts empty = match all)
         let subscriptions = Arc::new(RwLock::new(Vec::new()));
 
         // Assign to next worker (round-robin)
@@ -293,8 +371,8 @@ impl PubSocket {
 
         debug!("[PUB] Assigning subscriber {} to worker {}", id, worker_idx);
 
-        // Use async send to avoid blocking the main runtime
-        // This allows the main thread to remain fully async
+        // Send stream + subscriptions to worker. The worker will split the stream
+        // into read (subscription reader task) and write (broadcast) halves.
         self.workers[worker_idx]
             .send_async(WorkerCommand::AddSubscriber {
                 id,
@@ -306,20 +384,8 @@ impl PubSocket {
 
         self.subscriber_count += 1;
         debug!(
-            "[PUB] Subscriber {} accepted (total: {})",
+            "[PUB] Subscriber {} accepted and subscription reader started (total: {})",
             id, self.subscriber_count
-        );
-
-        // TODO: Spawn background task to read subscriptions
-        // This requires either:
-        // 1. A second TCP connection for reading
-        // 2. A channel-based architecture
-        // 3. Or we accept that subscriptions are set client-side only
-
-        // For now, subscriptions default to "match all" (empty subscription list = match all)
-        debug!(
-            "[PUB] Accepted subscriber {} from {} (subscriptions default to match-all)",
-            id, addr
         );
 
         Ok(id)
@@ -331,14 +397,10 @@ impl PubSocket {
         // When a subscriber disconnects, the worker detects it and removes it
     }
 
-    /// Broadcast message to all matching subscribers
-    ///
-    /// Hot path - optimized for:
-    /// - Single iteration through subscribers
-    /// Broadcast message to all subscribers across all workers
+    /// Broadcast message to all matching subscribers across all workers.
     ///
     /// Message is shared via Arc for zero-copy distribution to workers.
-    /// Each worker handles its subset of subscribers in parallel.
+    /// Each worker filters by subscription prefix and delivers to matching subscribers only.
     pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
         // Check poison flag first
         if self.is_poisoned {
@@ -361,7 +423,6 @@ impl PubSocket {
         let message = Arc::new(msg);
 
         // Broadcast to all workers concurrently via async channels
-        // Each worker processes its subscribers independently
         for (idx, worker) in self.workers.iter().enumerate() {
             worker
                 .send_async(WorkerCommand::Broadcast {

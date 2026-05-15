@@ -3,13 +3,12 @@ use bytes::Bytes;
 use std::thread;
 use std::time::Duration;
 
-// PubSocket uses a worker pool that moves TcpStreams across compio runtimes.
-// This doesn't work in the test harness where io_uring rings are per-thread.
-// The underlying issue is tracked separately as a PubSocket architecture fix.
 #[test]
-#[ignore = "PubSocket worker pool cross-thread TcpStream issue"]
 fn test_pubsub_basic() {
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<std::net::SocketAddr>();
+    // Subscriber signals when it has connected and subscribed, so publisher
+    // knows it's safe to broadcast without relying on a fixed sleep duration.
+    let (sub_ready_tx, sub_ready_rx) = std::sync::mpsc::channel::<()>();
     let (result_tx, result_rx) = std::sync::mpsc::channel::<Result<(), String>>();
 
     thread::spawn(move || {
@@ -20,7 +19,10 @@ fn test_pubsub_basic() {
 
             pub_socket.accept_subscriber().await.unwrap();
 
-            compio::time::sleep(Duration::from_millis(100)).await;
+            // Wait for subscriber to signal it is subscribed before broadcasting.
+            // Use a blocking recv — the publisher has nothing else to do while waiting,
+            // and compio::time::sleep interferes with the handshake timer state.
+            sub_ready_rx.recv().unwrap();
 
             pub_socket.send(vec![
                 Bytes::from("topic.test"),
@@ -39,7 +41,9 @@ fn test_pubsub_basic() {
     sub.set_subscribe(b"topic").unwrap();
     sub.set_rcvtimeo(5000).unwrap();
 
+    // Give libzmq time to send the subscription frame to the PUB socket
     thread::sleep(Duration::from_millis(50));
+    sub_ready_tx.send(()).unwrap();
 
     let topic = sub.recv_string(0).unwrap().unwrap();
     let body = sub.recv_string(0).unwrap().unwrap();
