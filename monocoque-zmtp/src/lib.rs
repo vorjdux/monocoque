@@ -82,7 +82,7 @@
 
 // Internal modules (not part of public API)
 mod base;
-mod codec;
+pub mod codec;
 mod greeting;
 mod handshake;
 mod inproc_stream;
@@ -90,6 +90,7 @@ mod utils;
 
 // Public protocol types
 pub mod adapters;
+/// Sans-IO ZMTP session and related types.
 pub mod session;
 pub mod socket_trait;
 pub mod stream_sink;
@@ -101,12 +102,14 @@ pub mod security;
 pub mod dealer;
 pub mod pair;
 pub mod proxy;
+/// PUB socket implementation.
 pub mod publisher;
 pub mod pull;
 pub mod push;
 pub mod rep;
 pub mod req;
 pub mod router;
+pub mod stream;
 pub mod subscriber;
 pub mod xpub;
 pub mod xsub;
@@ -120,6 +123,7 @@ pub use push::PushSocket;
 pub use rep::RepSocket;
 pub use req::ReqSocket;
 pub use router::RouterSocket;
+pub use stream::StreamSocket;
 pub use subscriber::SubSocket;
 pub use xpub::XPubSocket;
 pub use xsub::XSubSocket;
@@ -136,7 +140,7 @@ pub use socket_trait::Socket;
 pub mod prelude {
     pub use super::session::SocketType;
     pub use super::socket_trait::Socket;
-    pub use super::stream_sink::{SocketStream, SocketSink, SocketStreamSink};
+    pub use super::stream_sink::{SocketSink, SocketStream, SocketStreamSink};
     pub use super::{
         DealerSocket, PairSocket, PubSocket, PullSocket, PushSocket, RepSocket, ReqSocket,
         RouterSocket, SubSocket, XPubSocket, XSubSocket,

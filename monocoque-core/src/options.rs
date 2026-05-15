@@ -284,7 +284,6 @@ pub struct SocketOptions {
     pub bind_to_device: Option<String>,
 
     // --- Security Options ---
-
     /// PLAIN server mode (`ZMQ_PLAIN_SERVER`)
     ///
     /// Enable PLAIN authentication as server.
@@ -351,6 +350,13 @@ pub struct SocketOptions {
     /// Subscription filters to remove for SUB/XSUB sockets.
     /// Applied after subscriptions during socket configuration.
     pub unsubscriptions: Vec<bytes::Bytes>,
+
+    /// Maximum reconnection attempts (`ZMQ_RECONNECT_STOP`)
+    ///
+    /// Maximum number of times to attempt reconnection after a disconnect.
+    /// - `None`: Retry indefinitely (default, matches libzmq behaviour)
+    /// - `Some(n)`: Give up and return `NotConnected` after n attempts
+    pub max_reconnect_attempts: Option<u32>,
 }
 
 impl Default for SocketOptions {
@@ -366,7 +372,7 @@ impl Default for SocketOptions {
             recv_hwm: 1000,
             send_hwm: 1000,
             immediate: false,
-            max_msg_size: None, // No limit
+            max_msg_size: None,      // No limit
             read_buffer_size: 8192,  // 8KB - balanced default
             write_buffer_size: 8192, // 8KB - balanced default
             routing_id: None,
@@ -379,21 +385,21 @@ impl Default for SocketOptions {
             xpub_welcome_msg: None,
             xsub_verbose_unsubs: false,
             conflate: false,
-            tcp_keepalive: -1,      // OS default
-            tcp_keepalive_cnt: -1,  // OS default
-            tcp_keepalive_idle: -1, // OS default
+            tcp_keepalive: -1,       // OS default
+            tcp_keepalive_cnt: -1,   // OS default
+            tcp_keepalive_idle: -1,  // OS default
             tcp_keepalive_intvl: -1, // OS default
             req_correlate: false,
             req_relaxed: false,
-            rate: 100,              // 100 kbps
+            rate: 100, // 100 kbps
             recovery_ivl: Duration::from_secs(10),
-            sndbuf: 0,              // OS default
-            rcvbuf: 0,              // OS default
-            multicast_hops: 1,      // Local network only
-            tos: 0,                 // Normal service
+            sndbuf: 0,               // OS default
+            rcvbuf: 0,               // OS default
+            multicast_hops: 1,       // Local network only
+            tos: 0,                  // Normal service
             multicast_maxtpdu: 1500, // Standard MTU
-            ipv6: false,            // IPv4 only
-            bind_to_device: None,   // All interfaces
+            ipv6: false,             // IPv4 only
+            bind_to_device: None,    // All interfaces
             // Security
             plain_server: false,
             plain_username: None,
@@ -402,16 +408,17 @@ impl Default for SocketOptions {
             curve_publickey: None,
             curve_secretkey: None,
             curve_serverkey: None,
-            zap_domain: String::new(), // Global domain
-            subscriptions: Vec::new(),     // No subscriptions
-            unsubscriptions: Vec::new(),   // No unsubscriptions
+            zap_domain: String::new(),    // Global domain
+            subscriptions: Vec::new(),    // No subscriptions
+            unsubscriptions: Vec::new(),  // No unsubscriptions
+            max_reconnect_attempts: None, // Retry indefinitely
         }
     }
 }
 
 impl SocketOptions {
     /// Create new socket options with default values (8KB buffers).
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -427,7 +434,7 @@ impl SocketOptions {
     ///
     /// let opts = SocketOptions::small();  // 4KB buffers for REQ/REP
     /// ```
-    #[must_use] 
+    #[must_use]
     pub fn small() -> Self {
         Self {
             read_buffer_size: 4096,
@@ -447,7 +454,7 @@ impl SocketOptions {
     ///
     /// let opts = SocketOptions::large();  // 16KB buffers for DEALER/ROUTER
     /// ```
-    #[must_use] 
+    #[must_use]
     pub fn large() -> Self {
         Self {
             read_buffer_size: 16384,
@@ -502,6 +509,14 @@ impl SocketOptions {
     /// Set maximum reconnection interval for exponential backoff.
     pub const fn with_reconnect_ivl_max(mut self, max: Duration) -> Self {
         self.reconnect_ivl_max = max;
+        self
+    }
+
+    /// Set maximum number of reconnection attempts.
+    ///
+    /// `None` retries indefinitely (default); `Some(n)` gives up after n attempts.
+    pub const fn with_max_reconnect_attempts(mut self, max: Option<u32>) -> Self {
+        self.max_reconnect_attempts = max;
         self
     }
 
@@ -790,7 +805,11 @@ impl SocketOptions {
     /// let opts = SocketOptions::new()
     ///     .with_plain_credentials("admin", "secret123");
     /// ```
-    pub fn with_plain_credentials(mut self, username: impl Into<String>, password: impl Into<String>) -> Self {
+    pub fn with_plain_credentials(
+        mut self,
+        username: impl Into<String>,
+        password: impl Into<String>,
+    ) -> Self {
         self.plain_username = Some(username.into());
         self.plain_password = Some(password.into());
         self
@@ -1094,8 +1113,8 @@ mod tests {
 
     #[test]
     fn test_connect_routing_id() {
-        let opts = SocketOptions::new()
-            .with_connect_routing_id(bytes::Bytes::from_static(b"peer-123"));
+        let opts =
+            SocketOptions::new().with_connect_routing_id(bytes::Bytes::from_static(b"peer-123"));
 
         assert_eq!(
             opts.connect_routing_id,
@@ -1117,7 +1136,7 @@ mod tests {
     fn test_subscription_options() {
         // Test with_subscribe
         let opts = SocketOptions::new()
-            .with_subscribe(bytes::Bytes::new())  // Subscribe to all
+            .with_subscribe(bytes::Bytes::new()) // Subscribe to all
             .with_subscribe(bytes::Bytes::from("weather."))
             .with_subscribe(bytes::Bytes::from("stocks."));
 
@@ -1127,11 +1146,10 @@ mod tests {
         assert_eq!(opts.subscriptions[2], bytes::Bytes::from("stocks."));
 
         // Test with_subscriptions
-        let opts2 = SocketOptions::new()
-            .with_subscriptions(vec![
-                bytes::Bytes::from("topic1"),
-                bytes::Bytes::from("topic2"),
-            ]);
+        let opts2 = SocketOptions::new().with_subscriptions(vec![
+            bytes::Bytes::from("topic1"),
+            bytes::Bytes::from("topic2"),
+        ]);
 
         assert_eq!(opts2.subscriptions.len(), 2);
 

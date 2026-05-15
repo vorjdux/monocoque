@@ -39,7 +39,7 @@ async fn main() -> io::Result<()> {
         .with_recv_timeout(Duration::from_secs(5));
 
     println!("1. Connecting with 1ns send timeout (will force cancellation)...");
-    
+
     match ReqSocket::connect_with_options("tcp://127.0.0.1:55555", options).await {
         Ok(mut socket) => {
             println!("   ✓ Connected to server\n");

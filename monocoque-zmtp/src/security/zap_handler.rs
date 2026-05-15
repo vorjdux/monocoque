@@ -3,10 +3,9 @@
 /// This module provides the ZAP handler infrastructure for authentication.
 /// ZAP handlers run on inproc://zeromq.zap.01 and process authentication
 /// requests from server sockets.
-
 use crate::security::plain::PlainAuthHandler;
 use crate::security::zap::{ZapMechanism, ZapRequest, ZapResponse};
-use crate::{DealerSocket, inproc_stream::InprocStream};
+use crate::{inproc_stream::InprocStream, DealerSocket};
 use monocoque_core::options::SocketOptions;
 use std::io;
 use std::sync::Arc;
@@ -59,10 +58,7 @@ impl<H: PlainAuthHandler> ZapHandler for DefaultZapHandler<H> {
             ZapMechanism::Plain => {
                 // Extract username and password
                 if request.credentials.len() < 2 {
-                    return ZapResponse::failure(
-                        request.request_id.clone(),
-                        "Missing credentials",
-                    );
+                    return ZapResponse::failure(request.request_id.clone(), "Missing credentials");
                 }
 
                 let username = String::from_utf8_lossy(&request.credentials[0]);
@@ -71,12 +67,7 @@ impl<H: PlainAuthHandler> ZapHandler for DefaultZapHandler<H> {
                 // Call PLAIN handler
                 match self
                     .plain_handler
-                    .authenticate(
-                        &username,
-                        &password,
-                        &request.domain,
-                        &request.address,
-                    )
+                    .authenticate(&username, &password, &request.domain, &request.address)
                     .await
                 {
                     Ok(user_id) => ZapResponse::success(request.request_id.clone(), user_id),
@@ -93,10 +84,7 @@ impl<H: PlainAuthHandler> ZapHandler for DefaultZapHandler<H> {
                 }
 
                 if !self.accept_curve {
-                    return ZapResponse::failure(
-                        request.request_id.clone(),
-                        "CURVE not enabled",
-                    );
+                    return ZapResponse::failure(request.request_id.clone(), "CURVE not enabled");
                 }
 
                 // In a real implementation, you would check the public key
@@ -140,18 +128,17 @@ impl<H: ZapHandler> ZapServer<H> {
     /// ```rust,no_run
     /// use monocoque_zmtp::security::zap_handler::{ZapServer, DefaultZapHandler};
     /// use monocoque_zmtp::security::plain::StaticPlainHandler;
-    /// use std::collections::HashMap;
     /// use std::sync::Arc;
     ///
     /// fn run_zap_server() -> std::io::Result<()> {
     ///     // Create a simple PLAIN handler
-    ///     let mut credentials = HashMap::new();
-    ///     credentials.insert("admin".to_string(), "secret".to_string());
-    ///     let plain_handler = Arc::new(StaticPlainHandler::new(credentials));
-    ///     
+    ///     let mut plain_handler = StaticPlainHandler::new();
+    ///     plain_handler.add_user("admin", "secret");
+    ///     let plain_handler = Arc::new(plain_handler);
+    ///
     ///     // Create default ZAP handler
     ///     let zap_handler = Arc::new(DefaultZapHandler::new(plain_handler, true));
-    ///     
+    ///
     ///     // Create ZAP server (binds immediately)
     ///     let server = ZapServer::new(zap_handler)?;
     ///     Ok(())
@@ -159,10 +146,7 @@ impl<H: ZapHandler> ZapServer<H> {
     /// ```
     pub fn new(handler: Arc<H>) -> io::Result<Self> {
         // Bind to the standard ZAP endpoint
-        let socket = DealerSocket::bind_inproc(
-            "inproc://zeromq.zap.01",
-            SocketOptions::default(),
-        )?;
+        let socket = DealerSocket::bind_inproc("inproc://zeromq.zap.01", SocketOptions::default())?;
 
         Ok(Self { socket, handler })
     }
@@ -212,15 +196,14 @@ impl<H: ZapHandler> ZapServer<H> {
 /// ```rust,no_run
 /// use monocoque_zmtp::security::zap_handler::{spawn_zap_server, DefaultZapHandler};
 /// use monocoque_zmtp::security::plain::StaticPlainHandler;
-/// use std::collections::HashMap;
 /// use std::sync::Arc;
 ///
 /// fn setup_auth() -> std::io::Result<()> {
-///     let mut credentials = HashMap::new();
-///     credentials.insert("admin".to_string(), "secret".to_string());
-///     let plain_handler = Arc::new(StaticPlainHandler::new(credentials));
+///     let mut plain_handler = StaticPlainHandler::new();
+///     plain_handler.add_user("admin", "secret");
+///     let plain_handler = Arc::new(plain_handler);
 ///     let zap_handler = Arc::new(DefaultZapHandler::new(plain_handler, true));
-///     
+///
 ///     spawn_zap_server(zap_handler)?;
 ///     Ok(())
 /// }
@@ -245,14 +228,13 @@ pub fn spawn_zap_server<H: ZapHandler + 'static>(handler: Arc<H>) -> io::Result<
 /// ```rust,no_run
 /// use monocoque_zmtp::security::zap_handler::start_default_zap_server;
 /// use monocoque_zmtp::security::plain::StaticPlainHandler;
-/// use std::collections::HashMap;
 /// use std::sync::Arc;
 ///
 /// fn setup() -> std::io::Result<()> {
-///     let mut credentials = HashMap::new();
-///     credentials.insert("admin".to_string(), "secret".to_string());
-///     let handler = Arc::new(StaticPlainHandler::new(credentials));
-///     
+///     let mut handler = StaticPlainHandler::new();
+///     handler.add_user("admin", "secret");
+///     let handler = Arc::new(handler);
+///
 ///     start_default_zap_server(handler, true)?;
 ///     Ok(())
 /// }
@@ -269,7 +251,8 @@ pub fn start_default_zap_server<H: PlainAuthHandler + 'static>(
 mod tests {
     use super::*;
     use crate::security::plain::StaticPlainHandler;
-    use std::collections::HashMap;
+    use crate::security::ZapStatus;
+    use bytes::Bytes;
 
     #[test]
     fn test_default_zap_handler_null() {

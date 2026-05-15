@@ -24,11 +24,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // For true bidirectional PAIR, we need to exchange the return channel
     // Send the client's receiver channel to the server
     tx_client_to_server.send(vec![Bytes::from("__PAIR_HANDSHAKE__")])?;
-    
+
     // Server thread
     let server_thread = thread::spawn(move || {
         println!("[Server] Waiting for messages...");
-        
+
         // Receive handshake (in real implementation, this would exchange channel info)
         if let Ok(msg) = rx_server.recv() {
             if msg.len() == 1 && msg[0] == "__PAIR_HANDSHAKE__" {
@@ -40,32 +40,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for i in 1..=3 {
             // Receive from client
             if let Ok(msg) = rx_server.recv() {
-                println!("[Server] Received from client: {:?}", 
-                    String::from_utf8_lossy(&msg[0]));
+                println!(
+                    "[Server] Received from client: {:?}",
+                    String::from_utf8_lossy(&msg[0])
+                );
             }
-            
+
             // Send response to client
             let response = format!("Server response #{}", i);
             tx_server_to_client.send(vec![Bytes::from(response)]).ok();
         }
-        
+
         println!("[Server] Done");
     });
 
     // Client sends messages
     thread::sleep(Duration::from_millis(100));
-    
+
     for i in 1..=3 {
         let msg = format!("Client message #{}", i);
         println!("[Client] Sending: {}", msg);
         tx_client_to_server.send(vec![Bytes::from(msg)])?;
-        
+
         // Receive response
         if let Ok(response) = rx_client.recv() {
-            println!("[Client] Got response: {:?}", 
-                String::from_utf8_lossy(&response[0]));
+            println!(
+                "[Client] Got response: {:?}",
+                String::from_utf8_lossy(&response[0])
+            );
         }
-        
+
         thread::sleep(Duration::from_millis(50));
     }
 

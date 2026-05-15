@@ -8,18 +8,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_max_level(tracing::Level::INFO)
         .init();
 
-    let subscriber_id = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "1".to_string());
-    
+    let subscriber_id = std::env::args().nth(1).unwrap_or_else(|| "1".to_string());
+
     info!("[SUB-{}] Connecting to publisher...", subscriber_id);
-    
+
     let mut sub_socket = SubSocket::connect("127.0.0.1:5556").await?;
-    
+
     // Subscribe to all messages starting with "test."
     sub_socket.subscribe(b"test.").await?;
     info!("[SUB-{}] Subscribed to 'test.*'", subscriber_id);
-    
+
     // Receive messages
     let mut count = 0;
     loop {
@@ -32,8 +30,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     "".into()
                 };
-                info!("[SUB-{}] Received #{}: topic='{}' data='{}'", 
-                      subscriber_id, count, topic, data);
+                info!(
+                    "[SUB-{}] Received #{}: topic='{}' data='{}'",
+                    subscriber_id, count, topic, data
+                );
             }
             None => {
                 info!("[SUB-{}] Connection closed", subscriber_id);
@@ -41,6 +41,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    
+
     Ok(())
 }

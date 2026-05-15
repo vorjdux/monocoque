@@ -15,36 +15,27 @@
 //!
 //! Terminal 1 (server):
 //! ```bash
-//! cargo run --example plain_auth_demo server
+//! cargo run --example plain_auth_demo --features zmq server
 //! ```
 //!
 //! Terminal 2 (client with valid credentials):
 //! ```bash
-//! cargo run --example plain_auth_demo client admin secret123
-//! ```
-//!
-//! Terminal 3 (client with invalid credentials):
-//! ```bash
-//! cargo run --example plain_auth_demo client hacker wrongpass
+//! cargo run --example plain_auth_demo --features zmq client admin secret123
 //! ```
 
 use bytes::Bytes;
-use monocoque::zmq::{RepSocket, ReqSocket, SocketOptions};
-use monocoque_zmtp::security::plain::{PlainAuthHandler, PlainCredentials, StaticPlainHandler};
 use compio::net::TcpListener;
+use monocoque::zmq::{RepSocket, ReqSocket, SocketOptions};
+use monocoque_zmtp::security::plain::StaticPlainHandler;
+use monocoque_zmtp::security::zap_handler::start_default_zap_server;
 use std::env;
+use std::sync::Arc;
 use std::time::Duration;
-use tracing::{error, info};
 
 const SERVER_ADDR: &str = "127.0.0.1:5555";
 
 #[compio::main]
 async fn main() {
-    // Initialize tracing
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
-        .init();
-
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
@@ -72,106 +63,85 @@ async fn main() {
 }
 
 async fn run_server() {
-    info!("🔐 Starting PLAIN authentication server on {}", SERVER_ADDR);
+    println!("Starting PLAIN authentication server on {}", SERVER_ADDR);
 
-    // Create authentication handler with valid credentials
     let mut auth_handler = StaticPlainHandler::new();
     auth_handler.add_user("admin", "secret123");
     auth_handler.add_user("guest", "guest123");
-    
-    info!("✅ Valid credentials:");
-    info!("   - admin:secret123");
-    info!("   - guest:guest123");
 
-    // Create server socket with PLAIN server mode enabled
+    start_default_zap_server(Arc::new(auth_handler), false).expect("Failed to start ZAP server");
+
+    let listener = TcpListener::bind(SERVER_ADDR)
+        .await
+        .expect("Failed to bind");
+    println!("Server listening, waiting for clients...");
+
     let options = SocketOptions::new()
         .with_plain_server(true)
         .with_zap_domain("example");
 
-    let mut socket = RepSocket::with_options(options);
-    
-    if let Err(e) = socket.bind(&format!("tcp://{}", SERVER_ADDR)).await {
-        error!("❌ Failed to bind: {}", e);
-        return;
-    }
+    let (stream, addr) = listener.accept().await.expect("Failed to accept");
+    println!("Connection from {}", addr);
 
-    info!("🎧 Server listening, waiting for authenticated clients...");
+    let mut socket = RepSocket::from_tcp_with_options(stream, options)
+        .await
+        .expect("Failed to create socket");
 
-    // Handle requests
-    for i in 1..=10 {
+    for i in 1..=3 {
         match socket.recv().await {
-            Ok(Some(msg)) => {
+            Some(msg) => {
                 let request = String::from_utf8_lossy(&msg[0]);
-                info!("📨 Request #{}: {}", i, request);
+                println!("Request #{}: {}", i, request);
 
-                // Echo back with prefix
                 let response = format!("Server says: {}", request);
                 socket.send(vec![Bytes::from(response)]).await.ok();
-                
-                info!("📤 Sent response #{}", i);
             }
-            Ok(None) => {
-                info!("ℹ️  Empty message received");
-            }
-            Err(e) => {
-                error!("❌ Receive error: {}", e);
+            None => {
+                println!("Connection closed");
                 break;
             }
         }
     }
 
-    info!("👋 Server shutting down");
+    println!("Server shutting down");
 }
 
 async fn run_client(username: &str, password: &str) {
-    info!("🔐 Connecting as user: {}", username);
+    println!("Connecting as user: {}", username);
 
-    // Create client credentials
-    let credentials = PlainCredentials::new(username, password);
-
-    // Create client socket with PLAIN credentials
     let options = SocketOptions::new()
         .with_plain_credentials(username, password)
         .with_recv_timeout(Duration::from_secs(5))
         .with_send_timeout(Duration::from_secs(5));
 
-    let mut socket = ReqSocket::with_options(options);
+    let mut socket = ReqSocket::connect_with_options(SERVER_ADDR, options)
+        .await
+        .expect("Failed to connect");
 
-    if let Err(e) = socket.connect(&format!("tcp://{}", SERVER_ADDR)).await {
-        error!("❌ Connection failed: {}", e);
-        return;
-    }
+    println!("Connected to server");
 
-    info!("✅ Connected to server");
-
-    // Send requests
     for i in 1..=3 {
         let message = format!("Hello from {} (message {})", username, i);
-        info!("📤 Sending: {}", message);
+        println!("Sending: {}", message);
 
-        if let Err(e) = socket.send(vec![Bytes::from(message)]).await {
-            error!("❌ Send error: {}", e);
-            return;
-        }
+        socket
+            .send(vec![Bytes::from(message)])
+            .await
+            .expect("Send failed");
 
         match socket.recv().await {
-            Ok(Some(msg)) => {
+            Some(msg) => {
                 let response = String::from_utf8_lossy(&msg[0]);
-                info!("📨 Response: {}", response);
+                println!("Response: {}", response);
             }
-            Ok(None) => {
-                error!("❌ Empty response");
-                return;
-            }
-            Err(e) => {
-                error!("❌ Receive error: {}", e);
+            None => {
+                println!("Empty response");
                 return;
             }
         }
 
-        // Small delay between messages
         compio::time::sleep(Duration::from_millis(500)).await;
     }
 
-    info!("✅ Client finished successfully");
+    println!("Client finished");
 }

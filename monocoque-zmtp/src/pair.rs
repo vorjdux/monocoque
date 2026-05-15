@@ -19,7 +19,7 @@
 use crate::base::SocketBase;
 use crate::codec::encode_multipart;
 use crate::inproc_stream::InprocStream;
-use crate::{handshake::perform_handshake_with_timeout, session::SocketType};
+use crate::{handshake::perform_handshake_with_options, session::SocketType};
 use bytes::Bytes;
 use compio::io::{AsyncRead, AsyncWrite};
 use compio::net::TcpStream;
@@ -53,19 +53,17 @@ where
     }
 
     /// Create a new PAIR socket with custom buffer configuration and socket options.
-    pub async fn with_options(
-        mut stream: S,
-        options: SocketOptions,
-    ) -> io::Result<Self> {
+    pub async fn with_options(mut stream: S, options: SocketOptions) -> io::Result<Self> {
         debug!("[PAIR] Creating new PAIR socket");
 
         // Perform ZMTP handshake
         debug!("[PAIR] Performing ZMTP handshake...");
-        let handshake_result = perform_handshake_with_timeout(
+        let handshake_result = perform_handshake_with_options(
             &mut stream,
             SocketType::Pair,
             None,
             Some(options.handshake_timeout),
+            &options,
         )
         .await
         .map_err(|e| io::Error::other(format!("Handshake failed: {}", e)))?;
@@ -261,9 +259,7 @@ impl PairSocket<TcpStream> {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn connect(
-        addr: impl compio::net::ToSocketAddrsAsync,
-    ) -> io::Result<Self> {
+    pub async fn connect(addr: impl compio::net::ToSocketAddrsAsync) -> io::Result<Self> {
         let stream = TcpStream::connect(addr).await?;
         Self::from_tcp(stream).await
     }
@@ -310,10 +306,7 @@ impl PairSocket<InprocStream> {
     }
 
     /// Bind to an inproc endpoint with custom configuration and options.
-    pub fn bind_inproc_with_options(
-        endpoint: &str,
-        options: SocketOptions,
-    ) -> io::Result<Self> {
+    pub fn bind_inproc_with_options(endpoint: &str, options: SocketOptions) -> io::Result<Self> {
         debug!("[PAIR] Binding to inproc endpoint: {}", endpoint);
 
         // Bind to inproc endpoint
@@ -356,19 +349,16 @@ impl PairSocket<InprocStream> {
     }
 
     /// Connect to an inproc endpoint with custom configuration and options.
-    pub fn connect_inproc_with_options(
-        endpoint: &str,
-        options: SocketOptions,
-    ) -> io::Result<Self> {
+    pub fn connect_inproc_with_options(endpoint: &str, options: SocketOptions) -> io::Result<Self> {
         debug!("[PAIR] Connecting to inproc endpoint: {}", endpoint);
 
         // Connect to inproc endpoint
         let tx = monocoque_core::inproc::connect_inproc(endpoint)?;
-        
+
         // For inproc, we need to create a receiver channel
         // The sender sends to the bound endpoint, we receive on our own channel
         let (_our_tx, our_rx) = flume::unbounded();
-        
+
         // Register our receiver with the sender
         // This is a bit tricky - we need bidirectional communication
         // For now, create a stream with the connection sender and a new receiver

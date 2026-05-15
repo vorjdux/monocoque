@@ -31,8 +31,9 @@ use std::fmt;
 use std::io;
 use tracing::{debug, trace};
 
-use crate::handshake::perform_handshake_with_timeout;
+use crate::handshake::perform_handshake_with_options;
 use crate::session::SocketType;
+use crate::xsub::XSubSocket;
 
 /// Unique identifier for each subscriber connection
 type SubscriberId = u64;
@@ -90,11 +91,16 @@ impl XPubSubscriber {
 /// ```
 pub struct XPubSocket {
     listener: TcpListener,
-    subscribers: HashMap<SubscriberId,XPubSubscriber>,
+    subscribers: HashMap<SubscriberId, XPubSubscriber>,
     next_id: SubscriberId,
     options: SocketOptions,
     /// Pending subscription events to deliver
     pending_events: SmallVec<[SubscriptionEvent; 8]>,
+    /// Optional upstream connection for manual-mode subscription forwarding.
+    ///
+    /// When set, `send_subscription()` writes subscription events to this
+    /// connection so they propagate to the upstream publisher.
+    upstream: Option<XSubSocket<TcpStream>>,
 }
 
 impl XPubSocket {
@@ -114,10 +120,7 @@ impl XPubSocket {
     }
 
     /// Bind with custom socket options.
-    pub async fn bind_with_options(
-        addr: &str,
-        options: SocketOptions,
-    ) -> io::Result<Self> {
+    pub async fn bind_with_options(addr: &str, options: SocketOptions) -> io::Result<Self> {
         let listener = TcpListener::bind(addr).await?;
         let local_addr = listener.local_addr()?;
         debug!("[XPUB] Bound to {}", local_addr);
@@ -128,6 +131,7 @@ impl XPubSocket {
             next_id: 1,
             options,
             pending_events: SmallVec::new(),
+            upstream: None,
         })
     }
 
@@ -140,11 +144,12 @@ impl XPubSocket {
                 debug!("[XPUB] New subscriber from {}", addr);
 
                 // Perform ZMTP handshake
-                let handshake_result = perform_handshake_with_timeout(
+                let handshake_result = perform_handshake_with_options(
                     &mut stream,
                     SocketType::Xpub,
                     None,
                     Some(self.options.handshake_timeout),
+                    &self.options,
                 )
                 .await?;
 
@@ -158,9 +163,22 @@ impl XPubSocket {
                 self.next_id += 1;
 
                 // Send welcome message if configured
-                if let Some(ref _welcome_msg) = self.options.xpub_welcome_msg {
-                    // TODO: Send welcome message
-                    trace!("[XPUB] Would send welcome message to subscriber {}", id);
+                if let Some(ref welcome_msg) = self.options.xpub_welcome_msg {
+                    use bytes::BytesMut;
+                    use compio::buf::BufResult;
+                    use compio::io::AsyncWriteExt;
+
+                    let mut buf = BytesMut::new();
+                    crate::codec::encode_multipart(std::slice::from_ref(welcome_msg), &mut buf);
+                    let data = buf.freeze().to_vec();
+                    let BufResult(result, _) = stream.write_all(data).await;
+                    if let Err(e) = result {
+                        trace!(
+                            "[XPUB] Failed to send welcome message to subscriber {}: {}",
+                            id,
+                            e
+                        );
+                    }
                 }
 
                 self.subscribers.insert(
@@ -172,7 +190,11 @@ impl XPubSocket {
                     },
                 );
 
-                debug!("[XPUB] Subscriber {} added (total: {})", id, self.subscribers.len());
+                debug!(
+                    "[XPUB] Subscriber {} added (total: {})",
+                    id,
+                    self.subscribers.len()
+                );
                 Ok(())
             }
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
@@ -210,7 +232,7 @@ impl XPubSocket {
         use compio::io::AsyncRead;
         use compio::time::timeout;
         use std::time::Duration;
-        
+
         // Return pending events first
         if !self.pending_events.is_empty() {
             return Ok(Some(self.pending_events.remove(0)));
@@ -221,24 +243,26 @@ impl XPubSocket {
 
         // Poll all subscribers for subscription messages
         // Subscription messages are 1 byte (0x00 or 0x01) + topic prefix
-        println!("[XPUB recv_subscription] Polling {} subscribers", self.subscribers.len());
+        trace!(
+            "[XPUB] Polling {} subscribers for subscription events",
+            self.subscribers.len()
+        );
         for sub in self.subscribers.values_mut() {
-            // Try non-blocking read of subscription message with timeout
             let buf = vec![0u8; 256];
-            println!("[XPUB recv_subscription] Reading from subscriber {} with timeout", sub.id);
-            
+
             // Use a short timeout to avoid blocking
             let read_result = timeout(Duration::from_millis(1), sub.stream.read(buf)).await;
-            
+
             match read_result {
                 Ok(BufResult(Ok(n), buf)) if n > 0 => {
-                    println!("[XPUB recv_subscription] Received {} bytes: {:?}", n, &buf[..n]);
-                    // Parse subscription event
+                    trace!("[XPUB] Received {} bytes from subscriber {}", n, sub.id);
                     if let Some(event) = SubscriptionEvent::from_message(&buf[..n]) {
-                        trace!("[XPUB] Received subscription event: {:?}", event);
-                        println!("[XPUB recv_subscription] Parsed event: {:?}", event);
-                        
-                        // Update subscriber's subscriptions
+                        trace!(
+                            "[XPUB] Subscription event from subscriber {}: {:?}",
+                            sub.id,
+                            event
+                        );
+
                         match &event {
                             SubscriptionEvent::Subscribe(prefix) => {
                                 sub.subscriptions.subscribe(prefix.clone());
@@ -247,34 +271,24 @@ impl XPubSocket {
                                 sub.subscriptions.unsubscribe(prefix);
                             }
                         }
-                        
-                        // Return event if in verbose mode
+
                         if self.options.xpub_verbose {
-                            println!("[XPUB recv_subscription] Returning event (verbose=true)");
                             return Ok(Some(event));
                         }
-                        println!("[XPUB recv_subscription] NOT returning event (verbose=false)");
-                    } else {
-                        println!("[XPUB recv_subscription] Failed to parse subscription event");
                     }
                 }
-                Ok(BufResult(Ok(_), _)) => {
-                    println!("[XPUB recv_subscription] No data available (n=0)");
-                }
+                Ok(BufResult(Ok(_), _)) => {}
                 Ok(BufResult(Err(e), _)) => {
-                    println!("[XPUB recv_subscription] Read error: {}", e);
                     if e.kind() != std::io::ErrorKind::WouldBlock {
-                        debug!("[XPUB] Error reading from subscriber: {}", e);
+                        debug!("[XPUB] Error reading from subscriber {}: {}", sub.id, e);
                     }
                 }
                 Err(_) => {
-                    // Timeout - no data available
-                    println!("[XPUB recv_subscription] Read timeout (no data)");
+                    // Timeout — no data available from this subscriber
                 }
             }
         }
-        
-        println!("[XPUB recv_subscription] No subscription event found");
+
         Ok(None)
     }
 
@@ -297,22 +311,32 @@ impl XPubSocket {
     /// # }
     /// ```
     pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
+        use bytes::BytesMut;
+        use compio::buf::BufResult;
+        use compio::io::AsyncWriteExt;
+
         trace!("[XPUB] Broadcasting message with {} frames", msg.len());
 
-        let dead_subs = Vec::new();
+        let mut dead_subs = Vec::new();
 
         for sub in self.subscribers.values_mut() {
-            // Skip non-matching subscribers
             if !sub.matches(&msg) {
                 continue;
             }
 
-            // TODO: Actually send the message to the subscriber
-            // For now, just track that we would send it
-            trace!("[XPUB] Would send to subscriber {}", sub.id);
+            let mut buf = BytesMut::new();
+            crate::codec::encode_multipart(&msg, &mut buf);
+            let data = buf.freeze().to_vec();
+
+            let BufResult(result, _) = sub.stream.write_all(data).await;
+            if let Err(e) = result {
+                debug!("[XPUB] Failed to send to subscriber {}: {}", sub.id, e);
+                dead_subs.push(sub.id);
+            } else {
+                trace!("[XPUB] Sent to subscriber {}", sub.id);
+            }
         }
 
-        // Remove dead subscribers
         for id in dead_subs {
             self.subscribers.remove(&id);
             debug!("[XPUB] Removed dead subscriber {}", id);
@@ -387,9 +411,44 @@ impl XPubSocket {
         self.options.xpub_manual = manual;
     }
 
-    /// Manually send a subscription message (manual mode only).
+    /// Connect to an upstream publisher so that subscription events can be forwarded.
     ///
-    /// This allows explicit control over subscription forwarding.
+    /// The upstream is typically a PUB or XSUB socket.  After calling this method,
+    /// `send_subscription()` (manual mode) writes subscription messages to the upstream
+    /// connection, causing the upstream publisher to start or stop delivering matching
+    /// messages.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use monocoque_zmtp::xpub::XPubSocket;
+    /// # use monocoque_core::subscription::SubscriptionEvent;
+    /// # use bytes::Bytes;
+    /// # async fn example() -> std::io::Result<()> {
+    /// let mut xpub = XPubSocket::bind("127.0.0.1:5556").await?;
+    /// xpub.set_manual(true);
+    /// xpub.connect_upstream("127.0.0.1:5555").await?;
+    ///
+    /// // Receive a subscription from a downstream client and forward it upstream.
+    /// if let Some(event) = xpub.recv_subscription().await? {
+    ///     xpub.send_subscription(event).await?;
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn connect_upstream(&mut self, addr: &str) -> io::Result<()> {
+        debug!("[XPUB] Connecting upstream to {}", addr);
+        let xsub = XSubSocket::connect(addr).await?;
+        self.upstream = Some(xsub);
+        debug!("[XPUB] Upstream connected");
+        Ok(())
+    }
+
+    /// Manually send a subscription event to the upstream connection.
+    ///
+    /// Requires both manual mode (`set_manual(true)`) and an upstream connection
+    /// (`connect_upstream()`).  Writes the subscription message directly to the
+    /// upstream publisher so it starts (or stops) delivering matching messages.
     pub async fn send_subscription(&mut self, event: SubscriptionEvent) -> io::Result<()> {
         if !self.options.xpub_manual {
             return Err(io::Error::new(
@@ -398,9 +457,15 @@ impl XPubSocket {
             ));
         }
 
-        // TODO: Forward subscription to upstream
-        trace!("[XPUB] Manual subscription: {:?}", event);
-        Ok(())
+        let upstream = self.upstream.as_mut().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotConnected,
+                "No upstream connection; call connect_upstream() first",
+            )
+        })?;
+
+        trace!("[XPUB] Forwarding subscription upstream: {:?}", event);
+        upstream.send_subscription_event(event).await
     }
 }
 
@@ -410,6 +475,7 @@ impl fmt::Debug for XPubSocket {
             .field("subscribers", &self.subscribers.len())
             .field("verbose", &self.options.xpub_verbose)
             .field("manual", &self.options.xpub_manual)
+            .field("has_upstream", &self.upstream.is_some())
             .finish()
     }
 }
@@ -417,6 +483,7 @@ impl fmt::Debug for XPubSocket {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::publisher::PubSocket as InternalPub;
 
     #[compio::test]
     async fn test_xpub_bind() {
@@ -436,6 +503,88 @@ mod tests {
         let parsed = SubscriptionEvent::from_message(&msg).unwrap();
         assert_eq!(parsed, event);
     }
+
+    /// `send_subscription` errors when manual mode is off.
+    #[compio::test]
+    async fn test_send_subscription_requires_manual_mode() {
+        let mut xpub = XPubSocket::bind("127.0.0.1:0").await.unwrap();
+        // manual mode is off by default
+        let err = xpub
+            .send_subscription(SubscriptionEvent::Subscribe(Bytes::from("topic")))
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    /// `send_subscription` errors when no upstream is connected.
+    #[compio::test]
+    async fn test_send_subscription_requires_upstream() {
+        let mut xpub = XPubSocket::bind("127.0.0.1:0").await.unwrap();
+        xpub.set_manual(true);
+        let err = xpub
+            .send_subscription(SubscriptionEvent::Subscribe(Bytes::from("topic")))
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotConnected);
+    }
+
+    /// `connect_upstream` + `send_subscription` forward subscription bytes to a PubSocket.
+    ///
+    /// The PubSocket's subscription reader (running inside a worker thread) picks up the
+    /// raw subscription bytes written by the upstream XSubSocket. We verify this
+    /// indirectly: after forwarding Subscribe("weather"), publishing a "weather" message
+    /// reaches the upstream connection (the XSubSocket), confirming the PUB socket
+    /// started delivering matching messages.
+    #[compio::test]
+    async fn test_connect_upstream_and_forward_subscription() {
+        use compio::net::TcpListener;
+
+        // Bind a PubSocket listener (the upstream data source).
+        let pub_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let pub_addr = pub_listener.local_addr().unwrap();
+
+        // Spawn PubSocket: accept the XSubSocket upstream connection, then broadcast.
+        let pub_task = compio::runtime::spawn(async move {
+            let mut pub_sock = InternalPub::new();
+            // Accept the connection that connect_upstream() will make.
+            pub_sock.accept_subscriber(&pub_listener).await.unwrap();
+            // Give the subscription reader time to process Subscribe("weather").
+            compio::time::sleep(std::time::Duration::from_millis(50)).await;
+            // Broadcast a matching message — should reach the upstream XSubSocket.
+            pub_sock
+                .send(vec![Bytes::from("weather"), Bytes::from("sunny")])
+                .await
+                .unwrap();
+        });
+
+        let mut xpub = XPubSocket::bind("127.0.0.1:0").await.unwrap();
+        xpub.set_manual(true);
+
+        // Connect upstream to the PubSocket listener.
+        xpub.connect_upstream(&pub_addr.to_string()).await.unwrap();
+        assert!(xpub.upstream.is_some());
+
+        // Forward a subscription to the PubSocket.
+        xpub.send_subscription(SubscriptionEvent::Subscribe(Bytes::from("weather")))
+            .await
+            .unwrap();
+
+        // Wait for the PubSocket to broadcast.
+        pub_task.await;
+
+        // The upstream XSubSocket should have received the "weather" message.
+        let msg = xpub
+            .upstream
+            .as_mut()
+            .unwrap()
+            .recv()
+            .await
+            .unwrap()
+            .expect("upstream should have received matching message");
+
+        assert_eq!(msg[0], Bytes::from("weather"));
+        assert_eq!(msg[1], Bytes::from("sunny"));
+    }
 }
 
 // Implement Socket trait for XPubSocket (non-generic)
@@ -447,11 +596,9 @@ impl crate::Socket for XPubSocket {
 
     async fn recv(&mut self) -> io::Result<Option<Vec<Bytes>>> {
         // XPUB receives subscription events
-        self.recv_subscription().await.map(|opt| {
-            opt.map(|event| {
-                vec![event.to_message()]
-            })
-        })
+        self.recv_subscription()
+            .await
+            .map(|opt| opt.map(|event| vec![event.to_message()]))
     }
 
     fn socket_type(&self) -> SocketType {

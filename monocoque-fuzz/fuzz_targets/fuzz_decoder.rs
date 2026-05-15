@@ -43,7 +43,7 @@ fn parse_command(data: &[u8]) -> Result<(), &'static str> {
     }
     
     let flags = data[0];
-    let size = data[1];
+    let _size = data[1];
     
     // Check if it's a long command
     if (flags & 0x02) != 0 {

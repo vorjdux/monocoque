@@ -21,10 +21,7 @@ use tracing::{debug, trace};
 
 use crate::base::SocketBase;
 use crate::codec::encode_multipart;
-use crate::{
-    handshake::perform_handshake_with_timeout,
-    session::SocketType,
-};
+use crate::{handshake::perform_handshake_with_options, session::SocketType};
 use monocoque_core::endpoint::Endpoint;
 use monocoque_core::options::SocketOptions;
 
@@ -113,19 +110,17 @@ where
     /// This provides full control over buffer sizes and timeouts.
     ///
     /// Works with both TCP and Unix domain sockets.
-    pub async fn with_options(
-        mut stream: S,
-        options: SocketOptions,
-    ) -> io::Result<Self> {
+    pub async fn with_options(mut stream: S, options: SocketOptions) -> io::Result<Self> {
         debug!("[REP] Creating new direct REP socket");
 
         // Perform ZMTP handshake with timeout
         debug!("[REP] Performing ZMTP handshake...");
-        let handshake_result = perform_handshake_with_timeout(
+        let handshake_result = perform_handshake_with_options(
             &mut stream,
             SocketType::Rep,
             None,
             Some(options.handshake_timeout),
+            &options,
         )
         .await
         .map_err(|e| io::Error::other(format!("Handshake failed: {}", e)))?;
@@ -404,7 +399,6 @@ impl RepSocket<TcpStream> {
     }
 
     /// Create a new REP socket from a TCP stream with TCP_NODELAY and custom config.
-
 
     /// Create a new REP socket from a TCP stream with TCP_NODELAY and custom options.
     pub async fn from_tcp_with_options(

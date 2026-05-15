@@ -69,7 +69,7 @@ async fn main() -> io::Result<()> {
     let mut xsub = XSubSocket::connect("127.0.0.1:5555").await?;
     info!("XSUB frontend bound on tcp://127.0.0.1:5555");
 
-    // Create XPUB backend for subscribers  
+    // Create XPUB backend for subscribers
     let mut xpub = XPubSocket::bind("127.0.0.1:5556").await?;
     xpub.set_verbose(true); // Receive subscription events
     info!("XPUB backend bound on tcp://127.0.0.1:5556");
@@ -99,7 +99,7 @@ async fn main() -> io::Result<()> {
                             subscription_changes += 1;
                             info!("→ Subscriber subscribed to '{}'", topic);
                             info!("  Active subscriptions: {}", subscriptions.len());
-                            
+
                             // Forward subscription upstream to publishers via XSUB
                             if let Err(e) = xsub.subscribe(prefix.clone()).await {
                                 warn!("Failed to forward subscription: {}", e);
@@ -114,7 +114,7 @@ async fn main() -> io::Result<()> {
                             subscription_changes += 1;
                             info!("← Subscriber unsubscribed from '{}'", topic);
                             info!("  Active subscriptions: {}", subscriptions.len());
-                            
+
                             // Forward unsubscription upstream
                             if let Err(e) = xsub.unsubscribe(prefix.clone()).await {
                                 warn!("Failed to forward unsubscription: {}", e);
@@ -128,9 +128,17 @@ async fn main() -> io::Result<()> {
                 // Show stats periodically
                 if subscription_changes % 5 == 0 && subscription_changes > 0 {
                     info!("");
-                    info!("📊 Broker stats: {} subscription changes", subscription_changes);
-                    info!("   Active topics: {:?}", 
-                          subscriptions.iter().map(|t| String::from_utf8_lossy(t)).collect::<Vec<_>>());
+                    info!(
+                        "📊 Broker stats: {} subscription changes",
+                        subscription_changes
+                    );
+                    info!(
+                        "   Active topics: {:?}",
+                        subscriptions
+                            .iter()
+                            .map(|t| String::from_utf8_lossy(t))
+                            .collect::<Vec<_>>()
+                    );
                     info!("");
                 }
             }

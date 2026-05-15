@@ -3,6 +3,7 @@
 use bytes::Bytes;
 use compio::net::TcpStream;
 use monocoque_core::monitor::{create_monitor, SocketEvent, SocketEventSender, SocketMonitor};
+use monocoque_core::options::SocketOptions;
 use monocoque_zmtp::subscriber::SubSocket as InternalSub;
 use monocoque_zmtp::SocketType;
 use std::io;
@@ -123,8 +124,6 @@ impl SubSocket {
         Ok(sock)
     }
 
-
-
     /// Create a SUB socket from a TCP stream with TCP_NODELAY enabled.
     pub async fn from_tcp(stream: TcpStream) -> io::Result<Self> {
         Ok(Self {
@@ -192,7 +191,6 @@ where
     }
 
     /// Helper to emit monitoring events (if monitoring is enabled).
-    #[allow(dead_code)]
     fn emit_event(&self, event: SocketEvent) {
         if let Some(monitor) = &self.monitor {
             let _ = monitor.send(event);
@@ -202,7 +200,7 @@ where
     /// Subscribe to messages matching the given topic prefix.
     ///
     /// Empty topic subscribes to all messages.
-    /// 
+    ///
     /// This sends a subscription message to the PUB socket.
     pub async fn subscribe(&mut self, topic: &[u8]) -> io::Result<()> {
         self.inner.subscribe(Bytes::copy_from_slice(topic)).await
@@ -273,6 +271,12 @@ where
     #[inline]
     pub fn events(&self) -> u32 {
         self.inner.events()
+    }
+
+    /// Get a mutable reference to this socket's options.
+    #[inline]
+    pub fn options_mut(&mut self) -> &mut SocketOptions {
+        self.inner.options_mut()
     }
 }
 

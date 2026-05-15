@@ -136,6 +136,130 @@ required-features = ["zmq"]
 name = "curve_demo"
 required-features = ["zmq"]
 
+[[example]]
+name = "authenticated_req_rep"
+required-features = ["zmq"]
+
+[[example]]
+name = "debug_handshake_timing"
+required-features = ["zmq"]
+
+[[example]]
+name = "debug_rep_server"
+required-features = ["zmq"]
+
+[[example]]
+name = "endpoint_parsing"
+required-features = ["zmq"]
+
+[[example]]
+name = "hwm_enforcement_demo"
+required-features = ["zmq"]
+
+[[example]]
+name = "inproc_demo"
+required-features = ["zmq"]
+
+[[example]]
+name = "inproc_pair_demo"
+required-features = ["zmq"]
+
+[[example]]
+name = "interop_rep_libzmq"
+required-features = ["zmq"]
+
+[[example]]
+name = "interop_req_libzmq"
+required-features = ["zmq"]
+
+[[example]]
+name = "ipc_transport"
+required-features = ["zmq"]
+
+[[example]]
+name = "monitoring"
+required-features = ["zmq"]
+
+[[example]]
+name = "multi_pub_test"
+required-features = ["zmq"]
+
+[[example]]
+name = "multi_sub_client"
+required-features = ["zmq"]
+
+[[example]]
+name = "multi_subscriber"
+required-features = ["zmq"]
+
+[[example]]
+name = "paranoid_pirate"
+required-features = ["zmq"]
+
+[[example]]
+name = "paranoid_pirate_proxy"
+required-features = ["zmq"]
+
+[[example]]
+name = "paranoid_pirate_simple"
+required-features = ["zmq"]
+
+[[example]]
+name = "poison_guard_demo"
+required-features = ["zmq"]
+
+[[example]]
+name = "pubsub_events_new"
+required-features = ["zmq"]
+
+[[example]]
+name = "reconnection_demo"
+required-features = ["zmq"]
+
+[[example]]
+name = "rep_server"
+required-features = ["zmq"]
+
+[[example]]
+name = "req_client"
+required-features = ["zmq"]
+
+[[example]]
+name = "router_identity"
+required-features = ["zmq"]
+
+[[example]]
+name = "simple_rep_server"
+required-features = ["zmq"]
+
+[[example]]
+name = "simple_req_client"
+required-features = ["zmq"]
+
+[[example]]
+name = "simple_req_rep"
+required-features = ["zmq"]
+
+[[example]]
+name = "socket_introspection"
+required-features = ["zmq"]
+
+[[example]]
+name = "socket_monitoring"
+required-features = ["zmq"]
+
+[[example]]
+name = "stream_sink_adapters"
+required-features = ["zmq"]
+
+[[example]]
+name = "tcp_and_ipc_demo"
+required-features = ["zmq"]
+
+[[example]]
+name = "zap_server_demo"
+required-features = ["zmq"]
+
 # Integration tests with libzmq
 [[test]]
 name = "interop_load_balance"
@@ -151,6 +275,10 @@ required-features = ["zmq"]
 
 [[test]]
 name = "interop_router"
+required-features = ["zmq"]
+
+[[test]]
+name = "interop_push_pull"
 required-features = ["zmq"]
 
 [dependencies]
@@ -173,6 +301,7 @@ tokio.workspace = true
 num_cpus.workspace = true
 portpicker.workspace = true
 hex.workspace = true
+async-trait.workspace = true
 
 [features]
 default = []

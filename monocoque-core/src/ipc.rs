@@ -48,7 +48,7 @@ pub async fn bind<P: AsRef<Path>>(path: P) -> std::io::Result<UnixListener> {
     if path_ref.exists() {
         std::fs::remove_file(path_ref)?;
     }
-    
+
     UnixListener::bind(path).await
 }
 
@@ -67,29 +67,27 @@ mod tests {
     #[compio::test]
     async fn test_ipc_connect_bind() {
         let path = "/tmp/monocoque_test_ipc.sock";
-        
+
         // Clean up any existing socket
         let _ = std::fs::remove_file(path);
-        
+
         let listener = bind(path).await.unwrap();
-        
+
         // Spawn accept task
-        let accept_handle = compio::runtime::spawn(async move {
-            accept(&listener).await
-        });
-        
+        let accept_handle = compio::runtime::spawn(async move { accept(&listener).await });
+
         // Give listener time to start
         compio::time::sleep(std::time::Duration::from_millis(10)).await;
-        
+
         // Connect
         let client = connect(path).await.unwrap();
-        
+
         // Wait for accept
         let server = accept_handle.await.unwrap();
-        
+
         assert!(client.peer_addr().is_ok());
         assert!(server.local_addr().is_ok());
-        
+
         // Cleanup
         drop(client);
         drop(server);

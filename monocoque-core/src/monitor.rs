@@ -19,16 +19,10 @@ pub enum SocketEvent {
     Bound(Endpoint),
 
     /// Bind operation failed.
-    BindFailed {
-        endpoint: Endpoint,
-        reason: String,
-    },
+    BindFailed { endpoint: Endpoint, reason: String },
 
     /// Connection attempt failed.
-    ConnectFailed {
-        endpoint: Endpoint,
-        reason: String,
-    },
+    ConnectFailed { endpoint: Endpoint, reason: String },
 
     /// Socket is listening for incoming connections.
     Listening(Endpoint),
@@ -68,7 +62,7 @@ pub type SocketEventSender = flume::Sender<SocketEvent>;
 /// Creates a new monitoring channel pair.
 ///
 /// This is exposed publicly to allow socket implementations to create monitors.
-#[must_use] 
+#[must_use]
 pub fn create_monitor() -> (SocketEventSender, SocketMonitor) {
     flume::unbounded()
 }
@@ -89,8 +83,10 @@ mod tests {
     fn test_monitor_channel() {
         let (sender, receiver) = create_monitor();
         let addr: SocketAddr = "127.0.0.1:5555".parse().unwrap();
-        sender.send(SocketEvent::Connected(Endpoint::Tcp(addr))).unwrap();
-        
+        sender
+            .send(SocketEvent::Connected(Endpoint::Tcp(addr)))
+            .unwrap();
+
         let event = receiver.recv().unwrap();
         assert!(matches!(event, SocketEvent::Connected(_)));
     }

@@ -46,15 +46,21 @@ fn monocoque_req_rep_throughput(c: &mut Criterion) {
 
                     let accept_task = compio::runtime::spawn(async move {
                         let (stream, _) = listener.accept().await.unwrap();
-                        RepSocket::from_tcp_with_options(stream, SocketOptions::default().with_buffer_sizes(4096, 4096))
-                            .await
-                            .unwrap()
+                        RepSocket::from_tcp_with_options(
+                            stream,
+                            SocketOptions::default().with_buffer_sizes(4096, 4096),
+                        )
+                        .await
+                        .unwrap()
                     });
 
                     let stream = compio::net::TcpStream::connect(server_addr).await.unwrap();
-                    let mut req = ReqSocket::from_tcp_with_options(stream, SocketOptions::default().with_buffer_sizes(4096, 4096))
-                        .await
-                        .unwrap();
+                    let mut req = ReqSocket::from_tcp_with_options(
+                        stream,
+                        SocketOptions::default().with_buffer_sizes(4096, 4096),
+                    )
+                    .await
+                    .unwrap();
                     let rep = accept_task.await;
 
                     // Message throughput loop - this dominates the timing with 10k iterations
@@ -148,10 +154,12 @@ fn monocoque_dealer_router_throughput(c: &mut Criterion) {
 
                     let router_task = compio::runtime::spawn(async move {
                         let (stream, _) = listener.accept().await.unwrap();
-                        let mut router =
-                            RouterSocket::from_tcp_with_options(stream, SocketOptions::default().with_buffer_sizes(16384, 16384))
-                                .await
-                                .unwrap();
+                        let mut router = RouterSocket::from_tcp_with_options(
+                            stream,
+                            SocketOptions::default().with_buffer_sizes(16384, 16384),
+                        )
+                        .await
+                        .unwrap();
 
                         for _ in 0..MESSAGE_COUNT {
                             let msg = router.recv().await.unwrap();
@@ -160,10 +168,12 @@ fn monocoque_dealer_router_throughput(c: &mut Criterion) {
                     });
 
                     let stream = compio::net::TcpStream::connect(server_addr).await.unwrap();
-                    let mut dealer =
-                        DealerSocket::from_tcp_with_options(stream, SocketOptions::default().with_buffer_sizes(16384, 16384))
-                            .await
-                            .unwrap();
+                    let mut dealer = DealerSocket::from_tcp_with_options(
+                        stream,
+                        SocketOptions::default().with_buffer_sizes(16384, 16384),
+                    )
+                    .await
+                    .unwrap();
 
                     for _ in 0..MESSAGE_COUNT {
                         dealer.send(vec![black_box(payload.clone())]).await.unwrap();

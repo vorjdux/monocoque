@@ -41,7 +41,10 @@ fn main() {
         info!("[Monocoque PUB] Listening on tcp://127.0.0.1:5562");
 
         // Accept subscriber connection
-        pub_socket.accept_subscriber().await.expect("Failed to accept subscriber");
+        pub_socket
+            .accept_subscriber()
+            .await
+            .expect("Failed to accept subscriber");
         info!("[Monocoque PUB] Subscriber connected\n");
 
         // Give subscriber time to send subscription

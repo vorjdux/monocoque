@@ -13,44 +13,44 @@ use std::fmt;
 pub enum SocketType {
     /// PAIR socket for exclusive bidirectional communication
     Pair = 0,
-    
+
     /// PUB socket for publishing messages to subscribers
     Pub = 1,
-    
+
     /// SUB socket for subscribing to published messages
     Sub = 2,
-    
+
     /// REQ socket for synchronous request-reply client
     Req = 3,
-    
+
     /// REP socket for synchronous request-reply server
     Rep = 4,
-    
+
     /// DEALER socket for asynchronous request-reply patterns
     Dealer = 5,
-    
+
     /// ROUTER socket for routing messages by identity
     Router = 6,
-    
+
     /// PULL socket for receiving messages from pushers
     Pull = 7,
-    
+
     /// PUSH socket for sending messages to pullers
     Push = 8,
-    
+
     /// XPUB socket for extended publisher with subscription awareness
     XPub = 9,
-    
+
     /// XSUB socket for extended subscriber with dynamic subscriptions
     XSub = 10,
-    
+
     /// STREAM socket for raw TCP connections (not yet implemented)
     Stream = 11,
 }
 
 impl SocketType {
     /// Get the socket type as a string name.
-    #[must_use] 
+    #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Pair => "PAIR",
@@ -67,18 +67,23 @@ impl SocketType {
             Self::Stream => "STREAM",
         }
     }
-    
+
     /// Check if this socket type is compatible with the given peer type.
-    #[must_use] 
+    #[must_use]
     pub const fn is_compatible(&self, peer: Self) -> bool {
         matches!(
             (self, peer),
-            (Self::Pair, Self::Pair) | (Self::Pub, Self::Sub) | (Self::Sub, Self::Pub) |
-(Self::Req | Self::Dealer, Self::Rep) | (Self::Rep | Self::Router, Self::Req)
-| (Self::Req | Self::Dealer | Self::Router, Self::Router) |
-(Self::Rep | Self::Router | Self::Dealer, Self::Dealer) |
-(Self::Push, Self::Pull) | (Self::Pull, Self::Push) | (Self::XPub, Self::XSub)
-| (Self::XSub, Self::XPub)
+            (Self::Pair, Self::Pair)
+                | (Self::Pub, Self::Sub)
+                | (Self::Sub, Self::Pub)
+                | (Self::Req | Self::Dealer, Self::Rep)
+                | (Self::Rep | Self::Router, Self::Req)
+                | (Self::Req | Self::Dealer | Self::Router, Self::Router)
+                | (Self::Rep | Self::Router | Self::Dealer, Self::Dealer)
+                | (Self::Push, Self::Pull)
+                | (Self::Pull, Self::Push)
+                | (Self::XPub, Self::XSub)
+                | (Self::XSub, Self::XPub)
         )
     }
 }
@@ -109,7 +114,7 @@ mod tests {
         assert!(SocketType::Push.is_compatible(SocketType::Pull));
         assert!(SocketType::Pub.is_compatible(SocketType::Sub));
         assert!(SocketType::XPub.is_compatible(SocketType::XSub));
-        
+
         // Incompatible pairs
         assert!(!SocketType::Req.is_compatible(SocketType::Dealer));
         assert!(!SocketType::Pub.is_compatible(SocketType::Pull));

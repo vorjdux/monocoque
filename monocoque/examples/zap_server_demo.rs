@@ -8,10 +8,10 @@
 //! - Spawning a ZAP server on inproc transport
 //! - Authentication with custom logic (e.g., database lookup)
 
-use bytes::Bytes;
-use monocoque_zmtp::security::zap::{ZapHandler, ZapMechanism, ZapRequest, ZapResponse, ZapStatus};
-use monocoque_zmtp::security::zap_handler::{spawn_zap_server, DefaultZapHandler};
 use monocoque_zmtp::security::plain::StaticPlainHandler;
+use monocoque_zmtp::security::zap::{ZapMechanism, ZapRequest, ZapResponse, ZapStatus};
+use monocoque_zmtp::security::zap_handler::{spawn_zap_server, ZapHandler};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Custom authentication handler that implements business logic
@@ -19,7 +19,7 @@ struct CustomZapHandler {
     /// Allowed IP addresses
     allowed_ips: Vec<String>,
     /// PLAIN authentication handler
-    plain_handler: Arc<dyn monocoque_zmtp::security::plain::PlainAuthHandler>,
+    plain_handler: Arc<dyn monocoque_zmtp::security::plain::PlainAuthHandler + Send + Sync>,
 }
 
 #[async_trait::async_trait(?Send)]
@@ -40,7 +40,7 @@ impl ZapHandler for CustomZapHandler {
                 status_code: ZapStatus::Failure,
                 status_text: "IP not allowed".to_string(),
                 user_id: String::new(),
-                metadata: Bytes::new(),
+                metadata: HashMap::new(),
             };
         }
 
@@ -53,7 +53,7 @@ impl ZapHandler for CustomZapHandler {
                 status_code: ZapStatus::Failure,
                 status_text: "Invalid domain".to_string(),
                 user_id: String::new(),
-                metadata: Bytes::new(),
+                metadata: HashMap::new(),
             };
         }
 
@@ -67,7 +67,7 @@ impl ZapHandler for CustomZapHandler {
                     status_code: ZapStatus::Success,
                     status_text: "OK".to_string(),
                     user_id: "anonymous".to_string(),
-                    metadata: Bytes::new(),
+                    metadata: HashMap::new(),
                 }
             }
             ZapMechanism::Plain => {
@@ -79,7 +79,7 @@ impl ZapHandler for CustomZapHandler {
                         status_code: ZapStatus::Failure,
                         status_text: "Invalid credentials".to_string(),
                         user_id: String::new(),
-                        metadata: Bytes::new(),
+                        metadata: HashMap::new(),
                     };
                 }
 
@@ -102,7 +102,7 @@ impl ZapHandler for CustomZapHandler {
                             status_code: ZapStatus::Success,
                             status_text: "OK".to_string(),
                             user_id,
-                            metadata: Bytes::new(),
+                            metadata: HashMap::new(),
                         }
                     }
                     Err(err) => {
@@ -113,7 +113,7 @@ impl ZapHandler for CustomZapHandler {
                             status_code: ZapStatus::Failure,
                             status_text: err,
                             user_id: String::new(),
-                            metadata: Bytes::new(),
+                            metadata: HashMap::new(),
                         }
                     }
                 }
@@ -127,7 +127,7 @@ impl ZapHandler for CustomZapHandler {
                         status_code: ZapStatus::Failure,
                         status_text: "Invalid CURVE key".to_string(),
                         user_id: String::new(),
-                        metadata: Bytes::new(),
+                        metadata: HashMap::new(),
                     };
                 }
 
@@ -139,7 +139,7 @@ impl ZapHandler for CustomZapHandler {
                     status_code: ZapStatus::Success,
                     status_text: "OK".to_string(),
                     user_id: "curve-client".to_string(),
-                    metadata: Bytes::new(),
+                    metadata: HashMap::new(),
                 }
             }
         }
@@ -174,7 +174,7 @@ fn main() {
 
         // Spawn ZAP server on inproc://zeromq.zap.01
         println!("🚀 Starting ZAP server on inproc://zeromq.zap.01");
-        let zap_task = spawn_zap_server(Arc::new(custom_handler));
+        spawn_zap_server(Arc::new(custom_handler)).expect("Failed to start ZAP server");
 
         println!("✅ ZAP server running");
         println!();
@@ -187,14 +187,7 @@ fn main() {
         println!("  2. Client connects with .with_plain_credentials(user, pass)");
         println!("  3. ZAP server authenticates the connection");
         println!();
-        println!("Press Ctrl+C to stop...");
 
-        // In a real application, you would:
-        // 1. Create server sockets that use authentication
-        // 2. Let the ZAP server handle authentication requests
-        // 3. Process authenticated client connections
-
-        // For this demo, just keep the ZAP server running
-        zap_task.await.expect("ZAP server task failed");
+        println!("ZAP server started. Exiting demo.");
     });
 }

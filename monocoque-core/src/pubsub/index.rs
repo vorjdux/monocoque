@@ -27,15 +27,14 @@ pub struct SubscriptionIndex {
 }
 
 impl SubscriptionIndex {
-    #[must_use] 
+    #[must_use]
     pub const fn new() -> Self {
         Self { subs: Vec::new() }
     }
 
     #[inline]
     #[must_use]
-    #[allow(clippy::incompatible_msrv)] // is_empty in const context requires 1.87
-    pub const fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.subs.is_empty()
     }
 
@@ -101,7 +100,7 @@ impl SubscriptionIndex {
     /// - Forward scan over sorted prefixes.
     /// - Early exit when prefix > topic lexicographically (cannot be a prefix).
     /// - Starts-with check for actual prefix match.
-    #[must_use] 
+    #[must_use]
     pub fn match_topic(&self, topic: &[u8]) -> SmallVec<[PeerKey; 16]> {
         let mut out: SmallVec<[PeerKey; 16]> = SmallVec::new();
 
