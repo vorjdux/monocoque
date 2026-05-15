@@ -10,7 +10,7 @@ edition = "2021"
 license = "MIT"
 authors = ["Matheus Santos <vorj.dux@gmail.com>"]
 repository = "https://github.com/vorjdux/monocoque"
-rust-version = "1.75"
+rust-version = "1.85"
 
 [workspace.dependencies]
 # Core dependencies
