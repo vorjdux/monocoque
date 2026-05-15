@@ -502,7 +502,7 @@ impl ReqSocket<TcpStream> {
     /// # use monocoque_core::options::SocketOptions;
     /// # use compio::net::TcpStream;
     /// # async fn example() -> std::io::Result<()> {
-    /// let stream = TcpStream::connect(\"127.0.0.1:5555\").await?;
+    /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
     /// let mut opts = SocketOptions::small();
     /// opts.req_correlate = true; // Enable request ID correlation
     /// let socket = ReqSocket::from_tcp_with_options(stream, opts).await?;

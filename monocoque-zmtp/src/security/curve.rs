@@ -39,8 +39,8 @@
 //!
 //! ## References
 //!
-//! - RFC 26: https://rfc.zeromq.org/spec/26/
-//! - CurveCP: https://curvecp.org/
+//! - RFC 26: <https://rfc.zeromq.org/spec/26/>
+//! - CurveCP: <https://curvecp.org/>
 
 use bytes::{Bytes, BytesMut};
 use chacha20poly1305::{
@@ -66,7 +66,9 @@ const CURVE_MESSAGE: &[u8] = b"\x07MESSAGE";
 
 /// CURVE key sizes
 pub const CURVE_KEY_SIZE: usize = 32;
+/// Size of a CURVE nonce in bytes.
 pub const CURVE_NONCE_SIZE: usize = 24;
+/// Overhead added by the Poly1305 authentication tag.
 pub const CURVE_BOX_OVERHEAD: usize = 16; // Poly1305 tag
 
 /// CURVE public key (32 bytes)
@@ -143,7 +145,9 @@ impl std::fmt::Debug for CurveSecretKey {
 /// CURVE key pair (public + secret)
 #[derive(Debug, Clone)]
 pub struct CurveKeyPair {
+    /// Long-term public key.
     pub public: CurvePublicKey,
+    /// Long-term secret key.
     pub secret: CurveSecretKey,
 }
 
@@ -195,18 +199,25 @@ impl CurveBox {
 /// CURVE-specific errors
 #[derive(Debug, Error)]
 pub enum CurveError {
+    /// Symmetric encryption failed.
     #[error("Encryption failed")]
     EncryptionFailed,
+    /// Symmetric decryption or authentication-tag verification failed.
     #[error("Decryption failed")]
     DecryptionFailed,
+    /// A key did not have the expected length.
     #[error("Invalid key size")]
     InvalidKeySize,
+    /// A nonce had an unexpected format or length.
     #[error("Invalid nonce")]
     InvalidNonce,
+    /// The peer violated the CurveZMQ protocol.
     #[error("Protocol violation")]
     ProtocolViolation,
+    /// The peer's identity could not be verified.
     #[error("Authentication failed")]
     AuthenticationFailed,
+    /// An underlying I/O error occurred.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
