@@ -3,6 +3,7 @@
 use bytes::Bytes;
 use compio::net::TcpListener;
 use monocoque_core::monitor::{create_monitor, SocketEventSender, SocketMonitor};
+use monocoque_core::options::SocketOptions;
 use monocoque_zmtp::publisher::PubSocket as InternalPub;
 use monocoque_zmtp::SocketType;
 use std::io;
@@ -106,6 +107,18 @@ impl PubSocket {
         let (sender, receiver) = create_monitor();
         self.monitor = Some(sender);
         receiver
+    }
+
+    /// Get a mutable reference to this socket's options.
+    #[inline]
+    pub fn options_mut(&mut self) -> &mut SocketOptions {
+        self.inner.options_mut()
+    }
+
+    /// Number of messages dropped due to HWM backpressure.
+    #[inline]
+    pub fn drop_count(&self) -> u64 {
+        self.inner.drop_count()
     }
 
 }
