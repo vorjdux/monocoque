@@ -9,10 +9,11 @@
 ## Table of Contents
 
 1. [From libzmq (C/C++)](#from-libzmq)
-2. [From zmq.rs](#from-zmqrs)
+2. [From zmq.rs (rust-zmq)](#from-zmqrs)
 3. [API Mapping Reference](#api-mapping-reference)
-4. [Common Patterns](#common-patterns)
-5. [Breaking Changes](#breaking-changes)
+4. [Feature Parity Table](#feature-parity-table)
+5. [Common Patterns](#common-patterns)
+6. [Breaking Changes](#breaking-changes)
 
 ---
 
@@ -341,6 +342,61 @@ let msg = socket.recv().await?;
 | `ZMQ_CURVE_PUBLICKEY` | `.with_curve_keypair()` |
 | `ZMQ_REQ_CORRELATE` | `.with_req_correlate()` |
 | `ZMQ_REQ_RELAXED` | `.with_req_relaxed()` |
+
+---
+
+## Feature Parity Table
+
+Comparing the `zmq` crate (rust-zmq, wrapping libzmq) with `monocoque`:
+
+| Feature | `zmq` (rust-zmq) | monocoque |
+|---------|-----------------|-----------|
+| **REQ/REP** | ✅ `zmq::REQ` / `zmq::REP` | ✅ `ReqSocket` / `RepSocket` |
+| **DEALER/ROUTER** | ✅ | ✅ |
+| **PUB/SUB** | ✅ | ✅ |
+| **PUSH/PULL** | ✅ | ✅ |
+| **PAIR** | ✅ | ✅ |
+| **XPUB/XSUB** | ✅ | ✅ |
+| **STREAM** | ✅ | ✅ `StreamSocket` |
+| **Async/await** | ❌ (blocking only) | ✅ native |
+| **io_uring** | ❌ | ✅ (Linux 5.1+) |
+| **IPC transport** | ✅ | ✅ (Unix only) |
+| **inproc transport** | ✅ | Partial (via channel bridge) |
+| **NULL security** | ✅ | ✅ |
+| **PLAIN security** | ✅ | ✅ |
+| **CURVE security** | ✅ | ✅ |
+| **ZAP handler** | ✅ | ✅ |
+| **Socket monitor** | ✅ | ✅ `socket.monitor()` |
+| **Proxy / device** | ✅ | ✅ `monocoque::zmq::proxy` |
+| **Multipart send** | ✅ (SNDMORE flag) | ✅ (`Vec<Bytes>`, no flag) |
+| **TCP keepalive** | ✅ | ✅ |
+| **High-water mark** | ✅ | ✅ |
+| **Global context** | Required | Not needed |
+| **C dependency** | ✅ (libzmq) | ❌ (pure Rust) |
+
+### `zmq::Socket` Method Mapping
+
+Direct equivalent of every `zmq::Socket` method used in everyday code:
+
+| `zmq::Socket` (rust-zmq) | `monocoque::zmq::*` equivalent |
+|--------------------------|-------------------------------|
+| `socket.send(data, 0)` | `socket.send(vec![Bytes::from(data)]).await?` |
+| `socket.send_multipart(parts, 0)` | `socket.send(parts.into_iter().map(Bytes::from).collect()).await?` |
+| `socket.recv_bytes(0)` | `socket.recv().await?.map(|m| m[0].to_vec())` |
+| `socket.recv_multipart(0)` | `socket.recv().await?` — returns `Vec<Bytes>` |
+| `socket.recv_msg(0)` | `socket.recv().await?` |
+| `socket.connect(endpoint)` | `DealerSocket::connect(endpoint).await?` |
+| `socket.bind(endpoint)` | `RouterSocket::bind(endpoint).await?` |
+| `socket.set_rcvtimeo(ms)` | `opts.with_recv_timeout(Duration::from_millis(ms))` |
+| `socket.set_sndtimeo(ms)` | `opts.with_send_timeout(Duration::from_millis(ms))` |
+| `socket.set_rcvhwm(n)` | `opts.with_recv_hwm(n)` |
+| `socket.set_sndhwm(n)` | `opts.with_send_hwm(n)` |
+| `socket.set_linger(ms)` | `opts.with_linger(Some(Duration::from_millis(ms)))` |
+| `socket.set_subscribe(topic)` | `sub_socket.subscribe(topic).await?` |
+| `socket.set_unsubscribe(topic)` | `sub_socket.unsubscribe(topic).await?` |
+| `socket.set_identity(id)` | `opts.with_routing_id(Bytes::from(id))` |
+| `socket.get_rcvmore()` | `socket.has_more()` |
+| `socket.monitor(addr, events)` | `let mon = socket.monitor()` |
 
 ---
 

@@ -300,11 +300,78 @@ struct MultiKeyServer {
 - ❌ Never commit to version control
 - ❌ Never send over unencrypted channels
 
+### End-to-End CURVE Example
+
+A complete working example: generate keys, start a CURVE server, connect a CURVE client,
+and attach a ZAP handler that validates the client's public key.
+
+```rust,no_run
+use monocoque::zmq::{RouterSocket, DealerSocket, SocketOptions};
+use monocoque_zmtp::security::curve::CurveKeyPair;
+use bytes::Bytes;
+
+// ── Step 1: Generate key pairs ────────────────────────────────────────────────
+
+let server_kp = CurveKeyPair::generate();
+let client_kp = CurveKeyPair::generate();
+
+// Distribute server_kp.public to the client out-of-band (config file, DNS, etc.)
+let server_pubkey: [u8; 32] = *server_kp.public.as_bytes();
+let client_pubkey: [u8; 32] = *client_kp.public.as_bytes();
+
+// ── Step 2: Start the CURVE server ───────────────────────────────────────────
+
+let server_opts = SocketOptions::default()
+    .with_curve_server(true)
+    .with_curve_keypair(
+        *server_kp.public.as_bytes(),
+        *server_kp.secret.as_bytes(),
+    );
+
+// RouterSocket::bind returns (listener_handle, socket).
+let (_listener, mut server) = RouterSocket::bind_with_options(
+    "127.0.0.1:5555",
+    server_opts,
+).await?;
+
+// ── Step 3: Connect the CURVE client ─────────────────────────────────────────
+
+let client_opts = SocketOptions::default()
+    .with_curve_keypair(
+        *client_kp.public.as_bytes(),
+        *client_kp.secret.as_bytes(),
+    )
+    .with_curve_serverkey(server_pubkey);
+
+let mut client = DealerSocket::connect_with_options(
+    "127.0.0.1:5555",
+    client_opts,
+).await?;
+
+// ── Step 4: Exchange messages ─────────────────────────────────────────────────
+// The ZMTP CURVE handshake completes automatically during connect/accept.
+
+client.send(vec![Bytes::from("hello from client")]).await?;
+
+if let Some(msg) = server.recv().await {
+    // msg[0] = routing ID, msg[1] = empty delimiter, msg[2] = payload
+    let payload = std::str::from_utf8(&msg[2]).unwrap_or("?");
+    println!("Server received: {}", payload);
+
+    // Echo back
+    server.send(msg).await?;
+}
+```
+
+> **ZAP handler**: For production use, attach a ZAP handler (see [ZAP Protocol](#zap-protocol)
+> below) to validate the client's public key against an allowlist before the handshake completes.
+> Without a ZAP handler, any client that knows the server's public key can connect.
+
 ### CURVE Performance Considerations
 
-- **Handshake overhead**: ~3ms for key exchange (one-time per connection)
+- **Handshake overhead**: ~3 ms for key exchange (one-time per connection)
 - **Message overhead**: ~32 bytes per message (MAC + nonce)
-- **CPU usage**: ChaCha20-Poly1305 is highly optimized (minimal overhead on modern CPUs)
+- **CPU usage**: ChaCha20-Poly1305 is highly optimised (minimal overhead on modern CPUs)
 - **Throughput**: Typically 90-95% of NULL mechanism throughput
 
 ---
