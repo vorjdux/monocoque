@@ -13,7 +13,7 @@ fn test_network_tuning_options() {
         .with_multicast_hops(5)
         .with_tos(0x10)
         .with_multicast_maxtpdu(9000);
-    
+
     assert_eq!(opts.rate, 200);
     assert_eq!(opts.recovery_ivl, Duration::from_secs(20));
     assert_eq!(opts.sndbuf, 65536);
@@ -27,18 +27,17 @@ fn test_network_tuning_options() {
 fn test_ipv6_option() {
     let opts = SocketOptions::new().with_ipv6(true);
     assert!(opts.ipv6);
-    
+
     let opts = SocketOptions::default();
     assert!(!opts.ipv6); // Default is false
 }
 
 #[test]
 fn test_bind_to_device_option() {
-    let opts = SocketOptions::new()
-        .with_bind_to_device("eth0");
-    
+    let opts = SocketOptions::new().with_bind_to_device("eth0");
+
     assert_eq!(opts.bind_to_device, Some("eth0".to_string()));
-    
+
     let opts = SocketOptions::default();
     assert_eq!(opts.bind_to_device, None);
 }
@@ -46,7 +45,7 @@ fn test_bind_to_device_option() {
 #[test]
 fn test_default_network_values() {
     let opts = SocketOptions::default();
-    
+
     assert_eq!(opts.rate, 100); // 100 kbps
     assert_eq!(opts.recovery_ivl, Duration::from_secs(10));
     assert_eq!(opts.sndbuf, 0); // OS default
@@ -68,7 +67,7 @@ fn test_combined_options() {
         .with_ipv6(true)
         .with_rate(500)
         .with_sndbuf(131072);
-    
+
     assert_eq!(opts.recv_timeout, Some(Duration::from_secs(5)));
     assert_eq!(opts.send_timeout, Some(Duration::from_secs(5)));
     assert_eq!(opts.tcp_keepalive, 1);

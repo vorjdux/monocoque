@@ -24,10 +24,22 @@ async fn pair_connected() -> (PairSocket, PairSocket) {
 /// ProxyCommand byte parsing is a pure function — no runtime needed.
 #[test]
 fn test_proxy_command_parsing() {
-    assert_eq!(ProxyCommand::from_bytes(b"PAUSE"), Some(ProxyCommand::Pause));
-    assert_eq!(ProxyCommand::from_bytes(b"RESUME"), Some(ProxyCommand::Resume));
-    assert_eq!(ProxyCommand::from_bytes(b"TERMINATE"), Some(ProxyCommand::Terminate));
-    assert_eq!(ProxyCommand::from_bytes(b"STATISTICS"), Some(ProxyCommand::Statistics));
+    assert_eq!(
+        ProxyCommand::from_bytes(b"PAUSE"),
+        Some(ProxyCommand::Pause)
+    );
+    assert_eq!(
+        ProxyCommand::from_bytes(b"RESUME"),
+        Some(ProxyCommand::Resume)
+    );
+    assert_eq!(
+        ProxyCommand::from_bytes(b"TERMINATE"),
+        Some(ProxyCommand::Terminate)
+    );
+    assert_eq!(
+        ProxyCommand::from_bytes(b"STATISTICS"),
+        Some(ProxyCommand::Statistics)
+    );
     assert_eq!(ProxyCommand::from_bytes(b"UNKNOWN"), None);
     assert_eq!(ProxyCommand::from_bytes(b""), None);
 }
@@ -51,7 +63,10 @@ async fn test_proxy_pair_forward() {
     let msg = client_b.recv().await.unwrap().unwrap();
     assert_eq!(msg, vec![Bytes::from("hello")]);
 
-    ctrl_client.send(vec![Bytes::from("TERMINATE")]).await.unwrap();
+    ctrl_client
+        .send(vec![Bytes::from("TERMINATE")])
+        .await
+        .unwrap();
     proxy_task.await.unwrap();
 }
 
@@ -80,7 +95,10 @@ async fn test_proxy_pair_bidirectional() {
     let msg = client_a.recv().await.unwrap().unwrap();
     assert_eq!(msg, vec![Bytes::from("B to A")]);
 
-    ctrl_client.send(vec![Bytes::from("TERMINATE")]).await.unwrap();
+    ctrl_client
+        .send(vec![Bytes::from("TERMINATE")])
+        .await
+        .unwrap();
     proxy_task.await.unwrap();
 }
 
@@ -109,7 +127,10 @@ async fn test_proxy_capture_socket() {
     let msg_cap = capture_client.recv().await.unwrap().unwrap();
     assert_eq!(msg_cap, vec![Bytes::from("captured")]);
 
-    ctrl_client.send(vec![Bytes::from("TERMINATE")]).await.unwrap();
+    ctrl_client
+        .send(vec![Bytes::from("TERMINATE")])
+        .await
+        .unwrap();
     proxy_task.await.unwrap();
 }
 
@@ -133,7 +154,13 @@ async fn test_proxy_steerable_terminate() {
     client_b.recv().await.unwrap().unwrap();
 
     // TERMINATE should cause proxy_steerable to return Ok(()).
-    ctrl_client.send(vec![Bytes::from("TERMINATE")]).await.unwrap();
+    ctrl_client
+        .send(vec![Bytes::from("TERMINATE")])
+        .await
+        .unwrap();
     let result = proxy_task.await;
-    assert!(result.is_ok(), "proxy_steerable should return Ok(()) on TERMINATE");
+    assert!(
+        result.is_ok(),
+        "proxy_steerable should return Ok(()) on TERMINATE"
+    );
 }

@@ -5,7 +5,7 @@
 use monocoque_zmtp::security::plain::{
     plain_client_handshake, plain_server_handshake_zap, PlainCredentials, StaticPlainHandler,
 };
-use monocoque_zmtp::security::zap_handler::{DefaultZapHandler, spawn_zap_server};
+use monocoque_zmtp::security::zap_handler::{spawn_zap_server, DefaultZapHandler};
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
@@ -48,9 +48,13 @@ async fn test_plain_zap_success() -> io::Result<()> {
 
     let mut client_stream = compio::net::TcpStream::connect(server_addr).await?;
     let credentials = PlainCredentials::new("testuser", "testpass");
-    plain_client_handshake(&mut client_stream, &credentials, Some(Duration::from_secs(2)))
-        .await
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+    plain_client_handshake(
+        &mut client_stream,
+        &credentials,
+        Some(Duration::from_secs(2)),
+    )
+    .await
+    .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
 
     server_task.await?;
 
@@ -88,9 +92,12 @@ async fn test_plain_zap_failure() -> io::Result<()> {
 
     let mut client_stream = compio::net::TcpStream::connect(server_addr).await?;
     let credentials = PlainCredentials::new("testuser", "WRONGPASS");
-    let result =
-        plain_client_handshake(&mut client_stream, &credentials, Some(Duration::from_secs(2)))
-            .await;
+    let result = plain_client_handshake(
+        &mut client_stream,
+        &credentials,
+        Some(Duration::from_secs(2)),
+    )
+    .await;
 
     // Client may or may not fail depending on ZAP server state
     let _ = result;

@@ -132,7 +132,10 @@ mod tests {
             let _guard = PoisonGuard::new(&mut poisoned);
             // Guard dropped without disarm
         }
-        assert!(poisoned, "Connection should be poisoned when guard is dropped");
+        assert!(
+            poisoned,
+            "Connection should be poisoned when guard is dropped"
+        );
     }
 
     #[test]

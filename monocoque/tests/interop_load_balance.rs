@@ -1,5 +1,5 @@
-use monocoque::zmq::RouterSocket;
 use bytes::Bytes;
+use monocoque::zmq::RouterSocket;
 use std::thread;
 use std::time::Duration;
 
@@ -20,10 +20,10 @@ fn test_router_load_balancer_basic() {
 
             let msg = router.recv().await.unwrap();
 
-            router.send(vec![
-                msg[0].clone(),
-                Bytes::from("Response from Router"),
-            ]).await.unwrap();
+            router
+                .send(vec![msg[0].clone(), Bytes::from("Response from Router")])
+                .await
+                .unwrap();
 
             result_tx.send(Ok(())).unwrap();
         });
@@ -42,5 +42,8 @@ fn test_router_load_balancer_basic() {
     let response = dealer.recv_string(0).unwrap().unwrap();
     assert_eq!(response, "Response from Router");
 
-    result_rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+    result_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
 }

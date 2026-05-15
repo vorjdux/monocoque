@@ -67,7 +67,10 @@ async fn main() -> std::io::Result<()> {
 
     alice.send(vec![Bytes::from("Hello from Alice")]).await?;
     if let Some(response) = alice.recv().await {
-        println!("[ALICE] Received: {}", String::from_utf8_lossy(&response[0]));
+        println!(
+            "[ALICE] Received: {}",
+            String::from_utf8_lossy(&response[0])
+        );
     }
 
     let bob_options = SocketOptions::new()

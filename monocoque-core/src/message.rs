@@ -16,14 +16,14 @@ use std::io;
 /// // Build a simple message
 /// let msg = Message::new()
 ///     .push_str("topic")
-///     .push(b"data")
+///     .push(&b"data"[..])
 ///     .into_frames();
 /// assert_eq!(msg.len(), 2);
 /// ```
 ///
-/// ```
+/// ```ignore
 /// # use monocoque_core::message::Message;
-/// // Build a message with JSON payload
+/// // Build a message with JSON payload (requires serde feature)
 /// #[derive(serde::Serialize)]
 /// struct Data { value: u32 }
 ///
@@ -60,7 +60,7 @@ impl Message {
     /// use bytes::Bytes;
     ///
     /// let msg = Message::new()
-    ///     .push(b"raw bytes")
+    ///     .push(&b"raw bytes"[..])
     ///     .push(vec![1, 2, 3])
     ///     .push(Bytes::from_static(b"static"));
     /// ```
@@ -96,7 +96,7 @@ impl Message {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// # use monocoque_core::message::Message;
     /// #[derive(serde::Serialize)]
     /// struct Event {
@@ -114,8 +114,8 @@ impl Message {
     /// ```
     #[cfg(feature = "serde")]
     pub fn push_json<T: serde::Serialize>(mut self, value: &T) -> io::Result<Self> {
-        let json = serde_json::to_vec(value)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let json =
+            serde_json::to_vec(value).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         self.frames.push(Bytes::from(json));
         Ok(self)
     }
@@ -128,7 +128,7 @@ impl Message {
     /// # use monocoque_core::message::Message;
     /// // ROUTER envelope: [identity] [empty] [data]
     /// let msg = Message::new()
-    ///     .push(b"client-id")
+    ///     .push(&b"client-id"[..])
     ///     .push_empty()
     ///     .push_str("request");
     /// ```
@@ -169,11 +169,11 @@ impl Message {
     /// Returns an error if the frame doesn't exist or isn't valid JSON.
     #[cfg(feature = "serde")]
     pub fn parse_frame_json<T: serde::de::DeserializeOwned>(&self, index: usize) -> io::Result<T> {
-        let frame = self.frames.get(index)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Frame index out of bounds"))?;
-        
-        serde_json::from_slice(frame)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        let frame = self.frames.get(index).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "Frame index out of bounds")
+        })?;
+
+        serde_json::from_slice(frame).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
     /// Try to parse the first frame as a UTF-8 string.
@@ -182,11 +182,11 @@ impl Message {
     ///
     /// Returns an error if the frame doesn't exist or isn't valid UTF-8.
     pub fn parse_frame_str(&self, index: usize) -> io::Result<&str> {
-        let frame = self.frames.get(index)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Frame index out of bounds"))?;
-        
-        std::str::from_utf8(frame)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        let frame = self.frames.get(index).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "Frame index out of bounds")
+        })?;
+
+        std::str::from_utf8(frame).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 }
 
@@ -235,9 +235,7 @@ mod tests {
 
     #[test]
     fn test_parse_frame_str() {
-        let msg = Message::new()
-            .push_str("topic")
-            .push(&b"data"[..]);
+        let msg = Message::new().push_str("topic").push(&b"data"[..]);
 
         assert_eq!(msg.parse_frame_str(0).unwrap(), "topic");
         assert!(msg.parse_frame_str(2).is_err()); // Out of bounds
@@ -259,10 +257,7 @@ mod tests {
             value: 42,
         };
 
-        let msg = Message::new()
-            .push_str("topic")
-            .push_json(&data)
-            .unwrap();
+        let msg = Message::new().push_str("topic").push_json(&data).unwrap();
 
         assert_eq!(msg.len(), 2);
 

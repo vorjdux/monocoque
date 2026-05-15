@@ -48,10 +48,7 @@ where
     }
 
     /// Create a new PUSH socket with custom buffer configuration and socket options.
-    pub async fn with_options(
-        mut stream: S,
-        options: SocketOptions,
-    ) -> io::Result<Self> {
+    pub async fn with_options(mut stream: S, options: SocketOptions) -> io::Result<Self> {
         debug!("[PUSH] Creating new PUSH socket");
 
         // Perform ZMTP handshake

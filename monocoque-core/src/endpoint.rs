@@ -50,20 +50,20 @@ impl Endpoint {
     }
 
     /// Returns true if this is a TCP endpoint.
-    #[must_use] 
+    #[must_use]
     pub const fn is_tcp(&self) -> bool {
         matches!(self, Self::Tcp(_))
     }
 
     /// Returns true if this is an IPC endpoint.
     #[cfg(unix)]
-    #[must_use] 
+    #[must_use]
     pub const fn is_ipc(&self) -> bool {
         matches!(self, Self::Ipc(_))
     }
 
     /// Returns true if this is an inproc endpoint.
-    #[must_use] 
+    #[must_use]
     pub const fn is_inproc(&self) -> bool {
         matches!(self, Self::Inproc(_))
     }

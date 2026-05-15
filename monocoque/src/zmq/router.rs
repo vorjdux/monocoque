@@ -345,10 +345,10 @@ where
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let (_listener, mut router) = RouterSocket::bind("tcp://0.0.0.0:5555").await?;
-    /// 
+    ///
     /// // Assign explicit identity to next connection
     /// router.set_connect_routing_id(b"worker-001".to_vec())?;
-    /// 
+    ///
     /// // When a peer connects, it will be identified as "worker-001"
     /// # Ok(())
     /// # }
@@ -378,7 +378,7 @@ where
     /// # use monocoque::zmq::RouterSocket;
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let (_listener, mut router) = RouterSocket::bind("tcp://0.0.0.0:5555").await?;
-    /// 
+    ///
     /// // Fail fast if routing to unknown peer
     /// router.set_router_mandatory(true);
     /// # Ok(())
@@ -407,7 +407,7 @@ where
     /// # use monocoque::zmq::RouterSocket;
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let (_listener, mut router) = RouterSocket::bind("tcp://0.0.0.0:5555").await?;
-    /// 
+    ///
     /// // Allow identity takeover for reconnecting clients
     /// router.set_router_handover(true);
     /// # Ok(())
@@ -430,7 +430,7 @@ where
     /// # use monocoque::zmq::RouterSocket;
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let (_listener, router) = RouterSocket::bind("tcp://0.0.0.0:5555").await?;
-    /// 
+    ///
     /// let identity = router.peer_identity();
     /// println!("Peer identity: {:?}", identity);
     /// # Ok(())
@@ -494,7 +494,9 @@ impl RouterSocket<compio::net::UnixStream> {
 impl monocoque_zmtp::proxy::ProxySocket for RouterSocket<TcpStream> {
     fn recv_multipart<'life0, 'async_trait>(
         &'life0 mut self,
-    ) -> ::core::pin::Pin<Box<dyn ::core::future::Future<Output = io::Result<Option<Vec<Bytes>>>> + 'async_trait>>
+    ) -> ::core::pin::Pin<
+        Box<dyn ::core::future::Future<Output = io::Result<Option<Vec<Bytes>>>> + 'async_trait>,
+    >
     where
         'life0: 'async_trait,
         Self: 'async_trait,

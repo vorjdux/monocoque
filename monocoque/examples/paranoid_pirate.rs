@@ -49,20 +49,24 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(1000);
 /// - REPLY messages when processing requests
 async fn run_worker(worker_id: u32, crash_after: Option<u32>) -> std::io::Result<()> {
     info!("[Worker-{}] 🔧 Starting paranoid worker", worker_id);
-    
+
     let mut socket = DealerSocket::connect("127.0.0.1:5556").await?;
-    
+
     // Send READY signal to broker
-    socket.send(vec![Bytes::new(), Bytes::from_static(READY)]).await?;
+    socket
+        .send(vec![Bytes::new(), Bytes::from_static(READY)])
+        .await?;
     info!("[Worker-{}] ✅ Sent READY to broker", worker_id);
-    
+
     let mut heartbeat_timer = Instant::now();
     let mut request_count = 0u32;
-    
+
     loop {
         // Send periodic heartbeat
         if heartbeat_timer.elapsed() >= HEARTBEAT_INTERVAL {
-            socket.send(vec![Bytes::new(), Bytes::from_static(HEARTBEAT)]).await?;
+            socket
+                .send(vec![Bytes::new(), Bytes::from_static(HEARTBEAT)])
+                .await?;
             debug!("[Worker-{}] 💓 Sent heartbeat", worker_id);
             heartbeat_timer = Instant::now();
         }
@@ -82,28 +86,30 @@ async fn run_worker(worker_id: u32, crash_after: Option<u32>) -> std::io::Result
                 if msg[0].is_empty() && msg.len() > 1 {
                     msg.remove(0);
                 }
-                
+
                 request_count += 1;
-                let request_data = msg.last()
+                let request_data = msg
+                    .last()
                     .map(|b| String::from_utf8_lossy(b).to_string())
                     .unwrap_or_default();
-                    
-                info!("[Worker-{}] 📥 Processing request #{}: {}", 
-                    worker_id, request_count, request_data);
-                
+
+                info!(
+                    "[Worker-{}] 📥 Processing request #{}: {}",
+                    worker_id, request_count, request_data
+                );
+
                 // Simulate work
                 compio::runtime::time::sleep(Duration::from_millis(100)).await;
-                
+
                 // Send reply (echo back with worker ID)
-                let reply_text = format!("Processed by worker-{}: {}", 
-                    worker_id, request_data);
-                
+                let reply_text = format!("Processed by worker-{}: {}", worker_id, request_data);
+
                 let mut reply = vec![Bytes::new()];
                 // Keep routing info frames
-                reply.extend(msg[..msg.len()-1].to_vec());
+                reply.extend(msg[..msg.len() - 1].to_vec());
                 // Replace last frame with our reply
                 reply.push(Bytes::from(reply_text));
-                
+
                 socket.send(reply).await?;
                 info!("[Worker-{}] 📤 Sent reply #{}", worker_id, request_count);
             }
@@ -119,32 +125,35 @@ async fn run_worker(worker_id: u32, crash_after: Option<u32>) -> std::io::Result
 /// Sends N requests and waits for replies
 async fn run_client(client_id: u32, num_requests: u32) -> std::io::Result<()> {
     info!("[Client-{}] 🔌 Starting", client_id);
-    
+
     // Wait for broker and workers to be ready
     compio::runtime::time::sleep(Duration::from_millis(1500)).await;
-    
+
     let mut socket = ReqSocket::connect("127.0.0.1:5555").await?;
-    
+
     for i in 1..=num_requests {
         let request = format!("Request {} from client-{}", i, client_id);
         info!("[Client-{}] 📨 Sending: {}", client_id, request);
-        
+
         socket.send(vec![Bytes::from(request)]).await?;
-        
+
         // Wait for reply (REQ/REP guarantees request-reply pairs)
         if let Some(reply) = socket.recv().await {
             if let Some(reply_text) = reply.first() {
-                info!("[Client-{}] 📬 Received: {:?}", client_id, 
-                    String::from_utf8_lossy(reply_text));
+                info!(
+                    "[Client-{}] 📬 Received: {:?}",
+                    client_id,
+                    String::from_utf8_lossy(reply_text)
+                );
             }
         } else {
             warn!("[Client-{}] ⚠️  No reply received", client_id);
         }
-        
+
         // Delay between requests
         compio::runtime::time::sleep(Duration::from_millis(800)).await;
     }
-    
+
     info!("[Client-{}] ✅ Completed all requests", client_id);
     Ok(())
 }
@@ -156,21 +165,26 @@ async fn run_client(client_id: u32, num_requests: u32) -> std::io::Result<()> {
 /// to track worker liveness and maintain an LRU queue.
 async fn run_broker() -> std::io::Result<()> {
     info!("🚀 Starting Paranoid Pirate Broker");
-    
+
     // Frontend: ROUTER for clients (REQ sockets)
     let (_, mut frontend) = monocoque::zmq::RouterSocket::bind("127.0.0.1:5555").await?;
     // Backend: DEALER for workers (DEALER sockets)
     let (_, mut backend) = DealerSocket::bind("127.0.0.1:5556").await?;
-    
+
     info!("📡 Frontend (clients) listening on 127.0.0.1:5555");
     info!("📡 Backend (workers) listening on 127.0.0.1:5556");
     info!("🔄 Starting ZeroMQ proxy (async-aware with futures::select!)\n");
-    
+
     // Use the ZeroMQ proxy pattern - now async-aware for single-threaded runtime
     // This forwards messages bidirectionally: frontend ←→ backend
     // READY, HEARTBEAT, and request/reply messages all flow through
-    monocoque::zmq::proxy::proxy(&mut frontend, &mut backend, Option::<&mut DealerSocket>::None).await?;
-    
+    monocoque::zmq::proxy::proxy(
+        &mut frontend,
+        &mut backend,
+        Option::<&mut DealerSocket>::None,
+    )
+    .await?;
+
     Ok(())
 }
 
@@ -200,7 +214,8 @@ fn main() -> std::io::Result<()> {
             if let Err(e) = run_broker().await {
                 error!("Broker error: {}", e);
             }
-        }).detach();
+        })
+        .detach();
 
         // Wait for broker to initialize
         compio::runtime::time::sleep(Duration::from_secs(1)).await;
@@ -210,7 +225,8 @@ fn main() -> std::io::Result<()> {
             if let Err(e) = run_worker(1, None).await {
                 error!("Worker 1 error: {}", e);
             }
-        }).detach();
+        })
+        .detach();
 
         // Small delay between worker spawns
         compio::runtime::time::sleep(Duration::from_millis(200)).await;
@@ -220,7 +236,8 @@ fn main() -> std::io::Result<()> {
             if let Err(_e) = run_worker(2, Some(3)).await {
                 info!("Worker 2 completed/crashed");
             }
-        }).detach();
+        })
+        .detach();
 
         // Wait for workers to connect and send READY
         compio::runtime::time::sleep(Duration::from_secs(2)).await;
@@ -235,12 +252,13 @@ fn main() -> std::io::Result<()> {
         // After 5 seconds, spawn recovery worker (after worker 2 crashes)
         compio::runtime::time::sleep(Duration::from_secs(5)).await;
         info!("\n🔄 Spawning recovery worker...\n");
-        
+
         compio::runtime::spawn(async {
             if let Err(e) = run_worker(3, None).await {
                 error!("Worker 3 error: {}", e);
             }
-        }).detach();
+        })
+        .detach();
 
         // Wait for client to finish all requests
         let _ = client1.await;
@@ -261,7 +279,7 @@ fn main() -> std::io::Result<()> {
         info!("  • Remove dead workers from queue");
         info!("  • Route requests to available workers");
         info!("  • Use multi-peer ROUTER sockets");
-        
+
         Ok(())
     })
 }

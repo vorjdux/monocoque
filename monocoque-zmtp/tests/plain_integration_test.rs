@@ -20,8 +20,7 @@ fn test_plain_auth_options_configuration() {
     assert!(server_options.plain_username.is_none());
     assert!(server_options.plain_password.is_none());
 
-    let client_options = SocketOptions::new()
-        .with_plain_credentials("testuser", "testpass");
+    let client_options = SocketOptions::new().with_plain_credentials("testuser", "testpass");
 
     assert_eq!(client_options.plain_server, false);
     assert_eq!(client_options.plain_username, Some("testuser".to_string()));
@@ -66,12 +65,16 @@ fn test_plain_multiple_users() {
 
         // All users should authenticate successfully with correct passwords
         for (user, pass) in [("user1", "pass1"), ("user2", "pass2"), ("user3", "pass3")] {
-            let result = handler.authenticate(user, pass, "global", "127.0.0.1").await;
+            let result = handler
+                .authenticate(user, pass, "global", "127.0.0.1")
+                .await;
             assert!(result.is_ok(), "User {} should authenticate", user);
         }
 
         // Cross-authentication should fail
-        let result = handler.authenticate("user1", "pass2", "global", "127.0.0.1").await;
+        let result = handler
+            .authenticate("user1", "pass2", "global", "127.0.0.1")
+            .await;
         assert!(result.is_err(), "Wrong password should fail");
     });
 }

@@ -32,11 +32,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         println!("2. IPC Transport (Unix domain sockets):");
         println!("   Creating DEALER socket with IPC...");
-        
+
         // Clean up any existing socket file
         let socket_path = "/tmp/monocoque_test.sock";
         let _ = std::fs::remove_file(socket_path);
-        
+
         match DealerSocket::connect_ipc(socket_path).await {
             Ok(_socket) => {
                 println!("   ✓ IPC socket created successfully");

@@ -1,5 +1,5 @@
-use monocoque::zmq::PairSocket;
 use bytes::Bytes;
+use monocoque::zmq::PairSocket;
 use std::thread;
 use std::time::Duration;
 
@@ -20,7 +20,9 @@ fn test_interop_pair() {
 
             let msg = pair.recv().await.unwrap().unwrap();
             if msg[0] != b"Ping"[..] {
-                result_tx.send(Err(format!("Expected Ping, got {:?}", msg[0]))).unwrap();
+                result_tx
+                    .send(Err(format!("Expected Ping, got {:?}", msg[0])))
+                    .unwrap();
                 return;
             }
 
@@ -40,5 +42,8 @@ fn test_interop_pair() {
     let msg = sock.recv_string(0).unwrap().unwrap();
     assert_eq!(msg, "Pong");
 
-    result_rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+    result_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
 }

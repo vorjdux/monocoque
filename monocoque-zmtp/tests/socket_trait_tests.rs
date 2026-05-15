@@ -1,7 +1,7 @@
 //! Integration tests for Socket trait API
 
-use monocoque_zmtp::Socket;
 use bytes::Bytes;
+use monocoque_zmtp::Socket;
 
 #[compio::test]
 async fn test_socket_trait_send_recv_signature() {
@@ -26,18 +26,28 @@ async fn test_socket_trait_send_recv_signature() {
 
     let server_task = compio::runtime::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        monocoque_zmtp::RouterSocket::from_tcp(stream).await.unwrap()
+        monocoque_zmtp::RouterSocket::from_tcp(stream)
+            .await
+            .unwrap()
     });
 
     let mut dealer = monocoque_zmtp::DealerSocket::connect(addr).await.unwrap();
     let mut router = server_task.await;
 
     // Verify types via trait
-    assert_eq!(check_type(&dealer), monocoque_zmtp::session::SocketType::Dealer);
-    assert_eq!(check_type(&router), monocoque_zmtp::session::SocketType::Router);
+    assert_eq!(
+        check_type(&dealer),
+        monocoque_zmtp::session::SocketType::Dealer
+    );
+    assert_eq!(
+        check_type(&router),
+        monocoque_zmtp::session::SocketType::Router
+    );
 
     // Verify send/recv compile with the trait
-    send_message(&mut dealer, vec![Bytes::from("hello")]).await.unwrap();
+    send_message(&mut dealer, vec![Bytes::from("hello")])
+        .await
+        .unwrap();
     let msg = recv_message(&mut router).await.unwrap();
     assert!(msg.is_some());
 }
@@ -51,7 +61,9 @@ async fn test_multiple_socket_types() {
 
     let server_task = compio::runtime::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        monocoque_zmtp::RouterSocket::from_tcp(stream).await.unwrap()
+        monocoque_zmtp::RouterSocket::from_tcp(stream)
+            .await
+            .unwrap()
     });
 
     let dealer = monocoque_zmtp::DealerSocket::connect(addr).await.unwrap();

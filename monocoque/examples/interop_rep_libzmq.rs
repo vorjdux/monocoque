@@ -44,7 +44,10 @@ fn main() {
             }
 
             // Second request-reply cycle
-            let request = socket.recv().await.expect("Failed to receive second request");
+            let request = socket
+                .recv()
+                .await
+                .expect("Failed to receive second request");
             if let Some(msg) = request {
                 info!("\n[Monocoque REP] Received second request:");
                 for (i, frame) in msg.iter().enumerate() {
@@ -78,14 +81,20 @@ fn main() {
     req.send("Request from libzmq REQ", 0).unwrap();
 
     let reply = req.recv_bytes(0).unwrap();
-    info!("[libzmq REQ] Received reply: {:?}\n", String::from_utf8_lossy(&reply));
+    info!(
+        "[libzmq REQ] Received reply: {:?}\n",
+        String::from_utf8_lossy(&reply)
+    );
 
     // Second request-reply cycle
     info!("[libzmq REQ] Sending second request");
     req.send("Second request from libzmq", 0).unwrap();
 
     let reply = req.recv_bytes(0).unwrap();
-    info!("[libzmq REQ] Received second reply: {:?}\n", String::from_utf8_lossy(&reply));
+    info!(
+        "[libzmq REQ] Received second reply: {:?}\n",
+        String::from_utf8_lossy(&reply)
+    );
 
     drop(req);
 

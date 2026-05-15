@@ -26,11 +26,13 @@ where
 {
     let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
     thread::spawn(move || {
-        compio::runtime::Runtime::new().unwrap().block_on(async move {
-            let srv = StreamSocket::bind("127.0.0.1:0").await.unwrap();
-            addr_tx.send(srv.local_addr().unwrap()).unwrap();
-            f(srv);
-        });
+        compio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let srv = StreamSocket::bind("127.0.0.1:0").await.unwrap();
+                addr_tx.send(srv.local_addr().unwrap()).unwrap();
+                f(srv);
+            });
     });
     addr_rx.recv().unwrap()
 }
@@ -47,20 +49,22 @@ fn test_stream_connection_notification() {
     let (notif_tx, notif_rx) = mpsc::channel::<Vec<Bytes>>();
 
     thread::spawn(move || {
-        compio::runtime::Runtime::new().unwrap().block_on(async move {
-            let mut srv = StreamSocket::bind("127.0.0.1:0").await.unwrap();
-            addr_tx.send(srv.local_addr().unwrap()).unwrap();
+        compio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let mut srv = StreamSocket::bind("127.0.0.1:0").await.unwrap();
+                addr_tx.send(srv.local_addr().unwrap()).unwrap();
 
-            // Accept one connection.
-            srv.accept_raw().await.unwrap();
+                // Accept one connection.
+                srv.accept_raw().await.unwrap();
 
-            // The reader task sends the connection notification synchronously
-            // into the inbound queue; give it a moment.
-            std::thread::sleep(Duration::from_millis(20));
+                // The reader task sends the connection notification synchronously
+                // into the inbound queue; give it a moment.
+                std::thread::sleep(Duration::from_millis(20));
 
-            let msg = srv.recv().await.unwrap().expect("expected notification");
-            notif_tx.send(msg).unwrap();
-        });
+                let msg = srv.recv().await.unwrap().expect("expected notification");
+                notif_tx.send(msg).unwrap();
+            });
     });
 
     let addr = addr_rx.recv().unwrap();
@@ -86,21 +90,23 @@ fn test_stream_recv_raw_data() {
     let (msg_tx, msg_rx) = mpsc::channel::<Vec<Bytes>>();
 
     thread::spawn(move || {
-        compio::runtime::Runtime::new().unwrap().block_on(async move {
-            let mut srv = StreamSocket::bind("127.0.0.1:0").await.unwrap();
-            addr_tx.send(srv.local_addr().unwrap()).unwrap();
+        compio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let mut srv = StreamSocket::bind("127.0.0.1:0").await.unwrap();
+                addr_tx.send(srv.local_addr().unwrap()).unwrap();
 
-            srv.accept_raw().await.unwrap();
+                srv.accept_raw().await.unwrap();
 
-            // Drain notifications until we get a non-empty data frame.
-            loop {
-                let msg = srv.recv().await.unwrap().expect("channel closed");
-                if !msg[2].is_empty() {
-                    msg_tx.send(msg).unwrap();
-                    break;
+                // Drain notifications until we get a non-empty data frame.
+                loop {
+                    let msg = srv.recv().await.unwrap().expect("channel closed");
+                    if !msg[2].is_empty() {
+                        msg_tx.send(msg).unwrap();
+                        break;
+                    }
                 }
-            }
-        });
+            });
     });
 
     let addr = addr_rx.recv().unwrap();
@@ -124,33 +130,37 @@ fn test_stream_send_raw_data() {
     let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
 
     thread::spawn(move || {
-        compio::runtime::Runtime::new().unwrap().block_on(async move {
-            let mut srv = StreamSocket::bind("127.0.0.1:0").await.unwrap();
-            addr_tx.send(srv.local_addr().unwrap()).unwrap();
+        compio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let mut srv = StreamSocket::bind("127.0.0.1:0").await.unwrap();
+                addr_tx.send(srv.local_addr().unwrap()).unwrap();
 
-            let routing_id = srv.accept_raw().await.unwrap();
+                let routing_id = srv.accept_raw().await.unwrap();
 
-            // Wait for the connect notification.
-            srv.recv().await.unwrap();
+                // Wait for the connect notification.
+                srv.recv().await.unwrap();
 
-            // Send raw bytes to the client.
-            srv.send(vec![
-                routing_id,
-                Bytes::new(),
-                Bytes::from("server says hello"),
-            ])
-            .await
-            .unwrap();
+                // Send raw bytes to the client.
+                srv.send(vec![
+                    routing_id,
+                    Bytes::new(),
+                    Bytes::from("server says hello"),
+                ])
+                .await
+                .unwrap();
 
-            // Keep the runtime alive until the client closes the connection so
-            // the background writer task has time to flush before we drop it.
-            let _ = srv.recv().await;
-        });
+                // Keep the runtime alive until the client closes the connection so
+                // the background writer task has time to flush before we drop it.
+                let _ = srv.recv().await;
+            });
     });
 
     let addr = addr_rx.recv().unwrap();
     let mut client = std::net::TcpStream::connect(addr).unwrap();
-    client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
 
     let mut buf = [0u8; 64];
     let n = client.read(&mut buf).unwrap();
@@ -168,31 +178,35 @@ fn test_stream_echo() {
 
     // Echo server thread.
     thread::spawn(move || {
-        compio::runtime::Runtime::new().unwrap().block_on(async move {
-            let mut srv = StreamSocket::bind("127.0.0.1:0").await.unwrap();
-            addr_tx.send(srv.local_addr().unwrap()).unwrap();
+        compio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let mut srv = StreamSocket::bind("127.0.0.1:0").await.unwrap();
+                addr_tx.send(srv.local_addr().unwrap()).unwrap();
 
-            srv.accept_raw().await.unwrap();
+                srv.accept_raw().await.unwrap();
 
-            // Echo up to 3 messages (notifications + data).
-            for _ in 0..10 {
-                let msg = srv.recv().await.unwrap().expect("closed");
-                if msg[2].is_empty() {
-                    continue; // skip notifications
+                // Echo up to 3 messages (notifications + data).
+                for _ in 0..10 {
+                    let msg = srv.recv().await.unwrap().expect("closed");
+                    if msg[2].is_empty() {
+                        continue; // skip notifications
+                    }
+                    // Echo data back to the same peer.
+                    srv.send(msg).await.unwrap();
+                    // Keep the runtime alive until the writer task flushes; the
+                    // disconnect notification arrives when the client drops.
+                    let _ = srv.recv().await;
+                    return;
                 }
-                // Echo data back to the same peer.
-                srv.send(msg).await.unwrap();
-                // Keep the runtime alive until the writer task flushes; the
-                // disconnect notification arrives when the client drops.
-                let _ = srv.recv().await;
-                return;
-            }
-        });
+            });
     });
 
     let addr = addr_rx.recv().unwrap();
     let mut client = std::net::TcpStream::connect(addr).unwrap();
-    client.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
 
     client.write_all(b"ping").unwrap();
 
@@ -215,17 +229,19 @@ fn test_stream_multi_peer_unique_routing_ids() {
     let (ids_tx, ids_rx) = mpsc::channel::<Vec<Bytes>>();
 
     thread::spawn(move || {
-        compio::runtime::Runtime::new().unwrap().block_on(async move {
-            let mut srv = StreamSocket::bind("127.0.0.1:0").await.unwrap();
-            addr_tx.send(srv.local_addr().unwrap()).unwrap();
+        compio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let mut srv = StreamSocket::bind("127.0.0.1:0").await.unwrap();
+                addr_tx.send(srv.local_addr().unwrap()).unwrap();
 
-            let mut routing_ids = Vec::new();
-            for _ in 0..N {
-                let id = srv.accept_raw().await.unwrap();
-                routing_ids.push(id);
-            }
-            ids_tx.send(routing_ids).unwrap();
-        });
+                let mut routing_ids = Vec::new();
+                for _ in 0..N {
+                    let id = srv.accept_raw().await.unwrap();
+                    routing_ids.push(id);
+                }
+                ids_tx.send(routing_ids).unwrap();
+            });
     });
 
     let addr = addr_rx.recv().unwrap();
@@ -254,22 +270,24 @@ fn test_stream_disconnect_removes_peer() {
     let (result_tx, result_rx) = mpsc::channel::<bool>();
 
     thread::spawn(move || {
-        compio::runtime::Runtime::new().unwrap().block_on(async move {
-            let mut srv = StreamSocket::bind("127.0.0.1:0").await.unwrap();
-            addr_tx.send(srv.local_addr().unwrap()).unwrap();
+        compio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let mut srv = StreamSocket::bind("127.0.0.1:0").await.unwrap();
+                addr_tx.send(srv.local_addr().unwrap()).unwrap();
 
-            let id = srv.accept_raw().await.unwrap();
-            assert_eq!(srv.peer_count(), 1);
+                let id = srv.accept_raw().await.unwrap();
+                assert_eq!(srv.peer_count(), 1);
 
-            srv.disconnect(&id);
-            assert_eq!(srv.peer_count(), 0);
+                srv.disconnect(&id);
+                assert_eq!(srv.peer_count(), 0);
 
-            // Sending to the disconnected peer should not error (silent drop).
-            let res = srv
-                .send(vec![id, Bytes::new(), Bytes::from("ignored")])
-                .await;
-            result_tx.send(res.is_ok()).unwrap();
-        });
+                // Sending to the disconnected peer should not error (silent drop).
+                let res = srv
+                    .send(vec![id, Bytes::new(), Bytes::from("ignored")])
+                    .await;
+                result_tx.send(res.is_ok()).unwrap();
+            });
     });
 
     let addr = addr_rx.recv().unwrap();

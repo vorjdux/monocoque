@@ -130,7 +130,10 @@ impl SegmentedBuffer {
         let mut out = BytesMut::with_capacity(n);
         let mut remaining = n;
         while remaining > 0 {
-            let seg = self.segs.pop_front().expect("len check ensures segments exist");
+            let seg = self
+                .segs
+                .pop_front()
+                .expect("len check ensures segments exist");
             let take = remaining.min(seg.len());
             out.extend_from_slice(&seg[..take]);
             remaining -= take;

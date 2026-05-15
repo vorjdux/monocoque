@@ -33,7 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Spawn a task to handle monitoring events
     let _monitor_task = compio::runtime::spawn(async move {
         println!("📡 Monitoring task started...\n");
-        
+
         while let Ok(event) = monitor.recv_async().await {
             match event {
                 SocketEvent::Connected(ep) => {
@@ -59,7 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        
+
         println!("\n📡 Monitoring task ended");
     });
 

@@ -79,10 +79,7 @@ where
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn with_options(
-        mut stream: S,
-        mut options: SocketOptions,
-    ) -> io::Result<Self> {
+    pub async fn with_options(mut stream: S, mut options: SocketOptions) -> io::Result<Self> {
         debug!("[ROUTER] Creating new direct ROUTER socket");
 
         // Perform ZMTP handshake
@@ -248,7 +245,7 @@ where
     /// - `None`: Block indefinitely until all data is sent (default libzmq behavior)
     pub async fn close(mut self) -> io::Result<()> {
         let linger = self.base.options.linger;
-        
+
         if self.base.send_buffer.is_empty() {
             trace!("[ROUTER] No buffered data, closing immediately");
             return Ok(());
@@ -262,7 +259,10 @@ where
 
         match linger {
             Some(dur) if dur.is_zero() => {
-                debug!("[ROUTER] Linger=0, discarding {} bytes", self.base.send_buffer.len());
+                debug!(
+                    "[ROUTER] Linger=0, discarding {} bytes",
+                    self.base.send_buffer.len()
+                );
                 Ok(())
             }
             Some(dur) => {
@@ -405,7 +405,7 @@ impl RouterSocket<TcpStream> {
     /// # async fn example() -> std::io::Result<()> {
     /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
     /// let mut opts = SocketOptions::large();
-    /// opts.tcp_keepalive = Some(true);
+    /// opts.tcp_keepalive = 1;
     /// let socket = RouterSocket::from_tcp_with_options(stream, opts).await?;
     /// # Ok(())
     /// # }

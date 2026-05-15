@@ -54,7 +54,7 @@ impl AsyncRead for InprocStream {
                 // Assemble frames and copy to buffer
                 let mut total = 0;
                 let buf_capacity = buf.buf_capacity();
-                
+
                 for frame in msg_frames {
                     let to_copy = frame.len().min(buf_capacity - total);
                     if to_copy == 0 {
@@ -70,8 +70,10 @@ impl AsyncRead for InprocStream {
                     dest_slice.copy_from_slice(&frame[..to_copy]);
                     total += to_copy;
                 }
-                
-                unsafe { buf.set_buf_init(total); }
+
+                unsafe {
+                    buf.set_buf_init(total);
+                }
                 BufResult(Ok(total), buf)
             }
             Err(_) => {
@@ -87,7 +89,7 @@ impl AsyncWrite for InprocStream {
         // For inproc, we send the entire buffer as a single frame
         let len = buf.buf_len();
         let data = Bytes::copy_from_slice(buf.as_slice());
-        
+
         match self.tx.send(vec![data]) {
             Ok(()) => BufResult(Ok(len), buf),
             Err(_) => BufResult(

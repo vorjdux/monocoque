@@ -14,7 +14,7 @@
 //!
 //! ```text
 //! XSUB ──subscribe("topic.a")──> Publisher
-//!      <──────data("topic.a")─── 
+//!      <──────data("topic.a")───
 //! XSUB ──subscribe("topic.b")──> Publisher
 //!      <──────data("topic.b")───
 //! ```
@@ -54,15 +54,15 @@ use crate::session::SocketType;
 ///     let mut xsub = XSubSocket::connect("127.0.0.1:5555").await?;
 ///     
 ///     // Subscribe to topics
-///     xsub.subscribe(b"topic.").await?;
-///     
+///     xsub.subscribe("topic.").await?;
+///
 ///     // Receive messages
 ///     if let Some(msg) = xsub.recv().await? {
 ///         println!("Received: {:?}", msg);
 ///     }
-///     
+///
 ///     // Unsubscribe
-///     xsub.unsubscribe(b"topic.").await?;
+///     xsub.unsubscribe("topic.").await?;
 ///     
 ///     Ok(())
 /// }
@@ -87,10 +87,7 @@ where
     }
 
     /// Create a new XSUB socket with custom configuration and options.
-    pub async fn with_options(
-        mut stream: S,
-        options: SocketOptions,
-    ) -> io::Result<Self> {
+    pub async fn with_options(mut stream: S, options: SocketOptions) -> io::Result<Self> {
         debug!("[XSUB] Creating new XSUB socket");
 
         // Perform ZMTP handshake
@@ -126,17 +123,17 @@ where
     /// # use monocoque_zmtp::xsub::XSubSocket;
     /// # async fn example(mut xsub: XSubSocket) -> std::io::Result<()> {
     /// // Subscribe to all messages starting with "topic."
-    /// xsub.subscribe(b"topic.").await?;
-    /// 
+    /// xsub.subscribe("topic.").await?;
+    ///
     /// // Subscribe to all messages (empty prefix)
-    /// xsub.subscribe(b"").await?;
+    /// xsub.subscribe("").await?;
     /// # Ok(())
     /// # }
     /// ```
     pub async fn subscribe(&mut self, prefix: impl Into<Bytes>) -> io::Result<()> {
         let prefix = prefix.into();
         trace!("[XSUB] Subscribing to: {:?}", prefix);
-        
+
         self.subscriptions.subscribe(prefix.clone());
 
         // Send subscription message upstream
@@ -157,14 +154,14 @@ where
     /// # use bytes::Bytes;
     /// # async fn example(mut xsub: XSubSocket) -> std::io::Result<()> {
     /// let prefix = Bytes::from_static(b"topic.");
-    /// xsub.unsubscribe(&prefix).await?;
+    /// xsub.unsubscribe(prefix).await?;
     /// # Ok(())
     /// # }
     /// ```
     pub async fn unsubscribe(&mut self, prefix: impl Into<Bytes>) -> io::Result<()> {
         let prefix = prefix.into();
         trace!("[XSUB] Unsubscribing from: {:?}", prefix);
-        
+
         self.subscriptions.unsubscribe(&prefix);
 
         // Send unsubscribe message if verbose mode enabled
@@ -198,18 +195,23 @@ where
         use monocoque_core::alloc::IoBytes;
 
         let msg = event.to_message();
-        trace!("[XSUB] Sending subscription event ({} bytes): {:?}", msg.len(), msg);
-        
-        let stream = self.base.stream.as_mut().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
-        })?;
-        
+        trace!(
+            "[XSUB] Sending subscription event ({} bytes): {:?}",
+            msg.len(),
+            msg
+        );
+
+        let stream =
+            self.base.stream.as_mut().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
+            })?;
+
         let BufResult(result, _) = AsyncWrite::write(stream, IoBytes::new(msg)).await;
         result?;
-        
+
         // Flush to ensure message is sent immediately
         stream.flush().await?;
-        
+
         trace!("[XSUB] Subscription event sent and flushed successfully");
         Ok(())
     }
@@ -338,10 +340,7 @@ impl XSubSocket<TcpStream> {
     }
 
     /// Connect with custom socket options.
-    pub async fn connect_with_options(
-        addr: &str,
-        options: SocketOptions,
-    ) -> io::Result<Self> {
+    pub async fn connect_with_options(addr: &str, options: SocketOptions) -> io::Result<Self> {
         let stream = TcpStream::connect(addr).await?;
         Self::with_options(stream, options).await
     }
@@ -354,7 +353,7 @@ mod tests {
     #[test]
     fn test_subscription_tracking() {
         use compio::runtime::Runtime;
-        
+
         Runtime::new().unwrap().block_on(async {
             // Mock stream for testing
             // In real tests, use actual TCP connection

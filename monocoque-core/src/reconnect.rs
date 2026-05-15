@@ -3,8 +3,8 @@
 //! This module provides utilities for managing socket reconnection with
 //! exponential backoff, following libzmq patterns.
 
-use std::time::Duration;
 use crate::options::SocketOptions;
+use std::time::Duration;
 
 /// Reconnection state tracker for managing connection attempts and backoff.
 ///
@@ -69,16 +69,16 @@ impl ReconnectState {
     /// The duration to wait before the next reconnection attempt.
     pub fn next_delay(&mut self) -> Duration {
         let delay = self.current_interval;
-        
+
         // Calculate next interval with exponential backoff
         self.attempt += 1;
         self.current_interval = self.base_interval * (1_u32 << self.attempt.min(10));
-        
+
         // Cap at max interval
         if self.current_interval > self.max_interval {
             self.current_interval = self.max_interval;
         }
-        
+
         delay
     }
 
@@ -92,28 +92,28 @@ impl ReconnectState {
 
     /// Get the current attempt number.
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub const fn attempt(&self) -> u32 {
         self.attempt
     }
 
     /// Get the base reconnection interval.
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub const fn base_interval(&self) -> Duration {
         self.base_interval
     }
 
     /// Get the maximum reconnection interval.
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub const fn max_interval(&self) -> Duration {
         self.max_interval
     }
 
     /// Get the current reconnection interval.
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub const fn current_interval(&self) -> Duration {
         self.current_interval
     }
@@ -188,7 +188,7 @@ mod tests {
         assert_eq!(state.next_delay(), Duration::from_millis(100));
         assert_eq!(state.next_delay(), Duration::from_millis(200));
         assert_eq!(state.next_delay(), Duration::from_millis(400));
-        
+
         // Should be capped at max
         assert_eq!(state.next_delay(), Duration::from_millis(500));
         assert_eq!(state.next_delay(), Duration::from_millis(500));

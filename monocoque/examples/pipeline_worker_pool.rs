@@ -36,10 +36,7 @@ async fn main() -> std::io::Result<()> {
                     Ok(Some(msg)) => {
                         let task = String::from_utf8_lossy(&msg[0]);
                         let result = format!("worker-{} done: {}", i, task);
-                        result_tx
-                            .send(vec![Bytes::from(result)])
-                            .await
-                            .unwrap();
+                        result_tx.send(vec![Bytes::from(result)]).await.unwrap();
                     }
                     _ => break,
                 }
@@ -55,7 +52,9 @@ async fn main() -> std::io::Result<()> {
     println!("Distributing {} tasks to {} workers…", TASKS, WORKERS);
     let start = Instant::now();
     for i in 0..TASKS {
-        ventilator.send(vec![Bytes::from(format!("task-{}", i))]).await?;
+        ventilator
+            .send(vec![Bytes::from(format!("task-{}", i))])
+            .await?;
     }
 
     // ── Collect results ───────────────────────────────────────────────────

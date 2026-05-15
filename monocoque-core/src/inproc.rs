@@ -12,26 +12,23 @@
 //!
 //! # Usage
 //!
-//! ```rust,no_run
+//! ```ignore
 //! use monocoque_core::inproc::{bind_inproc, connect_inproc};
 //! use bytes::Bytes;
 //!
-//! # async fn example() -> std::io::Result<()> {
 //! // Bind to an inproc endpoint
-//! let (mut sender, receiver) = bind_inproc("inproc://my-endpoint")?;
+//! let (sender, receiver) = bind_inproc("inproc://my-endpoint").unwrap();
 //!
-//! // Connect to the same endpoint from another task
-//! let mut client = connect_inproc("inproc://my-endpoint").await?;
+//! // Connect from another task
+//! let client = connect_inproc("inproc://my-endpoint").unwrap();
 //!
-//! // Send messages (zero-copy)
-//! client.send(vec![Bytes::from("Hello")]).await?;
+//! // Send messages
+//! client.send(vec![Bytes::from("Hello")]).unwrap();
 //!
 //! // Receive messages
-//! if let Some(msg) = receiver.recv().await {
+//! if let Ok(msg) = receiver.recv() {
 //!     println!("Received: {:?}", msg);
 //! }
-//! # Ok(())
-//! # }
 //! ```
 
 use bytes::Bytes;
@@ -83,20 +80,11 @@ static INPROC_REPLY_REGISTRY: once_cell::sync::Lazy<DashMap<String, InprocSender
 ///
 /// # Example
 ///
-/// ```rust,no_run
+/// ```
 /// use monocoque_core::inproc::bind_inproc;
 ///
-/// # fn example() -> std::io::Result<()> {
-/// let (sender, mut receiver) = bind_inproc("inproc://my-endpoint")?;
-///
-/// // Spawn a task to handle incoming messages
-/// tokio::spawn(async move {
-///     while let Some(msg) = receiver.recv().await {
-///         println!("Received: {:?}", msg);
-///     }
-/// });
-/// # Ok(())
-/// # }
+/// let (sender, receiver) = bind_inproc("inproc://my-endpoint-bind").unwrap();
+/// // sender and receiver are ready for use
 /// ```
 pub fn bind_inproc(endpoint: &str) -> io::Result<(InprocSender, InprocReceiver)> {
     // Validate endpoint format
@@ -106,7 +94,10 @@ pub fn bind_inproc(endpoint: &str) -> io::Result<(InprocSender, InprocReceiver)>
     let (tx, rx) = flume::unbounded();
 
     // Try to insert into registry
-    if INPROC_REGISTRY.insert(name.to_string(), tx.clone()).is_some() {
+    if INPROC_REGISTRY
+        .insert(name.to_string(), tx.clone())
+        .is_some()
+    {
         return Err(io::Error::new(
             io::ErrorKind::AddrInUse,
             format!("inproc endpoint '{name}' is already bound"),
@@ -342,9 +333,7 @@ fn validate_and_extract_name(endpoint: &str) -> io::Result<&str> {
     if !endpoint.starts_with(PREFIX) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!(
-                "inproc endpoint must start with '{PREFIX}', got: '{endpoint}'"
-            ),
+            format!("inproc endpoint must start with '{PREFIX}', got: '{endpoint}'"),
         ));
     }
 
@@ -366,10 +355,7 @@ mod tests {
     #[test]
     fn test_validate_endpoint() {
         assert!(validate_and_extract_name("inproc://test").is_ok());
-        assert_eq!(
-            validate_and_extract_name("inproc://test").unwrap(),
-            "test"
-        );
+        assert_eq!(validate_and_extract_name("inproc://test").unwrap(), "test");
 
         assert!(validate_and_extract_name("tcp://test").is_err());
         assert!(validate_and_extract_name("inproc://").is_err());
@@ -408,7 +394,9 @@ mod tests {
         client.send(msg.clone()).unwrap();
 
         // Receive on bound socket (non-blocking recv_timeout)
-        let received = rx.recv_timeout(std::time::Duration::from_millis(100)).unwrap();
+        let received = rx
+            .recv_timeout(std::time::Duration::from_millis(100))
+            .unwrap();
         assert_eq!(received, msg);
 
         // Cleanup

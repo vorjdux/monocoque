@@ -51,10 +51,12 @@ fn monocoque_req_rep_latency(c: &mut Criterion) {
 
                             let server_task = compio::runtime::spawn(async move {
                                 let (stream, _) = listener.accept().await.unwrap();
-                                let mut rep =
-                                    RepSocket::from_tcp_with_options(stream, SocketOptions::default().with_buffer_sizes(4096, 4096))
-                                        .await
-                                        .unwrap();
+                                let mut rep = RepSocket::from_tcp_with_options(
+                                    stream,
+                                    SocketOptions::default().with_buffer_sizes(4096, 4096),
+                                )
+                                .await
+                                .unwrap();
 
                                 // Server echo loop
                                 loop {
@@ -70,10 +72,12 @@ fn monocoque_req_rep_latency(c: &mut Criterion) {
 
                             let stream =
                                 compio::net::TcpStream::connect(server_addr).await.unwrap();
-                            let mut req =
-                                ReqSocket::from_tcp_with_options(stream, SocketOptions::default().with_buffer_sizes(4096, 4096))
-                                    .await
-                                    .unwrap();
+                            let mut req = ReqSocket::from_tcp_with_options(
+                                stream,
+                                SocketOptions::default().with_buffer_sizes(4096, 4096),
+                            )
+                            .await
+                            .unwrap();
 
                             // WARMUP: Do warmup rounds
                             for _ in 0..WARMUP_ROUNDS {
@@ -178,17 +182,23 @@ fn monocoque_connection_latency(c: &mut Criterion) {
                 let accept_task = compio::runtime::spawn(async move {
                     for _ in 0..CONNECTIONS {
                         let (stream, _) = listener.accept().await.unwrap();
-                        let _ = RepSocket::from_tcp_with_options(stream, SocketOptions::default().with_buffer_sizes(4096, 4096))
-                            .await
-                            .unwrap();
+                        let _ = RepSocket::from_tcp_with_options(
+                            stream,
+                            SocketOptions::default().with_buffer_sizes(4096, 4096),
+                        )
+                        .await
+                        .unwrap();
                     }
                 });
 
                 for _ in 0..CONNECTIONS {
                     let stream = compio::net::TcpStream::connect(server_addr).await.unwrap();
-                    let req = ReqSocket::from_tcp_with_options(stream, SocketOptions::default().with_buffer_sizes(4096, 4096))
-                        .await
-                        .unwrap();
+                    let req = ReqSocket::from_tcp_with_options(
+                        stream,
+                        SocketOptions::default().with_buffer_sizes(4096, 4096),
+                    )
+                    .await
+                    .unwrap();
                     black_box(req);
                 }
 

@@ -11,7 +11,7 @@
 //! use futures::StreamExt;
 //!
 //! # async fn example() -> std::io::Result<()> {
-//! let mut socket = DealerSocket::from_tcp("127.0.0.1:5555").await?;
+//! let mut socket = DealerSocket::connect("127.0.0.1:5555").await?;
 //! let mut stream = SocketStream::new(socket);
 //!
 //! while let Some(msg) = stream.next().await {
@@ -22,8 +22,8 @@
 //! ```
 
 use bytes::Bytes;
-use futures::stream::Stream;
 use futures::sink::Sink;
+use futures::stream::Stream;
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -42,7 +42,7 @@ use crate::Socket;
 /// use futures::StreamExt;
 ///
 /// # async fn example() -> std::io::Result<()> {
-/// let socket = DealerSocket::from_tcp("127.0.0.1:5555").await?;
+/// let socket = DealerSocket::connect("127.0.0.1:5555").await?;
 /// let stream = SocketStream::new(socket);
 ///
 /// // Use stream combinators
@@ -103,7 +103,7 @@ impl<S: Socket + Unpin> Stream for SocketStream<S> {
 /// use bytes::Bytes;
 ///
 /// # async fn example() -> std::io::Result<()> {
-/// let socket = DealerSocket::from_tcp("127.0.0.1:5555").await?;
+/// let socket = DealerSocket::connect("127.0.0.1:5555").await?;
 /// let mut sink = SocketSink::new(socket);
 ///
 /// // Use sink methods
@@ -175,7 +175,7 @@ impl<S: Socket + Unpin> Sink<Vec<Bytes>> for SocketSink<S> {
 /// use bytes::Bytes;
 ///
 /// # async fn example() -> std::io::Result<()> {
-/// let socket = DealerSocket::from_tcp("127.0.0.1:5555").await?;
+/// let socket = DealerSocket::connect("127.0.0.1:5555").await?;
 /// let mut stream_sink = SocketStreamSink::new(socket);
 ///
 /// // Send a message

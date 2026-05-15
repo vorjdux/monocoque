@@ -4,8 +4,8 @@
 
 use bytes::Bytes;
 use compio::net::{TcpListener, TcpStream};
-use std::time::{Duration, Instant};
 use monocoque_zmtp::{RepSocket, ReqSocket};
+use std::time::{Duration, Instant};
 
 const WARMUP: usize = 10;
 const ITERATIONS: usize = 1000;

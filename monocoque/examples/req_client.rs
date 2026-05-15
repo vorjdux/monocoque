@@ -1,7 +1,7 @@
 //! REQ Client for Interop Testing
 
-use monocoque_zmtp::req::ReqSocket;
 use bytes::Bytes;
+use monocoque_zmtp::req::ReqSocket;
 use std::env;
 
 #[compio::main]
@@ -18,8 +18,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut socket = ReqSocket::new(stream).await?;
 
     // Send request
-    socket.send(vec![Bytes::from("Hello from Monocoque")]).await?;
-    
+    socket
+        .send(vec![Bytes::from("Hello from Monocoque")])
+        .await?;
+
     // Receive reply
     if let Some(reply) = socket.recv().await? {
         println!("Reply: {}", String::from_utf8_lossy(&reply[0]));

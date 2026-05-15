@@ -43,39 +43,43 @@ fn test_pub_hwm_drops_with_slow_subscriber() {
 
     // Publisher thread
     thread::spawn(move || {
-        compio::runtime::Runtime::new().unwrap().block_on(async move {
-            let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            addr_tx.send(listener.local_addr().unwrap()).unwrap();
+        compio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                addr_tx.send(listener.local_addr().unwrap()).unwrap();
 
-            let opts = SocketOptions::default().with_send_hwm(HWM);
-            let mut pub_sock = InternalPub::with_workers_opts(1, opts);
-            pub_sock.accept_subscriber(&listener).await.unwrap();
+                let opts = SocketOptions::default().with_send_hwm(HWM);
+                let mut pub_sock = InternalPub::with_workers_opts(1, opts);
+                pub_sock.accept_subscriber(&listener).await.unwrap();
 
-            // Brief pause so subscriber's subscription bytes are processed.
-            std::thread::sleep(Duration::from_millis(30));
+                // Brief pause so subscriber's subscription bytes are processed.
+                std::thread::sleep(Duration::from_millis(30));
 
-            for i in 0..MSGS {
-                // Ignore errors — the point is to flood the worker channel.
-                let _ = pub_sock
-                    .send(vec![Bytes::new(), Bytes::from(format!("{}", i))])
-                    .await;
-            }
+                for i in 0..MSGS {
+                    // Ignore errors — the point is to flood the worker channel.
+                    let _ = pub_sock
+                        .send(vec![Bytes::new(), Bytes::from(format!("{}", i))])
+                        .await;
+                }
 
-            drop_tx.send(pub_sock.drop_count()).unwrap();
-        });
+                drop_tx.send(pub_sock.drop_count()).unwrap();
+            });
     });
 
     let pub_addr = addr_rx.recv().unwrap();
 
     // Subscriber: connect and subscribe to everything, but never recv().
     thread::spawn(move || {
-        compio::runtime::Runtime::new().unwrap().block_on(async move {
-            let stream = compio::net::TcpStream::connect(pub_addr).await.unwrap();
-            let mut sub = SubSocket::from_tcp(stream).await.unwrap();
-            sub.subscribe(Bytes::new()).await.unwrap(); // subscribe-all
-            // Hold the connection open without reading.
-            std::thread::sleep(Duration::from_secs(10));
-        });
+        compio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let stream = compio::net::TcpStream::connect(pub_addr).await.unwrap();
+                let mut sub = SubSocket::from_tcp(stream).await.unwrap();
+                sub.subscribe(Bytes::new()).await.unwrap(); // subscribe-all
+                                                            // Hold the connection open without reading.
+                std::thread::sleep(Duration::from_secs(10));
+            });
     });
 
     let drops = drop_rx
@@ -103,45 +107,50 @@ fn test_dealer_send_buffered_hwm_returns_would_block() {
 
     // Server: accept and hold open.
     thread::spawn(move || {
-        compio::runtime::Runtime::new().unwrap().block_on(async move {
-            let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            addr_tx.send(listener.local_addr().unwrap()).unwrap();
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut router = monocoque_zmtp::router::RouterSocket::from_tcp(stream)
-                .await
-                .unwrap();
-            // Keep alive while client tests HWM.
-            std::thread::sleep(Duration::from_secs(5));
-            drop(router);
-        });
+        compio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                addr_tx.send(listener.local_addr().unwrap()).unwrap();
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut router = monocoque_zmtp::router::RouterSocket::from_tcp(stream)
+                    .await
+                    .unwrap();
+                // Keep alive while client tests HWM.
+                std::thread::sleep(Duration::from_secs(5));
+                drop(router);
+            });
     });
 
     let addr = addr_rx.recv().unwrap();
 
-    compio::runtime::Runtime::new().unwrap().block_on(async move {
-        let opts = SocketOptions::default().with_send_hwm(HWM);
-        let mut dealer =
-            DealerSocket::connect_with_options(addr, opts).await.unwrap();
+    compio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(async move {
+            let opts = SocketOptions::default().with_send_hwm(HWM);
+            let mut dealer = DealerSocket::connect_with_options(addr, opts)
+                .await
+                .unwrap();
 
-        // Fill the buffer up to HWM.
-        for _ in 0..HWM {
-            dealer
-                .send_buffered(vec![Bytes::from("x")])
-                .expect("should succeed below HWM");
-        }
+            // Fill the buffer up to HWM.
+            for _ in 0..HWM {
+                dealer
+                    .send_buffered(vec![Bytes::from("x")])
+                    .expect("should succeed below HWM");
+            }
 
-        // The (HWM+1)-th call must return WouldBlock.
-        let err = dealer
-            .send_buffered(vec![Bytes::from("overflow")])
-            .expect_err("expected WouldBlock at HWM");
+            // The (HWM+1)-th call must return WouldBlock.
+            let err = dealer
+                .send_buffered(vec![Bytes::from("overflow")])
+                .expect_err("expected WouldBlock at HWM");
 
-        assert_eq!(
-            err.kind(),
-            std::io::ErrorKind::WouldBlock,
-            "expected WouldBlock, got {:?}",
-            err.kind()
-        );
-    });
+            assert_eq!(
+                err.kind(),
+                std::io::ErrorKind::WouldBlock,
+                "expected WouldBlock, got {:?}",
+                err.kind()
+            );
+        });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -160,31 +169,32 @@ fn test_dealer_hwm_stress_no_deadlock() {
 
     // Server: drain messages from all clients.
     thread::spawn(move || {
-        compio::runtime::Runtime::new().unwrap().block_on(async move {
-            let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            addr_tx.send(listener.local_addr().unwrap()).unwrap();
+        compio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                addr_tx.send(listener.local_addr().unwrap()).unwrap();
 
-            let mut tasks = Vec::new();
-            for _ in 0..N_CLIENTS {
-                let (stream, _) = listener.accept().await.unwrap();
-                let task = compio::runtime::spawn(async move {
-                    let mut router =
-                        monocoque_zmtp::router::RouterSocket::from_tcp(stream)
+                let mut tasks = Vec::new();
+                for _ in 0..N_CLIENTS {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let task = compio::runtime::spawn(async move {
+                        let mut router = monocoque_zmtp::router::RouterSocket::from_tcp(stream)
                             .await
                             .unwrap();
-                    loop {
-                        match router.recv().await {
-                            Ok(Some(_)) => {}
-                            _ => break,
+                        loop {
+                            match router.recv().await {
+                                Ok(Some(_)) => {}
+                                _ => break,
+                            }
                         }
-                    }
-                });
-                tasks.push(task);
-            }
-            for t in tasks {
-                t.await;
-            }
-        });
+                    });
+                    tasks.push(task);
+                }
+                for t in tasks {
+                    t.await;
+                }
+            });
     });
 
     let addr = addr_rx.recv().unwrap();
@@ -192,22 +202,23 @@ fn test_dealer_hwm_stress_no_deadlock() {
     let handles: Vec<_> = (0..N_CLIENTS)
         .map(|_| {
             thread::spawn(move || {
-                compio::runtime::Runtime::new().unwrap().block_on(async move {
-                    let opts = SocketOptions::default().with_send_hwm(HWM);
-                    let mut dealer =
-                        DealerSocket::connect_with_options(addr, opts)
+                compio::runtime::Runtime::new()
+                    .unwrap()
+                    .block_on(async move {
+                        let opts = SocketOptions::default().with_send_hwm(HWM);
+                        let mut dealer = DealerSocket::connect_with_options(addr, opts)
                             .await
                             .unwrap();
 
-                    for i in 0..MSGS {
-                        // Use direct send() (unbuffered) to avoid HWM on the
-                        // buffered path; the point is network-layer throughput.
-                        dealer
-                            .send(vec![Bytes::new(), Bytes::from(format!("{}", i))])
-                            .await
-                            .unwrap();
-                    }
-                })
+                        for i in 0..MSGS {
+                            // Use direct send() (unbuffered) to avoid HWM on the
+                            // buffered path; the point is network-layer throughput.
+                            dealer
+                                .send(vec![Bytes::new(), Bytes::from(format!("{}", i))])
+                                .await
+                                .unwrap();
+                        }
+                    })
             })
         })
         .collect();

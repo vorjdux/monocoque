@@ -81,16 +81,10 @@ async fn router_server(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
         let payload = &request[1];
 
         info!("[ROUTER] Identity: {:?}", String::from_utf8_lossy(identity));
-        info!(
-            "[ROUTER] Message: {:?}",
-            String::from_utf8_lossy(payload)
-        );
+        info!("[ROUTER] Message: {:?}", String::from_utf8_lossy(payload));
 
         // Send reply back to same identity
-        let reply = vec![
-            identity.clone(),
-            Bytes::from("Hello from ROUTER!"),
-        ];
+        let reply = vec![identity.clone(), Bytes::from("Hello from ROUTER!")];
 
         info!("[ROUTER] Sending reply with {} frames...", reply.len());
         socket.send(reply).await?;

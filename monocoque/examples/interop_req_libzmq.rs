@@ -25,7 +25,10 @@ fn main() {
 
         // Receive request
         let request = rep.recv_bytes(0).unwrap();
-        info!("[libzmq REP] Received request: {:?}", String::from_utf8_lossy(&request));
+        info!(
+            "[libzmq REP] Received request: {:?}",
+            String::from_utf8_lossy(&request)
+        );
 
         // Send reply
         rep.send("Reply from libzmq REP", 0).unwrap();
@@ -33,7 +36,10 @@ fn main() {
 
         // Second round
         let request = rep.recv_bytes(0).unwrap();
-        info!("[libzmq REP] Received second request: {:?}", String::from_utf8_lossy(&request));
+        info!(
+            "[libzmq REP] Received second request: {:?}",
+            String::from_utf8_lossy(&request)
+        );
 
         rep.send("Second reply from libzmq", 0).unwrap();
         info!("[libzmq REP] Sent second reply\n");

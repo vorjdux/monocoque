@@ -20,7 +20,7 @@ async fn main() -> std::io::Result<()> {
     // Example 1: Using Stream for receiving
     println!("Example 1: Stream adapter");
     println!("--------------------------");
-    
+
     // In a real implementation, sockets would implement RecvSocket/SendSocket
     println!("Design: Wrap any socket with SocketStream to use StreamExt methods:");
     println!("  let stream = SocketStream::new(socket);");

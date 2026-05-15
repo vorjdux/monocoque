@@ -72,41 +72,6 @@ impl SecurityMechanism {
     }
 }
 
-/// Performs the complete ZMTP handshake with a configurable timeout.
-///
-/// The security mechanism is inferred from `options`:
-/// - `curve_secretkey.is_some()` or `curve_server` → CURVE
-/// - `plain_server` or `plain_username.is_some()` → PLAIN
-/// - otherwise → NULL (default)
-///
-/// # Arguments
-///
-/// * `timeout` - Maximum time to complete the entire handshake
-///   - `None`: Block indefinitely (default behavior)
-///   - `Some(duration)`: Fail if handshake doesn't complete within duration
-///
-/// # Errors
-///
-/// Returns `ZmtpError::Timeout` if the handshake exceeds the specified timeout.
-pub async fn perform_handshake_with_timeout<S>(
-    stream: &mut S,
-    local_socket_type: SocketType,
-    identity: Option<&[u8]>,
-    timeout: Option<Duration>,
-) -> Result<HandshakeResult, ZmtpError>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
-    perform_handshake_with_options(
-        stream,
-        local_socket_type,
-        identity,
-        timeout,
-        &SocketOptions::default(),
-    )
-    .await
-}
-
 /// Performs the complete ZMTP handshake, selecting the security mechanism from options.
 ///
 /// This is the primary handshake entry point for sockets that have security configured.
@@ -122,8 +87,12 @@ where
 {
     let mechanism = SecurityMechanism::from_options(options);
 
-    debug!("[HANDSHAKE] Starting handshake for {} (timeout: {:?}, mechanism: {:?})",
-        local_socket_type.as_str(), timeout, mechanism);
+    debug!(
+        "[HANDSHAKE] Starting handshake for {} (timeout: {:?}, mechanism: {:?})",
+        local_socket_type.as_str(),
+        timeout,
+        mechanism
+    );
 
     // Step 1: Send our greeting
     debug!("[HANDSHAKE] Step 1: Sending greeting...");
@@ -133,7 +102,10 @@ where
         .await
         .map_err(|_| ZmtpError::Protocol)?;
     write_res.map_err(|_| ZmtpError::Protocol)?;
-    debug!("[HANDSHAKE] Step 1 DONE: Sent greeting ({} bytes)", greeting_bytes.len());
+    debug!(
+        "[HANDSHAKE] Step 1 DONE: Sent greeting ({} bytes)",
+        greeting_bytes.len()
+    );
 
     // Step 2: Receive peer greeting
     debug!("[HANDSHAKE] Step 2: Receiving peer greeting...");
@@ -171,7 +143,10 @@ where
         .await
         .map_err(|_| ZmtpError::Protocol)?;
     write_res.map_err(|_| ZmtpError::Protocol)?;
-    debug!("[HANDSHAKE] Step 4 DONE: Sent READY command ({} bytes)", ready_frame.len());
+    debug!(
+        "[HANDSHAKE] Step 4 DONE: Sent READY command ({} bytes)",
+        ready_frame.len()
+    );
 
     // Step 5: Receive peer READY command
     debug!("[HANDSHAKE] Step 5: Receiving peer READY command...");
@@ -180,7 +155,10 @@ where
         .await
         .map_err(|_| ZmtpError::Protocol)?;
     read_res.map_err(|_| ZmtpError::Protocol)?;
-    debug!("[HANDSHAKE] Step 5a DONE: Read header [{:02x}, {:02x}]", header_buf[0], header_buf[1]);
+    debug!(
+        "[HANDSHAKE] Step 5a DONE: Read header [{:02x}, {:02x}]",
+        header_buf[0], header_buf[1]
+    );
 
     let flags = header_buf[0];
     let is_command = (flags & FLAG_COMMAND) != 0;
@@ -207,7 +185,10 @@ where
     // Read body
     const MAX_READY_SIZE: usize = 512;
     if body_len > MAX_READY_SIZE {
-        debug!("[HANDSHAKE] ERROR: READY body too large: {} bytes", body_len);
+        debug!(
+            "[HANDSHAKE] ERROR: READY body too large: {} bytes",
+            body_len
+        );
         return Err(ZmtpError::Protocol);
     }
     let body_buf = vec![0u8; body_len];
@@ -221,7 +202,10 @@ where
     let ready_bytes = Bytes::from(body_buf);
     let (peer_socket_type, peer_identity) = parse_ready_command(&ready_bytes)?;
 
-    debug!("[HANDSHAKE] Handshake complete! Peer is {}", peer_socket_type.as_str());
+    debug!(
+        "[HANDSHAKE] Handshake complete! Peer is {}",
+        peer_socket_type.as_str()
+    );
 
     Ok(HandshakeResult {
         peer_identity,
@@ -285,7 +269,9 @@ async fn run_curve_exchange<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    use crate::security::curve::{CurveClient, CurveKeyPair, CurvePublicKey, CurveSecretKey, CurveServer};
+    use crate::security::curve::{
+        CurveClient, CurveKeyPair, CurvePublicKey, CurveSecretKey, CurveServer,
+    };
 
     if options.curve_server {
         debug!("[HANDSHAKE] Running CURVE server exchange");
@@ -351,20 +337,13 @@ fn build_greeting_with_mechanism(mechanism: SecurityMechanism, options: &SocketO
     b.freeze()
 }
 
-/// Build a ZMTP 3.0 greeting (64 bytes) with NULL mechanism.
-///
-/// Kept for backward compatibility with callers that do not pass options.
-fn build_greeting() -> Bytes {
-    build_greeting_with_mechanism(SecurityMechanism::Null, &SocketOptions::default())
-}
-
 /// Parse READY command to extract socket type and identity
 fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), ZmtpError> {
     // READY format:
     // - 1 byte: command name length
     // - N bytes: "READY"
     // - Properties as key-value pairs
-    
+
     if body.len() < 6 {
         return Err(ZmtpError::Protocol);
     }
@@ -450,4 +429,3 @@ const fn parse_socket_type(value: &[u8]) -> Result<SocketType, ZmtpError> {
         _ => Err(ZmtpError::Protocol),
     }
 }
-
