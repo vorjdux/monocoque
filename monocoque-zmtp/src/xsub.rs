@@ -30,7 +30,7 @@ use smallvec::SmallVec;
 use std::io;
 use tracing::{debug, trace};
 
-use crate::handshake::perform_handshake_with_timeout;
+use crate::handshake::perform_handshake_with_options;
 use crate::session::SocketType;
 
 /// XSUB (Extended Subscriber) socket.
@@ -95,11 +95,12 @@ where
 
         // Perform ZMTP handshake
         debug!("[XSUB] Performing ZMTP handshake...");
-        let handshake_result = perform_handshake_with_timeout(
+        let handshake_result = perform_handshake_with_options(
             &mut stream,
             SocketType::Xsub,
             None,
             Some(options.handshake_timeout),
+            &options,
         )
         .await
         .map_err(|e| io::Error::other(format!("Handshake failed: {}", e)))?;

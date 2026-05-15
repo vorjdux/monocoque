@@ -17,7 +17,7 @@
 //! - Work queue consumption
 
 use crate::base::SocketBase;
-use crate::{handshake::perform_handshake_with_timeout, session::SocketType};
+use crate::{handshake::perform_handshake_with_options, session::SocketType};
 use bytes::Bytes;
 use compio::io::{AsyncRead, AsyncWrite};
 use compio::net::TcpStream;
@@ -58,11 +58,12 @@ where
 
         // Perform ZMTP handshake
         debug!("[PULL] Performing ZMTP handshake...");
-        let handshake_result = perform_handshake_with_timeout(
+        let handshake_result = perform_handshake_with_options(
             &mut stream,
             SocketType::Pull,
             None,
             Some(options.handshake_timeout),
+            &options,
         )
         .await
         .map_err(|e| io::Error::other(format!("Handshake failed: {}", e)))?;

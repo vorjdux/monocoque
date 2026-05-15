@@ -19,7 +19,7 @@ use tracing::{debug, trace};
 
 use crate::base::SocketBase;
 use crate::codec::encode_multipart;
-use crate::{handshake::perform_handshake_with_timeout, session::SocketType};
+use crate::{handshake::perform_handshake_with_options, session::SocketType};
 use monocoque_core::endpoint::Endpoint;
 
 static PEER_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -87,11 +87,12 @@ where
 
         // Perform ZMTP handshake
         debug!("[ROUTER] Performing ZMTP handshake...");
-        let handshake_result = perform_handshake_with_timeout(
+        let handshake_result = perform_handshake_with_options(
             &mut stream,
             SocketType::Router,
             None,
             Some(options.handshake_timeout),
+            &options,
         )
         .await
         .map_err(|e| io::Error::other(format!("Handshake failed: {}", e)))?;

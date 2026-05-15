@@ -17,7 +17,7 @@ use smallvec::SmallVec;
 use std::io;
 use tracing::{debug, trace};
 
-use crate::{handshake::perform_handshake_with_timeout, session::SocketType};
+use crate::{handshake::perform_handshake_with_options, session::SocketType};
 use monocoque_core::endpoint::Endpoint;
 
 /// Direct-stream SUB socket.
@@ -56,11 +56,12 @@ where
 
         // Perform ZMTP handshake
         debug!("[SUB] Performing ZMTP handshake...");
-        let handshake_result = perform_handshake_with_timeout(
+        let handshake_result = perform_handshake_with_options(
             &mut stream,
             SocketType::Sub,
             None,
             Some(options.handshake_timeout),
+            &options,
         )
         .await
         .map_err(|e| io::Error::other(format!("Handshake failed: {}", e)))?;
