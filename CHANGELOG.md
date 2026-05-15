@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+### ✨ New Features
+
+#### STREAM Socket (raw TCP bridging)
+- Added `StreamSocket` — accepts plain TCP connections without ZMTP handshake
+- 3-frame message format: `[routing_id, empty, data]`
+- Connection/disconnect notifications with empty data frame
+- Per-peer routing via 8-byte unique IDs
+- Exported from `monocoque::zmq::StreamSocket` and `monocoque::zmq::prelude`
+
+#### DEALER Automatic Reconnection
+- `DealerSocket::recv_with_reconnect()` — receive with automatic reconnect on disconnect
+- `DealerSocket::send_with_reconnect()` — send with automatic reconnect on disconnect
+- Exponential backoff with configurable `max_reconnect_attempts`
+- `SocketOptions::with_max_reconnect_attempts(Option<u32>)` builder method
+
+#### PUB High Water Mark (HWM) Enforcement
+- Worker channels are now bounded by `send_hwm` — full channels drop messages instead of blocking
+- `PubSocket::drop_count()` — returns count of messages dropped due to HWM
+- Prevents unbounded memory growth under slow subscribers
+
+### 🐛 Bug Fixes
+
+- Fixed `compio::time::sleep` hanging after ZMTP handshake timeouts — replaced with `std::thread::sleep` in reconnect backoff to avoid residual io_uring timer state
+- Fixed escaped-quote syntax errors (`\"`) in doc-comment code blocks in `req.rs` and `router.rs`
+- Fixed bare URL rustdoc warnings in `security/zap.rs` and `security/curve.rs`
+
+### 📚 Documentation
+
+- New `docs/GETTING_STARTED.md` — install, REQ/REP hello world, PUB/SUB example
+- New `docs/ADR.md` — architecture decision records (io_uring, PUB worker pool, Bytes refcounting)
+- New `docs/PERFORMANCE_TUNING.md` — buffer sizing, worker count, TCP options, inproc guidance
+- Updated `docs/SECURITY_GUIDE.md` — end-to-end CURVE keygen and handshake example
+- Updated `docs/MIGRATION.md` — feature parity table and `zmq::Socket` method mapping
+- Full rustdoc pass: zero warnings across all crates, all public items documented
+
+---
+
 ### 🧹 Code Quality & Linting (2026-01-26)
 
 **Summary**: Comprehensive code quality improvements with strict clippy linting, dependency standardization, and enhanced documentation.

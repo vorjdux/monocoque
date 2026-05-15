@@ -1,8 +1,11 @@
 [package]
 name = "monocoque-fuzz"
-version = "0.0.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
 publish = false
-edition = "2021"
 
 [package.metadata]
 cargo-fuzz = true
@@ -10,6 +13,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 monocoque-zmtp = { path = "../monocoque-zmtp" }
+monocoque-core = { path = "../monocoque-core" }
 bytes = "1.5"
 futures = "0.3"
 compio = "0.13"
@@ -17,6 +21,24 @@ compio = "0.13"
 [[bin]]
 name = "fuzz_decoder"
 path = "fuzz_targets/fuzz_decoder.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_frame_codec"
+path = "fuzz_targets/fuzz_frame_codec.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_security_plain"
+path = "fuzz_targets/fuzz_security_plain.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_subscription_trie"
+path = "fuzz_targets/fuzz_subscription_trie.rs"
 test = false
 doc = false
 

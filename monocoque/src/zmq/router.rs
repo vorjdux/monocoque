@@ -4,6 +4,7 @@ use super::common::channel_to_io_error;
 use bytes::Bytes;
 use compio::net::{TcpListener, TcpStream};
 use monocoque_core::monitor::{create_monitor, SocketEventSender, SocketMonitor};
+use monocoque_core::options::SocketOptions;
 use monocoque_zmtp::router::RouterSocket as InternalRouter;
 use monocoque_zmtp::SocketType;
 use std::io;
@@ -207,6 +208,12 @@ where
         let (sender, receiver) = create_monitor();
         self.monitor = Some(sender);
         receiver
+    }
+
+    /// Get a mutable reference to this socket's options.
+    #[inline]
+    pub fn options_mut(&mut self) -> &mut SocketOptions {
+        self.inner.options_mut()
     }
 
     /// Send a multipart message.

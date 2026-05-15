@@ -82,7 +82,7 @@
 
 // Internal modules (not part of public API)
 mod base;
-mod codec;
+pub mod codec;
 mod greeting;
 mod handshake;
 mod inproc_stream;
