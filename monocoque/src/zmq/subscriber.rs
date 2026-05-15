@@ -3,6 +3,7 @@
 use bytes::Bytes;
 use compio::net::TcpStream;
 use monocoque_core::monitor::{create_monitor, SocketEvent, SocketEventSender, SocketMonitor};
+use monocoque_core::options::SocketOptions;
 use monocoque_zmtp::subscriber::SubSocket as InternalSub;
 use monocoque_zmtp::SocketType;
 use std::io;
@@ -272,6 +273,12 @@ where
     #[inline]
     pub fn events(&self) -> u32 {
         self.inner.events()
+    }
+
+    /// Get a mutable reference to this socket's options.
+    #[inline]
+    pub fn options_mut(&mut self) -> &mut SocketOptions {
+        self.inner.options_mut()
     }
 }
 
