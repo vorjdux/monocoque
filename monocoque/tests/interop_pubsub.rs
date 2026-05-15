@@ -1,5 +1,5 @@
-use monocoque::zmq::PubSocket;
 use bytes::Bytes;
+use monocoque::zmq::PubSocket;
 use std::thread;
 use std::time::Duration;
 
@@ -24,10 +24,13 @@ fn test_pubsub_basic() {
             // and compio::time::sleep interferes with the handshake timer state.
             sub_ready_rx.recv().unwrap();
 
-            pub_socket.send(vec![
-                Bytes::from("topic.test"),
-                Bytes::from("Hello PubSub!"),
-            ]).await.unwrap();
+            pub_socket
+                .send(vec![
+                    Bytes::from("topic.test"),
+                    Bytes::from("Hello PubSub!"),
+                ])
+                .await
+                .unwrap();
 
             result_tx.send(Ok(())).unwrap();
         });
@@ -51,5 +54,8 @@ fn test_pubsub_basic() {
     assert_eq!(topic, "topic.test");
     assert_eq!(body, "Hello PubSub!");
 
-    result_rx.recv_timeout(Duration::from_secs(10)).unwrap().unwrap();
+    result_rx
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap()
+        .unwrap();
 }

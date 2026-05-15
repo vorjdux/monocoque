@@ -25,32 +25,38 @@ fn test_push_pull_basic() {
 
     // Server thread: PUSH binds and sends one message.
     thread::spawn(move || {
-        compio::runtime::Runtime::new().unwrap().block_on(async move {
-            let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            addr_tx.send(listener.local_addr().unwrap()).unwrap();
+        compio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                addr_tx.send(listener.local_addr().unwrap()).unwrap();
 
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut push = PushSocket::from_tcp(stream).await.unwrap();
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut push = PushSocket::from_tcp(stream).await.unwrap();
 
-            push.send(vec![Bytes::from("hello pipeline")]).await.unwrap();
-        });
+                push.send(vec![Bytes::from("hello pipeline")])
+                    .await
+                    .unwrap();
+            });
     });
 
     let addr = addr_rx.recv().unwrap();
 
     // Client thread: PULL connects and receives the message.
     let client = thread::spawn(move || {
-        compio::runtime::Runtime::new().unwrap().block_on(async move {
-            let stream = compio::net::TcpStream::connect(addr).await.unwrap();
-            let mut pull = PullSocket::from_tcp(stream).await.unwrap();
+        compio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let stream = compio::net::TcpStream::connect(addr).await.unwrap();
+                let mut pull = PullSocket::from_tcp(stream).await.unwrap();
 
-            let msg = compio::time::timeout(Duration::from_secs(5), pull.recv())
-                .await
-                .expect("recv timed out")
-                .expect("io error")
-                .expect("connection closed");
-            msg_tx.send(msg).unwrap();
-        });
+                let msg = compio::time::timeout(Duration::from_secs(5), pull.recv())
+                    .await
+                    .expect("recv timed out")
+                    .expect("io error")
+                    .expect("connection closed");
+                msg_tx.send(msg).unwrap();
+            });
     });
 
     client.join().expect("client thread panicked");
@@ -73,38 +79,44 @@ fn test_push_pull_multi_message() {
 
     // Server thread: PUSH binds and sends N messages.
     thread::spawn(move || {
-        compio::runtime::Runtime::new().unwrap().block_on(async move {
-            let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            addr_tx.send(listener.local_addr().unwrap()).unwrap();
+        compio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                addr_tx.send(listener.local_addr().unwrap()).unwrap();
 
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut push = PushSocket::from_tcp(stream).await.unwrap();
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut push = PushSocket::from_tcp(stream).await.unwrap();
 
-            for i in 0..N {
-                push.send(vec![Bytes::from(format!("msg-{}", i))]).await.unwrap();
-            }
-        });
+                for i in 0..N {
+                    push.send(vec![Bytes::from(format!("msg-{}", i))])
+                        .await
+                        .unwrap();
+                }
+            });
     });
 
     let addr = addr_rx.recv().unwrap();
 
     // Client thread: PULL connects and receives all N messages.
     let client = thread::spawn(move || {
-        compio::runtime::Runtime::new().unwrap().block_on(async move {
-            let stream = compio::net::TcpStream::connect(addr).await.unwrap();
-            let mut pull = PullSocket::from_tcp(stream).await.unwrap();
+        compio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let stream = compio::net::TcpStream::connect(addr).await.unwrap();
+                let mut pull = PullSocket::from_tcp(stream).await.unwrap();
 
-            let mut received = Vec::new();
-            for _ in 0..N {
-                let msg = compio::time::timeout(Duration::from_secs(5), pull.recv())
-                    .await
-                    .expect("recv timed out")
-                    .expect("io error")
-                    .expect("connection closed");
-                received.push(msg);
-            }
-            msgs_tx.send(received).unwrap();
-        });
+                let mut received = Vec::new();
+                for _ in 0..N {
+                    let msg = compio::time::timeout(Duration::from_secs(5), pull.recv())
+                        .await
+                        .expect("recv timed out")
+                        .expect("io error")
+                        .expect("connection closed");
+                    received.push(msg);
+                }
+                msgs_tx.send(received).unwrap();
+            });
     });
 
     client.join().expect("client thread panicked");
@@ -133,34 +145,38 @@ fn test_pull_bind_push_connect() {
 
     // Server thread: PULL binds and waits for a message.
     thread::spawn(move || {
-        compio::runtime::Runtime::new().unwrap().block_on(async move {
-            let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            addr_tx.send(listener.local_addr().unwrap()).unwrap();
+        compio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                addr_tx.send(listener.local_addr().unwrap()).unwrap();
 
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut pull = PullSocket::from_tcp(stream).await.unwrap();
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut pull = PullSocket::from_tcp(stream).await.unwrap();
 
-            let msg = compio::time::timeout(Duration::from_secs(5), pull.recv())
-                .await
-                .expect("recv timed out")
-                .expect("io error")
-                .expect("connection closed");
-            msg_tx.send(msg).unwrap();
-        });
+                let msg = compio::time::timeout(Duration::from_secs(5), pull.recv())
+                    .await
+                    .expect("recv timed out")
+                    .expect("io error")
+                    .expect("connection closed");
+                msg_tx.send(msg).unwrap();
+            });
     });
 
     let addr = addr_rx.recv().unwrap();
 
     // Client thread: PUSH connects and sends one message.
     let client = thread::spawn(move || {
-        compio::runtime::Runtime::new().unwrap().block_on(async move {
-            let stream = compio::net::TcpStream::connect(addr).await.unwrap();
-            let mut push = PushSocket::from_tcp(stream).await.unwrap();
+        compio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let stream = compio::net::TcpStream::connect(addr).await.unwrap();
+                let mut push = PushSocket::from_tcp(stream).await.unwrap();
 
-            push.send(vec![Bytes::from("reversed topology")])
-                .await
-                .unwrap();
-        });
+                push.send(vec![Bytes::from("reversed topology")])
+                    .await
+                    .unwrap();
+            });
     });
 
     client.join().expect("client thread panicked");

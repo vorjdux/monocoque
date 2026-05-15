@@ -177,8 +177,6 @@ impl ReqSocket {
         Ok(sock)
     }
 
-
-
     /// Create a REQ socket from a TCP stream with TCP_NODELAY enabled.
     pub async fn from_tcp(stream: TcpStream) -> io::Result<Self> {
         Ok(Self {

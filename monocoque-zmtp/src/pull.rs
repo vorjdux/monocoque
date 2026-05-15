@@ -50,10 +50,7 @@ where
     }
 
     /// Create a new PULL socket with custom buffer configuration and socket options.
-    pub async fn with_options(
-        mut stream: S,
-        options: SocketOptions,
-    ) -> io::Result<Self> {
+    pub async fn with_options(mut stream: S, options: SocketOptions) -> io::Result<Self> {
         debug!("[PULL] Creating new PULL socket");
 
         // Perform ZMTP handshake

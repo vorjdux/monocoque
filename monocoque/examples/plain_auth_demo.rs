@@ -69,10 +69,11 @@ async fn run_server() {
     auth_handler.add_user("admin", "secret123");
     auth_handler.add_user("guest", "guest123");
 
-    start_default_zap_server(Arc::new(auth_handler), false)
-        .expect("Failed to start ZAP server");
+    start_default_zap_server(Arc::new(auth_handler), false).expect("Failed to start ZAP server");
 
-    let listener = TcpListener::bind(SERVER_ADDR).await.expect("Failed to bind");
+    let listener = TcpListener::bind(SERVER_ADDR)
+        .await
+        .expect("Failed to bind");
     println!("Server listening, waiting for clients...");
 
     let options = SocketOptions::new()
@@ -123,7 +124,10 @@ async fn run_client(username: &str, password: &str) {
         let message = format!("Hello from {} (message {})", username, i);
         println!("Sending: {}", message);
 
-        socket.send(vec![Bytes::from(message)]).await.expect("Send failed");
+        socket
+            .send(vec![Bytes::from(message)])
+            .await
+            .expect("Send failed");
 
         match socket.recv().await {
             Some(msg) => {

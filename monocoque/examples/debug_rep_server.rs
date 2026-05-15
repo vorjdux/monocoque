@@ -12,7 +12,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     println!("Starting REP server on 127.0.0.1:15555...");
-    
+
     let listener = TcpListener::bind("127.0.0.1:15555").await?;
     println!("✓ Listening on 127.0.0.1:15555");
 
@@ -29,14 +29,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(msg) => {
             println!("✓ Received {} frames", msg.len());
             for (i, frame) in msg.iter().enumerate() {
-                println!("  Frame {}: {} bytes: {}", i, frame.len(), 
-                    String::from_utf8_lossy(frame));
+                println!(
+                    "  Frame {}: {} bytes: {}",
+                    i,
+                    frame.len(),
+                    String::from_utf8_lossy(frame)
+                );
             }
-            
+
             // Echo back
-            let reply = vec![Bytes::from(format!("Echo: {}", 
-                String::from_utf8_lossy(&msg[0])))];
-            
+            let reply = vec![Bytes::from(format!(
+                "Echo: {}",
+                String::from_utf8_lossy(&msg[0])
+            ))];
+
             println!("Sending reply...");
             socket.send(reply).await?;
             println!("✓ Reply sent");

@@ -8,10 +8,10 @@
 //! - Spawning a ZAP server on inproc transport
 //! - Authentication with custom logic (e.g., database lookup)
 
-use std::collections::HashMap;
-use monocoque_zmtp::security::zap::{ZapMechanism, ZapRequest, ZapResponse, ZapStatus};
-use monocoque_zmtp::security::zap_handler::{ZapHandler, spawn_zap_server};
 use monocoque_zmtp::security::plain::StaticPlainHandler;
+use monocoque_zmtp::security::zap::{ZapMechanism, ZapRequest, ZapResponse, ZapStatus};
+use monocoque_zmtp::security::zap_handler::{spawn_zap_server, ZapHandler};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Custom authentication handler that implements business logic

@@ -17,7 +17,7 @@ fn main() {
         let server = compio::runtime::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let mut rep = RepSocket::new(stream).await.unwrap();
-            
+
             let mut count = 0;
             for i in 0..ITERATIONS {
                 match rep.recv().await {
@@ -61,7 +61,7 @@ fn main() {
             match socket.recv().await {
                 Ok(Some(_)) => {
                     success_count += 1;
-                },
+                }
                 Ok(None) => {
                     println!("Connection closed at iteration {}", i);
                     break;

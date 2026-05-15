@@ -44,15 +44,12 @@
 
 use crate::base::SocketBase;
 use crate::codec::encode_multipart;
-use crate::{
-    handshake::perform_handshake_with_options,
-    session::SocketType,
-};
-use monocoque_core::endpoint::Endpoint;
-use monocoque_core::options::SocketOptions;
+use crate::{handshake::perform_handshake_with_options, session::SocketType};
 use bytes::Bytes;
 use compio::io::{AsyncRead, AsyncWrite};
 use compio::net::TcpStream;
+use monocoque_core::endpoint::Endpoint;
+use monocoque_core::options::SocketOptions;
 use smallvec::SmallVec;
 use std::io;
 use tracing::{debug, trace};
@@ -155,10 +152,7 @@ where
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn with_options(
-        mut stream: S,
-        options: SocketOptions,
-    ) -> io::Result<Self> {
+    pub async fn with_options(mut stream: S, options: SocketOptions) -> io::Result<Self> {
         debug!("[REQ] Creating new direct REQ socket");
 
         // Perform ZMTP handshake
@@ -227,9 +221,12 @@ where
             // Increment request ID
             self.request_id = self.request_id.wrapping_add(1);
             self.expected_request_id = Some(self.request_id);
-            
-            trace!("[REQ] Correlation enabled, prepending request ID: {}", self.request_id);
-            
+
+            trace!(
+                "[REQ] Correlation enabled, prepending request ID: {}",
+                self.request_id
+            );
+
             // Prepend request ID as first frame (4 bytes, big-endian)
             let mut correlated_msg = Vec::with_capacity(msg.len() + 1);
             correlated_msg.push(Bytes::copy_from_slice(&self.request_id.to_be_bytes()));
@@ -305,7 +302,7 @@ where
                             // Complete message received
                             let msg: Vec<Bytes> = self.frames.drain(..).collect();
                             trace!("[REQ] Received {} frames", msg.len());
-                            
+
                             // If correlation is enabled, validate request ID
                             let validated_msg = if self.base.options.req_correlate {
                                 if msg.is_empty() {
@@ -314,39 +311,48 @@ where
                                         "Correlation enabled but received empty message",
                                     ));
                                 }
-                                
+
                                 // First frame should be the request ID (4 bytes)
                                 let id_frame = &msg[0];
                                 if id_frame.len() != 4 {
                                     return Err(io::Error::new(
                                         io::ErrorKind::InvalidData,
-                                        format!("Correlation frame has invalid length: {} (expected 4)", id_frame.len()),
+                                        format!(
+                                            "Correlation frame has invalid length: {} (expected 4)",
+                                            id_frame.len()
+                                        ),
                                     ));
                                 }
-                                
+
                                 let received_id = u32::from_be_bytes([
-                                    id_frame[0], id_frame[1], id_frame[2], id_frame[3]
+                                    id_frame[0],
+                                    id_frame[1],
+                                    id_frame[2],
+                                    id_frame[3],
                                 ]);
-                                
+
                                 trace!("[REQ] Received correlation ID: {}", received_id);
-                                
+
                                 // Validate against expected ID
                                 if let Some(expected) = self.expected_request_id {
                                     if received_id != expected {
                                         return Err(io::Error::new(
                                             io::ErrorKind::InvalidData,
-                                            format!("Request ID mismatch: expected {}, got {}", expected, received_id),
+                                            format!(
+                                                "Request ID mismatch: expected {}, got {}",
+                                                expected, received_id
+                                            ),
                                         ));
                                     }
                                     trace!("[REQ] Correlation ID validated successfully");
                                 }
-                                
+
                                 // Strip correlation frame and return rest
                                 msg[1..].to_vec()
                             } else {
                                 msg
                             };
-                            
+
                             self.state = ReqState::Idle;
                             self.expected_request_id = None;
                             return Ok(Some(validated_msg));

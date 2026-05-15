@@ -71,7 +71,8 @@ fn monocoque_multithreaded_dealers(c: &mut Criterion) {
                                     let handler = compio::runtime::spawn(async move {
                                         let mut router = RouterSocket::from_tcp_with_options(
                                             stream,
-                                            SocketOptions::default().with_buffer_sizes(16384, 16384),
+                                            SocketOptions::default()
+                                                .with_buffer_sizes(16384, 16384),
                                         )
                                         .await
                                         .unwrap();

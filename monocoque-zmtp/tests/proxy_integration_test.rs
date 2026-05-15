@@ -48,44 +48,43 @@ fn test_proxy_steerable_terminate() {
     let (result_tx, result_rx) = mpsc::channel::<bool>();
 
     thread::spawn(move || {
-        compio::runtime::Runtime::new().unwrap().block_on(async move {
-            // Set up three PAIR socket pairs: frontend, backend, control.
-            let (frontend, mut client_a) = pair_connected().await;
-            let (backend, mut client_b) = pair_connected().await;
-            let (control, mut ctrl_client) = pair_connected().await;
+        compio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                // Set up three PAIR socket pairs: frontend, backend, control.
+                let (frontend, mut client_a) = pair_connected().await;
+                let (backend, mut client_b) = pair_connected().await;
+                let (control, mut ctrl_client) = pair_connected().await;
 
-            // Spawn proxy task inside the same runtime.
-            let proxy_task = compio::runtime::spawn(async move {
-                let mut fe = frontend;
-                let mut be = backend;
-                let mut ctrl = control;
-                let capture: Option<&mut PairSocket> = None;
-                proxy_steerable(&mut fe, &mut be, capture, &mut ctrl).await
-            });
+                // Spawn proxy task inside the same runtime.
+                let proxy_task = compio::runtime::spawn(async move {
+                    let mut fe = frontend;
+                    let mut be = backend;
+                    let mut ctrl = control;
+                    let capture: Option<&mut PairSocket> = None;
+                    proxy_steerable(&mut fe, &mut be, capture, &mut ctrl).await
+                });
 
-            // Send one message through the proxy to confirm it is running.
-            client_a.send(vec![Bytes::from("ping")]).await.unwrap();
-            let _msg = compio::time::timeout(Duration::from_secs(5), client_b.recv())
-                .await
-                .expect("forward timed out")
-                .expect("io error")
-                .expect("connection closed");
+                // Send one message through the proxy to confirm it is running.
+                client_a.send(vec![Bytes::from("ping")]).await.unwrap();
+                let _msg = compio::time::timeout(Duration::from_secs(5), client_b.recv())
+                    .await
+                    .expect("forward timed out")
+                    .expect("io error")
+                    .expect("connection closed");
 
-            // Send TERMINATE — proxy_steerable must return Ok(()).
-            ctrl_client
-                .send(vec![Bytes::from("TERMINATE")])
-                .await
-                .unwrap();
+                // Send TERMINATE — proxy_steerable must return Ok(()).
+                ctrl_client
+                    .send(vec![Bytes::from("TERMINATE")])
+                    .await
+                    .unwrap();
 
-            let proxy_result =
-                compio::time::timeout(Duration::from_secs(5), proxy_task)
+                let proxy_result = compio::time::timeout(Duration::from_secs(5), proxy_task)
                     .await
                     .expect("proxy did not exit within timeout");
 
-            result_tx
-                .send(proxy_result.is_ok())
-                .unwrap();
-        });
+                result_tx.send(proxy_result.is_ok()).unwrap();
+            });
     });
 
     let ok = result_rx.recv_timeout(Duration::from_secs(10)).unwrap();
@@ -103,58 +102,59 @@ fn test_proxy_steerable_statistics() {
     let (stats_tx, stats_rx) = mpsc::channel::<String>();
 
     thread::spawn(move || {
-        compio::runtime::Runtime::new().unwrap().block_on(async move {
-            let (frontend, mut client_a) = pair_connected().await;
-            let (backend, mut client_b) = pair_connected().await;
-            let (control, mut ctrl_client) = pair_connected().await;
+        compio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let (frontend, mut client_a) = pair_connected().await;
+                let (backend, mut client_b) = pair_connected().await;
+                let (control, mut ctrl_client) = pair_connected().await;
 
-            let proxy_task = compio::runtime::spawn(async move {
-                let mut fe = frontend;
-                let mut be = backend;
-                let mut ctrl = control;
-                let capture: Option<&mut PairSocket> = None;
-                proxy_steerable(&mut fe, &mut be, capture, &mut ctrl).await
-            });
+                let proxy_task = compio::runtime::spawn(async move {
+                    let mut fe = frontend;
+                    let mut be = backend;
+                    let mut ctrl = control;
+                    let capture: Option<&mut PairSocket> = None;
+                    proxy_steerable(&mut fe, &mut be, capture, &mut ctrl).await
+                });
 
-            // Forward a couple of messages so the counter is non-zero.
-            for i in 0..2u32 {
-                client_a
-                    .send(vec![Bytes::from(format!("msg-{}", i))])
+                // Forward a couple of messages so the counter is non-zero.
+                for i in 0..2u32 {
+                    client_a
+                        .send(vec![Bytes::from(format!("msg-{}", i))])
+                        .await
+                        .unwrap();
+                    let _msg = compio::time::timeout(Duration::from_secs(5), client_b.recv())
+                        .await
+                        .expect("forward timed out")
+                        .expect("io error")
+                        .expect("connection closed");
+                }
+
+                // Ask for statistics.
+                ctrl_client
+                    .send(vec![Bytes::from("STATISTICS")])
                     .await
                     .unwrap();
-                let _msg = compio::time::timeout(Duration::from_secs(5), client_b.recv())
-                    .await
-                    .expect("forward timed out")
-                    .expect("io error")
-                    .expect("connection closed");
-            }
 
-            // Ask for statistics.
-            ctrl_client
-                .send(vec![Bytes::from("STATISTICS")])
-                .await
-                .unwrap();
-
-            // The proxy sends the stats reply back on the same control socket.
-            let stats_msg =
-                compio::time::timeout(Duration::from_secs(5), ctrl_client.recv())
+                // The proxy sends the stats reply back on the same control socket.
+                let stats_msg = compio::time::timeout(Duration::from_secs(5), ctrl_client.recv())
                     .await
                     .expect("statistics reply timed out")
                     .expect("io error")
                     .expect("connection closed");
 
-            let reply = std::str::from_utf8(&stats_msg[0])
-                .expect("non-UTF-8 stats reply")
-                .to_owned();
-            stats_tx.send(reply).unwrap();
+                let reply = std::str::from_utf8(&stats_msg[0])
+                    .expect("non-UTF-8 stats reply")
+                    .to_owned();
+                stats_tx.send(reply).unwrap();
 
-            // Terminate cleanly.
-            ctrl_client
-                .send(vec![Bytes::from("TERMINATE")])
-                .await
-                .unwrap();
-            let _ = compio::time::timeout(Duration::from_secs(5), proxy_task).await;
-        });
+                // Terminate cleanly.
+                ctrl_client
+                    .send(vec![Bytes::from("TERMINATE")])
+                    .await
+                    .unwrap();
+                let _ = compio::time::timeout(Duration::from_secs(5), proxy_task).await;
+            });
     });
 
     let reply = stats_rx.recv_timeout(Duration::from_secs(10)).unwrap();

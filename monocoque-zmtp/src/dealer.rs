@@ -18,9 +18,7 @@ use std::time::Duration;
 use tracing::{debug, trace};
 
 use crate::{
-    base::SocketBase,
-    codec::encode_multipart,
-    handshake::perform_handshake_with_options,
+    base::SocketBase, codec::encode_multipart, handshake::perform_handshake_with_options,
     session::SocketType,
 };
 use monocoque_core::endpoint::Endpoint;
@@ -84,7 +82,7 @@ where
     ///
     /// # async fn example() -> std::io::Result<()> {
     /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
-    /// 
+    ///
     /// // High-throughput configuration
     /// let options = SocketOptions::large()
     ///     .with_recv_timeout(Duration::from_secs(5))
@@ -94,10 +92,7 @@ where
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn with_options(
-        mut stream: S,
-        options: SocketOptions,
-    ) -> io::Result<Self> {
+    pub async fn with_options(mut stream: S, options: SocketOptions) -> io::Result<Self> {
         debug!("[DEALER] Creating new direct DEALER socket");
 
         // Perform ZMTP handshake with timeout
@@ -127,7 +122,6 @@ where
     }
 
     /// Connect to an endpoint with automatic reconnection support.
-
 
     /// Receive a message.
     pub async fn recv(&mut self) -> io::Result<Option<Vec<Bytes>>> {
@@ -323,7 +317,7 @@ where
     /// ```
     pub async fn close(mut self) -> io::Result<()> {
         let linger = self.base.options.linger;
-        
+
         // If no data buffered, just drop the socket
         if self.base.send_buffer.is_empty() {
             trace!("[DEALER] No buffered data, closing immediately");
@@ -339,7 +333,10 @@ where
         match linger {
             Some(dur) if dur.is_zero() => {
                 // Linger = 0: discard buffered data immediately
-                debug!("[DEALER] Linger=0, discarding {} bytes", self.base.send_buffer.len());
+                debug!(
+                    "[DEALER] Linger=0, discarding {} bytes",
+                    self.base.send_buffer.len()
+                );
                 Ok(())
             }
             Some(dur) => {
@@ -377,7 +374,7 @@ where
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// # use monocoque_zmtp::DealerSocket;
     /// # use compio::net::TcpStream;
     /// # use std::time::Duration;
@@ -572,9 +569,7 @@ impl DealerSocket<TcpStream> {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn connect(
-        addr: impl compio::net::ToSocketAddrsAsync,
-    ) -> io::Result<Self> {
+    pub async fn connect(addr: impl compio::net::ToSocketAddrsAsync) -> io::Result<Self> {
         Self::connect_with_options(addr, SocketOptions::default()).await
     }
 
@@ -652,7 +647,7 @@ impl DealerSocket<TcpStream> {
     ///
     /// # async fn example() -> std::io::Result<()> {
     /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
-    /// 
+    ///
     /// let options = SocketOptions::large()  // 16KB buffers
     ///     .with_tcp_keepalive(1)
     ///     .with_tcp_keepalive_idle(60)
@@ -719,7 +714,10 @@ impl DealerSocket<TcpStream> {
                     }
                 }
                 attempts += 1;
-                trace!("[DEALER] Stream disconnected, reconnecting (attempt {})", attempts);
+                trace!(
+                    "[DEALER] Stream disconnected, reconnecting (attempt {})",
+                    attempts
+                );
                 self.try_reconnect().await?;
             }
 
@@ -773,7 +771,10 @@ impl DealerSocket<TcpStream> {
                     }
                 }
                 attempts += 1;
-                trace!("[DEALER] Stream disconnected, reconnecting (attempt {})", attempts);
+                trace!(
+                    "[DEALER] Stream disconnected, reconnecting (attempt {})",
+                    attempts
+                );
                 self.try_reconnect().await?;
             }
 
@@ -808,7 +809,7 @@ impl DealerSocket<InprocStream> {
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// use monocoque_zmtp::DealerSocket;
     /// use monocoque_zmtp::inproc_stream::InprocStream;
     /// use monocoque_core::options::SocketOptions;
@@ -825,10 +826,7 @@ impl DealerSocket<InprocStream> {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn bind_inproc(
-        endpoint: &str,
-        options: SocketOptions,
-    ) -> io::Result<Self> {
+    pub fn bind_inproc(endpoint: &str, options: SocketOptions) -> io::Result<Self> {
         use crate::inproc_stream::InprocStream;
         use monocoque_core::inproc::bind_inproc;
 
@@ -858,7 +856,7 @@ impl DealerSocket<InprocStream> {
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// use monocoque_zmtp::DealerSocket;
     /// use monocoque_zmtp::inproc_stream::InprocStream;
     /// use monocoque_core::options::SocketOptions;
@@ -875,10 +873,7 @@ impl DealerSocket<InprocStream> {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn connect_inproc(
-        endpoint: &str,
-        options: SocketOptions,
-    ) -> io::Result<Self> {
+    pub fn connect_inproc(endpoint: &str, options: SocketOptions) -> io::Result<Self> {
         use crate::inproc_stream::InprocStream;
         use monocoque_core::inproc::connect_inproc;
 

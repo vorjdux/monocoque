@@ -51,10 +51,12 @@ fn monocoque_dealer_router_pipelined(c: &mut Criterion) {
                     // Router task: process in batches
                     let router_task = compio::runtime::spawn(async move {
                         let (stream, _) = listener.accept().await.unwrap();
-                        let mut router =
-                            RouterSocket::from_tcp_with_options(stream, SocketOptions::default().with_buffer_sizes(16384, 16384))
-                                .await
-                                .unwrap();
+                        let mut router = RouterSocket::from_tcp_with_options(
+                            stream,
+                            SocketOptions::default().with_buffer_sizes(16384, 16384),
+                        )
+                        .await
+                        .unwrap();
 
                         // Process in batches to avoid deadlock
                         const BATCH_SIZE: usize = 100;
@@ -77,10 +79,12 @@ fn monocoque_dealer_router_pipelined(c: &mut Criterion) {
                     // Dealer task: process in batches
                     let dealer_task = compio::runtime::spawn(async move {
                         let stream = compio::net::TcpStream::connect(server_addr).await.unwrap();
-                        let mut dealer =
-                            DealerSocket::from_tcp_with_options(stream, SocketOptions::default().with_buffer_sizes(16384, 16384))
-                                .await
-                                .unwrap();
+                        let mut dealer = DealerSocket::from_tcp_with_options(
+                            stream,
+                            SocketOptions::default().with_buffer_sizes(16384, 16384),
+                        )
+                        .await
+                        .unwrap();
 
                         const BATCH_SIZE: usize = 100;
                         for _ in 0..(TOTAL_MESSAGES / BATCH_SIZE) {
@@ -203,10 +207,12 @@ fn monocoque_extreme_pipeline(c: &mut Criterion) {
 
                 let router_task = compio::runtime::spawn(async move {
                     let (stream, _) = listener.accept().await.unwrap();
-                    let mut router =
-                        RouterSocket::from_tcp_with_options(stream, SocketOptions::default().with_buffer_sizes(16384, 16384))
-                            .await
-                            .unwrap();
+                    let mut router = RouterSocket::from_tcp_with_options(
+                        stream,
+                        SocketOptions::default().with_buffer_sizes(16384, 16384),
+                    )
+                    .await
+                    .unwrap();
 
                     // Echo loop: recv + send immediately
                     for _ in 0..extreme_depth {
@@ -217,9 +223,12 @@ fn monocoque_extreme_pipeline(c: &mut Criterion) {
                 });
 
                 let stream = compio::net::TcpStream::connect(server_addr).await.unwrap();
-                let mut dealer = DealerSocket::from_tcp_with_options(stream, SocketOptions::default().with_buffer_sizes(16384, 16384))
-                    .await
-                    .unwrap();
+                let mut dealer = DealerSocket::from_tcp_with_options(
+                    stream,
+                    SocketOptions::default().with_buffer_sizes(16384, 16384),
+                )
+                .await
+                .unwrap();
 
                 // Send all messages
                 for _ in 0..extreme_depth {

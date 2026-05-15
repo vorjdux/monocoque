@@ -140,7 +140,7 @@ pub use socket_trait::Socket;
 pub mod prelude {
     pub use super::session::SocketType;
     pub use super::socket_trait::Socket;
-    pub use super::stream_sink::{SocketStream, SocketSink, SocketStreamSink};
+    pub use super::stream_sink::{SocketSink, SocketStream, SocketStreamSink};
     pub use super::{
         DealerSocket, PairSocket, PubSocket, PullSocket, PushSocket, RepSocket, ReqSocket,
         RouterSocket, SubSocket, XPubSocket, XSubSocket,

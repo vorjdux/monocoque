@@ -3,9 +3,8 @@
 /// This module provides client-side ZAP integration for server sockets.
 /// During authentication, server sockets send ZAP requests to the ZAP handler
 /// running on inproc://zeromq.zap.01 and wait for the response.
-
 use crate::security::zap::{ZapMechanism, ZapRequest, ZapResponse};
-use crate::{DealerSocket, inproc_stream::InprocStream};
+use crate::{inproc_stream::InprocStream, DealerSocket};
 use bytes::Bytes;
 use monocoque_core::options::SocketOptions;
 use std::io;
@@ -28,15 +27,10 @@ impl ZapClient {
     /// # Arguments
     /// * `timeout` - Timeout for ZAP requests (default: 5 seconds)
     pub fn new(timeout: Duration) -> io::Result<Self> {
-        let socket = DealerSocket::connect_inproc(
-            "inproc://zeromq.zap.01",
-            SocketOptions::default(),
-        )?;
+        let socket =
+            DealerSocket::connect_inproc("inproc://zeromq.zap.01", SocketOptions::default())?;
 
-        Ok(Self {
-            socket,
-            timeout,
-        })
+        Ok(Self { socket, timeout })
     }
 
     /// Send a ZAP authentication request and wait for response
@@ -72,7 +66,10 @@ impl ZapClient {
 
         // Decode the response
         ZapResponse::decode(&response_frames).map_err(|e| {
-            io::Error::new(io::ErrorKind::InvalidData, format!("Failed to decode ZAP response: {}", e))
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Failed to decode ZAP response: {}", e),
+            )
         })
     }
 
@@ -94,10 +91,13 @@ impl ZapClient {
         address: &str,
     ) -> io::Result<ZapResponse> {
         // Generate a simple request ID (timestamp-based)
-        let request_id = format!("{}", std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos());
+        let request_id = format!(
+            "{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
 
         let request = ZapRequest {
             version: "1.0".to_string(),
@@ -131,10 +131,13 @@ impl ZapClient {
         address: &str,
     ) -> io::Result<ZapResponse> {
         // Generate a simple request ID (timestamp-based)
-        let request_id = format!("{}", std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos());
+        let request_id = format!(
+            "{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
 
         let request = ZapRequest {
             version: "1.0".to_string(),
@@ -156,7 +159,7 @@ mod tests {
 
     // ZAP client tests require a running ZAP server.
     // Integration tests are in tests/zap_integration.rs
-    
+
     #[test]
     fn test_zap_client_creation() {
         // Test that we can create a client

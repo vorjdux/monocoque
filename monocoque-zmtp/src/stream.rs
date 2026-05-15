@@ -87,7 +87,9 @@ async fn peer_reader(
     use compio::io::AsyncRead;
 
     // Connection notification
-    let _ = inbound.send_async(vec![routing_id.clone(), Bytes::new(), Bytes::new()]).await;
+    let _ = inbound
+        .send_async(vec![routing_id.clone(), Bytes::new(), Bytes::new()])
+        .await;
 
     loop {
         let buf = vec![0u8; 8192];
@@ -263,24 +265,23 @@ impl StreamSocket {
             ));
         }
 
-        let routing_id = &msg[0];
+        let routing_id = msg[0].clone();
 
         // Collect all non-routing-id, non-empty frames as raw data.
         let data: Bytes = msg
             .iter()
             .skip(1)
-            .filter(|f| !f.is_empty())
+            .find(|f| !f.is_empty())
             .cloned()
-            .next()
             .unwrap_or_default();
 
         if data.is_empty() {
             // Sending [routing_id, ""] is a disconnect hint (libzmq semantics).
-            self.disconnect(routing_id);
+            self.disconnect(&routing_id);
             return Ok(());
         }
 
-        match self.peers.get(routing_id) {
+        match self.peers.get(&routing_id) {
             Some(tx) => {
                 tx.try_send(data).map_err(|e| {
                     io::Error::other(format!("Peer {:?} send failed: {}", routing_id, e))
@@ -288,7 +289,10 @@ impl StreamSocket {
                 trace!("[STREAM] Queued data for peer {:?}", routing_id);
             }
             None => {
-                warn!("[STREAM] Unknown routing-id {:?}, dropping message", routing_id);
+                warn!(
+                    "[STREAM] Unknown routing-id {:?}, dropping message",
+                    routing_id
+                );
             }
         }
         Ok(())

@@ -8,7 +8,6 @@
 /// - PUB socket with worker pool broadcasts to all subscribers
 /// - SUB socket subscribes to specific topics
 /// - Topics are prefix-matched (e.g., "trade." matches "trade.BTC", "trade.ETH")
-
 use bytes::Bytes;
 use monocoque::zmq::{PubSocket, SubSocket};
 use std::thread;
@@ -30,7 +29,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start subscriber in background
     compio::runtime::spawn(async {
         run_subscriber().await.ok();
-    }).detach();
+    })
+    .detach();
 
     // Give subscriber time to connect
     thread::sleep(Duration::from_millis(500));

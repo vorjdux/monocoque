@@ -124,8 +124,6 @@ impl SubSocket {
         Ok(sock)
     }
 
-
-
     /// Create a SUB socket from a TCP stream with TCP_NODELAY enabled.
     pub async fn from_tcp(stream: TcpStream) -> io::Result<Self> {
         Ok(Self {
@@ -202,7 +200,7 @@ where
     /// Subscribe to messages matching the given topic prefix.
     ///
     /// Empty topic subscribes to all messages.
-    /// 
+    ///
     /// This sends a subscription message to the PUB socket.
     pub async fn subscribe(&mut self, topic: &[u8]) -> io::Result<()> {
         self.inner.subscribe(Bytes::copy_from_slice(topic)).await

@@ -109,7 +109,7 @@ impl SemaphorePermits {
     /// # Arguments
     ///
     /// * `max_bytes` - Maximum number of bytes that can be buffered
-    #[must_use] 
+    #[must_use]
     pub fn new(max_bytes: usize) -> Self {
         Self {
             semaphore: Arc::new(Semaphore::new(max_bytes)),
@@ -124,7 +124,7 @@ impl BytePermits for SemaphorePermits {
         for _ in 0..n_bytes {
             let _ = self.semaphore.acquire().await;
         }
-        
+
         // Return permit that will release on drop
         Permit::semaphore(self.semaphore.clone(), n_bytes)
     }
@@ -149,15 +149,15 @@ mod tests {
     fn semaphore_permits_enforce_limit() {
         let permits = SemaphorePermits::new(1024);
         let rt = compio::runtime::Runtime::new().unwrap();
-        
+
         rt.block_on(async {
             // First 1024 bytes should succeed
             let p1 = permits.acquire(1024).await;
-            
+
             // Try to acquire more - this would block, so we test the behavior
             // by checking we can acquire after dropping
             drop(p1);
-            
+
             let _p2 = permits.acquire(512).await;
             let _p3 = permits.acquire(512).await;
             // Should succeed with 1024 total
@@ -168,14 +168,14 @@ mod tests {
     fn semaphore_permits_release_on_drop() {
         let permits = SemaphorePermits::new(1000);
         let rt = compio::runtime::Runtime::new().unwrap();
-        
+
         rt.block_on(async {
             {
                 let _p1 = permits.acquire(500).await;
                 let _p2 = permits.acquire(500).await;
                 // Full capacity used
             } // Permits dropped here
-            
+
             // Should be able to acquire again after drop
             let _p3 = permits.acquire(1000).await;
         });

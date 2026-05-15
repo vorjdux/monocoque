@@ -75,39 +75,47 @@ fn test_pubsub_fanout_distinct_topics() {
             let addr = pub_addr;
             let ready_tx = sub_ready_tx.clone();
             thread::spawn(move || {
-                compio::runtime::Runtime::new().unwrap().block_on(async move {
-                    let stream = compio::net::TcpStream::connect(addr).await.unwrap();
-                    let mut sub = SubSocket::from_tcp(stream).await.unwrap();
-                    sub.subscribe(Bytes::from(format!("t{}", i))).await.unwrap();
+                compio::runtime::Runtime::new()
+                    .unwrap()
+                    .block_on(async move {
+                        let stream = compio::net::TcpStream::connect(addr).await.unwrap();
+                        let mut sub = SubSocket::from_tcp(stream).await.unwrap();
+                        sub.subscribe(Bytes::from(format!("t{}", i))).await.unwrap();
 
-                    // Signal that subscription bytes have been sent.
-                    ready_tx.send(()).unwrap();
+                        // Signal that subscription bytes have been sent.
+                        ready_tx.send(()).unwrap();
 
-                    let mut received = 0usize;
-                    for _ in 0..MSGS {
-                        let msg = compio::time::timeout(Duration::from_secs(10), sub.recv())
-                            .await
-                            .expect("recv timed out")
-                            .expect("io error")
-                            .expect("connection closed");
+                        let mut received = 0usize;
+                        for _ in 0..MSGS {
+                            let msg = compio::time::timeout(Duration::from_secs(10), sub.recv())
+                                .await
+                                .expect("recv timed out")
+                                .expect("io error")
+                                .expect("connection closed");
 
-                        assert_eq!(
-                            msg[0],
-                            Bytes::from(format!("t{}", i)),
-                            "subscriber {} got wrong topic",
-                            i
-                        );
-                        received += 1;
-                    }
-                    received
-                })
+                            assert_eq!(
+                                msg[0],
+                                Bytes::from(format!("t{}", i)),
+                                "subscriber {} got wrong topic",
+                                i
+                            );
+                            received += 1;
+                        }
+                        received
+                    })
             })
         })
         .collect();
 
     for (i, handle) in handles.into_iter().enumerate() {
-        let count = handle.join().unwrap_or_else(|_| panic!("subscriber {} thread panicked", i));
-        assert_eq!(count, MSGS, "subscriber {} received {}/{} messages", i, count, MSGS);
+        let count = handle
+            .join()
+            .unwrap_or_else(|_| panic!("subscriber {} thread panicked", i));
+        assert_eq!(
+            count, MSGS,
+            "subscriber {} received {}/{} messages",
+            i, count, MSGS
+        );
     }
 }
 
@@ -147,10 +155,7 @@ fn test_pubsub_fanout_overlapping_topics() {
             // 3 messages on "weather.hum"  → only A should receive
             for i in 0..3u32 {
                 pub_sock
-                    .send(vec![
-                        Bytes::from("weather.hum"),
-                        Bytes::from(i.to_string()),
-                    ])
+                    .send(vec![Bytes::from("weather.hum"), Bytes::from(i.to_string())])
                     .await
                     .unwrap();
             }
@@ -163,46 +168,50 @@ fn test_pubsub_fanout_overlapping_topics() {
     let result_tx_a = result_tx.clone();
     let sub_ready_tx_a = sub_ready_tx.clone();
     thread::spawn(move || {
-        let count = compio::runtime::Runtime::new().unwrap().block_on(async move {
-            let stream = compio::net::TcpStream::connect(pub_addr).await.unwrap();
-            let mut sub = SubSocket::from_tcp(stream).await.unwrap();
-            sub.subscribe(Bytes::from("weather")).await.unwrap();
-            sub_ready_tx_a.send(()).unwrap();
+        let count = compio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let stream = compio::net::TcpStream::connect(pub_addr).await.unwrap();
+                let mut sub = SubSocket::from_tcp(stream).await.unwrap();
+                sub.subscribe(Bytes::from("weather")).await.unwrap();
+                sub_ready_tx_a.send(()).unwrap();
 
-            let mut n = 0usize;
-            for _ in 0..8 {
-                compio::time::timeout(Duration::from_secs(10), sub.recv())
-                    .await
-                    .expect("recv timed out")
-                    .expect("io error")
-                    .expect("connection closed");
-                n += 1;
-            }
-            n
-        });
+                let mut n = 0usize;
+                for _ in 0..8 {
+                    compio::time::timeout(Duration::from_secs(10), sub.recv())
+                        .await
+                        .expect("recv timed out")
+                        .expect("io error")
+                        .expect("connection closed");
+                    n += 1;
+                }
+                n
+            });
         result_tx_a.send((0, count)).unwrap();
     });
 
     // Subscriber B: "weather.temp" (matches only "weather.temp")
     let sub_ready_tx_b = sub_ready_tx;
     thread::spawn(move || {
-        let count = compio::runtime::Runtime::new().unwrap().block_on(async move {
-            let stream = compio::net::TcpStream::connect(pub_addr).await.unwrap();
-            let mut sub = SubSocket::from_tcp(stream).await.unwrap();
-            sub.subscribe(Bytes::from("weather.temp")).await.unwrap();
-            sub_ready_tx_b.send(()).unwrap();
+        let count = compio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let stream = compio::net::TcpStream::connect(pub_addr).await.unwrap();
+                let mut sub = SubSocket::from_tcp(stream).await.unwrap();
+                sub.subscribe(Bytes::from("weather.temp")).await.unwrap();
+                sub_ready_tx_b.send(()).unwrap();
 
-            let mut n = 0usize;
-            for _ in 0..5 {
-                compio::time::timeout(Duration::from_secs(10), sub.recv())
-                    .await
-                    .expect("recv timed out")
-                    .expect("io error")
-                    .expect("connection closed");
-                n += 1;
-            }
-            n
-        });
+                let mut n = 0usize;
+                for _ in 0..5 {
+                    compio::time::timeout(Duration::from_secs(10), sub.recv())
+                        .await
+                        .expect("recv timed out")
+                        .expect("io error")
+                        .expect("connection closed");
+                    n += 1;
+                }
+                n
+            });
         result_tx.send((1, count)).unwrap();
     });
 
@@ -212,8 +221,16 @@ fn test_pubsub_fanout_overlapping_topics() {
         counts[idx] = count;
     }
 
-    assert_eq!(counts[0], 8, "subscriber A (\"weather\") expected 8 messages, got {}", counts[0]);
-    assert_eq!(counts[1], 5, "subscriber B (\"weather.temp\") expected 5 messages, got {}", counts[1]);
+    assert_eq!(
+        counts[0], 8,
+        "subscriber A (\"weather\") expected 8 messages, got {}",
+        counts[0]
+    );
+    assert_eq!(
+        counts[1], 5,
+        "subscriber B (\"weather.temp\") expected 5 messages, got {}",
+        counts[1]
+    );
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -262,33 +279,35 @@ fn test_router_dealer_multi_peer() {
         .map(|client_id| {
             let addr = server_addr;
             thread::spawn(move || {
-                compio::runtime::Runtime::new().unwrap().block_on(async move {
-                    let mut dealer = DealerSocket::connect(addr).await.unwrap();
+                compio::runtime::Runtime::new()
+                    .unwrap()
+                    .block_on(async move {
+                        let mut dealer = DealerSocket::connect(addr).await.unwrap();
 
-                    for round in 0..ROUNDS {
-                        let payload =
-                            Bytes::from(format!("client{}-round{}", client_id, round));
-                        dealer
-                            .send(vec![Bytes::new(), payload.clone()])
-                            .await
-                            .unwrap();
-
-                        let reply =
-                            compio::time::timeout(Duration::from_secs(10), dealer.recv())
+                        for round in 0..ROUNDS {
+                            let payload =
+                                Bytes::from(format!("client{}-round{}", client_id, round));
+                            dealer
+                                .send(vec![Bytes::new(), payload.clone()])
                                 .await
-                                .expect("recv timed out")
-                                .expect("io error")
-                                .expect("connection closed");
+                                .unwrap();
 
-                        assert_eq!(
-                            reply.last().unwrap(),
-                            &payload,
-                            "client {} round {} got wrong payload",
-                            client_id,
-                            round
-                        );
-                    }
-                })
+                            let reply =
+                                compio::time::timeout(Duration::from_secs(10), dealer.recv())
+                                    .await
+                                    .expect("recv timed out")
+                                    .expect("io error")
+                                    .expect("connection closed");
+
+                            assert_eq!(
+                                reply.last().unwrap(),
+                                &payload,
+                                "client {} round {} got wrong payload",
+                                client_id,
+                                round
+                            );
+                        }
+                    })
             })
         })
         .collect();

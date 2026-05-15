@@ -2,10 +2,10 @@
 //!
 //! Tests strict and relaxed modes for REQ socket enforcement.
 
-use monocoque_zmtp::req::ReqSocket;
-use monocoque_zmtp::rep::RepSocket;
-use monocoque_core::options::SocketOptions;
 use bytes::Bytes;
+use monocoque_core::options::SocketOptions;
+use monocoque_zmtp::rep::RepSocket;
+use monocoque_zmtp::req::ReqSocket;
 use std::io;
 
 /// Test strict REQ state machine - send→send should fail
@@ -18,11 +18,11 @@ async fn test_req_strict_send_send_fails() -> io::Result<()> {
     let server_task = compio::runtime::spawn(async move {
         let (stream, _) = listener.accept().await?;
         let mut rep_socket = RepSocket::new(stream).await?;
-        
+
         // Receive first request
         let _req = rep_socket.recv().await?;
         rep_socket.send(vec![Bytes::from("reply1")]).await?;
-        
+
         Ok::<(), io::Error>(())
     });
 
@@ -40,8 +40,11 @@ async fn test_req_strict_send_send_fails() -> io::Result<()> {
 
     // Second send WITHOUT recv should FAIL in strict mode
     let result = req_socket.send(vec![Bytes::from("request2")]).await;
-    assert!(result.is_err(), "Expected error when sending twice without recv in strict mode");
-    
+    assert!(
+        result.is_err(),
+        "Expected error when sending twice without recv in strict mode"
+    );
+
     let err = result.unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     assert!(err.to_string().contains("await reply") || err.to_string().contains("recv"));
@@ -63,11 +66,11 @@ async fn test_req_strict_recv_recv_fails() -> io::Result<()> {
     let server_task = compio::runtime::spawn(async move {
         let (stream, _) = listener.accept().await?;
         let mut rep_socket = RepSocket::new(stream).await?;
-        
+
         // Receive request and send reply
         let _req = rep_socket.recv().await?;
         rep_socket.send(vec![Bytes::from("reply1")]).await?;
-        
+
         Ok::<(), io::Error>(())
     });
 
@@ -83,8 +86,11 @@ async fn test_req_strict_recv_recv_fails() -> io::Result<()> {
 
     // Now socket is in Idle state - recv without send should FAIL
     let result = req_socket.recv().await;
-    assert!(result.is_err(), "Expected error when receiving twice without send in strict mode");
-    
+    assert!(
+        result.is_err(),
+        "Expected error when receiving twice without send in strict mode"
+    );
+
     let err = result.unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     assert!(err.to_string().contains("Idle") || err.to_string().contains("send"));
@@ -149,15 +155,17 @@ async fn test_req_strict_normal_flow() -> io::Result<()> {
     let server_task = compio::runtime::spawn(async move {
         let (stream, _) = listener.accept().await?;
         let mut rep_socket = RepSocket::new(stream).await?;
-        
+
         // Handle 3 request-reply cycles
         for i in 0..3 {
             let req = rep_socket.recv().await?.expect("Should receive request");
             assert_eq!(req[0], Bytes::from(format!("request{}", i)));
-            
-            rep_socket.send(vec![Bytes::from(format!("reply{}", i))]).await?;
+
+            rep_socket
+                .send(vec![Bytes::from(format!("reply{}", i))])
+                .await?;
         }
-        
+
         Ok::<(), io::Error>(())
     });
 
@@ -169,7 +177,9 @@ async fn test_req_strict_normal_flow() -> io::Result<()> {
 
     // Proper alternating send→recv→send→recv should work
     for i in 0..3 {
-        req_socket.send(vec![Bytes::from(format!("request{}", i))]).await?;
+        req_socket
+            .send(vec![Bytes::from(format!("request{}", i))])
+            .await?;
         let reply = req_socket.recv().await?.expect("Should receive reply");
         assert_eq!(reply[0], Bytes::from(format!("reply{}", i)));
     }
@@ -188,13 +198,13 @@ async fn test_req_correlation_mode() -> io::Result<()> {
     let server_task = compio::runtime::spawn(async move {
         let (stream, _) = listener.accept().await?;
         let mut rep_socket = RepSocket::new(stream).await?;
-        
+
         // Receive request (with correlation ID as first frame)
         let req = rep_socket.recv().await?.expect("Should receive");
-        
+
         // Echo back the correlation ID + payload
         rep_socket.send(req).await?;
-        
+
         Ok::<(), io::Error>(())
     });
 
@@ -208,10 +218,10 @@ async fn test_req_correlation_mode() -> io::Result<()> {
 
     // Send request - correlation ID will be prepended automatically
     req_socket.send(vec![Bytes::from("payload")]).await?;
-    
+
     // Receive reply - correlation ID will be validated and stripped
     let reply = req_socket.recv().await?.expect("Should receive");
-    
+
     // Should only contain the payload (correlation ID stripped)
     assert_eq!(reply.len(), 1);
     assert_eq!(reply[0], Bytes::from("payload"));

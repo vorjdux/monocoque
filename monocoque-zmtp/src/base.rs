@@ -51,37 +51,37 @@ where
 {
     /// Underlying stream (TCP or Unix socket) - None when disconnected
     pub(crate) stream: Option<S>,
-    
+
     /// Optional endpoint for automatic reconnection
     pub(crate) endpoint: Option<Endpoint>,
-    
+
     /// Reconnection state tracker (exponential backoff)
     pub(crate) reconnect: Option<ReconnectState>,
-    
+
     /// ZMTP frame decoder
     pub(crate) decoder: ZmtpDecoder,
-    
+
     /// Arena allocator for zero-copy I/O
     pub(crate) arena: IoArena,
-    
+
     /// Segmented read buffer for incoming data
     pub(crate) recv: SegmentedBuffer,
-    
+
     /// Reusable write buffer for outgoing data
     pub(crate) write_buf: BytesMut,
-    
+
     /// Send buffer for message batching
     pub(crate) send_buffer: BytesMut,
-    
+
     /// Socket options (timeouts, limits, identity, buffer sizes)
     pub(crate) options: SocketOptions,
 
     /// Last connected/bound endpoint
     pub(crate) last_endpoint: Option<String>,
-    
+
     /// Connection health flag (true if I/O was cancelled mid-operation)
     pub(crate) is_poisoned: bool,
-    
+
     /// Number of messages currently buffered (for HWM enforcement)
     pub(crate) buffered_messages: usize,
 }
@@ -97,11 +97,7 @@ where
     /// state is stored.
     ///
     /// Buffer sizes are taken from `options.read_buffer_size` and `options.write_buffer_size`.
-    pub fn new(
-        stream: S,
-        _socket_type: SocketType,
-        options: SocketOptions,
-    ) -> Self {
+    pub fn new(stream: S, _socket_type: SocketType, options: SocketOptions) -> Self {
         let write_capacity = options.write_buffer_size;
         Self {
             stream: Some(stream),
@@ -239,17 +235,17 @@ where
     #[inline]
     pub fn events(&self) -> u32 {
         let mut events = 0u32;
-        
+
         // POLLIN (1): Can receive if connected and buffers available
         if self.is_connected() && !self.is_poisoned {
             events |= 1; // POLLIN
         }
-        
+
         // POLLOUT (2): Can send if connected and HWM not reached
         if self.is_connected() && !self.hwm_reached() && !self.is_poisoned {
             events |= 2; // POLLOUT
         }
-        
+
         events
     }
 
@@ -339,9 +335,10 @@ where
         }
 
         // Ensure we have a connected stream
-        let stream = self.stream.as_mut().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
-        })?;
+        let stream = self
+            .stream
+            .as_mut()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "Socket not connected"))?;
 
         trace!("[SocketBase] Flushing {} bytes", self.send_buffer.len());
 
@@ -406,9 +403,10 @@ where
         }
 
         // Ensure we have a connected stream
-        let stream = self.stream.as_mut().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
-        })?;
+        let stream = self
+            .stream
+            .as_mut()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "Socket not connected"))?;
 
         // Arm poison guard
         let guard = PoisonGuard::new(&mut self.is_poisoned);
@@ -417,7 +415,7 @@ where
         let buf = self.write_buf.split().freeze();
 
         use compio::buf::BufResult;
-        
+
         // Apply send timeout from options
         let BufResult(result, _) = match self.options.send_timeout {
             None => {

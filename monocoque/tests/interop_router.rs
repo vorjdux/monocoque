@@ -1,5 +1,5 @@
-use monocoque::zmq::RouterSocket;
 use bytes::Bytes;
+use monocoque::zmq::RouterSocket;
 use std::thread;
 use std::time::Duration;
 
@@ -20,18 +20,22 @@ fn test_router_explicit_routing() {
 
             let msg = router.recv().await.unwrap();
             if msg[0] != b"CLIENT_A"[..] {
-                result_tx.send(Err(format!("Expected CLIENT_A identity, got {:?}", msg[0]))).unwrap();
+                result_tx
+                    .send(Err(format!("Expected CLIENT_A identity, got {:?}", msg[0])))
+                    .unwrap();
                 return;
             }
             if msg[1] != b"Hello"[..] {
-                result_tx.send(Err(format!("Expected Hello, got {:?}", msg[1]))).unwrap();
+                result_tx
+                    .send(Err(format!("Expected Hello, got {:?}", msg[1])))
+                    .unwrap();
                 return;
             }
 
-            router.send(vec![
-                msg[0].clone(),
-                Bytes::from_static(b"World"),
-            ]).await.unwrap();
+            router
+                .send(vec![msg[0].clone(), Bytes::from_static(b"World")])
+                .await
+                .unwrap();
 
             result_tx.send(Ok(())).unwrap();
         });
@@ -50,5 +54,8 @@ fn test_router_explicit_routing() {
     let msg = dealer.recv_string(0).unwrap().unwrap();
     assert_eq!(msg, "World");
 
-    result_rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+    result_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
 }

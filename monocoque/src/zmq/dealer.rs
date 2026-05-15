@@ -164,15 +164,15 @@ impl DealerSocket {
         // Parse endpoint for connecting
         let parsed = monocoque_core::endpoint::Endpoint::parse(endpoint)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-        
+
         // Connect using the internal simple connect
         let inner = InternalDealer::connect(endpoint).await?;
-        
+
         let sock = Self {
             inner,
             monitor: None,
         };
-        
+
         sock.emit_event(SocketEvent::Connected(parsed));
         Ok(sock)
     }
@@ -207,27 +207,29 @@ impl DealerSocket {
         // Parse endpoint
         let parsed = monocoque_core::endpoint::Endpoint::parse(endpoint)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-        
+
         // For now, only TCP is supported for connect with options
         let monocoque_core::endpoint::Endpoint::Tcp(addr) = parsed else {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "connect_with_options only supports TCP endpoints"
+                "connect_with_options only supports TCP endpoints",
             ));
         };
-        
+
         // Connect TCP stream manually
         let stream = compio::net::TcpStream::connect(addr).await?;
-        
+
         // Create socket with options
         let inner = InternalDealer::from_tcp_with_options(stream, options).await?;
-        
+
         let sock = Self {
             inner,
             monitor: None,
         };
-        
-        sock.emit_event(SocketEvent::Connected(monocoque_core::endpoint::Endpoint::Tcp(addr)));
+
+        sock.emit_event(SocketEvent::Connected(
+            monocoque_core::endpoint::Endpoint::Tcp(addr),
+        ));
         Ok(sock)
     }
 
@@ -270,8 +272,6 @@ impl DealerSocket {
         ));
         Ok(sock)
     }
-
-
 
     /// Bind to an address and accept the first connection.
     ///
@@ -355,7 +355,7 @@ impl DealerSocket {
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
-    /// 
+    ///
     /// // Customize HWM only (uses default 8KB buffers)
     /// let socket = DealerSocket::from_tcp_with_options(
     ///     stream,
@@ -666,11 +666,13 @@ impl DealerSocket<compio::net::UnixStream> {
     }
 }
 
-// Implement ProxySocket for the high-level DealerSocket wrapper  
+// Implement ProxySocket for the high-level DealerSocket wrapper
 impl monocoque_zmtp::proxy::ProxySocket for DealerSocket<TcpStream> {
     fn recv_multipart<'life0, 'async_trait>(
         &'life0 mut self,
-    ) -> ::core::pin::Pin<Box<dyn ::core::future::Future<Output = io::Result<Option<Vec<Bytes>>>> + 'async_trait>>
+    ) -> ::core::pin::Pin<
+        Box<dyn ::core::future::Future<Output = io::Result<Option<Vec<Bytes>>>> + 'async_trait>,
+    >
     where
         'life0: 'async_trait,
         Self: 'async_trait,

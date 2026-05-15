@@ -84,10 +84,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     // Note: These are compile-time tests to ensure the API is sound
     // Full integration tests would require actual I/O operations
-    
+
     #[test]
     fn test_timeout_types() {
         // Verify Duration handling

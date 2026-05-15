@@ -37,7 +37,9 @@ impl PullSocket<TcpStream> {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn bind(addr: impl compio::net::ToSocketAddrsAsync) -> io::Result<(TcpListener, Self)> {
+    pub async fn bind(
+        addr: impl compio::net::ToSocketAddrsAsync,
+    ) -> io::Result<(TcpListener, Self)> {
         let listener = TcpListener::bind(addr).await?;
         let (stream, _) = listener.accept().await?;
         let socket = Self::from_tcp(stream).await?;

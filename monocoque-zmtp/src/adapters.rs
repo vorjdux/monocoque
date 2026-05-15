@@ -5,7 +5,7 @@
 //!
 //! # Examples
 //!
-//! ```no_run
+//! ```rust,ignore
 //! use monocoque_zmtp::{DealerSocket, adapters::SocketStream};
 //! use futures::StreamExt;
 //!

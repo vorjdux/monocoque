@@ -27,9 +27,11 @@
 //! ```
 
 use bytes::Bytes;
-use monocoque::zmq::{RepSocket, ReqSocket, SocketOptions};
-use monocoque_zmtp::security::curve::{CurveKeyPair, CurvePublicKey, CurveSecretKey, CURVE_KEY_SIZE};
 use compio::net::TcpListener;
+use monocoque::zmq::{RepSocket, ReqSocket, SocketOptions};
+use monocoque_zmtp::security::curve::{
+    CurveKeyPair, CurvePublicKey, CurveSecretKey, CURVE_KEY_SIZE,
+};
 use std::env;
 use std::time::Duration;
 use tracing::{error, info};
@@ -47,7 +49,10 @@ async fn main() {
 
     if args.len() < 2 {
         eprintln!("Usage:");
-        eprintln!("  {} keygen                          # Generate key pairs", args[0]);
+        eprintln!(
+            "  {} keygen                          # Generate key pairs",
+            args[0]
+        );
         eprintln!("  {} server <server_secret_key_hex>  # Run server", args[0]);
         eprintln!("  {} client <server_public_key_hex>  # Run client", args[0]);
         std::process::exit(1);
@@ -129,13 +134,19 @@ async fn run_server(secret_key_hex: &str) {
     info!("✅ Server public key: {}", hex::encode(public.as_bytes()));
 
     // Bind TCP listener
-    let listener = TcpListener::bind(SERVER_ADDR).await
+    let listener = TcpListener::bind(SERVER_ADDR)
+        .await
         .expect("Failed to bind");
-    
-    info!("🎧 Server listening for encrypted connections on {}", SERVER_ADDR);
+
+    info!(
+        "🎧 Server listening for encrypted connections on {}",
+        SERVER_ADDR
+    );
 
     // Accept connection
-    let (stream, _addr) = listener.accept().await
+    let (stream, _addr) = listener
+        .accept()
+        .await
         .expect("Failed to accept connection");
 
     // Create server socket with CURVE server mode
@@ -144,7 +155,8 @@ async fn run_server(secret_key_hex: &str) {
         .with_curve_keypair(*public.as_bytes(), secret_array)
         .with_zap_domain("curve-example");
 
-    let mut socket = RepSocket::from_tcp_with_options(stream, options).await
+    let mut socket = RepSocket::from_tcp_with_options(stream, options)
+        .await
         .expect("Failed to create socket");
 
     info!("✅ Client connected with CURVE encryption");
@@ -192,21 +204,25 @@ async fn run_client(server_public_key_hex: &str) {
 
     // Generate client keypair
     let client_keypair = CurveKeyPair::generate();
-    info!("✅ Client public key: {}", hex::encode(client_keypair.public.as_bytes()));
+    info!(
+        "✅ Client public key: {}",
+        hex::encode(client_keypair.public.as_bytes())
+    );
 
     // Create client socket with CURVE client mode
     let options = SocketOptions::new()
-        .with_curve_keypair(*client_keypair.public.as_bytes(), 
-                           [0u8; 32]) // Placeholder - use actual secret
+        .with_curve_keypair(*client_keypair.public.as_bytes(), [0u8; 32]) // Placeholder - use actual secret
         .with_curve_serverkey(server_public_array)
         .with_recv_timeout(Duration::from_secs(5))
         .with_send_timeout(Duration::from_secs(5));
 
     // Connect to server
-    let stream = compio::net::TcpStream::connect(SERVER_ADDR).await
+    let stream = compio::net::TcpStream::connect(SERVER_ADDR)
+        .await
         .expect("Failed to connect");
 
-    let mut socket = ReqSocket::from_tcp_with_options(stream, options).await
+    let mut socket = ReqSocket::from_tcp_with_options(stream, options)
+        .await
         .expect("Failed to create socket");
 
     info!("✅ Encrypted connection established");

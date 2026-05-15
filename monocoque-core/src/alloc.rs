@@ -118,7 +118,7 @@ impl SlabMut {
     /// - `ptr` is inside `page`
     /// - `len <= cap`
     /// - After this call, no mutable access exists
-    #[must_use] 
+    #[must_use]
     pub fn freeze(self) -> Bytes {
         let base = self.page.ptr.as_ptr();
         let offset = unsafe { self.ptr.as_ptr().offset_from(base) } as usize;
@@ -196,7 +196,7 @@ impl Default for IoArena {
 }
 
 impl IoArena {
-    #[must_use] 
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             current: None,

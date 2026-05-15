@@ -73,6 +73,12 @@ pub struct ZmtpDecoder {
     staging: BytesMut,
 }
 
+impl Default for ZmtpDecoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ZmtpDecoder {
     #[must_use]
     pub fn new() -> Self {

@@ -178,7 +178,11 @@ impl CurveBox {
     }
 
     /// Encrypt message with nonce
-    fn encrypt(&self, plaintext: &[u8], nonce: &[u8; CURVE_NONCE_SIZE]) -> Result<Vec<u8>, CurveError> {
+    fn encrypt(
+        &self,
+        plaintext: &[u8],
+        nonce: &[u8; CURVE_NONCE_SIZE],
+    ) -> Result<Vec<u8>, CurveError> {
         // ChaCha20Poly1305 uses 12-byte nonces, take first 12 bytes of ZMQ's 24-byte nonce
         let nonce = Nonce::from_slice(&nonce[..12]);
         self.cipher
@@ -187,7 +191,11 @@ impl CurveBox {
     }
 
     /// Decrypt message with nonce
-    fn decrypt(&self, ciphertext: &[u8], nonce: &[u8; CURVE_NONCE_SIZE]) -> Result<Vec<u8>, CurveError> {
+    fn decrypt(
+        &self,
+        ciphertext: &[u8],
+        nonce: &[u8; CURVE_NONCE_SIZE],
+    ) -> Result<Vec<u8>, CurveError> {
         // ChaCha20Poly1305 uses 12-byte nonces, take first 12 bytes of ZMQ's 24-byte nonce
         let nonce = Nonce::from_slice(&nonce[..12]);
         self.cipher
@@ -288,20 +296,22 @@ impl CurveClient {
 
         let mut hello = BytesMut::new();
         hello.extend_from_slice(CURVE_HELLO);
-        
+
         // Version (1 byte, always 1)
         hello.extend_from_slice(&[1u8]);
-        
+
         // Client short-term public key (32 bytes)
         hello.extend_from_slice(self.client_short_keypair.public.as_bytes());
-        
+
         // Nonce (8 bytes of zeros for HELLO)
         hello.extend_from_slice(&[0u8; 8]);
-        
+
         // Signature (64 bytes, zeros for now - simplified)
         hello.extend_from_slice(&[0u8; 64]);
 
-        let buf_result = write_all_with_timeout(stream, hello.freeze().to_vec(), timeout).await.map_err(ZmtpError::from)?;
+        let buf_result = write_all_with_timeout(stream, hello.freeze().to_vec(), timeout)
+            .await
+            .map_err(ZmtpError::from)?;
         let BufResult(result, _) = buf_result;
         result.map_err(Into::into)
     }
@@ -322,7 +332,9 @@ impl CurveClient {
 
         // Read WELCOME header (7 bytes)
         let header = vec![0u8; 7];
-        let buf_result = read_exact_with_timeout(stream, header, timeout).await.map_err(ZmtpError::from)?;
+        let buf_result = read_exact_with_timeout(stream, header, timeout)
+            .await
+            .map_err(ZmtpError::from)?;
         let BufResult(result, header) = buf_result;
         result?;
 
@@ -333,7 +345,9 @@ impl CurveClient {
 
         // Read server short-term public key (32 bytes)
         let server_short_key = vec![0u8; CURVE_KEY_SIZE];
-        let buf_result = read_exact_with_timeout(stream, server_short_key, timeout).await.map_err(ZmtpError::from)?;
+        let buf_result = read_exact_with_timeout(stream, server_short_key, timeout)
+            .await
+            .map_err(ZmtpError::from)?;
         let BufResult(result, server_short_key) = buf_result;
         result?;
 
@@ -343,7 +357,9 @@ impl CurveClient {
 
         // Read encrypted cookie (96 bytes)
         let cookie = vec![0u8; 96];
-        let buf_result = read_exact_with_timeout(stream, cookie, timeout).await.map_err(ZmtpError::from)?;
+        let buf_result = read_exact_with_timeout(stream, cookie, timeout)
+            .await
+            .map_err(ZmtpError::from)?;
         let BufResult(result, _cookie) = buf_result;
         result?;
 
@@ -367,19 +383,21 @@ impl CurveClient {
 
         let mut initiate = BytesMut::new();
         initiate.extend_from_slice(CURVE_INITIATE);
-        
+
         // Client long-term public key (32 bytes)
         initiate.extend_from_slice(self.client_keypair.public.as_bytes());
-        
+
         // Nonce (8 bytes)
         let mut nonce = [0u8; 8];
         rand::thread_rng().fill_bytes(&mut nonce);
         initiate.extend_from_slice(&nonce);
-        
+
         // Encrypted vouch (128 bytes)
         initiate.extend_from_slice(&[0u8; 128]);
 
-        let buf_result = write_all_with_timeout(stream, initiate.freeze().to_vec(), timeout).await.map_err(ZmtpError::from)?;
+        let buf_result = write_all_with_timeout(stream, initiate.freeze().to_vec(), timeout)
+            .await
+            .map_err(ZmtpError::from)?;
         let BufResult(result, _) = buf_result;
         result.map_err(Into::into)
     }
@@ -400,7 +418,9 @@ impl CurveClient {
 
         // Read READY header (5 bytes)
         let header = vec![0u8; 5];
-        let buf_result = read_exact_with_timeout(stream, header, timeout).await.map_err(ZmtpError::from)?;
+        let buf_result = read_exact_with_timeout(stream, header, timeout)
+            .await
+            .map_err(ZmtpError::from)?;
         let BufResult(result, header) = buf_result;
         result?;
 
@@ -410,12 +430,13 @@ impl CurveClient {
         }
 
         // Compute shared secret for message encryption
-        let server_short_public = self.server_short_public
-            .ok_or(ZmtpError::Protocol)?;
-        
-        let shared_secret = self.client_short_keypair.secret
+        let server_short_public = self.server_short_public.ok_or(ZmtpError::Protocol)?;
+
+        let shared_secret = self
+            .client_short_keypair
+            .secret
             .diffie_hellman(&server_short_public);
-        
+
         self.message_box = Some(CurveBox::new(&shared_secret));
 
         debug!("[CURVE CLIENT] Handshake complete");
@@ -424,7 +445,9 @@ impl CurveClient {
 
     /// Encrypt a message
     pub fn encrypt_message(&mut self, plaintext: &[u8]) -> Result<Bytes, CurveError> {
-        let message_box = self.message_box.as_ref()
+        let message_box = self
+            .message_box
+            .as_ref()
             .ok_or(CurveError::ProtocolViolation)?;
 
         // Create nonce (24 bytes: "CurveZMQMESSAGEC" + 8-byte counter)
@@ -434,12 +457,12 @@ impl CurveClient {
         self.send_nonce += 1;
 
         let ciphertext = message_box.encrypt(plaintext, &nonce)?;
-        
+
         let mut message = BytesMut::new();
         message.extend_from_slice(CURVE_MESSAGE);
         message.extend_from_slice(&nonce[16..]); // Only send counter part
         message.extend_from_slice(&ciphertext);
-        
+
         Ok(message.freeze())
     }
 
@@ -453,7 +476,9 @@ impl CurveClient {
             return Err(CurveError::ProtocolViolation);
         }
 
-        let message_box = self.message_box.as_ref()
+        let message_box = self
+            .message_box
+            .as_ref()
             .ok_or(CurveError::ProtocolViolation)?;
 
         // Reconstruct nonce
@@ -513,7 +538,7 @@ impl CurveServer {
         self.send_welcome(stream, timeout).await?;
         self.recv_initiate(stream, timeout).await?;
         self.send_ready(stream, timeout).await?;
-        
+
         // Return client's public key for authentication
         Ok(self.client_public.unwrap())
     }
@@ -534,7 +559,9 @@ impl CurveServer {
 
         // Read HELLO header (5 bytes)
         let header = vec![0u8; 5];
-        let buf_result = read_exact_with_timeout(stream, header, timeout).await.map_err(ZmtpError::from)?;
+        let buf_result = read_exact_with_timeout(stream, header, timeout)
+            .await
+            .map_err(ZmtpError::from)?;
         let BufResult(result, header) = buf_result;
         result?;
 
@@ -545,13 +572,17 @@ impl CurveServer {
 
         // Read version (1 byte)
         let version = vec![0u8; 1];
-        let buf_result = read_exact_with_timeout(stream, version, timeout).await.map_err(ZmtpError::from)?;
+        let buf_result = read_exact_with_timeout(stream, version, timeout)
+            .await
+            .map_err(ZmtpError::from)?;
         let BufResult(result, _version) = buf_result;
         result?;
 
         // Read client short-term public key (32 bytes)
         let client_short_key = vec![0u8; CURVE_KEY_SIZE];
-        let buf_result = read_exact_with_timeout(stream, client_short_key, timeout).await.map_err(ZmtpError::from)?;
+        let buf_result = read_exact_with_timeout(stream, client_short_key, timeout)
+            .await
+            .map_err(ZmtpError::from)?;
         let BufResult(result, client_short_key) = buf_result;
         result?;
 
@@ -561,7 +592,9 @@ impl CurveServer {
 
         // Skip nonce and signature (72 bytes)
         let skip_buf = vec![0u8; 72];
-        let buf_result = read_exact_with_timeout(stream, skip_buf, timeout).await.map_err(ZmtpError::from)?;
+        let buf_result = read_exact_with_timeout(stream, skip_buf, timeout)
+            .await
+            .map_err(ZmtpError::from)?;
         let BufResult(result, _) = buf_result;
         result?;
 
@@ -585,14 +618,16 @@ impl CurveServer {
 
         let mut welcome = BytesMut::new();
         welcome.extend_from_slice(CURVE_WELCOME);
-        
+
         // Server short-term public key (32 bytes)
         welcome.extend_from_slice(self.server_short_keypair.public.as_bytes());
-        
+
         // Encrypted cookie (96 bytes, zeros for now - simplified)
         welcome.extend_from_slice(&[0u8; 96]);
 
-        let buf_result = write_all_with_timeout(stream, welcome.freeze().to_vec(), timeout).await.map_err(ZmtpError::from)?;
+        let buf_result = write_all_with_timeout(stream, welcome.freeze().to_vec(), timeout)
+            .await
+            .map_err(ZmtpError::from)?;
         let BufResult(result, _) = buf_result;
         result.map_err(Into::into)
     }
@@ -613,7 +648,9 @@ impl CurveServer {
 
         // Read INITIATE header (8 bytes)
         let header = vec![0u8; 8];
-        let buf_result = read_exact_with_timeout(stream, header, timeout).await.map_err(ZmtpError::from)?;
+        let buf_result = read_exact_with_timeout(stream, header, timeout)
+            .await
+            .map_err(ZmtpError::from)?;
         let BufResult(result, header) = buf_result;
         result?;
 
@@ -624,7 +661,9 @@ impl CurveServer {
 
         // Read client long-term public key (32 bytes)
         let client_key = vec![0u8; CURVE_KEY_SIZE];
-        let buf_result = read_exact_with_timeout(stream, client_key, timeout).await.map_err(ZmtpError::from)?;
+        let buf_result = read_exact_with_timeout(stream, client_key, timeout)
+            .await
+            .map_err(ZmtpError::from)?;
         let BufResult(result, client_key) = buf_result;
         result?;
 
@@ -634,7 +673,9 @@ impl CurveServer {
 
         // Skip nonce and vouch (136 bytes)
         let skip_buf = vec![0u8; 136];
-        let buf_result = read_exact_with_timeout(stream, skip_buf, timeout).await.map_err(ZmtpError::from)?;
+        let buf_result = read_exact_with_timeout(stream, skip_buf, timeout)
+            .await
+            .map_err(ZmtpError::from)?;
         let BufResult(result, _) = buf_result;
         result?;
 
@@ -657,17 +698,20 @@ impl CurveServer {
         debug!("[CURVE SERVER] Sending READY");
 
         let ready = Bytes::from_static(CURVE_READY).to_vec();
-        let buf_result = write_all_with_timeout(stream, ready, timeout).await.map_err(ZmtpError::from)?;
+        let buf_result = write_all_with_timeout(stream, ready, timeout)
+            .await
+            .map_err(ZmtpError::from)?;
         let BufResult(result, _) = buf_result;
         result?;
 
         // Compute shared secret for message encryption
-        let client_short_public = self.client_short_public
-            .ok_or(ZmtpError::Protocol)?;
-        
-        let shared_secret = self.server_short_keypair.secret
+        let client_short_public = self.client_short_public.ok_or(ZmtpError::Protocol)?;
+
+        let shared_secret = self
+            .server_short_keypair
+            .secret
             .diffie_hellman(&client_short_public);
-        
+
         self.message_box = Some(CurveBox::new(&shared_secret));
 
         debug!("[CURVE SERVER] Handshake complete");
@@ -676,7 +720,9 @@ impl CurveServer {
 
     /// Encrypt a message
     pub fn encrypt_message(&mut self, plaintext: &[u8]) -> Result<Bytes, CurveError> {
-        let message_box = self.message_box.as_ref()
+        let message_box = self
+            .message_box
+            .as_ref()
             .ok_or(CurveError::ProtocolViolation)?;
 
         // Create nonce (24 bytes: "CurveZMQMESSAGES" + 8-byte counter)
@@ -686,12 +732,12 @@ impl CurveServer {
         self.send_nonce += 1;
 
         let ciphertext = message_box.encrypt(plaintext, &nonce)?;
-        
+
         let mut message = BytesMut::new();
         message.extend_from_slice(CURVE_MESSAGE);
         message.extend_from_slice(&nonce[16..]); // Only send counter part
         message.extend_from_slice(&ciphertext);
-        
+
         Ok(message.freeze())
     }
 
@@ -705,7 +751,9 @@ impl CurveServer {
             return Err(CurveError::ProtocolViolation);
         }
 
-        let message_box = self.message_box.as_ref()
+        let message_box = self
+            .message_box
+            .as_ref()
             .ok_or(CurveError::ProtocolViolation)?;
 
         // Reconstruct nonce
@@ -796,11 +844,10 @@ where
 
     // Create ZAP client
     let zap_timeout = timeout.unwrap_or(Duration::from_secs(5));
-    let mut zap_client = ZapClient::new(zap_timeout)
-        .map_err(|e| {
-            warn!("[CURVE SERVER ZAP] Failed to create ZAP client: {}", e);
-            ZmtpError::AuthenticationFailed
-        })?;
+    let mut zap_client = ZapClient::new(zap_timeout).map_err(|e| {
+        warn!("[CURVE SERVER ZAP] Failed to create ZAP client: {}", e);
+        ZmtpError::AuthenticationFailed
+    })?;
 
     let zap_response = zap_client
         .authenticate_curve(client_public_key.as_bytes(), &domain, peer_addr)
@@ -812,7 +859,10 @@ where
 
     // Check ZAP response status
     if matches!(zap_response.status_code, ZapStatus::Success) {
-        debug!("[CURVE SERVER ZAP] Authentication successful for client key: {:?}", client_public_key);
+        debug!(
+            "[CURVE SERVER ZAP] Authentication successful for client key: {:?}",
+            client_public_key
+        );
         Ok(client_public_key)
     } else {
         warn!(
@@ -866,7 +916,7 @@ mod tests {
     fn test_keypair_generation() {
         let keypair = CurveKeyPair::generate();
         assert_eq!(keypair.public.as_bytes().len(), CURVE_KEY_SIZE);
-        
+
         // Verify public key matches secret key
         let derived_public = keypair.secret.public_key();
         assert_eq!(keypair.public, derived_public);
@@ -887,13 +937,13 @@ mod tests {
     fn test_curve_box_encrypt_decrypt() {
         let shared_secret = [42u8; CURVE_KEY_SIZE];
         let box_ = CurveBox::new(&shared_secret);
-        
+
         let plaintext = b"Hello, CURVE!";
         let nonce = [1u8; CURVE_NONCE_SIZE];
-        
+
         let ciphertext = box_.encrypt(plaintext, &nonce).unwrap();
         let decrypted = box_.decrypt(&ciphertext, &nonce).unwrap();
-        
+
         assert_eq!(plaintext, decrypted.as_slice());
     }
 

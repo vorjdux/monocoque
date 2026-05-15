@@ -65,10 +65,12 @@ fn monocoque_pubsub_fanout(c: &mut Criterion) {
                             let task = compio::runtime::spawn(async move {
                                 let stream =
                                     compio::net::TcpStream::connect(server_addr).await.unwrap();
-                                let mut sub =
-                                    SubSocket::from_tcp_with_options(stream, SocketOptions::default().with_buffer_sizes(16384, 16384))
-                                        .await
-                                        .unwrap();
+                                let mut sub = SubSocket::from_tcp_with_options(
+                                    stream,
+                                    SocketOptions::default().with_buffer_sizes(16384, 16384),
+                                )
+                                .await
+                                .unwrap();
                                 sub.subscribe(b"").await.unwrap(); // Subscribe to all
 
                                 let mut count = 0;

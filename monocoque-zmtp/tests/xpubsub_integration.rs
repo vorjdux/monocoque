@@ -21,17 +21,20 @@ async fn test_xpub_xsub_subscription_flow() {
     let mut xpub = XPubSocket::bind("127.0.0.1:0").await.unwrap();
     xpub.set_verbose(true); // Enable subscription event reporting
     let addr = xpub.local_addr().unwrap();
-    
+
     println!("[TEST] XPUB bound to {}", addr);
 
     // 2. Spawn server task
     let server_task = compio::runtime::spawn(async move {
         println!("[SERVER] Waiting to accept connection...");
-        
+
         // Accept the XSUB client
         xpub.accept().await.expect("Failed to accept");
-        println!("[SERVER] Client connected, subscriber count: {}", xpub.subscriber_count());
-        
+        println!(
+            "[SERVER] Client connected, subscriber count: {}",
+            xpub.subscriber_count()
+        );
+
         // Poll for subscription events
         for attempt in 0..100 {
             match xpub.recv_subscription().await {
@@ -70,7 +73,10 @@ async fn test_xpub_xsub_subscription_flow() {
 
     // 6. Wait for server result
     let event_option = server_task.await;
-    assert!(event_option.is_some(), "Expected to receive subscription event");
+    assert!(
+        event_option.is_some(),
+        "Expected to receive subscription event"
+    );
 
     let event = event_option.unwrap();
     match event {
@@ -88,15 +94,15 @@ async fn test_xpub_xsub_subscription_flow() {
 #[compio::test]
 async fn test_xpub_creation_and_config() {
     let mut xpub = XPubSocket::bind("127.0.0.1:0").await.unwrap();
-    
+
     // Test configuration methods
     xpub.set_verbose(true);
     xpub.set_manual(true);
-    
+
     // Verify socket binds successfully
     let addr = xpub.local_addr().unwrap();
     assert!(addr.port() > 0);
-    
+
     // Verify subscriber count tracking
     assert_eq!(xpub.subscriber_count(), 0);
 }
@@ -106,20 +112,20 @@ async fn test_xpub_creation_and_config() {
 async fn test_xsub_subscription_api() {
     // Test subscription tracking without full connection
     let mut trie = SubscriptionTrie::new();
-    
+
     // Add subscriptions
     trie.subscribe(Bytes::from("topic1."));
     trie.subscribe(Bytes::from("topic2."));
     trie.subscribe(Bytes::from("topic3."));
-    
+
     // Verify matching
     assert!(trie.matches(b"topic1.subtopic"));
     assert!(trie.matches(b"topic2.subtopic"));
     assert!(trie.matches(b"topic3.subtopic"));
-    
+
     // Unsubscribe
     trie.unsubscribe(&Bytes::from("topic2."));
-    
+
     // Verify unsubscription
     assert!(trie.matches(b"topic1.subtopic"));
     assert!(!trie.matches(b"topic2.subtopic"));
@@ -177,10 +183,10 @@ async fn test_xpub_manual_mode() {
 #[compio::test]
 async fn test_xpub_welcome_message() {
     let xpub = XPubSocket::bind("127.0.0.1:0").await.unwrap();
-    
+
     let addr = xpub.local_addr().unwrap();
     assert!(addr.port() > 0);
-    
+
     // Subscriber count tracking is handled internally
     assert_eq!(xpub.subscriber_count(), 0);
 }
@@ -191,11 +197,11 @@ async fn test_xsub_subscription_tracking() {
     // Bind a dummy listener for XSUB to connect to
     let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    
+
     // In a real scenario, this would connect to a PUB socket
     // For now, test basic subscription tracking without full connection
     let result = XSubSocket::connect(&addr.to_string()).await;
-    
+
     // May not connect successfully without a real publisher
     // The important part is that the API exists
 }
@@ -204,10 +210,10 @@ async fn test_xsub_subscription_tracking() {
 #[compio::test]
 async fn test_xpub_subscriber_count() {
     let xpub = XPubSocket::bind("127.0.0.1:0").await.unwrap();
-    
+
     // Initially no subscribers
     assert_eq!(xpub.subscriber_count(), 0);
-    
+
     // Subscriber count tracking is handled internally
 }
 
@@ -215,10 +221,10 @@ async fn test_xpub_subscriber_count() {
 #[test]
 fn test_empty_prefix_subscription_matching() {
     let mut trie = SubscriptionTrie::new();
-    
+
     // Subscribe to everything (empty prefix)
     trie.subscribe(Bytes::from(""));
-    
+
     // Empty prefix matches all topics
     assert!(trie.matches(b"anything"));
     assert!(trie.matches(b"weather.temp"));
@@ -229,11 +235,11 @@ fn test_empty_prefix_subscription_matching() {
 #[compio::test]
 async fn test_xpub_manual_mode_config() {
     let mut xpub = XPubSocket::bind("127.0.0.1:0").await.unwrap();
-    
+
     // Test manual mode configuration
     xpub.set_manual(true);
     xpub.set_verbose(true);
-    
+
     // Socket configured successfully
     assert!(xpub.local_addr().is_ok());
 }
@@ -242,11 +248,11 @@ fn test_subscription_event_encoding() {
     // Test subscribe event
     let sub = SubscriptionEvent::Subscribe(Bytes::from("test.topic"));
     let encoded = sub.to_message();
-    
+
     // First byte should be 0x01 (subscribe)
     assert_eq!(encoded[0], 0x01);
     assert_eq!(&encoded[1..], b"test.topic");
-    
+
     // Decode back
     let decoded = SubscriptionEvent::from_message(&encoded).unwrap();
     assert_eq!(decoded, sub);
@@ -254,11 +260,11 @@ fn test_subscription_event_encoding() {
     // Test unsubscribe event
     let unsub = SubscriptionEvent::Unsubscribe(Bytes::from("other.topic"));
     let encoded = unsub.to_message();
-    
+
     // First byte should be 0x00 (unsubscribe)
     assert_eq!(encoded[0], 0x00);
     assert_eq!(&encoded[1..], b"other.topic");
-    
+
     // Decode back
     let decoded = SubscriptionEvent::from_message(&encoded).unwrap();
     assert_eq!(decoded, unsub);
@@ -282,14 +288,14 @@ fn test_subscription_trie_overlapping() {
     // Add overlapping subscriptions
     trie.subscribe(Bytes::from("weather."));
     trie.subscribe(Bytes::from("weather.temp."));
-    
+
     // Both should match more specific topics
     assert!(trie.matches(b"weather.temp.celsius"));
     assert!(trie.matches(b"weather.humidity"));
-    
+
     // Remove specific one
     trie.unsubscribe(&Bytes::from("weather.temp."));
-    
+
     // General one still matches
     assert!(trie.matches(b"weather.temp.celsius"));
     assert!(trie.matches(b"weather.humidity"));
@@ -300,10 +306,10 @@ fn test_subscription_trie_overlapping() {
 async fn test_xpub_non_verbose() {
     let xpub = XPubSocket::bind("127.0.0.1:0").await.unwrap();
     // verbose = false by default (verified internally in socket)
-    
+
     let addr = xpub.local_addr().unwrap();
     assert!(addr.port() > 0);
-    
+
     // In non-verbose mode, XPUB doesn't report subscription events
     // This just tests basic socket creation
 }

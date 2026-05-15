@@ -104,11 +104,14 @@ fn test_plain_zap_request_encode_decode() {
 #[test]
 fn test_plain_empty_credentials() {
     let mut handler = StaticPlainHandler::new();
-    
+
     // Don't add any users
-    let result = futures::executor::block_on(
-        handler.authenticate("anyone", "anything", "test", "127.0.0.1")
-    );
+    let result = futures::executor::block_on(handler.authenticate(
+        "anyone",
+        "anything",
+        "test",
+        "127.0.0.1",
+    ));
     assert!(result.is_err());
 }
 
@@ -118,20 +121,29 @@ fn test_plain_case_sensitive() {
     handler.add_user("Admin", "Secret123");
 
     // Wrong case username
-    let result = futures::executor::block_on(
-        handler.authenticate("admin", "Secret123", "test", "127.0.0.1")
-    );
+    let result = futures::executor::block_on(handler.authenticate(
+        "admin",
+        "Secret123",
+        "test",
+        "127.0.0.1",
+    ));
     assert!(result.is_err());
 
     // Wrong case password
-    let result = futures::executor::block_on(
-        handler.authenticate("Admin", "secret123", "test", "127.0.0.1")
-    );
+    let result = futures::executor::block_on(handler.authenticate(
+        "Admin",
+        "secret123",
+        "test",
+        "127.0.0.1",
+    ));
     assert!(result.is_err());
 
     // Correct case
-    let result = futures::executor::block_on(
-        handler.authenticate("Admin", "Secret123", "test", "127.0.0.1")
-    );
+    let result = futures::executor::block_on(handler.authenticate(
+        "Admin",
+        "Secret123",
+        "test",
+        "127.0.0.1",
+    ));
     assert!(result.is_ok());
 }

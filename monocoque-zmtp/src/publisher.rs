@@ -189,8 +189,7 @@ fn worker_thread(worker_id: usize, rx: Receiver<WorkerCommand>) {
                     // Spawn background task to read subscription messages.
                     // Runs concurrently within this worker's compio runtime.
                     let sub_state = Arc::clone(&subscriptions);
-                    compio::runtime::spawn(subscription_reader(id, read_half, sub_state))
-                        .detach();
+                    compio::runtime::spawn(subscription_reader(id, read_half, sub_state)).detach();
 
                     subscribers.insert(
                         id,
@@ -234,11 +233,7 @@ fn worker_thread(worker_id: usize, rx: Receiver<WorkerCommand>) {
                                 dead_subs.push(sub.id);
                             }
                             Err(_) => {
-                                warn!(
-                                    "[Worker {}] Subscriber {} timed out",
-                                    worker_id,
-                                    sub.id
-                                );
+                                warn!("[Worker {}] Subscriber {} timed out", worker_id, sub.id);
                                 dead_subs.push(sub.id);
                             }
                         }
@@ -270,9 +265,9 @@ async fn send_message_to_stream(
     stream: &mut OwnedWriteHalf<TcpStream>,
     msg: &[Bytes],
 ) -> io::Result<()> {
+    use bytes::BytesMut;
     use compio::buf::BufResult;
     use compio::io::AsyncWriteExt;
-    use bytes::BytesMut;
 
     // Encode message to buffer using proper ZMTP framing
     let mut write_buf = BytesMut::new();
@@ -326,7 +321,10 @@ impl PubSocket {
     /// silently dropped and counted in `drop_count()`.
     pub fn with_workers_opts(worker_count: usize, options: SocketOptions) -> Self {
         let hwm = options.send_hwm;
-        debug!("[PUB] Starting {} worker threads (channel HWM={})", worker_count, hwm);
+        debug!(
+            "[PUB] Starting {} worker threads (channel HWM={})",
+            worker_count, hwm
+        );
 
         let mut workers = Vec::with_capacity(worker_count);
 
@@ -441,14 +439,19 @@ impl PubSocket {
         // worker doesn't stall the broadcast. If the channel is full (HWM
         // reached), drop the message for that worker and count it.
         for (idx, worker) in self.workers.iter().enumerate() {
-            match worker.try_send(WorkerCommand::Broadcast { message: message.clone() }) {
+            match worker.try_send(WorkerCommand::Broadcast {
+                message: message.clone(),
+            }) {
                 Ok(()) => {}
                 Err(flume::TrySendError::Full(_)) => {
                     self.drop_count.fetch_add(1, Ordering::Relaxed);
                     debug!("[PUB] Worker {} channel full (HWM), message dropped", idx);
                 }
                 Err(flume::TrySendError::Disconnected(_)) => {
-                    return Err(io::Error::other(format!("Worker {} channel disconnected", idx)));
+                    return Err(io::Error::other(format!(
+                        "Worker {} channel disconnected",
+                        idx
+                    )));
                 }
             }
         }

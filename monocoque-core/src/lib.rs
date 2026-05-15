@@ -70,11 +70,11 @@ pub mod prelude {
     pub use crate::monitor::{SocketEvent, SocketMonitor};
     pub use crate::options::SocketOptions;
     pub use crate::poison::PoisonGuard;
-    pub use crate::reconnect::{ReconnectError, ReconnectState};
-    pub use crate::socket_type::SocketType;
     pub use crate::pubsub::hub::{PubSubCmd, PubSubEvent, PubSubHub};
     pub use crate::pubsub::index::{PeerKey, SubscriptionIndex};
+    pub use crate::reconnect::{ReconnectError, ReconnectState};
     pub use crate::router::{HubEvent, PeerCmd, RouterBehavior, RouterCmd, RouterHub};
+    pub use crate::socket_type::SocketType;
     pub use crate::tcp::{configure_tcp_keepalive, enable_tcp_nodelay};
 
     #[cfg(unix)]
