@@ -35,15 +35,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         match socket.recv().await? {
             Some(msg) => {
                 println!("Received {} frames", msg.len());
-                
+
                 // Echo back with "Echo: " prefix on first frame
                 let mut reply = Vec::with_capacity(msg.len());
-                
+
                 if !msg.is_empty() {
-                    let first_frame = format!("Echo: {}", 
-                        String::from_utf8_lossy(&msg[0]));
+                    let first_frame = format!("Echo: {}", String::from_utf8_lossy(&msg[0]));
                     reply.push(Bytes::from(first_frame));
-                    
+
                     // Copy remaining frames as-is
                     for frame in &msg[1..] {
                         reply.push(frame.clone());
@@ -51,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     reply.push(Bytes::from("Echo: <empty>"));
                 }
-                
+
                 socket.send(reply).await?;
             }
             None => {

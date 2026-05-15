@@ -82,10 +82,12 @@ fn monocoque_tcp_latency(c: &mut Criterion) {
 
                             let stream =
                                 compio::net::TcpStream::connect(server_addr).await.unwrap();
-                            let mut req =
-                                ReqSocket::from_tcp_with_options(stream, SocketOptions::default().with_buffer_sizes(4096, 4096))
-                                    .await
-                                    .unwrap();
+                            let mut req = ReqSocket::from_tcp_with_options(
+                                stream,
+                                SocketOptions::default().with_buffer_sizes(4096, 4096),
+                            )
+                            .await
+                            .unwrap();
 
                             // Warmup
                             for _ in 0..WARMUP_ROUNDS {
@@ -133,10 +135,10 @@ fn monocoque_ipc_latency(c: &mut Criterion) {
                     || {
                         rt.block_on(async {
                             let socket_path = format!("/tmp/monocoque_bench_{}.sock", std::process::id());
-                            
+
                             // Clean up any existing socket
                             let _ = std::fs::remove_file(&socket_path);
-                            
+
                             let listener = UnixListener::bind(&socket_path).await.unwrap();
 
                             let server_task = compio::runtime::spawn({
@@ -210,33 +212,15 @@ fn monocoque_tcp_throughput(c: &mut Criterion) {
     for &size in MESSAGE_SIZES {
         let payload = Bytes::from(vec![0u8; size]);
 
-        group.bench_with_input(
-            BenchmarkId::from_parameter(size),
-            &size,
-            |b, _| {
-                b.iter(|| {
-                    rt.block_on(async {
-                        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-                        let server_addr = listener.local_addr().unwrap();
+        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
+            b.iter(|| {
+                rt.block_on(async {
+                    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                    let server_addr = listener.local_addr().unwrap();
 
-                        let router_task = compio::runtime::spawn(async move {
-                            let (stream, _) = listener.accept().await.unwrap();
-                            let mut router = RouterSocket::from_tcp_with_options(
-                                stream,
-                                SocketOptions::default().with_buffer_sizes(16384, 16384),
-                            )
-                            .await
-                            .unwrap();
-
-                            for _ in 0..MESSAGE_COUNT {
-                                if let Some(msg) = router.recv().await {
-                                    router.send(msg).await.ok();
-                                }
-                            }
-                        });
-
-                        let stream = compio::net::TcpStream::connect(server_addr).await.unwrap();
-                        let mut dealer = DealerSocket::from_tcp_with_options(
+                    let router_task = compio::runtime::spawn(async move {
+                        let (stream, _) = listener.accept().await.unwrap();
+                        let mut router = RouterSocket::from_tcp_with_options(
                             stream,
                             SocketOptions::default().with_buffer_sizes(16384, 16384),
                         )
@@ -244,17 +228,31 @@ fn monocoque_tcp_throughput(c: &mut Criterion) {
                         .unwrap();
 
                         for _ in 0..MESSAGE_COUNT {
-                            dealer.send(vec![black_box(payload.clone())]).await.unwrap();
-                            if dealer.recv().await.is_none() {
-                                break;
+                            if let Some(msg) = router.recv().await {
+                                router.send(msg).await.ok();
                             }
                         }
-
-                        router_task.await;
                     });
+
+                    let stream = compio::net::TcpStream::connect(server_addr).await.unwrap();
+                    let mut dealer = DealerSocket::from_tcp_with_options(
+                        stream,
+                        SocketOptions::default().with_buffer_sizes(16384, 16384),
+                    )
+                    .await
+                    .unwrap();
+
+                    for _ in 0..MESSAGE_COUNT {
+                        dealer.send(vec![black_box(payload.clone())]).await.unwrap();
+                        if dealer.recv().await.is_none() {
+                            break;
+                        }
+                    }
+
+                    router_task.await;
                 });
-            },
-        );
+            });
+        });
     }
     group.finish();
 }
@@ -279,10 +277,10 @@ fn monocoque_ipc_throughput(c: &mut Criterion) {
                 b.iter(|| {
                     rt.block_on(async {
                         let socket_path = format!("/tmp/monocoque_bench_{}.sock", std::process::id());
-                        
+
                         // Clean up any existing socket
                         let _ = std::fs::remove_file(&socket_path);
-                        
+
                         let listener = UnixListener::bind(&socket_path).await.unwrap();
 
                         let router_task = compio::runtime::spawn({

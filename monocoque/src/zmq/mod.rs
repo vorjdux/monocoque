@@ -15,6 +15,7 @@
 //! - [`PairSocket`] - Exclusive pair connection
 //! - [`XPubSocket`] - Extended publisher (subscription events)
 //! - [`XSubSocket`] - Extended subscriber (subscription forwarding)
+//! - [`StreamSocket`] - Raw TCP bridging (no ZMTP handshake)
 //!
 //! # Features
 //!
@@ -75,7 +76,7 @@ pub use monocoque_core::options::SocketOptions;
 pub use monocoque_core::socket_type::SocketType;
 pub use monocoque_core::subscription::{Subscription, SubscriptionEvent, SubscriptionTrie};
 pub use monocoque_zmtp::proxy;
-pub use monocoque_zmtp::{PairSocket, XPubSocket, XSubSocket};
+pub use monocoque_zmtp::{PairSocket, StreamSocket, XPubSocket, XSubSocket};
 pub use publisher::PubSocket;
 pub use pull::PullSocket;
 pub use push::PushSocket;
@@ -105,8 +106,8 @@ pub mod prelude {
     pub use super::proxy::{proxy, proxy_steerable, ProxyCommand, ProxySocket};
     pub use super::{
         BufferConfig, DealerSocket, PairSocket, PubSocket, PullSocket, PushSocket, RepSocket,
-        ReqSocket, RouterSocket, SocketOptions, SubSocket, Subscription, SubscriptionEvent,
-        SubscriptionTrie, XPubSocket, XSubSocket,
+        ReqSocket, RouterSocket, SocketOptions, StreamSocket, SubSocket, Subscription,
+        SubscriptionEvent, SubscriptionTrie, XPubSocket, XSubSocket,
     };
     pub use bytes::Bytes;
     pub use monocoque_core::socket_type::SocketType;

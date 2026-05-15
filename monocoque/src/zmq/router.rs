@@ -3,7 +3,8 @@
 use super::common::channel_to_io_error;
 use bytes::Bytes;
 use compio::net::{TcpListener, TcpStream};
-use monocoque_core::monitor::{create_monitor, SocketEvent, SocketEventSender, SocketMonitor};
+use monocoque_core::monitor::{create_monitor, SocketEventSender, SocketMonitor};
+use monocoque_core::options::SocketOptions;
 use monocoque_zmtp::router::RouterSocket as InternalRouter;
 use monocoque_zmtp::SocketType;
 use std::io;
@@ -209,12 +210,10 @@ where
         receiver
     }
 
-    /// Helper to emit monitoring events (if monitoring is enabled).
-    #[allow(dead_code)]
-    fn emit_event(&self, event: SocketEvent) {
-        if let Some(monitor) = &self.monitor {
-            let _ = monitor.send(event); // Ignore errors if receiver dropped
-        }
+    /// Get a mutable reference to this socket's options.
+    #[inline]
+    pub fn options_mut(&mut self) -> &mut SocketOptions {
+        self.inner.options_mut()
     }
 
     /// Send a multipart message.
@@ -346,10 +345,10 @@ where
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let (_listener, mut router) = RouterSocket::bind("tcp://0.0.0.0:5555").await?;
-    /// 
+    ///
     /// // Assign explicit identity to next connection
     /// router.set_connect_routing_id(b"worker-001".to_vec())?;
-    /// 
+    ///
     /// // When a peer connects, it will be identified as "worker-001"
     /// # Ok(())
     /// # }
@@ -379,7 +378,7 @@ where
     /// # use monocoque::zmq::RouterSocket;
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let (_listener, mut router) = RouterSocket::bind("tcp://0.0.0.0:5555").await?;
-    /// 
+    ///
     /// // Fail fast if routing to unknown peer
     /// router.set_router_mandatory(true);
     /// # Ok(())
@@ -408,7 +407,7 @@ where
     /// # use monocoque::zmq::RouterSocket;
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let (_listener, mut router) = RouterSocket::bind("tcp://0.0.0.0:5555").await?;
-    /// 
+    ///
     /// // Allow identity takeover for reconnecting clients
     /// router.set_router_handover(true);
     /// # Ok(())
@@ -431,7 +430,7 @@ where
     /// # use monocoque::zmq::RouterSocket;
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let (_listener, router) = RouterSocket::bind("tcp://0.0.0.0:5555").await?;
-    /// 
+    ///
     /// let identity = router.peer_identity();
     /// println!("Peer identity: {:?}", identity);
     /// # Ok(())
@@ -495,7 +494,9 @@ impl RouterSocket<compio::net::UnixStream> {
 impl monocoque_zmtp::proxy::ProxySocket for RouterSocket<TcpStream> {
     fn recv_multipart<'life0, 'async_trait>(
         &'life0 mut self,
-    ) -> ::core::pin::Pin<Box<dyn ::core::future::Future<Output = io::Result<Option<Vec<Bytes>>>> + 'async_trait>>
+    ) -> ::core::pin::Pin<
+        Box<dyn ::core::future::Future<Output = io::Result<Option<Vec<Bytes>>>> + 'async_trait>,
+    >
     where
         'life0: 'async_trait,
         Self: 'async_trait,

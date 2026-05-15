@@ -1,6 +1,6 @@
 //! ZeroMQ Authentication Protocol (ZAP) implementation
 //!
-//! ZAP is defined in RFC 27: https://rfc.zeromq.org/spec/27/
+//! ZAP is defined in RFC 27: <https://rfc.zeromq.org/spec/27/>
 //!
 //! ## Protocol Overview
 //!
@@ -40,12 +40,16 @@ pub const ZAP_ENDPOINT: &str = "inproc://zeromq.zap.01";
 /// Authentication mechanism
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ZapMechanism {
+    /// No authentication (NULL mechanism).
     Null,
+    /// Username/password authentication (PLAIN mechanism).
     Plain,
+    /// Public-key authentication (CURVE mechanism).
     Curve,
 }
 
 impl ZapMechanism {
+    /// Return the wire-format mechanism name string.
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Null => "NULL",
@@ -54,6 +58,7 @@ impl ZapMechanism {
         }
     }
 
+    /// Parse a mechanism from its wire-format name string.
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "NULL" => Some(Self::Null),
@@ -78,6 +83,7 @@ pub enum ZapStatus {
 }
 
 impl ZapStatus {
+    /// Return the numeric status code as a string.
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Success => "200",
@@ -87,6 +93,7 @@ impl ZapStatus {
         }
     }
 
+    /// Parse a `ZapStatus` from its numeric string representation.
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "200" => Some(Self::Success),
@@ -158,20 +165,17 @@ impl ZapRequest {
             return Err("ZAP request requires at least 6 frames".to_string());
         }
 
-        let version = String::from_utf8(frames[0].to_vec())
-            .map_err(|_| "Invalid version string")?;
-        let request_id = String::from_utf8(frames[1].to_vec())
-            .map_err(|_| "Invalid request ID")?;
-        let domain = String::from_utf8(frames[2].to_vec())
-            .map_err(|_| "Invalid domain string")?;
-        let address = String::from_utf8(frames[3].to_vec())
-            .map_err(|_| "Invalid address string")?;
+        let version =
+            String::from_utf8(frames[0].to_vec()).map_err(|_| "Invalid version string")?;
+        let request_id = String::from_utf8(frames[1].to_vec()).map_err(|_| "Invalid request ID")?;
+        let domain = String::from_utf8(frames[2].to_vec()).map_err(|_| "Invalid domain string")?;
+        let address =
+            String::from_utf8(frames[3].to_vec()).map_err(|_| "Invalid address string")?;
         let identity = frames[4].clone();
-        
-        let mechanism_str = String::from_utf8(frames[5].to_vec())
-            .map_err(|_| "Invalid mechanism string")?;
-        let mechanism = ZapMechanism::from_str(&mechanism_str)
-            .ok_or("Unknown mechanism")?;
+
+        let mechanism_str =
+            String::from_utf8(frames[5].to_vec()).map_err(|_| "Invalid mechanism string")?;
+        let mechanism = ZapMechanism::from_str(&mechanism_str).ok_or("Unknown mechanism")?;
 
         let credentials = frames[6..].to_vec();
 
@@ -271,23 +275,23 @@ impl ZapResponse {
     /// Decode multipart message into response
     pub fn decode(frames: &[Bytes]) -> Result<Self, String> {
         if frames.len() != 6 {
-            return Err(format!("ZAP response requires 6 frames, got {}", frames.len()));
+            return Err(format!(
+                "ZAP response requires 6 frames, got {}",
+                frames.len()
+            ));
         }
 
-        let version = String::from_utf8(frames[0].to_vec())
-            .map_err(|_| "Invalid version string")?;
-        let request_id = String::from_utf8(frames[1].to_vec())
-            .map_err(|_| "Invalid request ID")?;
-        
-        let status_str = String::from_utf8(frames[2].to_vec())
-            .map_err(|_| "Invalid status code")?;
-        let status_code = ZapStatus::from_str(&status_str)
-            .ok_or("Unknown status code")?;
-        
-        let status_text = String::from_utf8(frames[3].to_vec())
-            .map_err(|_| "Invalid status text")?;
-        let user_id = String::from_utf8(frames[4].to_vec())
-            .map_err(|_| "Invalid user ID")?;
+        let version =
+            String::from_utf8(frames[0].to_vec()).map_err(|_| "Invalid version string")?;
+        let request_id = String::from_utf8(frames[1].to_vec()).map_err(|_| "Invalid request ID")?;
+
+        let status_str =
+            String::from_utf8(frames[2].to_vec()).map_err(|_| "Invalid status code")?;
+        let status_code = ZapStatus::from_str(&status_str).ok_or("Unknown status code")?;
+
+        let status_text =
+            String::from_utf8(frames[3].to_vec()).map_err(|_| "Invalid status text")?;
+        let user_id = String::from_utf8(frames[4].to_vec()).map_err(|_| "Invalid user ID")?;
 
         // Parse metadata (RFC 35 format)
         let metadata = Self::parse_metadata(&frames[5])?;
@@ -402,14 +406,21 @@ mod tests {
     #[test]
     fn test_zap_metadata() {
         let mut response = ZapResponse::success("123", "admin");
-        response.metadata.insert("role".to_string(), "superuser".to_string());
-        response.metadata.insert("email".to_string(), "admin@example.com".to_string());
+        response
+            .metadata
+            .insert("role".to_string(), "superuser".to_string());
+        response
+            .metadata
+            .insert("email".to_string(), "admin@example.com".to_string());
 
         let frames = response.encode();
         let decoded = ZapResponse::decode(&frames).unwrap();
 
         assert_eq!(decoded.metadata.len(), 2);
         assert_eq!(decoded.metadata.get("role"), Some(&"superuser".to_string()));
-        assert_eq!(decoded.metadata.get("email"), Some(&"admin@example.com".to_string()));
+        assert_eq!(
+            decoded.metadata.get("email"),
+            Some(&"admin@example.com".to_string())
+        );
     }
 }

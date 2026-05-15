@@ -21,11 +21,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sub_handle = compio::runtime::spawn(async move {
         let start = Instant::now();
         info!("[SUB] Starting connect...");
-        
+
         let before_connect = Instant::now();
         let socket = SubSocket::connect(&format!("127.0.0.1:{}", port)).await;
-        info!("[SUB] connect() completed in {:?}", before_connect.elapsed());
-        
+        info!(
+            "[SUB] connect() completed in {:?}",
+            before_connect.elapsed()
+        );
+
         info!("[SUB] Total time: {:?}", start.elapsed());
         socket
     });
@@ -37,7 +40,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let accept_start = Instant::now();
     info!("[PUB] Accepting subscriber...");
     pub_socket.accept_subscriber().await?;
-    info!("[PUB] accept_subscriber() completed in {:?}", accept_start.elapsed());
+    info!(
+        "[PUB] accept_subscriber() completed in {:?}",
+        accept_start.elapsed()
+    );
 
     // Wait for subscriber
     let result = sub_handle.await;

@@ -41,7 +41,10 @@ async fn connect_with_retry(addr: &str, reconnect: &mut ReconnectState) -> io::R
                     error!("Maximum reconnection attempts reached");
                     return Err(io::Error::new(
                         io::ErrorKind::TimedOut,
-                        format!("Failed to connect after {} attempts", MAX_RECONNECT_ATTEMPTS),
+                        format!(
+                            "Failed to connect after {} attempts",
+                            MAX_RECONNECT_ATTEMPTS
+                        ),
                     ));
                 }
 
@@ -82,7 +85,7 @@ async fn communication_loop(addr: &str) -> io::Result<()> {
         loop {
             request_num += 1;
             let message = format!("Request #{}", request_num);
-            
+
             info!("Sending: {}", message);
             let request = vec![Bytes::from(message)];
 
@@ -141,7 +144,7 @@ fn main() -> io::Result<()> {
     compio::runtime::Runtime::new()?.block_on(async {
         let addr = "127.0.0.1:5555";
         info!("Starting client, connecting to {}", addr);
-        
+
         match communication_loop(addr).await {
             Ok(()) => {
                 info!("Client finished successfully");

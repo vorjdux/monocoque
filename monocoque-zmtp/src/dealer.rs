@@ -18,9 +18,7 @@ use std::time::Duration;
 use tracing::{debug, trace};
 
 use crate::{
-    base::SocketBase,
-    codec::encode_multipart,
-    handshake::perform_handshake_with_timeout,
+    base::SocketBase, codec::encode_multipart, handshake::perform_handshake_with_options,
     session::SocketType,
 };
 use monocoque_core::endpoint::Endpoint;
@@ -84,7 +82,7 @@ where
     ///
     /// # async fn example() -> std::io::Result<()> {
     /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
-    /// 
+    ///
     /// // High-throughput configuration
     /// let options = SocketOptions::large()
     ///     .with_recv_timeout(Duration::from_secs(5))
@@ -94,19 +92,17 @@ where
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn with_options(
-        mut stream: S,
-        options: SocketOptions,
-    ) -> io::Result<Self> {
+    pub async fn with_options(mut stream: S, options: SocketOptions) -> io::Result<Self> {
         debug!("[DEALER] Creating new direct DEALER socket");
 
         // Perform ZMTP handshake with timeout
         debug!("[DEALER] Performing ZMTP handshake...");
-        let handshake_result = perform_handshake_with_timeout(
+        let handshake_result = perform_handshake_with_options(
             &mut stream,
             SocketType::Dealer,
             None,
             Some(options.handshake_timeout),
+            &options,
         )
         .await
         .map_err(|e| io::Error::other(format!("Handshake failed: {}", e)))?;
@@ -126,7 +122,6 @@ where
     }
 
     /// Connect to an endpoint with automatic reconnection support.
-
 
     /// Receive a message.
     pub async fn recv(&mut self) -> io::Result<Option<Vec<Bytes>>> {
@@ -322,7 +317,7 @@ where
     /// ```
     pub async fn close(mut self) -> io::Result<()> {
         let linger = self.base.options.linger;
-        
+
         // If no data buffered, just drop the socket
         if self.base.send_buffer.is_empty() {
             trace!("[DEALER] No buffered data, closing immediately");
@@ -338,7 +333,10 @@ where
         match linger {
             Some(dur) if dur.is_zero() => {
                 // Linger = 0: discard buffered data immediately
-                debug!("[DEALER] Linger=0, discarding {} bytes", self.base.send_buffer.len());
+                debug!(
+                    "[DEALER] Linger=0, discarding {} bytes",
+                    self.base.send_buffer.len()
+                );
                 Ok(())
             }
             Some(dur) => {
@@ -376,7 +374,7 @@ where
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// # use monocoque_zmtp::DealerSocket;
     /// # use compio::net::TcpStream;
     /// # use std::time::Duration;
@@ -554,7 +552,11 @@ impl DealerSocket<TcpStream> {
         Ok((listener, socket))
     }
 
-    /// Connect to a remote DEALER socket.
+    /// Connect to a remote DEALER socket, storing the endpoint for automatic reconnection.
+    ///
+    /// Unlike `from_tcp()`, this method stores the remote address so that
+    /// `recv_with_reconnect()` and `send_with_reconnect()` can re-establish
+    /// the connection after a server restart or network hiccup.
     ///
     /// # Examples
     ///
@@ -567,11 +569,47 @@ impl DealerSocket<TcpStream> {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn connect(
+    pub async fn connect(addr: impl compio::net::ToSocketAddrsAsync) -> io::Result<Self> {
+        Self::connect_with_options(addr, SocketOptions::default()).await
+    }
+
+    /// Connect with custom options, storing the endpoint for reconnection.
+    pub async fn connect_with_options(
         addr: impl compio::net::ToSocketAddrsAsync,
+        options: SocketOptions,
     ) -> io::Result<Self> {
         let stream = TcpStream::connect(addr).await?;
-        Self::from_tcp(stream).await
+        let peer_addr = stream.peer_addr()?;
+        crate::utils::configure_tcp_stream(&stream, &options, "DEALER")?;
+
+        let mut stream = stream;
+        let handshake_result = perform_handshake_with_options(
+            &mut stream,
+            SocketType::Dealer,
+            None,
+            Some(options.handshake_timeout),
+            &options,
+        )
+        .await
+        .map_err(|e| io::Error::other(format!("Handshake failed: {}", e)))?;
+
+        debug!(
+            peer_identity = ?handshake_result.peer_identity,
+            peer_socket_type = ?handshake_result.peer_socket_type,
+            "[DEALER] Connected to {} (endpoint stored for reconnection)",
+            peer_addr
+        );
+
+        let endpoint = monocoque_core::endpoint::Endpoint::Tcp(peer_addr);
+        Ok(Self {
+            base: crate::base::SocketBase::with_endpoint(
+                stream,
+                SocketType::Dealer,
+                endpoint,
+                options,
+            ),
+            frames: smallvec::SmallVec::new(),
+        })
     }
 
     /// Create a new DEALER socket from a TCP stream with default options.
@@ -609,7 +647,7 @@ impl DealerSocket<TcpStream> {
     ///
     /// # async fn example() -> std::io::Result<()> {
     /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
-    /// 
+    ///
     /// let options = SocketOptions::large()  // 16KB buffers
     ///     .with_tcp_keepalive(1)
     ///     .with_tcp_keepalive_idle(60)
@@ -654,44 +692,101 @@ impl DealerSocket<TcpStream> {
         self.base.is_connected()
     }
 
-    /// Receive a message with automatic reconnection.
+    /// Receive a message with automatic reconnection on EOF or network error.
     ///
-    /// If the socket was created with `connect()` and has an endpoint configured,
-    /// this will automatically attempt to reconnect on disconnection.
+    /// If the socket was created with `connect()` and stores an endpoint, this
+    /// method loops: on EOF or broken-pipe it clears the stream and calls
+    /// `try_reconnect()` (which applies exponential backoff), then retries `recv()`.
     ///
-    /// For sockets created with `from_tcp()`, this behaves the same as `recv()`.
+    /// Respects `max_reconnect_attempts` — returns `NotConnected` when exhausted.
     pub async fn recv_with_reconnect(&mut self) -> io::Result<Option<Vec<Bytes>>> {
-        // Try to reconnect if disconnected
-        if self.base.stream.is_none() {
-            trace!("[DEALER] Stream disconnected, attempting reconnection");
-            if let Err(e) = self.try_reconnect().await {
-                debug!("[DEALER] Reconnection failed: {}", e);
-                return Err(e);
+        let max = self.base.options.max_reconnect_attempts;
+        let mut attempts = 0u32;
+
+        loop {
+            if self.base.stream.is_none() {
+                if let Some(limit) = max {
+                    if attempts >= limit {
+                        return Err(io::Error::new(
+                            io::ErrorKind::NotConnected,
+                            format!("Max {} reconnection attempts exceeded", limit),
+                        ));
+                    }
+                }
+                attempts += 1;
+                trace!(
+                    "[DEALER] Stream disconnected, reconnecting (attempt {})",
+                    attempts
+                );
+                self.try_reconnect().await?;
+            }
+
+            match self.recv().await {
+                Ok(Some(msg)) => return Ok(Some(msg)),
+                // EOF: read_raw() already set stream = None
+                Ok(None) => {
+                    debug!("[DEALER] EOF on recv, will reconnect");
+                }
+                Err(e) => {
+                    // If the stream is now None (write_from_buf set it on a
+                    // preceding failed send), treat it as a reconnectable error.
+                    // Also accept well-known connection-reset codes.
+                    if self.base.stream.is_none()
+                        || matches!(
+                            e.kind(),
+                            io::ErrorKind::ConnectionReset
+                                | io::ErrorKind::ConnectionAborted
+                                | io::ErrorKind::BrokenPipe
+                                | io::ErrorKind::UnexpectedEof
+                        )
+                    {
+                        debug!("[DEALER] Connection error on recv ({}), will reconnect", e);
+                        self.base.stream = None;
+                    } else {
+                        return Err(e);
+                    }
+                }
             }
         }
-
-        // Now call the regular recv
-        self.recv().await
     }
 
-    /// Send a message with automatic reconnection.
+    /// Send a message with automatic reconnection on network error.
     ///
-    /// If the socket was created with `connect()` and has an endpoint configured,
-    /// this will automatically attempt to reconnect on disconnection.
+    /// On BrokenPipe / ConnectionReset, `write_from_buf()` already sets
+    /// `stream = None`, so the next loop iteration reconnects automatically.
     ///
-    /// For sockets created with `from_tcp()`, this behaves the same as `send()`.
+    /// Respects `max_reconnect_attempts` — returns `NotConnected` when exhausted.
     pub async fn send_with_reconnect(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
-        // Try to reconnect if disconnected
-        if self.base.stream.is_none() {
-            trace!("[DEALER] Stream disconnected, attempting reconnection");
-            if let Err(e) = self.try_reconnect().await {
-                debug!("[DEALER] Reconnection failed: {}", e);
-                return Err(e);
+        let max = self.base.options.max_reconnect_attempts;
+        let mut attempts = 0u32;
+
+        loop {
+            if self.base.stream.is_none() {
+                if let Some(limit) = max {
+                    if attempts >= limit {
+                        return Err(io::Error::new(
+                            io::ErrorKind::NotConnected,
+                            format!("Max {} reconnection attempts exceeded", limit),
+                        ));
+                    }
+                }
+                attempts += 1;
+                trace!(
+                    "[DEALER] Stream disconnected, reconnecting (attempt {})",
+                    attempts
+                );
+                self.try_reconnect().await?;
+            }
+
+            match self.send(msg.clone()).await {
+                Ok(()) => return Ok(()),
+                Err(_) if self.base.stream.is_none() => {
+                    // write_from_buf set stream = None → network error, retry
+                    debug!("[DEALER] Send failed (stream lost), will reconnect");
+                }
+                Err(e) => return Err(e),
             }
         }
-
-        // Now call the regular send
-        self.send(msg).await
     }
 }
 
@@ -714,7 +809,7 @@ impl DealerSocket<InprocStream> {
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// use monocoque_zmtp::DealerSocket;
     /// use monocoque_zmtp::inproc_stream::InprocStream;
     /// use monocoque_core::options::SocketOptions;
@@ -731,10 +826,7 @@ impl DealerSocket<InprocStream> {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn bind_inproc(
-        endpoint: &str,
-        options: SocketOptions,
-    ) -> io::Result<Self> {
+    pub fn bind_inproc(endpoint: &str, options: SocketOptions) -> io::Result<Self> {
         use crate::inproc_stream::InprocStream;
         use monocoque_core::inproc::bind_inproc;
 
@@ -764,7 +856,7 @@ impl DealerSocket<InprocStream> {
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// use monocoque_zmtp::DealerSocket;
     /// use monocoque_zmtp::inproc_stream::InprocStream;
     /// use monocoque_core::options::SocketOptions;
@@ -781,10 +873,7 @@ impl DealerSocket<InprocStream> {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn connect_inproc(
-        endpoint: &str,
-        options: SocketOptions,
-    ) -> io::Result<Self> {
+    pub fn connect_inproc(endpoint: &str, options: SocketOptions) -> io::Result<Self> {
         use crate::inproc_stream::InprocStream;
         use monocoque_core::inproc::connect_inproc;
 

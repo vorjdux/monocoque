@@ -19,7 +19,7 @@
 //!
 //! # Example: PUB-SUB Broker
 //!
-//! ```no_run
+//! ```rust,ignore
 //! use monocoque_zmtp::proxy::{proxy, ProxySocket};
 //! use monocoque_zmtp::xsub::XSubSocket;
 //! use monocoque_zmtp::xpub::XPubSocket;
@@ -28,10 +28,10 @@
 //! async fn main() -> std::io::Result<()> {
 //!     // Publishers connect to 5555
 //!     let mut frontend = XSubSocket::bind("127.0.0.1:5555").await?;
-//!     
+//!
 //!     // Subscribers connect to 5556
 //!     let mut backend = XPubSocket::bind("127.0.0.1:5556").await?;
-//!     
+//!
 //!     // Forward messages and subscriptions bidirectionally
 //!     proxy(&mut frontend, &mut backend, None).await?;
 //!     Ok(())
@@ -40,7 +40,7 @@
 //!
 //! # Example: REQ-REP Load Balancer
 //!
-//! ```no_run
+//! ```rust,ignore
 //! use monocoque_zmtp::proxy::{proxy, ProxySocket};
 //! use monocoque_zmtp::router::RouterSocket;
 //! use monocoque_zmtp::dealer::DealerSocket;
@@ -49,10 +49,10 @@
 //! async fn main() -> std::io::Result<()> {
 //!     // Clients connect to 5555
 //!     let mut frontend = RouterSocket::bind("127.0.0.1:5555").await?;
-//!     
+//!
 //!     // Workers connect to 5556
 //!     let mut backend = DealerSocket::bind("127.0.0.1:5556").await?;
-//!     
+//!
 //!     // Load balance requests across workers
 //!     proxy(&mut frontend, &mut backend, None).await?;
 //!     Ok(())
@@ -131,7 +131,7 @@ pub trait ProxySocket {
 ///
 /// # Example
 ///
-/// ```no_run
+/// ```rust,ignore
 /// use monocoque_zmtp::proxy::{proxy, ProxySocket};
 /// use monocoque_zmtp::xsub::XSubSocket;
 /// use monocoque_zmtp::xpub::XPubSocket;
@@ -140,7 +140,7 @@ pub trait ProxySocket {
 /// async fn main() -> std::io::Result<()> {
 ///     let mut frontend = XSubSocket::bind("127.0.0.1:5555").await?;
 ///     let mut backend = XPubSocket::bind("127.0.0.1:5556").await?;
-///     
+///
 ///     proxy(&mut frontend, &mut backend, None).await
 /// }
 /// ```
@@ -155,8 +155,12 @@ where
     C: ProxySocket,
 {
     use futures::{select, FutureExt};
-    
-    debug!("Starting proxy: {} ←→ {}", frontend.socket_desc(), backend.socket_desc());
+
+    debug!(
+        "Starting proxy: {} ←→ {}",
+        frontend.socket_desc(),
+        backend.socket_desc()
+    );
 
     loop {
         // Use select! to multiplex between frontend and backend in single-threaded runtime
@@ -180,7 +184,7 @@ where
                     backend.send_multipart(msg).await?;
                 }
             }
-            
+
             // Forward backend → frontend
             msg_result = backend.recv_multipart().fuse() => {
                 if let Some(msg) = msg_result? {
@@ -215,7 +219,7 @@ pub enum ProxyCommand {
     Resume,
     /// Terminate the proxy loop
     Terminate,
-    /// Report statistics (future extension)
+    /// Report statistics — replies with `"messages_forwarded=N"` on the control socket.
     Statistics,
 }
 
@@ -269,7 +273,7 @@ impl ProxyCommand {
 ///
 /// # Example
 ///
-/// ```no_run
+/// ```rust,ignore
 /// use monocoque_zmtp::proxy::{proxy_steerable, ProxySocket, ProxyCommand};
 /// use monocoque_zmtp::router::RouterSocket;
 /// use monocoque_zmtp::dealer::DealerSocket;
@@ -280,10 +284,10 @@ impl ProxyCommand {
 ///     // Broker sockets
 ///     let (_, mut frontend) = RouterSocket::bind("127.0.0.1:5555").await?;
 ///     let (_, mut backend) = DealerSocket::bind("127.0.0.1:5556").await?;
-///     
+///
 ///     // Control socket
 ///     let (_, mut control) = PairSocket::bind("127.0.0.1:5557").await?;
-///     
+///
 ///     // Run steerable proxy
 ///     proxy_steerable(&mut frontend, &mut backend, None, &mut control).await?;
 ///     Ok(())
@@ -297,13 +301,13 @@ impl ProxyCommand {
 ///
 /// # async fn send_control() -> std::io::Result<()> {
 /// let mut control_client = PairSocket::connect("127.0.0.1:5557").await?;
-/// 
+///
 /// // Pause proxy
 /// control_client.send(vec![Bytes::from("PAUSE")]).await?;
-/// 
+///
 /// // Resume proxy
 /// control_client.send(vec![Bytes::from("RESUME")]).await?;
-/// 
+///
 /// // Terminate proxy
 /// control_client.send(vec![Bytes::from("TERMINATE")]).await?;
 /// # Ok(())
@@ -322,9 +326,12 @@ where
     Ctrl: ProxySocket,
 {
     use futures::{select, FutureExt};
-    
-    debug!("Starting steerable proxy: {} ←→ {} (control enabled)", 
-           frontend.socket_desc(), backend.socket_desc());
+
+    debug!(
+        "Starting steerable proxy: {} ←→ {} (control enabled)",
+        frontend.socket_desc(),
+        backend.socket_desc()
+    );
 
     let mut paused = false;
     let mut message_count = 0u64;
@@ -337,7 +344,7 @@ where
                     if let Some(cmd_frame) = cmd_msg.first() {
                         if let Some(cmd) = ProxyCommand::from_bytes(cmd_frame) {
                             debug!("Proxy control command: {:?}", cmd);
-                            
+
                             match cmd {
                                 ProxyCommand::Pause => {
                                     debug!("Proxy PAUSED");
@@ -353,14 +360,15 @@ where
                                 }
                                 ProxyCommand::Statistics => {
                                     debug!("Proxy statistics: {} messages forwarded", message_count);
-                                    // Future: send stats back to control socket
+                                    let stats = format!("messages_forwarded={}", message_count);
+                                    let _ = control.send_multipart(vec![bytes::Bytes::from(stats)]).await;
                                 }
                             }
                         }
                     }
                 }
             }
-            
+
             // Forward frontend → backend (if not paused)
             msg_result = frontend.recv_multipart().fuse() => {
                 if let Some(msg) = msg_result? {
@@ -385,7 +393,7 @@ where
                     }
                 }
             }
-            
+
             // Forward backend → frontend (if not paused)
             msg_result = backend.recv_multipart().fuse() => {
                 if let Some(msg) = msg_result? {

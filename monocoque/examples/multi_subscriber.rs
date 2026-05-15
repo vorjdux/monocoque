@@ -2,11 +2,10 @@
 /// - Multiple SUB sockets connecting to a single PUB socket
 /// - Topic-based filtering per subscriber
 /// - High-performance broadcast with minimal overhead
-
 use bytes::Bytes;
+use compio::runtime::Runtime;
 use monocoque::zmq::prelude::*;
 use std::time::Duration;
-use compio::runtime::Runtime;
 use tracing::{error, info};
 use tracing_subscriber::FmtSubscriber;
 
@@ -60,7 +59,10 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     // Give subscribers time to send subscriptions
     std::thread::sleep(Duration::from_millis(100));
 
-    info!("[PUB] Broadcasting to {} subscribers", pub_socket.subscriber_count());
+    info!(
+        "[PUB] Broadcasting to {} subscribers",
+        pub_socket.subscriber_count()
+    );
 
     // Publish messages on different topics
     let topics = vec![
@@ -75,18 +77,20 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
 
     for (topic, msg) in topics {
         info!("[PUB] Publishing: {} -> {}", topic, msg);
-        
+
         // Send as multipart: [topic, message]
-        pub_socket.send(vec![
-            Bytes::from(topic.as_bytes()),
-            Bytes::from(msg.as_bytes()),
-        ]).await?;
-        
+        pub_socket
+            .send(vec![
+                Bytes::from(topic.as_bytes()),
+                Bytes::from(msg.as_bytes()),
+            ])
+            .await?;
+
         std::thread::sleep(Duration::from_millis(100));
     }
 
     info!("[PUB] Publisher finished");
-    
+
     // Give subscribers time to receive all messages
     std::thread::sleep(Duration::from_secs(1));
 
@@ -99,7 +103,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn run_subscriber(port: u16, topic: &str, id: u8) -> std::io::Result<()> {
     info!("[SUB{}] Starting subscriber for topic: '{}'", id, topic);
-    
+
     // Connect to publisher
     let endpoint = format!("127.0.0.1:{}", port);
     let mut sub_socket = SubSocket::connect(&endpoint).await?;
@@ -115,7 +119,7 @@ async fn run_subscriber(port: u16, topic: &str, id: u8) -> std::io::Result<()> {
     // Receive messages
     let mut msg_count = 0;
     let start = std::time::Instant::now();
-    
+
     while start.elapsed() < Duration::from_secs(3) {
         match sub_socket.recv().await? {
             Some(frames) if frames.len() >= 2 => {
@@ -134,6 +138,9 @@ async fn run_subscriber(port: u16, topic: &str, id: u8) -> std::io::Result<()> {
         }
     }
 
-    info!("[SUB{}] Subscriber finished. Received {} messages", id, msg_count);
+    info!(
+        "[SUB{}] Subscriber finished. Received {} messages",
+        id, msg_count
+    );
     Ok(())
 }

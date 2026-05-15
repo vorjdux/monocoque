@@ -50,11 +50,14 @@ const PLAIN_ERROR: &[u8] = b"\x05ERROR";
 /// PLAIN client credentials
 #[derive(Debug, Clone)]
 pub struct PlainCredentials {
+    /// Plaintext username.
     pub username: String,
+    /// Plaintext password.
     pub password: String,
 }
 
 impl PlainCredentials {
+    /// Create new credentials from the given username and password.
     pub fn new(username: impl Into<String>, password: impl Into<String>) -> Self {
         Self {
             username: username.into(),
@@ -99,12 +102,14 @@ pub struct StaticPlainHandler {
 }
 
 impl StaticPlainHandler {
+    /// Create a new handler with an empty credential map.
     pub fn new() -> Self {
         Self {
             credentials: std::collections::HashMap::new(),
         }
     }
 
+    /// Register a username/password pair in the credential map.
     pub fn add_user(&mut self, username: impl Into<String>, password: impl Into<String>) {
         self.credentials.insert(username.into(), password.into());
     }
@@ -126,9 +131,7 @@ impl PlainAuthHandler for StaticPlainHandler {
         _address: &str,
     ) -> Result<String, String> {
         match self.credentials.get(username) {
-            Some(expected_password) if expected_password == password => {
-                Ok(username.to_string())
-            }
+            Some(expected_password) if expected_password == password => Ok(username.to_string()),
             Some(_) => Err("Invalid password".to_string()),
             None => Err("Unknown user".to_string()),
         }
@@ -149,13 +152,15 @@ where
     use compio::buf::BufResult;
     use monocoque_core::timeout::write_all_with_timeout;
 
-    debug!("[PLAIN CLIENT] Starting PLAIN authentication for user: {}", 
-        credentials.username);
+    debug!(
+        "[PLAIN CLIENT] Starting PLAIN authentication for user: {}",
+        credentials.username
+    );
 
     // Build HELLO command
     let mut hello = BytesMut::new();
     hello.extend_from_slice(PLAIN_HELLO);
-    
+
     // Username (length-prefixed)
     let username_bytes = credentials.username.as_bytes();
     if username_bytes.len() > 255 {
@@ -163,7 +168,7 @@ where
     }
     hello.extend_from_slice(&[username_bytes.len() as u8]);
     hello.extend_from_slice(username_bytes);
-    
+
     // Password (length-prefixed)
     let password_bytes = credentials.password.as_bytes();
     if password_bytes.len() > 255 {
@@ -211,7 +216,10 @@ where
     use compio::buf::BufResult;
     use monocoque_core::timeout::{read_exact_with_timeout, write_all_with_timeout};
 
-    debug!("[PLAIN SERVER] Waiting for PLAIN HELLO from {}", peer_address);
+    debug!(
+        "[PLAIN SERVER] Waiting for PLAIN HELLO from {}",
+        peer_address
+    );
 
     // Read command header (6 bytes: \x05HELLO)
     let header = vec![0u8; 6];
@@ -236,8 +244,7 @@ where
     let buf_result = read_exact_with_timeout(stream, username_buf, timeout).await?;
     let BufResult(result, username_buf) = buf_result;
     result?;
-    let username = String::from_utf8(username_buf)
-        .map_err(|_| ZmtpError::Protocol)?;
+    let username = String::from_utf8(username_buf).map_err(|_| ZmtpError::Protocol)?;
 
     // Read password length
     let len_buf = vec![0u8; 1];
@@ -251,39 +258,37 @@ where
     let buf_result = read_exact_with_timeout(stream, password_buf, timeout).await?;
     let BufResult(result, password_buf) = buf_result;
     result?;
-    let password = String::from_utf8(password_buf)
-        .map_err(|_| ZmtpError::Protocol)?;
+    let password = String::from_utf8(password_buf).map_err(|_| ZmtpError::Protocol)?;
 
     debug!("[PLAIN SERVER] Received credentials for user: {}", username);
 
     // Authenticate via handler
-    match handler.authenticate(&username, &password, domain, peer_address).await {
+    match handler
+        .authenticate(&username, &password, domain, peer_address)
+        .await
+    {
         Ok(user_id) => {
-            debug!("[PLAIN SERVER] Authentication successful for user: {}", user_id);
-            
+            debug!(
+                "[PLAIN SERVER] Authentication successful for user: {}",
+                user_id
+            );
+
             // Send WELCOME
-            let buf_result = write_all_with_timeout(
-                stream,
-                PLAIN_WELCOME.to_vec(),
-                timeout
-            ).await?;
+            let buf_result =
+                write_all_with_timeout(stream, PLAIN_WELCOME.to_vec(), timeout).await?;
             let BufResult(result, _) = buf_result;
             result?;
-            
+
             Ok(user_id)
         }
         Err(reason) => {
             warn!("[PLAIN SERVER] Authentication failed: {}", reason);
-            
+
             // Send ERROR
-            let buf_result = write_all_with_timeout(
-                stream,
-                PLAIN_ERROR.to_vec(),
-                timeout
-            ).await?;
+            let buf_result = write_all_with_timeout(stream, PLAIN_ERROR.to_vec(), timeout).await?;
             let BufResult(result, _) = buf_result;
             result?;
-            
+
             Err(ZmtpError::AuthenticationFailed)
         }
     }
@@ -302,11 +307,14 @@ pub async fn plain_server_handshake_zap<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    use crate::security::zap_client::ZapClient;
     use compio::buf::BufResult;
     use monocoque_core::timeout::{read_exact_with_timeout, write_all_with_timeout};
-    use crate::security::zap_client::ZapClient;
 
-    debug!("[PLAIN SERVER ZAP] Waiting for PLAIN HELLO from {}", peer_address);
+    debug!(
+        "[PLAIN SERVER ZAP] Waiting for PLAIN HELLO from {}",
+        peer_address
+    );
 
     // Read command header (6 bytes: \x05HELLO)
     let header = vec![0u8; 6];
@@ -331,8 +339,7 @@ where
     let buf_result = read_exact_with_timeout(stream, username_buf, timeout).await?;
     let BufResult(result, username_buf) = buf_result;
     result?;
-    let username = String::from_utf8(username_buf)
-        .map_err(|_| ZmtpError::Protocol)?;
+    let username = String::from_utf8(username_buf).map_err(|_| ZmtpError::Protocol)?;
 
     // Read password length
     let len_buf = vec![0u8; 1];
@@ -346,17 +353,18 @@ where
     let buf_result = read_exact_with_timeout(stream, password_buf, timeout).await?;
     let BufResult(result, password_buf) = buf_result;
     result?;
-    let password = String::from_utf8(password_buf)
-        .map_err(|_| ZmtpError::Protocol)?;
+    let password = String::from_utf8(password_buf).map_err(|_| ZmtpError::Protocol)?;
 
-    debug!("[PLAIN SERVER ZAP] Received credentials for user: {}, sending ZAP request", username);
+    debug!(
+        "[PLAIN SERVER ZAP] Received credentials for user: {}, sending ZAP request",
+        username
+    );
 
     // Create ZAP client and send authentication request
-    let mut zap_client = ZapClient::new(Duration::from_secs(5))
-        .map_err(|_| {
-            warn!("[PLAIN SERVER ZAP] Failed to connect to ZAP handler");
-            ZmtpError::AuthenticationFailed
-        })?;
+    let mut zap_client = ZapClient::new(Duration::from_secs(5)).map_err(|_| {
+        warn!("[PLAIN SERVER ZAP] Failed to connect to ZAP handler");
+        ZmtpError::AuthenticationFailed
+    })?;
 
     let zap_response = zap_client
         .authenticate_plain(&username, &password, domain, peer_address)
@@ -368,30 +376,28 @@ where
 
     // Check ZAP response status
     if matches!(zap_response.status_code, ZapStatus::Success) {
-        debug!("[PLAIN SERVER ZAP] Authentication successful for user: {}", zap_response.user_id);
-        
+        debug!(
+            "[PLAIN SERVER ZAP] Authentication successful for user: {}",
+            zap_response.user_id
+        );
+
         // Send WELCOME
-        let buf_result = write_all_with_timeout(
-            stream,
-            PLAIN_WELCOME.to_vec(),
-            timeout
-        ).await?;
+        let buf_result = write_all_with_timeout(stream, PLAIN_WELCOME.to_vec(), timeout).await?;
         let BufResult(result, _) = buf_result;
         result?;
-        
+
         Ok(zap_response.user_id)
     } else {
-        warn!("[PLAIN SERVER ZAP] Authentication failed: {}", zap_response.status_text);
-        
+        warn!(
+            "[PLAIN SERVER ZAP] Authentication failed: {}",
+            zap_response.status_text
+        );
+
         // Send ERROR
-        let buf_result = write_all_with_timeout(
-            stream,
-            PLAIN_ERROR.to_vec(),
-            timeout
-        ).await?;
+        let buf_result = write_all_with_timeout(stream, PLAIN_ERROR.to_vec(), timeout).await?;
         let BufResult(result, _) = buf_result;
         result?;
-        
+
         Err(ZmtpError::AuthenticationFailed)
     }
 }
@@ -411,10 +417,7 @@ pub fn create_plain_zap_request(
         address,
         identity,
         ZapMechanism::Plain,
-        vec![
-            Bytes::from(username.into()),
-            Bytes::from(password.into()),
-        ],
+        vec![Bytes::from(username.into()), Bytes::from(password.into())],
     )
 }
 
@@ -429,16 +432,22 @@ mod tests {
         handler.add_user("guest", "guest123");
 
         // Valid credentials
-        let result = handler.authenticate("admin", "secret123", "test", "127.0.0.1").await;
+        let result = handler
+            .authenticate("admin", "secret123", "test", "127.0.0.1")
+            .await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "admin");
 
         // Invalid password
-        let result = handler.authenticate("admin", "wrong", "test", "127.0.0.1").await;
+        let result = handler
+            .authenticate("admin", "wrong", "test", "127.0.0.1")
+            .await;
         assert!(result.is_err());
 
         // Unknown user
-        let result = handler.authenticate("unknown", "password", "test", "127.0.0.1").await;
+        let result = handler
+            .authenticate("unknown", "password", "test", "127.0.0.1")
+            .await;
         assert!(result.is_err());
     }
 

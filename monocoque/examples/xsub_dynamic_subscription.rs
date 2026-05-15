@@ -38,9 +38,7 @@ use tracing_subscriber;
 #[compio::main]
 async fn main() -> io::Result<()> {
     // Initialize logging
-    tracing_subscriber::fmt()
-        .with_max_level(Level::INFO)
-        .init();
+    tracing_subscriber::fmt().with_max_level(Level::INFO).init();
 
     info!("Starting XSUB dynamic subscription example");
 
@@ -76,8 +74,7 @@ async fn main() -> io::Result<()> {
                     xsub.subscribe(Bytes::new()).await?;
                 } else if next_action_idx == 2 {
                     // Unsubscribe example
-                    let topic_bytes = Bytes::from_static(b"events.");
-                    xsub.unsubscribe(&topic_bytes).await?;
+                    xsub.unsubscribe(Bytes::from_static(b"events.")).await?;
                 } else {
                     // Normal subscribe
                     xsub.subscribe(Bytes::from(*topic)).await?;

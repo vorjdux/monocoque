@@ -24,8 +24,8 @@
 //! - REQ clients connect to 5555 and send requests
 //! - REP workers connect to 5556 and process requests
 
-use monocoque::zmq::{DealerSocket, RouterSocket};
 use monocoque::zmq::proxy::{proxy, ProxySocket};
+use monocoque::zmq::{DealerSocket, RouterSocket};
 
 #[compio::main]
 async fn main() -> std::io::Result<()> {
@@ -52,7 +52,12 @@ async fn main() -> std::io::Result<()> {
     println!("\n📡 Proxy running... Press Ctrl+C to stop\n");
 
     // Run the proxy (forwards requests and replies bidirectionally)
-    proxy(&mut frontend, &mut backend, Option::<&mut RouterSocket>::None).await?;
+    proxy(
+        &mut frontend,
+        &mut backend,
+        Option::<&mut RouterSocket>::None,
+    )
+    .await?;
 
     Ok(())
 }

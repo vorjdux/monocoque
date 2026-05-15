@@ -171,7 +171,7 @@ mod tests {
     #[test]
     fn test_subscription_matches() {
         let sub = Subscription::new(Bytes::from_static(b"topic."));
-        
+
         assert!(sub.matches(b"topic.foo"));
         assert!(sub.matches(b"topic.bar"));
         assert!(!sub.matches(b"other.foo"));
@@ -181,7 +181,7 @@ mod tests {
     #[test]
     fn test_empty_subscription_matches_all() {
         let sub = Subscription::new(Bytes::new());
-        
+
         assert!(sub.matches(b"anything"));
         assert!(sub.matches(b""));
     }
@@ -189,13 +189,13 @@ mod tests {
     #[test]
     fn test_trie_basic() {
         let mut trie = SubscriptionTrie::new();
-        
+
         assert!(!trie.matches(b"topic.foo"));
-        
+
         trie.subscribe(Bytes::from_static(b"topic."));
         assert!(trie.matches(b"topic.foo"));
         assert!(!trie.matches(b"other.foo"));
-        
+
         trie.unsubscribe(&Bytes::from_static(b"topic."));
         assert!(!trie.matches(b"topic.foo"));
     }
@@ -203,10 +203,10 @@ mod tests {
     #[test]
     fn test_trie_multiple_subscriptions() {
         let mut trie = SubscriptionTrie::new();
-        
+
         trie.subscribe(Bytes::from_static(b"topic."));
         trie.subscribe(Bytes::from_static(b"events."));
-        
+
         assert!(trie.matches(b"topic.foo"));
         assert!(trie.matches(b"events.bar"));
         assert!(!trie.matches(b"other.baz"));
@@ -216,10 +216,10 @@ mod tests {
     fn test_subscription_event() {
         let sub = SubscriptionEvent::Subscribe(Bytes::from_static(b"topic"));
         let msg = sub.to_message();
-        
+
         assert_eq!(msg[0], 0x01);
         assert_eq!(&msg[1..], b"topic");
-        
+
         let parsed = SubscriptionEvent::from_message(&msg).unwrap();
         assert_eq!(parsed, sub);
     }
@@ -228,10 +228,10 @@ mod tests {
     fn test_unsubscription_event() {
         let unsub = SubscriptionEvent::Unsubscribe(Bytes::from_static(b"topic"));
         let msg = unsub.to_message();
-        
+
         assert_eq!(msg[0], 0x00);
         assert_eq!(&msg[1..], b"topic");
-        
+
         let parsed = SubscriptionEvent::from_message(&msg).unwrap();
         assert_eq!(parsed, unsub);
     }

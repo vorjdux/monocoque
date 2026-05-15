@@ -1,55 +1,49 @@
-use monocoque::zmq::RouterSocket;
 use bytes::Bytes;
+use monocoque::zmq::RouterSocket;
 use std::thread;
+use std::time::Duration;
 
-// TODO: These interop tests hang due to compio runtime not exiting cleanly in test harness
 #[test]
-#[ignore = "compio runtime lifecycle issues in test harness"]
 fn test_router_load_balancer_basic() {
-    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<std::net::SocketAddr>();
+    let (result_tx, result_rx) = std::sync::mpsc::channel::<Result<(), String>>();
 
-    // Router thread
     thread::spawn(move || {
         compio::runtime::Runtime::new().unwrap().block_on(async {
-            let listener = compio::net::TcpListener::bind("127.0.0.1:5559").await.unwrap();
-            ready_tx.send(()).unwrap();
+            let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let local_addr = listener.local_addr().unwrap();
+            ready_tx.send(local_addr).unwrap();
 
-            // Accept first connection (DEALER client)
             let (stream, _) = listener.accept().await.unwrap();
-            
-            // Create ROUTER socket
+
             let mut router = RouterSocket::from_tcp(stream).await.unwrap();
 
-            // Receive message from dealer
             let msg = router.recv().await.unwrap();
-            eprintln!(
-                "[Router] Received from: {:?}",
-                std::str::from_utf8(&msg[0]).unwrap_or("???")
-            );
 
-            // Send response to specific peer
-            router.send(vec![
-                msg[0].clone(), // Return to sender
-                Bytes::from("Response from Router"),
-            ]).await.unwrap();
-            
-            drop(router);
+            router
+                .send(vec![msg[0].clone(), Bytes::from("Response from Router")])
+                .await
+                .unwrap();
+
+            result_tx.send(Ok(())).unwrap();
         });
     });
 
-    ready_rx.recv().unwrap();
+    let local_addr = ready_rx.recv().unwrap();
 
-    // Client using libzmq DEALER
     let ctx = zmq::Context::new();
     let dealer = ctx.socket(zmq::DEALER).unwrap();
     dealer.set_identity(b"WORKER_1").unwrap();
-    dealer.connect("tcp://127.0.0.1:5559").unwrap();
+    dealer.connect(&format!("tcp://{}", local_addr)).unwrap();
 
-    // Send request
     dealer.send("Task from worker", 0).unwrap();
 
-    // Receive response
+    dealer.set_rcvtimeo(5000).unwrap();
     let response = dealer.recv_string(0).unwrap().unwrap();
     assert_eq!(response, "Response from Router");
-}
 
+    result_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+}

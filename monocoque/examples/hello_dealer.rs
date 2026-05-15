@@ -6,32 +6,33 @@
 /// - Receive a response
 ///
 /// Run this after starting a ZMQ ROUTER server on port 5555
-
 use bytes::Bytes;
-use monocoque::zmq::DealerSocket;
 use compio::net::TcpStream;
+use monocoque::zmq::DealerSocket;
 use tracing::info;
 
 #[compio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Connecting to tcp://127.0.0.1:5555...");
-    
+
     // Connect to server
     let stream = TcpStream::connect("127.0.0.1:5555").await?;
-    
+
     // Create DEALER socket
     let mut socket = DealerSocket::from_tcp(stream).await?;
-    
+
     info!("Connected! Sending message...");
-    
+
     // Send a simple message
-    socket.send(vec![Bytes::from("Hello from Monocoque!")]).await?;
-    
+    socket
+        .send(vec![Bytes::from("Hello from Monocoque!")])
+        .await?;
+
     info!("Message sent. Waiting for response...");
-    
+
     // Receive response
     let response = socket.recv().await.ok_or("Connection closed")?;
-    
+
     info!("Received response: {} frames", response.len());
     for (i, frame) in response.iter().enumerate() {
         info!("  Frame {}: {} bytes", i, frame.len());
@@ -39,6 +40,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             info!("    Content: {s}");
         }
     }
-    
+
     Ok(())
 }

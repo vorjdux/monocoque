@@ -177,8 +177,6 @@ impl ReqSocket {
         Ok(sock)
     }
 
-
-
     /// Create a REQ socket from a TCP stream with TCP_NODELAY enabled.
     pub async fn from_tcp(stream: TcpStream) -> io::Result<Self> {
         Ok(Self {
@@ -228,7 +226,6 @@ where
     }
 
     /// Helper to emit monitoring events (if monitoring is enabled).
-    #[allow(dead_code)]
     fn emit_event(&self, event: SocketEvent) {
         if let Some(monitor) = &self.monitor {
             let _ = monitor.send(event);

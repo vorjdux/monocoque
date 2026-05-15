@@ -103,7 +103,7 @@ pub fn configure_tcp_stream(
     // Enable TCP_NODELAY for low latency
     monocoque_core::tcp::enable_tcp_nodelay(stream)?;
     debug!("[{}] TCP_NODELAY enabled", socket_name);
-    
+
     // Configure TCP keepalive if specified
     monocoque_core::tcp::configure_tcp_keepalive(
         stream,
@@ -112,16 +112,16 @@ pub fn configure_tcp_stream(
         options.tcp_keepalive_idle,
         options.tcp_keepalive_intvl,
     )?;
-    
+
     if options.tcp_keepalive == 1 {
         debug!(
-            "[{}] TCP keepalive enabled (cnt={}, idle={}s, intvl={}s)", 
+            "[{}] TCP keepalive enabled (cnt={}, idle={}s, intvl={}s)",
             socket_name,
-            options.tcp_keepalive_cnt, 
-            options.tcp_keepalive_idle, 
+            options.tcp_keepalive_cnt,
+            options.tcp_keepalive_idle,
             options.tcp_keepalive_intvl
         );
     }
-    
+
     Ok(())
 }

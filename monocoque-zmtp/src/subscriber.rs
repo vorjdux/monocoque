@@ -17,7 +17,7 @@ use smallvec::SmallVec;
 use std::io;
 use tracing::{debug, trace};
 
-use crate::{handshake::perform_handshake_with_timeout, session::SocketType};
+use crate::{handshake::perform_handshake_with_options, session::SocketType};
 use monocoque_core::endpoint::Endpoint;
 
 /// Direct-stream SUB socket.
@@ -48,19 +48,17 @@ where
     }
 
     /// Create a new SUB socket with custom buffer configuration and socket options.
-    pub async fn with_options(
-        mut stream: S,
-        options: SocketOptions,
-    ) -> io::Result<Self> {
+    pub async fn with_options(mut stream: S, options: SocketOptions) -> io::Result<Self> {
         debug!("[SUB] Creating new direct SUB socket");
 
         // Perform ZMTP handshake
         debug!("[SUB] Performing ZMTP handshake...");
-        let handshake_result = perform_handshake_with_timeout(
+        let handshake_result = perform_handshake_with_options(
             &mut stream,
             SocketType::Sub,
             None,
             Some(options.handshake_timeout),
+            &options,
         )
         .await
         .map_err(|e| io::Error::other(format!("Handshake failed: {}", e)))?;
@@ -82,12 +80,12 @@ where
     /// Subscribe to messages with the given prefix.
     ///
     /// An empty prefix subscribes to all messages.
-    /// 
+    ///
     /// This sends a subscription message to the PUB socket per ZMTP protocol.
     pub async fn subscribe(&mut self, prefix: impl Into<Bytes>) -> io::Result<()> {
         let prefix = prefix.into();
         trace!("[SUB] Adding subscription: {:?}", prefix);
-        
+
         if !self.subscriptions.contains(&prefix) {
             self.subscriptions.push(prefix.clone());
             self.subscriptions.sort();
@@ -98,22 +96,23 @@ where
         use compio::buf::BufResult;
         use compio::io::AsyncWrite;
         use monocoque_core::alloc::IoBytes;
-        
+
         let mut sub_msg = BytesMut::with_capacity(prefix.len() + 1);
         sub_msg.extend_from_slice(&[0x01]); // Subscribe command
         sub_msg.extend_from_slice(&prefix);
-        
+
         let buf = sub_msg.freeze();
         trace!("[SUB] Sending subscription message ({} bytes)", buf.len());
-        
-        let stream = self.base.stream.as_mut().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
-        })?;
+
+        let stream =
+            self.base.stream.as_mut().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
+            })?;
         let BufResult(result, _) = AsyncWrite::write(stream, IoBytes::new(buf)).await;
         result?;
-        
+
         trace!("[SUB] Subscription message sent successfully");
-        
+
         Ok(())
     }
 
@@ -129,22 +128,23 @@ where
         use compio::buf::BufResult;
         use compio::io::AsyncWrite;
         use monocoque_core::alloc::IoBytes;
-        
+
         let mut unsub_msg = BytesMut::with_capacity(prefix.len() + 1);
         unsub_msg.extend_from_slice(&[0x00]); // Unsubscribe command
         unsub_msg.extend_from_slice(prefix);
-        
+
         let buf = unsub_msg.freeze();
         trace!("[SUB] Sending unsubscription message ({} bytes)", buf.len());
-        
-        let stream = self.base.stream.as_mut().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
-        })?;
+
+        let stream =
+            self.base.stream.as_mut().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
+            })?;
         let BufResult(result, _) = AsyncWrite::write(stream, IoBytes::new(buf)).await;
         result?;
-        
+
         trace!("[SUB] Unsubscription message sent successfully");
-        
+
         Ok(())
     }
 

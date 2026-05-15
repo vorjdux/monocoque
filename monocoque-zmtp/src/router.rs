@@ -19,7 +19,7 @@ use tracing::{debug, trace};
 
 use crate::base::SocketBase;
 use crate::codec::encode_multipart;
-use crate::{handshake::perform_handshake_with_timeout, session::SocketType};
+use crate::{handshake::perform_handshake_with_options, session::SocketType};
 use monocoque_core::endpoint::Endpoint;
 
 static PEER_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -79,19 +79,17 @@ where
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn with_options(
-        mut stream: S,
-        mut options: SocketOptions,
-    ) -> io::Result<Self> {
+    pub async fn with_options(mut stream: S, mut options: SocketOptions) -> io::Result<Self> {
         debug!("[ROUTER] Creating new direct ROUTER socket");
 
         // Perform ZMTP handshake
         debug!("[ROUTER] Performing ZMTP handshake...");
-        let handshake_result = perform_handshake_with_timeout(
+        let handshake_result = perform_handshake_with_options(
             &mut stream,
             SocketType::Router,
             None,
             Some(options.handshake_timeout),
+            &options,
         )
         .await
         .map_err(|e| io::Error::other(format!("Handshake failed: {}", e)))?;
@@ -247,7 +245,7 @@ where
     /// - `None`: Block indefinitely until all data is sent (default libzmq behavior)
     pub async fn close(mut self) -> io::Result<()> {
         let linger = self.base.options.linger;
-        
+
         if self.base.send_buffer.is_empty() {
             trace!("[ROUTER] No buffered data, closing immediately");
             return Ok(());
@@ -261,7 +259,10 @@ where
 
         match linger {
             Some(dur) if dur.is_zero() => {
-                debug!("[ROUTER] Linger=0, discarding {} bytes", self.base.send_buffer.len());
+                debug!(
+                    "[ROUTER] Linger=0, discarding {} bytes",
+                    self.base.send_buffer.len()
+                );
                 Ok(())
             }
             Some(dur) => {
@@ -383,7 +384,7 @@ impl RouterSocket<TcpStream> {
     /// # use monocoque_zmtp::router::RouterSocket;
     /// # use compio::net::TcpStream;
     /// # async fn example() -> std::io::Result<()> {
-    /// let stream = TcpStream::connect(\"127.0.0.1:5555\").await?;
+    /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
     /// let socket = RouterSocket::from_tcp(stream).await?;
     /// # Ok(())
     /// # }
@@ -402,9 +403,9 @@ impl RouterSocket<TcpStream> {
     /// # use monocoque_core::options::SocketOptions;
     /// # use compio::net::TcpStream;
     /// # async fn example() -> std::io::Result<()> {
-    /// let stream = TcpStream::connect(\"127.0.0.1:5555\").await?;
+    /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
     /// let mut opts = SocketOptions::large();
-    /// opts.tcp_keepalive = Some(true);
+    /// opts.tcp_keepalive = 1;
     /// let socket = RouterSocket::from_tcp_with_options(stream, opts).await?;
     /// # Ok(())
     /// # }

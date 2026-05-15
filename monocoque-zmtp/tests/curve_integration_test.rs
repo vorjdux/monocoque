@@ -18,7 +18,7 @@ fn test_curve_keypair_generation() {
 
     // Different generations should produce different public keys
     assert_ne!(pair1.public.as_bytes(), pair2.public.as_bytes());
-    
+
     // Secret keys are also different (via diffie-hellman result)
     let shared1 = pair1.secret.diffie_hellman(&pair2.public);
     let shared2 = pair2.secret.diffie_hellman(&pair1.public);
@@ -41,7 +41,10 @@ fn test_curve_socket_options() {
     let client_keypair = CurveKeyPair::generate();
     let client_options = SocketOptions::new()
         .with_curve_serverkey(*keypair.public.as_bytes())
-        .with_curve_keypair(*client_keypair.public.as_bytes(), *client_keypair.public.as_bytes());
+        .with_curve_keypair(
+            *client_keypair.public.as_bytes(),
+            *client_keypair.public.as_bytes(),
+        );
 
     assert_eq!(client_options.curve_server, false);
     assert_eq!(
@@ -59,13 +62,19 @@ fn test_curve_perfect_forward_secrecy() {
     let client1_keypair = CurveKeyPair::generate();
     let _client1_options = SocketOptions::new()
         .with_curve_serverkey(*server_keypair.public.as_bytes())
-        .with_curve_keypair(*client1_keypair.public.as_bytes(), *client1_keypair.public.as_bytes());
+        .with_curve_keypair(
+            *client1_keypair.public.as_bytes(),
+            *client1_keypair.public.as_bytes(),
+        );
 
     // Client 2 session (different ephemeral keys)
     let client2_keypair = CurveKeyPair::generate();
     let _client2_options = SocketOptions::new()
         .with_curve_serverkey(*server_keypair.public.as_bytes())
-        .with_curve_keypair(*client2_keypair.public.as_bytes(), *client2_keypair.public.as_bytes());
+        .with_curve_keypair(
+            *client2_keypair.public.as_bytes(),
+            *client2_keypair.public.as_bytes(),
+        );
 
     // Each session has unique client keypair (different public keys)
     assert_ne!(
@@ -76,6 +85,3 @@ fn test_curve_perfect_forward_secrecy() {
     // This demonstrates that each connection would have unique session keys
     // (actual shared secret would be computed via DH exchange)
 }
-
-
-

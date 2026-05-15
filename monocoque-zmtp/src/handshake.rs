@@ -1,5 +1,5 @@
 //! Synchronous ZMTP handshake that completes before spawning background tasks.
-//! 
+//!
 //! This eliminates race conditions by ensuring both peers complete the handshake
 //! protocol before any application data can be sent.
 //!
@@ -7,7 +7,7 @@
 //!
 //! This module uses **stack arrays** for all fixed-size protocol buffers:
 //! - Greeting: 64-byte stack array
-//! - Frame header: 2-byte stack array  
+//! - Frame header: 2-byte stack array
 //! - Length field: 8-byte stack array
 //!
 //! The READY body uses a small `Vec` allocation (typically ~27 bytes) because:
@@ -25,6 +25,7 @@ use bytes::{Bytes, BytesMut};
 use compio::buf::BufResult;
 use compio::io::{AsyncRead, AsyncWrite};
 use monocoque_core::alloc::IoBytes;
+use monocoque_core::options::SocketOptions;
 use monocoque_core::timeout::{read_exact_with_timeout, write_all_with_timeout};
 use std::time::Duration;
 use tracing::debug;
@@ -36,61 +37,75 @@ pub struct HandshakeResult {
     pub peer_socket_type: SocketType,
 }
 
-/// Performs the complete ZMTP handshake synchronously on the stream.
-///
-/// This function blocks until:
-/// 1. Greeting exchange is complete
-/// 2. READY command exchange is complete
-///
-/// Only after this completes should the stream be handed to `SocketActor`.
-// Convenience wrapper without timeout - kept for API completeness
-#[allow(dead_code)]
-pub async fn perform_handshake<S>(
-    stream: &mut S,
-    local_socket_type: SocketType,
-    identity: Option<&[u8]>,
-) -> Result<HandshakeResult, ZmtpError>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
-    perform_handshake_with_timeout(stream, local_socket_type, identity, None).await
+/// Security mechanism to use for the ZMTP handshake.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecurityMechanism {
+    /// No authentication (default).
+    Null,
+    /// Username/password authentication (PLAIN).
+    Plain,
+    /// Public-key encryption (CURVE).
+    Curve,
 }
 
-/// Performs the complete ZMTP handshake with a configurable timeout.
+impl SecurityMechanism {
+    /// Detect the mechanism from socket options.
+    ///
+    /// Priority: CURVE > PLAIN > NULL.
+    pub fn from_options(options: &SocketOptions) -> Self {
+        if options.curve_secretkey.is_some() || options.curve_server {
+            Self::Curve
+        } else if options.plain_server || options.plain_username.is_some() {
+            Self::Plain
+        } else {
+            Self::Null
+        }
+    }
+
+    /// The ASCII mechanism name used in ZMTP greetings (20-byte field).
+    pub fn as_greeting_bytes(&self) -> &'static [u8] {
+        match self {
+            Self::Null => b"NULL",
+            Self::Plain => b"PLAIN",
+            Self::Curve => b"CURVE",
+        }
+    }
+}
+
+/// Performs the complete ZMTP handshake, selecting the security mechanism from options.
 ///
-/// # Arguments
-///
-/// * `timeout` - Maximum time to complete the entire handshake
-///   - `None`: Block indefinitely (default behavior)
-///   - `Some(duration)`: Fail if handshake doesn't complete within duration
-///
-/// # Errors
-///
-/// Returns `ZmtpError::Timeout` if the handshake exceeds the specified timeout.
-pub async fn perform_handshake_with_timeout<S>(
+/// This is the primary handshake entry point for sockets that have security configured.
+pub async fn perform_handshake_with_options<S>(
     stream: &mut S,
     local_socket_type: SocketType,
     identity: Option<&[u8]>,
     timeout: Option<Duration>,
+    options: &SocketOptions,
 ) -> Result<HandshakeResult, ZmtpError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    debug!("[HANDSHAKE] Starting handshake for {} (timeout: {:?})", 
-        local_socket_type.as_str(), timeout);
-    debug!("[HANDSHAKE] Starting synchronous handshake for {} (timeout: {:?})", 
-        local_socket_type.as_str(), timeout);
-    
+    let mechanism = SecurityMechanism::from_options(options);
+
+    debug!(
+        "[HANDSHAKE] Starting handshake for {} (timeout: {:?}, mechanism: {:?})",
+        local_socket_type.as_str(),
+        timeout,
+        mechanism
+    );
+
     // Step 1: Send our greeting
     debug!("[HANDSHAKE] Step 1: Sending greeting...");
-    let greeting_bytes = build_greeting();
+    let greeting_bytes = build_greeting_with_mechanism(mechanism, options);
     let io_buf = IoBytes::new(greeting_bytes.clone());
     let BufResult(write_res, _) = write_all_with_timeout(stream, io_buf, timeout)
         .await
         .map_err(|_| ZmtpError::Protocol)?;
     write_res.map_err(|_| ZmtpError::Protocol)?;
-    debug!("[HANDSHAKE] Step 1 DONE: Sent greeting ({} bytes)", greeting_bytes.len());
-    debug!("[HANDSHAKE] Sent greeting ({} bytes)", greeting_bytes.len());
+    debug!(
+        "[HANDSHAKE] Step 1 DONE: Sent greeting ({} bytes)",
+        greeting_bytes.len()
+    );
 
     // Step 2: Receive peer greeting
     debug!("[HANDSHAKE] Step 2: Receiving peer greeting...");
@@ -100,15 +115,27 @@ where
         .map_err(|_| ZmtpError::Protocol)?;
     read_res.map_err(|_| ZmtpError::Protocol)?;
     debug!("[HANDSHAKE] Step 2 DONE: Received peer greeting (64 bytes)");
-    debug!("[HANDSHAKE] Received peer greeting (64 bytes)");
-    
-    // Validate greeting
+
+    // Validate greeting signature
     if greeting_buf[0] != 0xFF {
         return Err(ZmtpError::Protocol);
     }
 
-    // Step 3: Send READY command
-    debug!("[HANDSHAKE] Step 3: Sending READY command...");
+    // Step 3: Run security-mechanism-specific exchange (between greeting and READY)
+    match mechanism {
+        SecurityMechanism::Null => {
+            // No mechanism-level exchange for NULL; proceed directly to READY.
+        }
+        SecurityMechanism::Plain => {
+            run_plain_exchange(stream, options, timeout).await?;
+        }
+        SecurityMechanism::Curve => {
+            run_curve_exchange(stream, options, timeout).await?;
+        }
+    }
+
+    // Step 4: Send READY command
+    debug!("[HANDSHAKE] Step 4: Sending READY command...");
     let ready_body = build_ready(local_socket_type.as_str(), identity);
     let ready_frame = encode_frame(FLAG_COMMAND, &ready_body);
     let io_buf = IoBytes::new(ready_frame.clone());
@@ -116,36 +143,34 @@ where
         .await
         .map_err(|_| ZmtpError::Protocol)?;
     write_res.map_err(|_| ZmtpError::Protocol)?;
-    
-    debug!("[HANDSHAKE] Step 3 DONE: Sent READY command ({} bytes)", ready_frame.len());
-    debug!("[HANDSHAKE] Sent READY command ({} bytes)", ready_frame.len());
+    debug!(
+        "[HANDSHAKE] Step 4 DONE: Sent READY command ({} bytes)",
+        ready_frame.len()
+    );
 
-    // Step 4: Receive peer READY command
-    debug!("[HANDSHAKE] Step 4: Receiving peer READY command...");
-    // Read the frame header first
-    debug!("[HANDSHAKE] Step 4a: Reading READY frame header (2 bytes)...");
+    // Step 5: Receive peer READY command
+    debug!("[HANDSHAKE] Step 5: Receiving peer READY command...");
     let header_buf = [0u8; 2];
     let BufResult(read_res, header_buf) = read_exact_with_timeout(stream, header_buf, timeout)
         .await
         .map_err(|_| ZmtpError::Protocol)?;
     read_res.map_err(|_| ZmtpError::Protocol)?;
-    debug!("[HANDSHAKE] Step 4a DONE: Read header [{:02x}, {:02x}]", header_buf[0], header_buf[1]);
-    
+    debug!(
+        "[HANDSHAKE] Step 5a DONE: Read header [{:02x}, {:02x}]",
+        header_buf[0], header_buf[1]
+    );
+
     let flags = header_buf[0];
     let is_command = (flags & FLAG_COMMAND) != 0;
     let is_long = (flags & 0x02) != 0;
-    
-    debug!("[HANDSHAKE] Step 4b: Parsing header - flags={:02x}, is_command={}, is_long={}", flags, is_command, is_long);
-    
+
     if !is_command {
         debug!("[HANDSHAKE] ERROR: Expected COMMAND frame, got data frame");
         return Err(ZmtpError::Protocol);
     }
 
     // Read body length
-    debug!("[HANDSHAKE] Step 4c: Determining body length...");
     let body_len = if is_long {
-        debug!("[HANDSHAKE] Step 4c: Reading 8-byte length...");
         let len_buf = [0u8; 8];
         let BufResult(read_res, len_buf) = read_exact_with_timeout(stream, len_buf, timeout)
             .await
@@ -155,34 +180,32 @@ where
     } else {
         header_buf[1] as usize
     };
-    debug!("[HANDSHAKE] Step 4c DONE: body_len={}", body_len);
+    debug!("[HANDSHAKE] Step 5b DONE: body_len={}", body_len);
 
     // Read body
-    // READY commands are typically small (~27 bytes), use stack buffer
-    debug!("[HANDSHAKE] Step 4d: Reading body ({} bytes)...", body_len);
-    const MAX_READY_SIZE: usize = 512; // Generous limit for READY command
+    const MAX_READY_SIZE: usize = 512;
     if body_len > MAX_READY_SIZE {
-        debug!("[HANDSHAKE] ERROR: READY body too large: {} bytes", body_len);
+        debug!(
+            "[HANDSHAKE] ERROR: READY body too large: {} bytes",
+            body_len
+        );
         return Err(ZmtpError::Protocol);
     }
     let body_buf = vec![0u8; body_len];
-    debug!("[HANDSHAKE] Step 4d: About to read {} bytes...", body_len);
     let BufResult(read_res, body_buf) = read_exact_with_timeout(stream, body_buf, timeout)
         .await
         .map_err(|_| ZmtpError::Protocol)?;
     read_res.map_err(|_| ZmtpError::Protocol)?;
-    debug!("[HANDSHAKE] Step 4d DONE: Read {} bytes of body", body_len);
-    
-    debug!("[HANDSHAKE] Step 4 DONE: Received full READY command ({} total bytes)", 2 + if is_long { 8 } else { 0 } + body_len);
-    debug!("[HANDSHAKE] Received READY command ({} total bytes)", 2 + if is_long { 8 } else { 0 } + body_len);
+    debug!("[HANDSHAKE] Step 5c DONE: Read {} bytes of body", body_len);
 
     // Parse READY command
-    debug!("[HANDSHAKE] Parsing READY command...");
     let ready_bytes = Bytes::from(body_buf);
     let (peer_socket_type, peer_identity) = parse_ready_command(&ready_bytes)?;
-    
-    debug!("[HANDSHAKE] ✓ Handshake complete! Peer is {}", peer_socket_type.as_str());
-    debug!("[HANDSHAKE] Handshake complete! Peer is {}", peer_socket_type.as_str());
+
+    debug!(
+        "[HANDSHAKE] Handshake complete! Peer is {}",
+        peer_socket_type.as_str()
+    );
 
     Ok(HandshakeResult {
         peer_identity,
@@ -190,8 +213,100 @@ where
     })
 }
 
-/// Build a ZMTP 3.0 greeting (64 bytes)
-fn build_greeting() -> Bytes {
+// ---------------------------------------------------------------------------
+// Per-mechanism security exchanges
+// ---------------------------------------------------------------------------
+
+/// Run the PLAIN authentication exchange.
+///
+/// - Client mode: send HELLO, receive WELCOME/ERROR.
+/// - Server mode: receive HELLO, validate, send WELCOME/ERROR.
+async fn run_plain_exchange<S>(
+    stream: &mut S,
+    options: &SocketOptions,
+    timeout: Option<Duration>,
+) -> Result<(), ZmtpError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    use crate::security::plain::{
+        plain_client_handshake, plain_server_handshake, PlainCredentials, StaticPlainHandler,
+    };
+
+    if options.plain_server {
+        debug!("[HANDSHAKE] Running PLAIN server exchange");
+        // Use in-process handler: accept any user present in options or reject all.
+        // For a proper server you would supply a real PlainAuthHandler; the simplest
+        // approach is a StaticPlainHandler pre-loaded with no users (reject everything).
+        // Callers that want custom validation should use the security API directly.
+        // We build a handler that always rejects — real auth should go through ZAP.
+        // Use plain_server_handshake with a trivial reject-all handler.
+        let handler = StaticPlainHandler::new(); // empty → rejects all
+        let domain = options.zap_domain.as_str();
+        plain_server_handshake(stream, &handler, domain, "unknown", timeout)
+            .await
+            .map(|_| ())
+    } else if let Some(ref username) = options.plain_username {
+        debug!("[HANDSHAKE] Running PLAIN client exchange");
+        let password = options.plain_password.as_deref().unwrap_or("");
+        let credentials = PlainCredentials::new(username.clone(), password);
+        plain_client_handshake(stream, &credentials, timeout).await
+    } else {
+        // Should not happen (mechanism detection guards this), but be safe.
+        Ok(())
+    }
+}
+
+/// Run the CURVE key-exchange handshake.
+///
+/// - Client mode: `curve_secretkey` + `curve_serverkey` must be set.
+/// - Server mode: `curve_server` flag + `curve_secretkey` must be set.
+async fn run_curve_exchange<S>(
+    stream: &mut S,
+    options: &SocketOptions,
+    timeout: Option<Duration>,
+) -> Result<(), ZmtpError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    use crate::security::curve::{
+        CurveClient, CurveKeyPair, CurvePublicKey, CurveSecretKey, CurveServer,
+    };
+
+    if options.curve_server {
+        debug!("[HANDSHAKE] Running CURVE server exchange");
+        let secret_bytes = options.curve_secretkey.ok_or(ZmtpError::Protocol)?;
+        let server_secret = CurveSecretKey::from_bytes(secret_bytes);
+        let server_public = server_secret.public_key();
+        let server_keypair = CurveKeyPair::from_keys(server_public, server_secret);
+
+        let mut curve_server = CurveServer::new(server_keypair);
+        curve_server.handshake(stream, timeout).await.map(|_| ())
+    } else if let (Some(secret_bytes), Some(server_key_bytes)) =
+        (options.curve_secretkey, options.curve_serverkey)
+    {
+        debug!("[HANDSHAKE] Running CURVE client exchange");
+        let client_secret = CurveSecretKey::from_bytes(secret_bytes);
+        let client_public = client_secret.public_key();
+        let client_keypair = CurveKeyPair::from_keys(client_public, client_secret);
+        let server_public = CurvePublicKey::from_bytes(server_key_bytes);
+
+        let mut curve_client = CurveClient::new(client_keypair, server_public);
+        curve_client.handshake(stream, timeout).await
+    } else if options.curve_secretkey.is_some() {
+        // Public key set but no server key: can't proceed.
+        Err(ZmtpError::Protocol)
+    } else {
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Greeting helpers
+// ---------------------------------------------------------------------------
+
+/// Build a ZMTP 3.0 greeting (64 bytes) advertising the given security mechanism.
+fn build_greeting_with_mechanism(mechanism: SecurityMechanism, options: &SocketOptions) -> Bytes {
     let mut b = BytesMut::with_capacity(64);
 
     // Signature
@@ -202,14 +317,21 @@ fn build_greeting() -> Bytes {
     // Version 3.0
     b.extend_from_slice(&[0x03, 0x00]);
 
-    // Mechanism: NULL
-    b.extend_from_slice(b"NULL");
-    b.extend_from_slice(&[0u8; 16]);
+    // Mechanism field: 20 bytes, ASCII name padded with NUL
+    let mech_name = mechanism.as_greeting_bytes();
+    b.extend_from_slice(mech_name);
+    let padding = 20usize.saturating_sub(mech_name.len());
+    b.extend_from_slice(&vec![0u8; padding]);
 
-    // As-server flag = 0
-    b.extend_from_slice(&[0x00]);
+    // As-server flag (byte 32): 1 if this side acts as CURVE/PLAIN server
+    let as_server = match mechanism {
+        SecurityMechanism::Curve => options.curve_server,
+        SecurityMechanism::Plain => options.plain_server,
+        SecurityMechanism::Null => false,
+    };
+    b.extend_from_slice(&[u8::from(as_server)]);
 
-    // Padding
+    // Padding to reach 64 bytes total
     b.extend_from_slice(&[0u8; 31]);
 
     b.freeze()
@@ -221,7 +343,7 @@ fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), Zmtp
     // - 1 byte: command name length
     // - N bytes: "READY"
     // - Properties as key-value pairs
-    
+
     if body.len() < 6 {
         return Err(ZmtpError::Protocol);
     }
@@ -307,4 +429,3 @@ const fn parse_socket_type(value: &[u8]) -> Result<SocketType, ZmtpError> {
         _ => Err(ZmtpError::Protocol),
     }
 }
-

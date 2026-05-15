@@ -24,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut dealer = DealerSocket::connect("127.0.0.1:5556").await?;
     println!("[Dealer] Socket type: {:?}", dealer.socket_type());
     println!("[Dealer] Type name: {}", dealer.socket_type().as_str());
-    
+
     // Wait a bit
     compio::time::sleep(Duration::from_millis(100)).await;
 
@@ -76,7 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n## Runtime Options Modification");
     let current_hwm = dealer.options().send_hwm;
     println!("[Dealer] Current send HWM: {}", current_hwm);
-    
+
     dealer.options_mut().send_hwm = 500;
     println!("[Dealer] New send HWM: {}", dealer.options().send_hwm);
 
@@ -92,6 +92,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  • TCP keepalive options enable connection monitoring");
     println!("  • REQ modes control request-reply behavior");
     println!("  • Options can be modified at runtime via options_mut()");
-    
+
     Ok(())
 }

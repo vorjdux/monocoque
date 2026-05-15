@@ -10,8 +10,7 @@ use tracing::info;
 // Style 1: Explicit protocol namespace (recommended)
 // ============================================================================
 
-#[allow(dead_code)]
-async fn explicit_style() -> Result<(), Box<dyn std::error::Error>> {
+async fn _explicit_style() -> Result<(), Box<dyn std::error::Error>> {
     use monocoque::zmq::{DealerSocket, RouterSocket};
 
     let dealer = DealerSocket::connect("127.0.0.1:5555").await?;
@@ -28,8 +27,7 @@ async fn explicit_style() -> Result<(), Box<dyn std::error::Error>> {
 // Style 2: Protocol prelude (for convenience)
 // ============================================================================
 
-#[allow(dead_code)]
-async fn prelude_style() -> Result<(), Box<dyn std::error::Error>> {
+async fn _prelude_style() -> Result<(), Box<dyn std::error::Error>> {
     use monocoque::zmq::prelude::*;
 
     let dealer = DealerSocket::connect("127.0.0.1:5555").await?;
@@ -45,8 +43,7 @@ async fn prelude_style() -> Result<(), Box<dyn std::error::Error>> {
 // Future: Multi-protocol mixing (when other protocols are added)
 // ============================================================================
 
-#[allow(dead_code)]
-async fn future_multi_protocol() -> Result<(), Box<dyn std::error::Error>> {
+async fn _future_multi_protocol() -> Result<(), Box<dyn std::error::Error>> {
     // Explicit namespaces prevent conflicts
     use monocoque::zmq::DealerSocket as ZmqDealer;
     // use monocoque::mqtt::Client as MqttClient;  // Future: features = ["mqtt"]

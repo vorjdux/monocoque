@@ -49,14 +49,12 @@ impl InprocStream {
 
 impl AsyncRead for InprocStream {
     async fn read<B: IoBufMut>(&mut self, mut buf: B) -> BufResult<usize, B> {
-        // Need to receive a message from the channel
-        // Use blocking recv for inproc (synchronous channels)
-        match self.rx.recv() {
+        match self.rx.recv_async().await {
             Ok(msg_frames) => {
                 // Assemble frames and copy to buffer
                 let mut total = 0;
                 let buf_capacity = buf.buf_capacity();
-                
+
                 for frame in msg_frames {
                     let to_copy = frame.len().min(buf_capacity - total);
                     if to_copy == 0 {
@@ -72,8 +70,10 @@ impl AsyncRead for InprocStream {
                     dest_slice.copy_from_slice(&frame[..to_copy]);
                     total += to_copy;
                 }
-                
-                unsafe { buf.set_buf_init(total); }
+
+                unsafe {
+                    buf.set_buf_init(total);
+                }
                 BufResult(Ok(total), buf)
             }
             Err(_) => {
@@ -89,7 +89,7 @@ impl AsyncWrite for InprocStream {
         // For inproc, we send the entire buffer as a single frame
         let len = buf.buf_len();
         let data = Bytes::copy_from_slice(buf.as_slice());
-        
+
         match self.tx.send(vec![data]) {
             Ok(()) => BufResult(Ok(len), buf),
             Err(_) => BufResult(
@@ -128,32 +128,31 @@ mod tests {
     use monocoque_core::inproc::{bind_inproc, connect_inproc};
 
     #[test]
-    #[ignore = "BufResult handling needs fixing"]
     fn test_inproc_stream_basic() -> io::Result<()> {
-        // Bind and connect
-        let (tx1, rx1) = bind_inproc("inproc://test-stream")?;
-        let tx2 = connect_inproc("inproc://test-stream")?;
+        use compio::buf::BufResult;
+        use compio::io::AsyncRead;
 
-        // Create streams
+        let endpoint = "inproc://test-stream-basic";
+        let (tx1, rx1) = bind_inproc(endpoint)?;
+        let tx2 = connect_inproc(endpoint)?;
+
         let mut stream1 = InprocStream::new(tx1, rx1);
-        let stream2 = InprocStream::new(tx2, flume::unbounded().1); // Dummy rx for this test
 
-        // Send from stream2 to stream1
-        let msg = vec![Bytes::from("hello")];
-        stream2.sender().send(msg).unwrap();
+        // Send data into stream1's receiver before reading (channel buffers it)
+        tx2.send(vec![Bytes::from_static(b"hello")]).unwrap();
 
-        // Read on stream1 (synchronous for test)
-        // TODO: Fix BufResult handling
-        // let buf = vec![0u8; 10];
-        // let buf_result = compio::runtime::Runtime::new()?.block_on(async {
-        //     use compio::io::AsyncReadExt;
-        //     stream1.read(buf).await
-        // });
-        // let n = ...?;
+        let rt = compio::runtime::Runtime::new()?;
+        let (n, buf) = rt.block_on(async {
+            let buf = vec![0u8; 10];
+            let BufResult(result, buf) = AsyncRead::read(&mut stream1, buf).await;
+            result.map(|n| (n, buf))
+        })?;
 
-        //assert_eq!(n, 5);
-        //assert_eq!(&buf[..n], b"hello");
+        assert_eq!(n, 5);
+        assert_eq!(&buf[..n], b"hello");
 
+        // Cleanup global registry
+        monocoque_core::inproc::unbind_inproc(endpoint)?;
         Ok(())
     }
 }

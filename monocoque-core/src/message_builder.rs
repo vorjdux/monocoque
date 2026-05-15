@@ -23,9 +23,9 @@ use bytes::Bytes;
 ///
 /// // Mixed types
 /// let msg = Message::new()
-///     .push(b"routing_id")
+///     .push(&b"routing_id"[..])
 ///     .push_str("command:execute")
-///     .push(&[1, 2, 3, 4])
+///     .push(&[1u8, 2, 3, 4][..])
 ///     .into_frames();
 /// ```
 ///
@@ -59,7 +59,7 @@ impl Message {
     ///
     /// let msg = Message::new();
     /// ```
-    #[must_use] 
+    #[must_use]
     pub const fn new() -> Self {
         Self { frames: Vec::new() }
     }
@@ -79,7 +79,7 @@ impl Message {
     ///     .push_str("frame3")
     ///     .push_str("frame4");
     /// ```
-    #[must_use] 
+    #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             frames: Vec::with_capacity(capacity),
@@ -95,7 +95,7 @@ impl Message {
     /// use bytes::Bytes;
     ///
     /// let msg = Message::new()
-    ///     .push(b"raw bytes")
+    ///     .push(&b"raw bytes"[..])
     ///     .push(vec![1, 2, 3])
     ///     .push(Bytes::from_static(b"static"));
     /// ```
@@ -117,7 +117,7 @@ impl Message {
     ///     .push_str("Hello")
     ///     .push_str("World");
     /// ```
-    #[must_use] 
+    #[must_use]
     pub fn push_str(mut self, s: &str) -> Self {
         self.frames.push(Bytes::copy_from_slice(s.as_bytes()));
         self
@@ -134,11 +134,11 @@ impl Message {
     ///
     /// // ROUTER envelope: [identity, empty, body]
     /// let msg = Message::new()
-    ///     .push(b"client-123")
+    ///     .push(&b"client-123"[..])
     ///     .push_empty()
     ///     .push_str("Hello");
     /// ```
-    #[must_use] 
+    #[must_use]
     pub fn push_empty(mut self) -> Self {
         self.frames.push(Bytes::new());
         self
@@ -208,16 +208,18 @@ impl Message {
     ///     .push_u32(12345) // Message ID
     ///     .push_str("payload");
     /// ```
-    #[must_use] 
+    #[must_use]
     pub fn push_u32(mut self, value: u32) -> Self {
-        self.frames.push(Bytes::copy_from_slice(&value.to_be_bytes()));
+        self.frames
+            .push(Bytes::copy_from_slice(&value.to_be_bytes()));
         self
     }
 
     /// Add a frame containing a big-endian u64.
-    #[must_use] 
+    #[must_use]
     pub fn push_u64(mut self, value: u64) -> Self {
-        self.frames.push(Bytes::copy_from_slice(&value.to_be_bytes()));
+        self.frames
+            .push(Bytes::copy_from_slice(&value.to_be_bytes()));
         self
     }
 
@@ -234,13 +236,13 @@ impl Message {
     ///
     /// assert_eq!(msg.len(), 2);
     /// ```
-    #[must_use] 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.frames.len()
     }
 
     /// Check if the message is empty (has no frames).
-    #[must_use] 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.frames.is_empty()
     }
@@ -251,28 +253,22 @@ impl Message {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```
     /// use monocoque_core::message_builder::Message;
-    /// # async fn example() -> std::io::Result<()> {
-    /// # use bytes::Bytes;
-    /// # let mut socket = monocoque_zmtp::DealerSocket::<compio::net::TcpStream>::new();
     ///
-    /// let msg = Message::new()
+    /// let frames = Message::new()
     ///     .push_str("Hello")
     ///     .push_str("World")
     ///     .into_frames();
-    ///
-    /// socket.send(msg).await?;
-    /// # Ok(())
-    /// # }
+    /// assert_eq!(frames.len(), 2);
     /// ```
-    #[must_use] 
+    #[must_use]
     pub fn into_frames(self) -> Vec<Bytes> {
         self.frames
     }
 
     /// Get a reference to the frames without consuming the builder.
-    #[must_use] 
+    #[must_use]
     pub fn frames(&self) -> &[Bytes] {
         &self.frames
     }
@@ -293,7 +289,7 @@ impl Message {
     /// let msg = Message::from_frames(frames);
     /// assert_eq!(msg.len(), 2);
     /// ```
-    #[must_use] 
+    #[must_use]
     pub const fn from_frames(frames: Vec<Bytes>) -> Self {
         Self { frames }
     }
@@ -352,9 +348,7 @@ mod tests {
 
     #[test]
     fn test_push_integers() {
-        let msg = Message::new()
-            .push_u32(12345)
-            .push_u64(67890);
+        let msg = Message::new().push_u32(12345).push_u64(67890);
 
         let frames = msg.into_frames();
         assert_eq!(frames[0].len(), 4);
@@ -376,10 +370,7 @@ mod tests {
 
     #[test]
     fn test_from_frames() {
-        let frames = vec![
-            Bytes::from_static(b"a"),
-            Bytes::from_static(b"b"),
-        ];
+        let frames = vec![Bytes::from_static(b"a"), Bytes::from_static(b"b")];
         let msg = Message::from_frames(frames.clone());
         assert_eq!(msg.len(), 2);
         assert_eq!(msg.frames(), &frames[..]);

@@ -1,259 +1,169 @@
 # Getting Started with Monocoque
 
-A quick-start guide to using Monocoque for high-performance messaging.
+A five-minute guide to sending your first message with Monocoque.
 
 **Performance Highlights:**
 
--   🚀 **31-37% faster latency** than libzmq (23μs vs 33-36μs)
--   ⚡ **3.24M msg/sec throughput** with batching API
--   🏁 **Pure Rust** - no C dependencies, full async/await support
--   🛡️ **Memory safe** - <2% unsafe code, fully isolated
+- **31-37% faster latency** than libzmq (23 μs vs 33-36 μs round-trip)
+- **3.24 M msg/sec throughput** with the batching API
+- **Pure Rust** — no C dependencies, full async/await
+- **Memory safe** — zero unsafe code in the protocol layer
 
 ---
 
 ## Installation
 
-Add Monocoque to your `Cargo.toml`:
-
 ```toml
 [dependencies]
-monocoque-core = { path = "path/to/monocoque/monocoque-core" }
-monocoque-zmtp = { path = "path/to/monocoque/monocoque-zmtp", features = ["runtime"] }
-bytes = "1.5"
-compio = { version = "0.10", features = ["runtime", "macros"] }
+monocoque = { version = "0.1", features = ["zmq"] }
+bytes    = "1"
+compio   = { version = "0.10", features = ["runtime", "macros"] }
 ```
 
 ---
 
-## Quick Example: DEALER Socket
+## Example 1: REQ/REP Round-Trip
 
-```rust
-use monocoque_zmtp::DealerSocket;
-use compio::net::TcpStream;
+The simplest pattern: one client sends a request, one server sends a reply.
+
+**Server** (`src/bin/rep_server.rs`):
+
+```rust,no_run
+use compio::net::TcpListener;
+use monocoque::zmq::RepSocket;
 use bytes::Bytes;
 
 #[compio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Connect to a ROUTER server
-    let stream = TcpStream::connect("127.0.0.1:5555").await?;
-    let socket = DealerSocket::new(stream);
+async fn main() -> std::io::Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:5555").await?;
+    println!("Server listening on :5555");
 
-    // Send a request
-    socket.send(vec![Bytes::from("Hello, Server!")]).await?;
+    let (stream, _addr) = listener.accept().await?;
+    let mut socket = RepSocket::from_tcp(stream).await?;
 
-    // Receive response
-    let response = socket.recv().await?;
-    println!("Received: {} frames", response.len());
-
+    if let Some(request) = socket.recv().await {
+        println!("Got: {:?}", request);
+        socket.send(vec![Bytes::from("PONG")]).await?;
+    }
     Ok(())
 }
 ```
 
-Or use the prelude for convenience:
+**Client** (`src/bin/req_client.rs`):
 
-```rust
-use monocoque_zmtp::prelude::*;
-use compio::net::TcpStream;
+```rust,no_run
+use monocoque::zmq::ReqSocket;
+use bytes::Bytes;
 
 #[compio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let stream = TcpStream::connect("127.0.0.1:5555").await?;
-    let socket = DealerSocket::new(stream);
-    // ... rest of code
+async fn main() -> std::io::Result<()> {
+    let mut socket = ReqSocket::connect("127.0.0.1:5555").await?;
+
+    socket.send(vec![Bytes::from("PING")]).await?;
+
+    if let Some(reply) = socket.recv().await {
+        println!("Reply: {:?}", reply);  // [b"PONG"]
+    }
+    Ok(())
+}
+```
+
+Run the server first, then the client:
+
+```bash
+cargo run --bin rep_server
+cargo run --bin req_client
+```
+
+---
+
+## Example 2: PUB/SUB
+
+A publisher broadcasts events; subscribers filter by topic prefix.
+
+**Publisher** (`src/bin/publisher.rs`):
+
+```rust,no_run
+use monocoque::zmq::PubSocket;
+use bytes::Bytes;
+use std::time::Duration;
+
+#[compio::main]
+async fn main() -> std::io::Result<()> {
+    let mut socket = PubSocket::bind("127.0.0.1:5556").await?;
+    println!("Publisher bound to :5556");
+
+    // Accept one subscriber before publishing.
+    socket.accept_subscriber().await?;
+
+    for i in 0u32.. {
+        socket.send(vec![
+            Bytes::from("weather.london"),
+            Bytes::from(format!("temp={}", 15 + i % 10)),
+        ]).await?;
+        compio::time::sleep(Duration::from_millis(500)).await;
+    }
+    Ok(())
+}
+```
+
+**Subscriber** (`src/bin/subscriber.rs`):
+
+```rust,no_run
+use monocoque::zmq::SubSocket;
+
+#[compio::main]
+async fn main() -> std::io::Result<()> {
+    let mut socket = SubSocket::connect("127.0.0.1:5556").await?;
+    socket.subscribe(b"weather.london").await?;
+
+    while let Ok(Some(msg)) = socket.recv().await {
+        let topic = std::str::from_utf8(&msg[0]).unwrap_or("?");
+        let data  = std::str::from_utf8(&msg[1]).unwrap_or("?");
+        println!("{}: {}", topic, data);
+    }
     Ok(())
 }
 ```
 
 ---
 
-## Socket Types
+## Socket Types at a Glance
 
-### DEALER
-
-**Use for**: Client-side request-reply with load balancing
-
-```rust
-use monocoque_zmtp::DealerSocket;
-
-let socket = DealerSocket::new(stream);
-socket.send(vec![Bytes::from("request")]).await?;
-let response = socket.recv().await?;
-```
-
-### ROUTER
-
-**Use for**: Server-side routing and identity-based messaging
-
-```rust
-use monocoque_zmtp::RouterSocket;
-
-let socket = RouterSocket::new(stream);
-let message = socket.recv().await?;  // First frame is routing ID
-socket.send(message).await?;          // Route back to sender
-```
-
-### PUB (Publisher)
-
-**Use for**: Broadcasting events to multiple subscribers
-
-```rust
-use monocoque_zmtp::PubSocket;
-
-let socket = PubSocket::new(stream);
-socket.send(vec![
-    Bytes::from("topic.name"),
-    Bytes::from("event data"),
-]).await?;
-```
-
-### SUB (Subscriber)
-
-**Use for**: Receiving filtered events from publishers
-
-```rust
-use monocoque_zmtp::SubSocket;
-
-let socket = SubSocket::new(stream);
-socket.subscribe(Bytes::from("topic.")).await?;
-let event = socket.recv().await?;
-```
-
----
-
-## Architecture Overview
-
-Monocoque uses a simple, direct architecture:
-
-```
-┌─────────────────────────────────┐
-│   monocoque-zmtp (sockets)      │  ← Generic direct stream I/O
-│   DealerSocket, RouterSocket,   │     Each socket owns its stream
-│   PubSocket, SubSocket, etc.    │     Handles all operations inline
-├─────────────────────────────────┤
-│   monocoque-core (utilities)    │  ← Zero-copy allocation
-│   - IoArena, SlabMut, IoBytes   │     Buffer management
-│   - SegmentedBuffer             │     Protocol-agnostic helpers
-│   - Endpoint parsing             │
-│   - TCP/IPC utilities            │
-├─────────────────────────────────┤
-│   compio (io_uring runtime)     │  ← Async I/O
-└─────────────────────────────────┘
-```
-
-**Key Design Principles**:
-
--   **Direct stream I/O**: Each socket directly manages its own `AsyncRead + AsyncWrite` stream
--   **Generic sockets**: `Socket<S = TcpStream>` works with any compatible stream
--   **Zero-copy**: Messages use `Bytes` for refcount-based sharing
--   **Runtime-agnostic**: Works with any async runtime providing streams
+| Socket | Pattern | Typical role |
+|--------|---------|-------------|
+| `ReqSocket` | Request-Reply | Sync client (must alternate send/recv) |
+| `RepSocket` | Request-Reply | Sync server (must alternate recv/send) |
+| `DealerSocket` | Async Request-Reply | Async client with reconnect support |
+| `RouterSocket` | Identity Routing | Server with per-peer routing IDs |
+| `PubSocket` | Broadcast | Publisher (worker-pool, many subscribers) |
+| `SubSocket` | Filtered recv | Subscriber with topic filters |
+| `PushSocket` | Pipeline | Task distributor |
+| `PullSocket` | Pipeline | Task worker |
+| `PairSocket` | Exclusive Pair | One-to-one channel |
 
 ---
 
 ## Running Tests
 
-### Unit Tests
-
 ```bash
-cargo test --all-features
-```
+# Core protocol tests
+cargo test -p monocoque-zmtp
 
-### Integration Tests with libzmq
-
-First, install libzmq:
-
-```bash
-# Ubuntu/Debian
-sudo apt install libzmq3-dev
-
-# macOS
-brew install zeromq
-
-# Arch Linux
-sudo pacman -S zeromq
-```
-
-Then run interop tests:
-
-```bash
-cargo test --package monocoque-zmtp --test interop_pair --features runtime
-cargo test --package monocoque-zmtp --test interop_router --features runtime
-cargo test --package monocoque-zmtp --test interop_pubsub --features runtime
-```
-
----
-
-## Examples
-
-See the `examples/` directory for complete, runnable examples:
-
--   `hello_dealer.rs` - Basic DEALER socket usage
--   `router_worker_pool.rs` - ROUTER load balancing pattern
--   `pubsub_events.rs` - PUB/SUB event distribution
-
-Run an example:
-
-```bash
-cargo run --example hello_dealer --features runtime
-```
-
----
-
-## Performance Tips
-
-1. **Use batching API for maximum throughput**: Achieve 3M+ msg/sec
-
-    ```rust
-    // Queue messages to buffer (no I/O)
-    for msg in batch {
-        socket.send_buffered(msg)?;
-    }
-    // Flush entire batch in one syscall
-    socket.flush().await?;
-    ```
-
-2. **Use multipart messages**: Reduces syscalls for complex data
-3. **Enable release mode**: `cargo build --release`
-4. **Profile with perf**: Monocoque is designed for profiling
-5. **IPC for local communication**: 7-17% faster than TCP
-
----
-
-## Troubleshooting
-
-### "Connection refused"
-
-Make sure the server is listening on the correct port before connecting.
-
-### "Handshake timeout"
-
-Check that both peers are using compatible ZMTP versions (3.1).
-
-### "Test compilation errors"
-
-Ensure the `runtime` feature is enabled:
-
-```bash
-cargo test --features runtime
+# Full workspace
+cargo test --workspace
 ```
 
 ---
 
 ## Next Steps
 
--   Read the [blueprints](blueprints/) for architecture details
--   Check [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) for current status
--   Review [NEXT_STEPS_ANALYSIS.md](NEXT_STEPS_ANALYSIS.md) for roadmap
+- [Architecture Decision Records](ADR.md) — why io_uring, worker pools, and `Bytes`
+- [Performance Tuning Guide](PERFORMANCE_TUNING.md) — buffer sizes, worker counts, TCP options
+- [Security Guide](SECURITY_GUIDE.md) — PLAIN and CURVE authentication
+- [Migration Guide](MIGRATION.md) — coming from `zmq` (rust-zmq) or libzmq
+- API docs: `cargo doc --no-deps --open -p monocoque`
 
 ---
 
-## Support
-
--   **Issues**: File on GitHub repository
--   **Documentation**: Run `cargo doc --open --all-features`
--   **Examples**: See `examples/` directory
-
----
-
-## License
-
-MIT
+*License: MIT OR Apache-2.0*

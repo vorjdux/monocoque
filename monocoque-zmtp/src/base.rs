@@ -24,8 +24,8 @@ use std::fmt;
 use std::io;
 use tracing::{debug, trace};
 
-use crate::codec::{ZmtpDecoder, ZmtpFrame};
-use crate::handshake::perform_handshake_with_timeout;
+use crate::codec::ZmtpDecoder;
+use crate::handshake::perform_handshake_with_options;
 use crate::session::SocketType;
 
 /// Base socket infrastructure shared by all ZMQ socket types.
@@ -51,41 +51,37 @@ where
 {
     /// Underlying stream (TCP or Unix socket) - None when disconnected
     pub(crate) stream: Option<S>,
-    
+
     /// Optional endpoint for automatic reconnection
     pub(crate) endpoint: Option<Endpoint>,
-    
+
     /// Reconnection state tracker (exponential backoff)
     pub(crate) reconnect: Option<ReconnectState>,
-    
+
     /// ZMTP frame decoder
     pub(crate) decoder: ZmtpDecoder,
-    
+
     /// Arena allocator for zero-copy I/O
     pub(crate) arena: IoArena,
-    
+
     /// Segmented read buffer for incoming data
     pub(crate) recv: SegmentedBuffer,
-    
+
     /// Reusable write buffer for outgoing data
     pub(crate) write_buf: BytesMut,
-    
+
     /// Send buffer for message batching
     pub(crate) send_buffer: BytesMut,
-    
+
     /// Socket options (timeouts, limits, identity, buffer sizes)
     pub(crate) options: SocketOptions,
-    
-    /// Socket type for introspection (used internally for reconnection)
-    #[allow(dead_code)]
-    pub(crate) socket_type: SocketType,
-    
+
     /// Last connected/bound endpoint
     pub(crate) last_endpoint: Option<String>,
-    
+
     /// Connection health flag (true if I/O was cancelled mid-operation)
     pub(crate) is_poisoned: bool,
-    
+
     /// Number of messages currently buffered (for HWM enforcement)
     pub(crate) buffered_messages: usize,
 }
@@ -101,11 +97,7 @@ where
     /// state is stored.
     ///
     /// Buffer sizes are taken from `options.read_buffer_size` and `options.write_buffer_size`.
-    pub fn new(
-        stream: S,
-        socket_type: SocketType,
-        options: SocketOptions,
-    ) -> Self {
+    pub fn new(stream: S, _socket_type: SocketType, options: SocketOptions) -> Self {
         let write_capacity = options.write_buffer_size;
         Self {
             stream: Some(stream),
@@ -117,7 +109,6 @@ where
             write_buf: BytesMut::with_capacity(write_capacity),
             send_buffer: BytesMut::with_capacity(write_capacity),
             options,
-            socket_type,
             last_endpoint: None,
             is_poisoned: false,
             buffered_messages: 0,
@@ -132,7 +123,7 @@ where
     /// Buffer sizes are taken from `options.read_buffer_size` and `options.write_buffer_size`.
     pub fn with_endpoint(
         stream: S,
-        socket_type: SocketType,
+        _socket_type: SocketType,
         endpoint: Endpoint,
         options: SocketOptions,
     ) -> Self {
@@ -148,7 +139,6 @@ where
             write_buf: BytesMut::with_capacity(write_capacity),
             send_buffer: BytesMut::with_capacity(write_capacity),
             options,
-            socket_type,
             last_endpoint: Some(endpoint_str),
             is_poisoned: false,
             buffered_messages: 0,
@@ -245,30 +235,18 @@ where
     #[inline]
     pub fn events(&self) -> u32 {
         let mut events = 0u32;
-        
+
         // POLLIN (1): Can receive if connected and buffers available
         if self.is_connected() && !self.is_poisoned {
             events |= 1; // POLLIN
         }
-        
+
         // POLLOUT (2): Can send if connected and HWM not reached
         if self.is_connected() && !self.hwm_reached() && !self.is_poisoned {
             events |= 2; // POLLOUT
         }
-        
-        events
-    }
 
-    /// Get a mutable reference to the stream, ensuring it's connected.
-    ///
-    /// Returns `NotConnected` error if the stream is None.
-    #[inline]
-    // Internal utility method for direct stream access in advanced scenarios
-    #[allow(dead_code)]
-    pub(crate) fn stream_mut(&mut self) -> io::Result<&mut S> {
-        self.stream.as_mut().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
-        })
+        events
     }
 
     /// Read raw bytes from the stream into the recv buffer without decoding.
@@ -336,32 +314,6 @@ where
         Ok(n)
     }
 
-    /// Read a single ZMTP frame from the stream.
-    ///
-    /// Returns:
-    /// - `Ok(Some(frame))` if a complete frame was decoded
-    /// - `Ok(None)` if EOF was reached (connection closed)
-    /// - `Err(e)` on I/O error
-    ///
-    /// On EOF, sets `stream = None` to mark disconnection.
-    // Low-level frame reader utility - may be used for protocol extensions
-    #[allow(dead_code)]
-    pub(crate) async fn read_frame(&mut self) -> io::Result<Option<ZmtpFrame>> {
-        loop {
-            // Try to decode a frame from buffered data
-            if let Some(frame) = self.decoder.decode(&mut self.recv)? {
-                return Ok(Some(frame));
-            }
-
-            // Need more data - read raw bytes
-            let n = self.read_raw().await?;
-            if n == 0 {
-                // EOF
-                return Ok(None);
-            }
-        }
-    }
-
     /// Write buffered data from `send_buffer` to the stream.
     ///
     /// Uses PoisonGuard to ensure cancellation safety. If this method is
@@ -383,9 +335,10 @@ where
         }
 
         // Ensure we have a connected stream
-        let stream = self.stream.as_mut().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
-        })?;
+        let stream = self
+            .stream
+            .as_mut()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "Socket not connected"))?;
 
         trace!("[SocketBase] Flushing {} bytes", self.send_buffer.len());
 
@@ -435,48 +388,6 @@ where
         Ok(())
     }
 
-    /// Write bytes directly to the stream (bypassing send_buffer).
-    ///
-    /// Uses PoisonGuard for cancellation safety. On write failure,
-    /// sets `stream = None` to mark disconnection.
-    // Low-level direct write utility - bypasses send_buffer for special cases
-    #[allow(dead_code)]
-    pub(crate) async fn write_direct(&mut self, data: &[u8]) -> io::Result<()> {
-        // Check health
-        if self.is_poisoned {
-            return Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "Socket poisoned by cancelled I/O",
-            ));
-        }
-
-        // Ensure we have a connected stream
-        let stream = self.stream.as_mut().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
-        })?;
-
-        // Arm poison guard
-        let guard = PoisonGuard::new(&mut self.is_poisoned);
-
-        // Copy to write buffer and send
-        self.write_buf.clear();
-        self.write_buf.extend_from_slice(data);
-        let buf = self.write_buf.split().freeze();
-
-        use compio::buf::BufResult;
-        let BufResult(result, _) = AsyncWrite::write(stream, IoBytes::new(buf)).await;
-
-        // Mark disconnected on error
-        if result.is_err() {
-            self.stream = None;
-        }
-
-        result?;
-
-        guard.disarm();
-        Ok(())
-    }
-
     /// Write the contents of write_buf directly to the stream.
     ///
     /// This is used when the caller has already encoded data into write_buf
@@ -492,9 +403,10 @@ where
         }
 
         // Ensure we have a connected stream
-        let stream = self.stream.as_mut().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
-        })?;
+        let stream = self
+            .stream
+            .as_mut()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "Socket not connected"))?;
 
         // Arm poison guard
         let guard = PoisonGuard::new(&mut self.is_poisoned);
@@ -503,7 +415,7 @@ where
         let buf = self.write_buf.split().freeze();
 
         use compio::buf::BufResult;
-        
+
         // Apply send timeout from options
         let BufResult(result, _) = match self.options.send_timeout {
             None => {
@@ -564,7 +476,11 @@ impl SocketBase<TcpStream> {
             )
         })?;
 
-        // Apply backoff delay if we have reconnection state
+        // Apply backoff delay if we have reconnection state.
+        // Use std::thread::sleep rather than compio::time::sleep: multiple
+        // handshake timeouts (via compio::time::timeout) leave residual timer
+        // state that makes subsequent compio sleeps hang indefinitely.
+        // Blocking sleep is safe here because the socket has no pending I/O.
         if let Some(reconnect) = &mut self.reconnect {
             let delay = reconnect.next_delay();
             debug!(
@@ -572,7 +488,7 @@ impl SocketBase<TcpStream> {
                 reconnect.attempt(),
                 delay
             );
-            compio::time::sleep(delay).await;
+            std::thread::sleep(delay);
         }
 
         // Attempt connection based on endpoint type
@@ -594,11 +510,12 @@ impl SocketBase<TcpStream> {
         };
 
         // Perform handshake
-        perform_handshake_with_timeout(
+        perform_handshake_with_options(
             &mut new_stream,
             socket_type,
             None, // Identity not supported in reconnection yet
             Some(self.options.handshake_timeout),
+            &self.options,
         )
         .await
         .map_err(|e| io::Error::other(format!("Handshake failed during reconnect: {}", e)))?;
