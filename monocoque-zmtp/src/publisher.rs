@@ -48,6 +48,7 @@ use monocoque_core::poison::PoisonGuard;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::io;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use tracing::{debug, error, trace, warn};
@@ -291,7 +292,7 @@ async fn send_message_to_stream(
 /// Uses multiple worker threads to handle subscribers in parallel.
 /// Each worker runs its own compio runtime with io_uring.
 pub struct PubSocket {
-    /// Worker thread channels
+    /// Worker thread channels (bounded by send_hwm for backpressure)
     workers: Vec<Sender<WorkerCommand>>,
     /// Next subscriber ID
     next_id: SubscriberId,
@@ -303,22 +304,34 @@ pub struct PubSocket {
     subscriber_count: usize,
     /// Connection health flag (true if send was cancelled mid-operation)
     is_poisoned: bool,
+    /// Messages dropped due to full worker channels (HWM enforcement)
+    drop_count: Arc<AtomicU64>,
 }
 
 impl PubSocket {
-    /// Create a new PUB socket with default worker count (number of CPU cores)
+    /// Create a new PUB socket with default worker count (number of CPU cores).
     pub fn new() -> Self {
         Self::with_workers(num_cpus::get().max(2))
     }
 
-    /// Create with specific number of worker threads
+    /// Create with a specific number of worker threads and default options.
     pub fn with_workers(worker_count: usize) -> Self {
-        debug!("[PUB] Starting {} worker threads", worker_count);
+        Self::with_workers_opts(worker_count, SocketOptions::default())
+    }
+
+    /// Create with a specific number of worker threads and custom socket options.
+    ///
+    /// Worker channels are bounded by `options.send_hwm`. When a worker's channel
+    /// is full (the worker is slow/blocked), broadcast messages for that worker are
+    /// silently dropped and counted in `drop_count()`.
+    pub fn with_workers_opts(worker_count: usize, options: SocketOptions) -> Self {
+        let hwm = options.send_hwm;
+        debug!("[PUB] Starting {} worker threads (channel HWM={})", worker_count, hwm);
 
         let mut workers = Vec::with_capacity(worker_count);
 
         for i in 0..worker_count {
-            let (tx, rx) = flume::unbounded();
+            let (tx, rx) = flume::bounded(hwm);
             thread::Builder::new()
                 .name(format!("pub-worker-{}", i))
                 .spawn(move || worker_thread(i, rx))
@@ -330,9 +343,10 @@ impl PubSocket {
             workers,
             next_id: 1,
             next_worker: 0,
-            options: SocketOptions::default(),
+            options,
             subscriber_count: 0,
             is_poisoned: false,
+            drop_count: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -422,24 +436,39 @@ impl PubSocket {
         // Wrap message in Arc for zero-copy sharing across workers
         let message = Arc::new(msg);
 
-        // Broadcast to all workers concurrently via async channels
+        // Try to send to each worker. Use try_send (non-blocking) so a slow
+        // worker doesn't stall the broadcast. If the channel is full (HWM
+        // reached), drop the message for that worker and count it.
         for (idx, worker) in self.workers.iter().enumerate() {
-            worker
-                .send_async(WorkerCommand::Broadcast {
-                    message: message.clone(),
-                })
-                .await
-                .map_err(|e| io::Error::other(format!("Worker {} send failed: {}", idx, e)))?;
+            match worker.try_send(WorkerCommand::Broadcast { message: message.clone() }) {
+                Ok(()) => {}
+                Err(flume::TrySendError::Full(_)) => {
+                    self.drop_count.fetch_add(1, Ordering::Relaxed);
+                    debug!("[PUB] Worker {} channel full (HWM), message dropped", idx);
+                }
+                Err(flume::TrySendError::Disconnected(_)) => {
+                    return Err(io::Error::other(format!("Worker {} channel disconnected", idx)));
+                }
+            }
         }
 
         guard.disarm();
         Ok(())
     }
 
-    /// Get subscriber count
+    /// Get subscriber count.
     #[inline]
     pub const fn subscriber_count(&self) -> usize {
         self.subscriber_count
+    }
+
+    /// Number of messages dropped due to full worker channels (HWM backpressure).
+    ///
+    /// Increments when `send()` calls `try_send` on a worker channel that is at
+    /// capacity. Reset by creating a new socket — this counter is never cleared.
+    #[inline]
+    pub fn drop_count(&self) -> u64 {
+        self.drop_count.load(Ordering::Relaxed)
     }
 
     /// Get socket options
