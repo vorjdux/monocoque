@@ -62,8 +62,37 @@ impl PullSocket<TcpStream> {
     /// # }
     /// ```
     pub async fn connect(addr: impl compio::net::ToSocketAddrsAsync) -> io::Result<Self> {
-        let stream = TcpStream::connect(addr).await?;
-        Self::from_tcp(stream).await
+        Ok(Self {
+            inner: InternalPull::connect(addr).await?,
+            monitor: None,
+        })
+    }
+
+    /// Connect with custom options, storing the endpoint for automatic reconnection.
+    pub async fn connect_with_options(
+        addr: impl compio::net::ToSocketAddrsAsync,
+        options: SocketOptions,
+    ) -> io::Result<Self> {
+        Ok(Self {
+            inner: InternalPull::connect_with_options(addr, options).await?,
+            monitor: None,
+        })
+    }
+
+    /// Check if the socket is currently connected.
+    #[inline]
+    pub fn is_connected(&self) -> bool {
+        self.inner.is_connected()
+    }
+
+    /// Try to reconnect to the stored endpoint.
+    pub async fn try_reconnect(&mut self) -> io::Result<()> {
+        self.inner.try_reconnect().await
+    }
+
+    /// Receive with automatic reconnection on EOF or network error.
+    pub async fn recv_with_reconnect(&mut self) -> io::Result<Option<Vec<bytes::Bytes>>> {
+        self.inner.recv_with_reconnect().await
     }
 
     /// Create a PULL socket from a TCP stream.
