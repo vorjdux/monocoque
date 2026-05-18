@@ -104,13 +104,13 @@ async fn communication_loop(addr: &str) -> io::Result<()> {
 
             // Wait for response
             match socket.recv().await {
-                Some(response) => {
+                Ok(Some(response)) => {
                     if let Some(data) = response.first() {
                         info!("Received: {}", String::from_utf8_lossy(data));
                         reconnect_state.reset(); // Reset on successful communication
                     }
                 }
-                None => {
+                Ok(None) | Err(_) => {
                     warn!("Connection closed by server");
                     let delay = reconnect_state.next_delay();
                     warn!("Reconnecting in {:?}", delay);

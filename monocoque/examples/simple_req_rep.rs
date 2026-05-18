@@ -45,7 +45,7 @@ fn main() {
             info!("[REP] Client connected");
 
             // First request-reply cycle
-            if let Some(request) = socket.recv().await {
+            if let Ok(Some(request)) = socket.recv().await {
                 info!("[REP] Received request:");
                 for (i, frame) in request.iter().enumerate() {
                     info!("  Frame {}: {:?}", i, String::from_utf8_lossy(frame));
@@ -89,7 +89,7 @@ fn main() {
         // Receive reply
         info!("[REQ] Waiting for reply");
         let response = socket.recv().await;
-        if let Some(msg) = response {
+        if let Ok(Some(msg)) = response {
             info!("[REQ] Received response:");
             for (i, frame) in msg.iter().enumerate() {
                 info!("  Frame {}: {:?}", i, String::from_utf8_lossy(frame));

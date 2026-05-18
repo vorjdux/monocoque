@@ -69,9 +69,10 @@ fn main() {
             .await
             .expect("Failed to send");
 
-        let response = socket.recv().await.expect("Failed to receive");
+        let response = socket.recv().await.expect("Failed to receive").expect("Connection closed");
         info!("[Monocoque REQ] Received response:");
-        if let Some(msg) = response {
+        {
+            let msg = response;
             for (i, frame) in msg.iter().enumerate() {
                 info!("  Frame {}: {:?}", i, String::from_utf8_lossy(frame));
             }
@@ -84,9 +85,10 @@ fn main() {
             .await
             .expect("Failed to send second request");
 
-        let response = socket.recv().await.expect("Failed to receive second reply");
+        let response = socket.recv().await.expect("Failed to receive second reply").expect("Connection closed");
         info!("[Monocoque REQ] Received second response:");
-        if let Some(msg) = response {
+        {
+            let msg = response;
             for (i, frame) in msg.iter().enumerate() {
                 info!("  Frame {}: {:?}", i, String::from_utf8_lossy(frame));
             }
