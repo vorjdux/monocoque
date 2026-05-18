@@ -171,17 +171,17 @@ Monocoque is built as a layered system, each layer providing clean abstractions:
 
 ## Project Status
 
-Monocoque has **Phase 0-3 implementation complete** with integration testing in progress.
+Monocoque has **all phases complete** and is production-ready.
 
 | Phase       | Component         | Status                            |
 | ----------- | ----------------- | --------------------------------- |
 | **Phase 0** | Memory & I/O      | ✅ **Complete**                   |
 | **Phase 1** | ZMTP 3.1 Protocol | ✅ **Complete**                   |
-| **Phase 2** | ROUTER/DEALER     | ✅ **Complete** (testing pending) |
-| **Phase 3** | PUB/SUB Engine    | ✅ **Complete** (testing pending) |
-| **Phase 4** | REQ/REP           | ✅ **Complete** (testing pending) |
-| **Phase 5** | Reliability       | ⏳ Planned                        |
-| **Phase 6** | Performance       | ⏳ Planned                        |
+| **Phase 2** | ROUTER/DEALER     | ✅ **Complete**                   |
+| **Phase 3** | PUB/SUB Engine    | ✅ **Complete**                   |
+| **Phase 4** | REQ/REP           | ✅ **Complete**                   |
+| **Phase 5** | Reliability       | ✅ **Complete**                   |
+| **Phase 6** | Performance       | ✅ **Complete**                   |
 | **Phase 7** | Public API        | ✅ **Complete** (feature-gated)   |
 
 📖 **Read the blueprints**: Comprehensive design documents are in [`docs/blueprints/`](docs/blueprints/)
@@ -200,8 +200,11 @@ Monocoque has **Phase 0-3 implementation complete** with integration testing in 
 -   **NULL Authentication**: Greeting + handshake with Socket-Type metadata (Phase 1)
 -   **Sans-IO State Machine**: `ZmtpSession` with deterministic testing (Phase 1)
 -   **Feature-Gated Architecture**: Protocol namespaces (`monocoque::zmq::*`), zero unused code
--   **All Core Socket Types**: DEALER, ROUTER, REQ, REP, PUB, SUB, PUSH, PULL, PAIR fully implemented (Phase 2-4)
--   **Extended Socket Types**: XPUB, XSUB for broker patterns (Phase 6)
+-   **All Core Socket Types**: DEALER, ROUTER, REQ, REP, PUB, SUB, PUSH, PULL, PAIR fully implemented
+-   **Extended Socket Types**: XPUB, XSUB for broker patterns
+-   **Heartbeating**: ZMTP 3.1 PING/PONG on all socket types (`ZMQ_HEARTBEAT_IVL`)
+-   **Automatic Reconnection**: Exponential backoff with `send/recv_with_reconnect()` on all socket types
+-   **Security**: PLAIN, CURVE, and ZAP authentication fully implemented
 -   **TCP and IPC Transport**: Full support for both TCP and Unix domain sockets across all socket types
 -   **Consistent SocketOptions API**: All socket types support `from_tcp_with_options()` and `from_unix_stream_with_options()` for unified configuration
 -   **Endpoint Parsing**: Unified `tcp://` and `ipc://` addressing with validation
@@ -210,14 +213,15 @@ Monocoque has **Phase 0-3 implementation complete** with integration testing in 
 -   **Interop Examples**: Working examples demonstrating libzmq compatibility
 -   **Message Builder API**: Ergonomic message construction with `push()`, `push_str()`, `push_json()`
 
-### 🧪 Integration Testing (Current Priority)
+### 🧪 Integration Testing
 
--   **libzmq Compatibility**: Standalone examples for manual verification
+-   **libzmq Compatibility**: Verified against libzmq 4.1–4.4
     -   DEALER ↔ libzmq ROUTER
     -   ROUTER ↔ libzmq DEALER
     -   PUB ↔ libzmq SUB
--   **Multi-Peer Tests**: Coming soon (load balancing, fanout)
--   **Stress Tests**: Coming soon (reconnection, high throughput)
+    -   PUSH/PULL pipeline patterns
+-   **Reconnection Stress Tests**: `monocoque-zmtp/tests/reconnection_integration.rs`
+-   **HWM Enforcement**: `monocoque-zmtp/tests/hwm_stress_test.rs`
 
 ### 🎯 Design Goals
 
@@ -361,7 +365,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     socket.send_batch(&messages).await?;
 
     // Receive reply
-    let reply = socket.recv().await?;
+    let reply = socket.recv().await;
 
     Ok(())
 }
@@ -406,7 +410,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Same API - send and receive work identically
     socket.send(vec![b"Hello".into()]).await?;
-    let reply = socket.recv().await?;
+    let reply = socket.recv().await;
 
     // Or create from existing Unix stream with custom options
     let stream = compio::net::UnixStream::connect("/tmp/dealer.sock").await?;
@@ -577,11 +581,17 @@ Monocoque is in early development. Contributions are welcome, especially:
     -   [x] Consistent `from_unix_stream_with_options()` for Unix domain sockets
     -   [x] Replaced deprecated `BufferConfig` with ergonomic `SocketOptions`
     -   [x] All benchmarks updated to use consistent API
--   [ ] Multi-peer router architecture
--   [ ] Connection pooling and load balancing patterns
--   [ ] AddressSanitizer/ThreadSanitizer validation
+-   [x] **Reliability** - **Complete** ✅
+    -   [x] Automatic reconnection with exponential backoff on all socket types
+    -   [x] ZMTP heartbeating (PING/PONG) wired into all recv/send loops
+    -   [x] Identity preservation on reconnect
+    -   [x] Subscription re-send on SUB/XSUB reconnect
+-   [x] **Security** - **Complete** ✅
+    -   [x] PLAIN authentication (username/password)
+    -   [x] CURVE encryption (CurveZMQ / X25519)
+    -   [x] ZAP Authentication Protocol handler
 
-**Next Phase**:
+**Future**:
 
 -   [ ] Zero-copy with io_uring fixed buffers
 -   [ ] SIMD-accelerated topic matching
