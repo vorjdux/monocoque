@@ -591,11 +591,10 @@ Monocoque is in early development. Contributions are welcome, especially:
     -   [x] CURVE encryption (CurveZMQ / X25519)
     -   [x] ZAP Authentication Protocol handler
 
-**Future**:
+**Stretch Goals** (optional, diminishing returns):
 
--   [ ] Zero-copy with io_uring fixed buffers
--   [ ] SIMD-accelerated topic matching
--   [ ] Target: 15-20μs latency, 3-5M msg/sec throughput
+-   [ ] **io_uring fixed buffers** — pre-register buffer pool with the kernel (`IORING_OP_READ_FIXED`/`WRITE_FIXED`) to eliminate the remaining kernel-boundary copy per read. Requires dropping below `compio` to `io-uring-sys`. Estimated gain: 5–15% latency at already-21μs baseline. ~2–3 weeks.
+-   [ ] **Prefix trie for topic matching** — current matching is a linear scan over `Vec<Subscription>` with slice comparison (already compiler-vectorized). A real trie is only worthwhile at 100+ concurrent subscriptions with deep topic hierarchies (e.g. `trading.fx.pair.EURUSD.bid`). ~2–3 weeks when subscriber counts justify it.
 
 **Long-Term Vision**:
 
