@@ -32,7 +32,7 @@ async fn worker(id: u32) -> std::io::Result<()> {
     let mut socket = DealerSocket::connect("127.0.0.1:5556").await?;
 
     loop {
-        if let Some(mut msg) = socket.recv().await {
+        if let Ok(Some(mut msg)) = socket.recv().await {
             // Skip empty delimiter
             if !msg.is_empty() && msg[0].is_empty() {
                 msg.remove(0);
@@ -77,7 +77,7 @@ async fn client(id: u32, requests: u32) -> std::io::Result<()> {
 
         socket.send(vec![Bytes::from(request)]).await?;
 
-        if let Some(reply) = socket.recv().await {
+        if let Ok(Some(reply)) = socket.recv().await {
             if let Some(data) = reply.first() {
                 info!(
                     "[Client-{}] Received: {}",

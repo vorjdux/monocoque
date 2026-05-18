@@ -595,6 +595,7 @@ Monocoque is in early development. Contributions are welcome, especially:
 
 -   [ ] **io_uring fixed buffers** — pre-register buffer pool with the kernel (`IORING_OP_READ_FIXED`/`WRITE_FIXED`) to eliminate the remaining kernel-boundary copy per read. Requires dropping below `compio` to `io-uring-sys`. Estimated gain: 5–15% latency at already-21μs baseline. ~2–3 weeks.
 -   [ ] **Prefix trie for topic matching** — current matching is a linear scan over `Vec<Subscription>` with slice comparison (already compiler-vectorized). A real trie is only worthwhile at 100+ concurrent subscriptions with deep topic hierarchies (e.g. `trading.fx.pair.EURUSD.bid`). ~2–3 weeks when subscriber counts justify it.
+-   [ ] **Concurrent PUB fanout** — current subscriber fanout in `PubSocket` is sequential with a per-subscriber timeout. For deployments with many subscribers (>100), concurrent sends via spawned tasks would prevent one slow subscriber from delaying others. Not needed until subscriber count warrants it.
 
 **Long-Term Vision**:
 

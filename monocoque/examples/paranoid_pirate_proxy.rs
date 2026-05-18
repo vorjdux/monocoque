@@ -58,7 +58,7 @@ async fn worker(id: u32, crash_after: Option<u32>) -> std::io::Result<()> {
         }
 
         // Process requests
-        if let Some(mut msg) = socket.recv().await {
+        if let Ok(Some(mut msg)) = socket.recv().await {
             // Skip empty delimiter
             if !msg.is_empty() && msg[0].is_empty() {
                 msg.remove(0);
@@ -98,7 +98,7 @@ async fn client(id: u32, requests: u32) -> std::io::Result<()> {
             .send(vec![Bytes::from(format!("Request {}", i))])
             .await?;
 
-        if let Some(reply) = socket.recv().await {
+        if let Ok(Some(reply)) = socket.recv().await {
             if let Some(data) = reply.first() {
                 info!("[Client-{}] 📬 {}", id, String::from_utf8_lossy(data));
             }
