@@ -237,6 +237,11 @@ fn worker_thread(worker_id: usize, rx: Receiver<WorkerCommand>) {
                         subscribers.len()
                     );
 
+                    // Encode once, broadcast N times via O(1) Bytes::clone()
+                    let mut wire_buf = bytes::BytesMut::new();
+                    crate::codec::encode_multipart(&message, &mut wire_buf);
+                    let wire = wire_buf.freeze();
+
                     let mut dead_subs = Vec::new();
                     for sub in subscribers.values_mut() {
                         // Skip non-matching subscribers
@@ -247,7 +252,7 @@ fn worker_thread(worker_id: usize, rx: Receiver<WorkerCommand>) {
                         // Send with 5-second timeout for fault isolation
                         let send_result = compio::time::timeout(
                             std::time::Duration::from_secs(5),
-                            send_message_to_stream(&mut sub.stream, &message),
+                            send_encoded_to_stream(&mut sub.stream, wire.clone()),
                         )
                         .await;
 
@@ -290,26 +295,19 @@ fn worker_thread(worker_id: usize, rx: Receiver<WorkerCommand>) {
     debug!("[Worker {}] Stopped", worker_id);
 }
 
-/// Send a message to a subscriber stream with proper ZMTP framing
-async fn send_message_to_stream(
+/// Write a pre-encoded ZMTP wire frame to a subscriber stream.
+///
+/// Takes ownership of `data` (required by compio's io_uring completion model)
+/// and discards it after the write completes. Callers broadcast via
+/// `Bytes::clone()`, which is an O(1) refcount bump with no data copy.
+async fn send_encoded_to_stream(
     stream: &mut OwnedWriteHalf<TcpStream>,
-    msg: &[Bytes],
+    data: Bytes,
 ) -> io::Result<()> {
-    use bytes::BytesMut;
     use compio::buf::BufResult;
     use compio::io::AsyncWriteExt;
-
-    // Encode message to buffer using proper ZMTP framing
-    let mut write_buf = BytesMut::new();
-    crate::codec::encode_multipart(msg, &mut write_buf);
-
-    // Write the entire message at once
-    let buf = write_buf.freeze();
-    let data = buf.to_vec();
     let BufResult(res, _) = stream.write_all(data).await;
-    res?;
-
-    Ok(())
+    res
 }
 
 /// PUB socket with worker pool for multi-subscriber broadcasting
