@@ -46,10 +46,11 @@ b.extend_from_slice(&[0x03, 0x00]);
 | SUB         | ✅       | ✅        | Phase 3 - Complete    |
 | REQ         | ✅       | ✅        | Phase 4 - Complete    |
 | REP         | ✅       | ✅        | Phase 4 - Complete    |
-| PUSH        | ✅       | 🔄        | Phase 5 - Planned     |
-| PULL        | ✅       | 🔄        | Phase 5 - Planned     |
-| PAIR        | ✅       | 🔄        | Phase 0 - Planned     |
-| PAIR        | ✅       | 🔄        | Phase 0 - Planned     |
+| PUSH        | ✅       | ✅        | Complete              |
+| PULL        | ✅       | ✅        | Complete              |
+| XPUB        | ✅       | ✅        | Complete              |
+| XSUB        | ✅       | ✅        | Complete              |
+| PAIR        | ✅       | ✅        | Complete              |
 
 ### Feature Compatibility
 
@@ -58,18 +59,21 @@ b.extend_from_slice(&[0x03, 0x00]);
 -   ✅ **NULL Security Mechanism** - No authentication (default)
 -   ✅ **ZMTP Framing** - 1-byte and 8-byte length frames
 -   ✅ **Multipart Messages** - MORE flag handling
--   ✅ **Command Frames** - READY command
--   ⏳ **Heartbeating** - ZMTP 3.1 feature (Phase 4)
--   ⏳ **PLAIN Security** - Username/password auth (Phase 6)
--   ⏳ **CURVE Security** - CurveZMQ encryption (Phase 7)
+-   ✅ **Command Frames** - READY, PING, PONG commands
+-   ✅ **Heartbeating** - ZMTP 3.1 PING/PONG (RFC 23)
+-   ✅ **PLAIN Security** - Username/password authentication
+-   ✅ **CURVE Security** - CurveZMQ public-key encryption
+-   ✅ **ZAP Authentication** - ZeroMQ Authentication Protocol
 
 #### Socket Patterns
 
 -   ✅ **Load Balancing** - ROUTER fair-queuing
 -   ✅ **Pub-Sub Filtering** - Topic-based subscriptions
 -   ✅ **Asynchronous I/O** - Non-blocking operations
--   ⏳ **Request-Reply** - REQ/REP envelope (Phase 4)
--   ⏳ **Pipeline** - PUSH/PULL patterns (Phase 5)
+-   ✅ **Request-Reply** - REQ/REP strict state machine with relaxed mode
+-   ✅ **Pipeline** - PUSH/PULL patterns with reconnection support
+-   ✅ **Automatic Reconnection** - Exponential backoff on all socket types
+-   ✅ **Socket Options** - Full `zmq_setsockopt` equivalents via `SocketOptions`
 
 ## Interoperability Testing
 
@@ -83,10 +87,10 @@ sudo apt install libzmq3-dev  # Ubuntu/Debian
 brew install zeromq           # macOS
 
 # Run interoperability tests
-cargo test --package monocoque-zmtp --features runtime --test interop_pair
-cargo test --package monocoque-zmtp --features runtime --test interop_router
-cargo test --package monocoque-zmtp --features runtime --test interop_pubsub
-cargo test --package monocoque-zmtp --features runtime --test interop_load_balance
+cargo test --package monocoque --features zmq --test interop_pair
+cargo test --package monocoque --features zmq --test interop_router
+cargo test --package monocoque --features zmq --test interop_pubsub
+cargo test --package monocoque --features zmq --test interop_load_balance
 ```
 
 ### Test Coverage
@@ -108,9 +112,8 @@ void *dealer = zmq_socket(ctx, ZMQ_DEALER);
 zmq_connect(dealer, "tcp://127.0.0.1:5555");
 
 // Monocoque (Rust async)
-use monocoque_zmtp::DealerSocket;
-let stream = TcpStream::connect("127.0.0.1:5555").await?;
-let socket = DealerSocket::new(stream);
+use monocoque::zmq::DealerSocket;
+let socket = DealerSocket::connect("127.0.0.1:5555").await?;
 ```
 
 ### Protocol Guarantees
@@ -121,20 +124,6 @@ let socket = DealerSocket::new(stream);
 4. **Command Compatibility**: READY command format matches RFC 23/ZMTP
 
 ### Known Limitations
-
-#### Not Yet Implemented
-
--   **Heartbeating (ZMTP 3.1)** - Connections don't send PING/PONG
-    -   Impact: Long-lived connections may not detect half-open states
-    -   Workaround: Application-level keepalives or timeouts
--   **ZAP Authentication** - No PLAIN/CURVE security mechanisms
-
-    -   Impact: Only NULL (no auth) is supported
-    -   Workaround: Use TLS at transport layer
-
--   **Socket Options** - No zmq_setsockopt equivalents yet
-    -   Impact: Fixed buffer sizes, no custom identities
-    -   Workaround: Configure at compile-time in Phase 0
 
 #### Behavioral Differences
 
@@ -169,7 +158,7 @@ let minor = src[11];  // Byte 11: minor version (0 or 1)
 // 3.1 = ZMQ 4.2+
 ```
 
-Currently, Monocoque parses but doesn't act on minor version differences. Future phases will enable ZMTP 3.1 features (heartbeating) when detected.
+Monocoque parses the minor version and supports ZMTP 3.1 features (heartbeating via PING/PONG) when both peers advertise 3.1.
 
 ## References
 
