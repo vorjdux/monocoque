@@ -43,6 +43,8 @@ struct XPubSubscriber {
     id: SubscriberId,
     stream: TcpStream,
     subscriptions: SubscriptionTrie,
+    recv_buf: monocoque_core::buffer::SegmentedBuffer,
+    decoder: crate::codec::ZmtpDecoder,
 }
 
 impl XPubSubscriber {
@@ -187,6 +189,8 @@ impl XPubSocket {
                         id,
                         stream,
                         subscriptions: SubscriptionTrie::new(),
+                        recv_buf: monocoque_core::buffer::SegmentedBuffer::new(),
+                        decoder: crate::codec::ZmtpDecoder::new(),
                     },
                 );
 
@@ -242,7 +246,6 @@ impl XPubSocket {
         // The caller should call accept() separately to handle new connections
 
         // Poll all subscribers for subscription messages
-        // Subscription messages are 1 byte (0x00 or 0x01) + topic prefix
         trace!(
             "[XPUB] Polling {} subscribers for subscription events",
             self.subscribers.len()
@@ -256,24 +259,45 @@ impl XPubSocket {
             match read_result {
                 Ok(BufResult(Ok(n), buf)) if n > 0 => {
                     trace!("[XPUB] Received {} bytes from subscriber {}", n, sub.id);
-                    if let Some(event) = SubscriptionEvent::from_message(&buf[..n]) {
-                        trace!(
-                            "[XPUB] Subscription event from subscriber {}: {:?}",
-                            sub.id,
-                            event
-                        );
+                    sub.recv_buf.push(bytes::Bytes::from(buf[..n].to_vec()));
 
-                        match &event {
-                            SubscriptionEvent::Subscribe(prefix) => {
-                                sub.subscriptions.subscribe(prefix.clone());
-                            }
-                            SubscriptionEvent::Unsubscribe(prefix) => {
-                                sub.subscriptions.unsubscribe(prefix);
-                            }
-                        }
+                    // Drain all complete ZMTP frames from the buffer
+                    loop {
+                        match sub.decoder.decode(&mut sub.recv_buf) {
+                            Ok(Some(frame)) => {
+                                if frame.is_command() {
+                                    if crate::base::is_ping_payload(&frame.payload) {
+                                        use compio::buf::BufResult;
+                                        use compio::io::AsyncWriteExt;
+                                        let pong = crate::base::build_pong_frame();
+                                        let BufResult(result, _) = sub.stream.write_all(pong.to_vec()).await;
+                                        let _ = result; // best-effort; disconnect handled elsewhere
+                                    }
+                                    continue;
+                                }
+                                if let Some(event) = SubscriptionEvent::from_message(&frame.payload) {
+                                    trace!(
+                                        "[XPUB] Subscription event from subscriber {}: {:?}",
+                                        sub.id,
+                                        event
+                                    );
 
-                        if self.options.xpub_verbose {
-                            return Ok(Some(event));
+                                    match &event {
+                                        SubscriptionEvent::Subscribe(prefix) => {
+                                            sub.subscriptions.subscribe(prefix.clone());
+                                        }
+                                        SubscriptionEvent::Unsubscribe(prefix) => {
+                                            sub.subscriptions.unsubscribe(prefix);
+                                        }
+                                    }
+
+                                    if self.options.xpub_verbose {
+                                        self.pending_events.push(event);
+                                    }
+                                }
+                            }
+                            Ok(None) => break,
+                            Err(_) => break,
                         }
                     }
                 }
@@ -287,6 +311,11 @@ impl XPubSocket {
                     // Timeout — no data available from this subscriber
                 }
             }
+        }
+
+        // Return any events collected from this poll round
+        if !self.pending_events.is_empty() {
+            return Ok(Some(self.pending_events.remove(0)));
         }
 
         Ok(None)

@@ -200,7 +200,7 @@ async fn test_xsub_subscription_tracking() {
 
     // In a real scenario, this would connect to a PUB socket
     // For now, test basic subscription tracking without full connection
-    let result = XSubSocket::connect(&addr.to_string()).await;
+    let _result = XSubSocket::connect(&addr.to_string()).await;
 
     // May not connect successfully without a real publisher
     // The important part is that the API exists

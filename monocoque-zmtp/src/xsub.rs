@@ -190,29 +190,31 @@ where
     /// # }
     /// ```
     pub async fn send_subscription_event(&mut self, event: SubscriptionEvent) -> io::Result<()> {
+        use bytes::BytesMut;
         use compio::buf::BufResult;
-        use compio::io::AsyncWrite;
-        use monocoque_core::alloc::IoBytes;
+        use compio::io::AsyncWriteExt;
 
-        let msg = event.to_message();
+        let raw = event.to_message();
         trace!(
             "[XSUB] Sending subscription event ({} bytes): {:?}",
-            msg.len(),
-            msg
+            raw.len(),
+            raw
         );
+
+        let mut wire = BytesMut::new();
+        crate::codec::encode_multipart(&[raw], &mut wire);
+        let wire = wire.freeze();
 
         let stream =
             self.base.stream.as_mut().ok_or_else(|| {
                 io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
             })?;
 
-        let BufResult(result, _) = AsyncWrite::write(stream, IoBytes::new(msg)).await;
+        let data = wire.to_vec();
+        let BufResult(result, _) = stream.write_all(data).await;
         result?;
 
-        // Flush to ensure message is sent immediately
-        stream.flush().await?;
-
-        trace!("[XSUB] Subscription event sent and flushed successfully");
+        trace!("[XSUB] Subscription event sent successfully");
         Ok(())
     }
 
@@ -323,7 +325,7 @@ where
 }
 
 impl XSubSocket<TcpStream> {
-    /// Connect to a publisher.
+    /// Connect to a publisher, storing the endpoint for automatic reconnection.
     ///
     /// # Examples
     ///
@@ -335,14 +337,116 @@ impl XSubSocket<TcpStream> {
     /// # }
     /// ```
     pub async fn connect(addr: &str) -> io::Result<Self> {
-        let stream = TcpStream::connect(addr).await?;
-        Self::new(stream).await
+        Self::connect_with_options(addr, SocketOptions::default()).await
     }
 
-    /// Connect with custom socket options.
+    /// Connect with custom socket options, storing the endpoint for automatic reconnection.
     pub async fn connect_with_options(addr: &str, options: SocketOptions) -> io::Result<Self> {
         let stream = TcpStream::connect(addr).await?;
-        Self::with_options(stream, options).await
+        let peer_addr = stream.peer_addr()?;
+
+        let mut stream = stream;
+        let handshake_result = crate::handshake::perform_handshake_with_options(
+            &mut stream,
+            crate::session::SocketType::Xsub,
+            None,
+            Some(options.handshake_timeout),
+            &options,
+        )
+        .await
+        .map_err(|e| io::Error::other(format!("Handshake failed: {}", e)))?;
+
+        debug!(
+            peer_identity = ?handshake_result.peer_identity,
+            peer_socket_type = ?handshake_result.peer_socket_type,
+            "[XSUB] Connected to {} (endpoint stored for reconnection)",
+            peer_addr
+        );
+
+        let endpoint = monocoque_core::endpoint::Endpoint::Tcp(peer_addr);
+        Ok(Self {
+            base: crate::base::SocketBase::with_endpoint(
+                stream,
+                crate::session::SocketType::Xsub,
+                endpoint,
+                options,
+            ),
+            subscriptions: SubscriptionTrie::new(),
+        })
+    }
+
+    /// Check if the socket is currently connected.
+    #[inline]
+    pub fn is_connected(&self) -> bool {
+        self.base.is_connected()
+    }
+
+    /// Try to reconnect to the stored endpoint, re-sending all active subscriptions.
+    pub async fn try_reconnect(&mut self) -> io::Result<()> {
+        self.base.try_reconnect(crate::session::SocketType::Xsub).await?;
+        // Re-send all subscriptions to the fresh connection
+        let prefixes: Vec<bytes::Bytes> = self.subscriptions
+            .subscriptions()
+            .iter()
+            .map(|s| s.prefix.clone())
+            .collect();
+        for prefix in prefixes {
+            self.send_subscription_event(
+                monocoque_core::subscription::SubscriptionEvent::Subscribe(prefix),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Receive a message with automatic reconnection on EOF or network error.
+    ///
+    /// Respects `max_reconnect_attempts` — returns `NotConnected` when exhausted.
+    pub async fn recv_with_reconnect(&mut self) -> io::Result<Option<Vec<bytes::Bytes>>> {
+        let max = self.base.options.max_reconnect_attempts;
+        let mut attempts = 0u32;
+
+        loop {
+            if self.base.stream.is_none() {
+                if let Some(limit) = max {
+                    if attempts >= limit {
+                        return Err(io::Error::new(
+                            io::ErrorKind::NotConnected,
+                            format!("Max {} reconnection attempts exceeded", limit),
+                        ));
+                    }
+                }
+                attempts += 1;
+                trace!(
+                    "[XSUB] Stream disconnected, reconnecting (attempt {})",
+                    attempts
+                );
+                self.try_reconnect().await?;
+            }
+
+            match self.recv().await {
+                Ok(Some(msg)) => return Ok(Some(msg)),
+                Ok(None) => {
+                    debug!("[XSUB] EOF on recv, will reconnect");
+                }
+                Err(e) => {
+                    if self.base.stream.is_none()
+                        || matches!(
+                            e.kind(),
+                            io::ErrorKind::ConnectionReset
+                                | io::ErrorKind::ConnectionAborted
+                                | io::ErrorKind::BrokenPipe
+                                | io::ErrorKind::UnexpectedEof
+                        )
+                    {
+                        debug!("[XSUB] Connection error on recv ({}), will reconnect", e);
+                        self.base.stream = None;
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
+        }
     }
 }
 
