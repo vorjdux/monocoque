@@ -30,6 +30,19 @@
 
 use bytes::Bytes;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Monotonic counter used to generate unique ZAP request IDs.
+///
+/// Each call to `ZapRequest::new_with_unique_id` increments this counter so
+/// that every request sent to the ZAP handler has a distinct ID, preventing
+/// response correlation mistakes when multiple requests are in-flight.
+static ZAP_REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+/// Generate the next unique ZAP request ID as a decimal string.
+pub fn next_request_id() -> String {
+    format!("{}", ZAP_REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed))
+}
 
 /// ZAP version constant
 pub const ZAP_VERSION: &str = "1.0";
@@ -125,7 +138,10 @@ pub struct ZapRequest {
 }
 
 impl ZapRequest {
-    /// Create a new ZAP request
+    /// Create a new ZAP request with a caller-supplied request ID.
+    ///
+    /// Prefer [`ZapRequest::new_with_unique_id`] in production code to ensure
+    /// that every request has a distinct, monotonically increasing ID.
     pub fn new(
         request_id: impl Into<String>,
         domain: impl Into<String>,
@@ -143,6 +159,30 @@ impl ZapRequest {
             mechanism,
             credentials,
         }
+    }
+
+    /// Create a new ZAP request with an automatically generated unique request ID.
+    ///
+    /// The request ID is produced by a process-wide `AtomicU64` counter that
+    /// starts at 1 and increments on every call.  This guarantees uniqueness
+    /// within a process and makes it straightforward to correlate responses
+    /// to their originating requests even when several ZAP round-trips are
+    /// concurrent.
+    pub fn new_with_unique_id(
+        domain: impl Into<String>,
+        address: impl Into<String>,
+        identity: Bytes,
+        mechanism: ZapMechanism,
+        credentials: Vec<Bytes>,
+    ) -> Self {
+        Self::new(
+            next_request_id(),
+            domain,
+            address,
+            identity,
+            mechanism,
+            credentials,
+        )
     }
 
     /// Encode request as multipart message
