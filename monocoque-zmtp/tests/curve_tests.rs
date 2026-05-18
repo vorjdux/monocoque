@@ -57,7 +57,7 @@ fn test_curve_keypair_from_bytes() {
     let original = CurveKeyPair::generate();
     let secret_bytes = *original.public.as_bytes(); // Placeholder - should be secret
 
-    let recreated_secret = CurveSecretKey::from_bytes(secret_bytes);
+    let _recreated_secret = CurveSecretKey::from_bytes(secret_bytes);
     let recreated_public = CurvePublicKey::from_bytes(secret_bytes);
 
     // Verify reconstruction works
@@ -124,7 +124,7 @@ fn test_curve_client_encryption() {
     let client_keypair = CurveKeyPair::generate();
     let server_keypair = CurveKeyPair::generate();
 
-    let mut client = CurveClient::new(client_keypair, server_keypair.public);
+    let _client = CurveClient::new(client_keypair, server_keypair.public);
 
     // Before handshake, message box should be None
     // (We can't test encrypt_message without completing handshake)

@@ -251,8 +251,6 @@ impl<S: Socket + Unpin> Sink<Vec<Bytes>> for SocketStreamSink<S> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // Note: Full integration tests would require actual sockets
     // These are placeholder tests for the adapter structure
 
