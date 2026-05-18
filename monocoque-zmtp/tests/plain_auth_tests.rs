@@ -2,7 +2,7 @@
 
 use bytes::Bytes;
 use monocoque_zmtp::security::plain::{PlainAuthHandler, StaticPlainHandler};
-use monocoque_zmtp::security::zap::{ZapMechanism, ZapRequest, ZapStatus};
+use monocoque_zmtp::security::zap::{ZapMechanism, ZapRequest};
 
 #[compio::test]
 async fn test_static_plain_handler_valid_credentials() {
@@ -103,7 +103,7 @@ fn test_plain_zap_request_encode_decode() {
 
 #[test]
 fn test_plain_empty_credentials() {
-    let mut handler = StaticPlainHandler::new();
+    let handler = StaticPlainHandler::new();
 
     // Don't add any users
     let result = futures::executor::block_on(handler.authenticate(

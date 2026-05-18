@@ -113,7 +113,7 @@ fn test_dealer_send_buffered_hwm_returns_would_block() {
                 let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
                 addr_tx.send(listener.local_addr().unwrap()).unwrap();
                 let (stream, _) = listener.accept().await.unwrap();
-                let mut router = monocoque_zmtp::router::RouterSocket::from_tcp(stream)
+                let router = monocoque_zmtp::router::RouterSocket::from_tcp(stream)
                     .await
                     .unwrap();
                 // Keep alive while client tests HWM.
