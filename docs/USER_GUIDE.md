@@ -3,7 +3,7 @@
 **Complete guide to building ZeroMQ applications with monocoque**
 
 **Version**: 0.1.0  
-**Last Updated**: January 25, 2026
+**Last Updated**: May 2026
 
 ---
 
@@ -39,17 +39,17 @@ compio = "0.12"
 
 **Server** (REP socket):
 ```rust
-use monocoque_zmtp::RepSocket;
+use monocoque::zmq::RepSocket;
 use bytes::Bytes;
 
 #[compio::main]
 async fn main() -> std::io::Result<()> {
-    // Bind and listen for requests
-    let mut server = RepSocket::from_tcp("tcp://127.0.0.1:5555").await?;
+    // Bind and wait for the first client connection
+    let (_listener, mut server) = RepSocket::bind("127.0.0.1:5555").await?;
     
     loop {
         // Receive request
-        let request = server.recv().await?.expect("Connection closed");
+        let request = server.recv().await.expect("Connection closed");
         println!("Received: {:?}", request);
         
         // Send reply
@@ -61,20 +61,20 @@ async fn main() -> std::io::Result<()> {
 
 **Client** (REQ socket):
 ```rust
-use monocoque_zmtp::ReqSocket;
+use monocoque::zmq::ReqSocket;
 use bytes::Bytes;
 
 #[compio::main]
 async fn main() -> std::io::Result<()> {
     // Connect to server
-    let mut client = ReqSocket::from_tcp("tcp://127.0.0.1:5555").await?;
+    let mut client = ReqSocket::connect("127.0.0.1:5555").await?;
     
     // Send request
     let request = vec![Bytes::from("Hello")];
     client.send(request).await?;
     
     // Receive reply
-    let reply = client.recv().await?.expect("No reply");
+    let reply = client.recv().await.expect("No reply");
     println!("Reply: {:?}", reply);
     
     Ok(())
@@ -132,17 +132,16 @@ let msg = vec![
 Configure socket behavior with `SocketOptions`:
 
 ```rust
-use monocoque_core::options::SocketOptions;
+use monocoque::zmq::{DealerSocket, SocketOptions};
 use std::time::Duration;
 
 let options = SocketOptions::new()
     .with_recv_timeout(Duration::from_secs(5))
     .with_send_timeout(Duration::from_secs(5))
     .with_recv_hwm(1000)
-    .with_send_hwm(1000)
-    .with_immediate(true);
+    .with_send_hwm(1000);
 
-let socket = DealerSocket::with_options(options);
+let socket = DealerSocket::connect_with_options("127.0.0.1:5555", options).await?;
 ```
 
 #### Common Options
@@ -173,13 +172,13 @@ let socket = DealerSocket::with_options(options);
 **Example:**
 ```rust
 // Client
-let mut client = ReqSocket::from_tcp("tcp://server:5555").await?;
+let mut client = ReqSocket::connect("127.0.0.1:5555").await?;
 client.send(vec![Bytes::from("ping")]).await?;
-let response = client.recv().await?;
+let response = client.recv().await;
 
 // Server
-let mut server = RepSocket::from_tcp("tcp://*:5555").await?;
-let request = server.recv().await?;
+let (_listener, mut server) = RepSocket::bind("127.0.0.1:5555").await?;
+let request = server.recv().await;
 server.send(vec![Bytes::from("pong")]).await?;
 ```
 
@@ -193,15 +192,15 @@ server.send(vec![Bytes::from("pong")]).await?;
 **Example:**
 ```rust
 // Client (DEALER)
-let mut client = DealerSocket::from_tcp("tcp://server:5555").await?;
+let mut client = DealerSocket::connect("127.0.0.1:5555").await?;
 for i in 0..10 {
     client.send(vec![Bytes::from(format!("Request {}", i))]).await?;
 }
 
 // Server (ROUTER)
-let mut server = RouterSocket::from_tcp("tcp://*:5555").await?;
+let (_listener, mut server) = RouterSocket::bind("127.0.0.1:5555").await?;
 loop {
-    let msg = server.recv().await?;
+    let msg = server.recv().await.expect("connection closed");
     // msg[0] = client identity
     // msg[1] = empty delimiter
     // msg[2..] = request frames
@@ -227,20 +226,20 @@ loop {
 **Example:**
 ```rust
 // Publisher
-let mut publisher = PubSocket::from_tcp("tcp://*:5556").await?;
+let mut publisher = PubSocket::bind("127.0.0.1:5556").await?;
 loop {
     let event = vec![
         Bytes::from("weather"),              // Topic
         Bytes::from("temperature: 72°F"),    // Data
     ];
     publisher.send(event).await?;
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    compio::time::sleep(Duration::from_secs(1)).await;
 }
 
 // Subscriber
-let mut subscriber = SubSocket::from_tcp("tcp://server:5556").await?;
+let mut subscriber = SubSocket::connect("127.0.0.1:5556").await?;
 subscriber.subscribe(b"weather").await?;
-while let Some(msg) = subscriber.recv().await? {
+while let Ok(Some(msg)) = subscriber.recv().await {
     println!("Weather update: {:?}", msg);
 }
 ```
@@ -254,11 +253,13 @@ while let Some(msg) = subscriber.recv().await? {
 
 **Example:**
 ```rust
-// Broker (proxy pattern)
-let mut frontend = XSubSocket::from_tcp("tcp://*:5559").await?;
-let mut backend = XPubSocket::from_tcp("tcp://*:5560").await?;
+use monocoque::zmq::{XSubSocket, XPubSocket, proxy};
 
-monocoque_zmtp::proxy::proxy(&mut frontend, &mut backend, None).await?;
+// Broker (proxy pattern): publishers connect to XSUB, subscribers connect to XPUB
+let mut frontend = XSubSocket::connect("127.0.0.1:5559").await?;
+let mut backend = XPubSocket::bind("127.0.0.1:5560").await?;
+
+proxy::proxy(&mut frontend, &mut backend, Option::<&mut XSubSocket>::None).await?;
 ```
 
 ### 3. Pipeline Pattern
@@ -272,26 +273,27 @@ monocoque_zmtp::proxy::proxy(&mut frontend, &mut backend, None).await?;
 
 **Example:**
 ```rust
-// Ventilator (task producer)
-let mut ventilator = PushSocket::from_tcp("tcp://*:5557").await?;
+// Ventilator (task producer) — binds, workers connect to it
+let (_listener, mut ventilator) = PushSocket::bind("127.0.0.1:5557").await?;
 for i in 0..100 {
     ventilator.send(vec![Bytes::from(format!("Task {}", i))]).await?;
 }
 
-// Worker
-let mut receiver = PullSocket::from_tcp("tcp://ventilator:5557").await?;
-let mut sender = PushSocket::from_tcp("tcp://sink:5558").await?;
-while let Some(task) = receiver.recv().await? {
+// Worker — connects to ventilator and sink
+let mut receiver = PullSocket::connect("127.0.0.1:5557").await?;
+let mut sender = PushSocket::connect("127.0.0.1:5558").await?;
+while let Ok(Some(task)) = receiver.recv().await {
     // Process task
     let result = process(task);
     sender.send(result).await?;
 }
 
-// Sink (result collector)
-let mut sink = PullSocket::from_tcp("tcp://*:5558").await?;
+// Sink (result collector) — binds, workers connect to it
+let (_listener, mut sink) = PullSocket::bind("127.0.0.1:5558").await?;
 for _ in 0..100 {
-    let result = sink.recv().await?;
-    println!("Result: {:?}", result);
+    if let Ok(Some(result)) = sink.recv().await {
+        println!("Result: {:?}", result);
+    }
 }
 ```
 
@@ -306,16 +308,16 @@ for _ in 0..100 {
 Username/password authentication:
 
 ```rust
-use monocoque_core::options::SocketOptions;
+use monocoque::zmq::{RepSocket, ReqSocket, SocketOptions};
 
-// Server
+// Server — enable PLAIN server mode, then bind
 let options = SocketOptions::new().with_plain_server(true);
-let server = RepSocket::with_options(options);
+let (_listener, mut server) = RepSocket::bind_with_options("127.0.0.1:5555", options).await?;
 
-// Client
+// Client — attach credentials, then connect
 let options = SocketOptions::new()
     .with_plain_credentials("admin", "secret123");
-let client = ReqSocket::with_options(options);
+let mut client = ReqSocket::connect_with_options("127.0.0.1:5555", options).await?;
 ```
 
 #### CURVE Encryption
@@ -375,23 +377,23 @@ println!("Recv timeout: {:?}", options.recv_timeout);
 Forward messages between socket pairs:
 
 ```rust
-use monocoque_zmtp::proxy::proxy;
+use monocoque::zmq::{proxy, DealerSocket, RouterSocket};
 
-let mut frontend = RouterSocket::from_tcp("tcp://*:5559").await?;
-let mut backend = DealerSocket::from_tcp("tcp://*:5560").await?;
+let (_listener, mut frontend) = RouterSocket::bind("127.0.0.1:5559").await?;
+let (_listener2, mut backend) = DealerSocket::bind("127.0.0.1:5560").await?;
 
 // Bidirectional forwarding
-proxy(&mut frontend, &mut backend, None).await?;
+proxy::proxy(&mut frontend, &mut backend, Option::<&mut RouterSocket>::None).await?;
 ```
 
 Steerable proxy with control socket:
 
 ```rust
-use monocoque_zmtp::proxy::proxy_steerable;
+use monocoque::zmq::{proxy, PairSocket};
 
-let mut control = PairSocket::from_tcp("tcp://127.0.0.1:5561").await?;
+let mut control = PairSocket::connect("127.0.0.1:5561").await?;
 
-proxy_steerable(&mut frontend, &mut backend, None, &mut control).await?;
+proxy::proxy_steerable(&mut frontend, &mut backend, Option::<&mut RouterSocket>::None, &mut control).await?;
 
 // From another thread:
 // Send b"PAUSE", b"RESUME", b"TERMINATE", or b"STATISTICS"
@@ -407,7 +409,7 @@ Always handle potential errors:
 
 ```rust
 // Good: Handle connection failures
-match DealerSocket::from_tcp("tcp://server:5555").await {
+match DealerSocket::connect("127.0.0.1:5555").await {
     Ok(mut socket) => {
         // Use socket
     }
@@ -420,12 +422,11 @@ match DealerSocket::from_tcp("tcp://server:5555").await {
 // Good: Handle recv timeouts
 let options = SocketOptions::new()
     .with_recv_timeout(Duration::from_secs(5));
-let mut socket = ReqSocket::with_options(options);
+let mut socket = ReqSocket::connect_with_options("127.0.0.1:5555", options).await?;
 
 match socket.recv().await {
-    Ok(Some(msg)) => println!("Received: {:?}", msg),
-    Ok(None) => println!("Timeout"),
-    Err(e) => eprintln!("Error: {}", e),
+    Some(msg) => println!("Received: {:?}", msg),
+    None => println!("Connection closed or timed out"),
 }
 ```
 
@@ -435,7 +436,7 @@ Use RAII for automatic cleanup:
 
 ```rust
 {
-    let socket = DealerSocket::from_tcp("tcp://server:5555").await?;
+    let socket = DealerSocket::connect("127.0.0.1:5555").await?;
     // Use socket
 } // Socket automatically closed here
 ```
@@ -449,18 +450,22 @@ let options = SocketOptions::new()
 
 ### 3. Message Construction
 
-Use the message builder for clarity:
+Use `Vec<Bytes>` directly for simple messages, or the builder for multi-frame envelopes:
 
 ```rust
-use monocoque_core::message_builder::Message;
+use bytes::Bytes;
 
-let msg = Message::new()
-    .push_str("topic")
-    .push_empty()        // Delimiter
-    .push_str("payload")
-    .into_frames();
-
+// Direct construction (most common)
+let msg = vec![Bytes::from("topic"), Bytes::from("payload")];
 socket.send(msg).await?;
+
+// ROUTER envelope pattern (identity + delimiter + payload)
+let reply = vec![
+    identity.clone(),   // Routing identity
+    Bytes::new(),       // Empty delimiter
+    Bytes::from("OK"),  // Payload
+];
+socket.send(reply).await?;
 ```
 
 ### 4. High Water Marks
@@ -497,15 +502,14 @@ Adjust for your message sizes:
 
 ```rust
 let options = SocketOptions::new()
-    .with_read_buffer_size(16 * 1024)   // 16KB read buffer
-    .with_write_buffer_size(16 * 1024); // 16KB write buffer
+    .with_buffer_sizes(16 * 1024, 16 * 1024); // 16KB read + write buffers
 ```
 
 Presets for common cases:
 
 ```rust
-let options = SocketOptions::small();  // 4KB buffers
-let options = SocketOptions::large();  // 16KB buffers
+let options = SocketOptions::small();  // 4KB buffers (low latency REQ/REP)
+let options = SocketOptions::large();  // 16KB buffers (high throughput DEALER/ROUTER)
 ```
 
 ### Conflation (Latest Value Cache)
