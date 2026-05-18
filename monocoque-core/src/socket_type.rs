@@ -44,7 +44,10 @@ pub enum SocketType {
     /// XSUB socket for extended subscriber with dynamic subscriptions
     XSub = 10,
 
-    /// STREAM socket for raw TCP connections (not yet implemented)
+    /// STREAM socket for raw TCP connections.
+    ///
+    /// Enables bridging between ZMTP peers and plain TCP connections, with per-peer
+    /// routing IDs on every message.
     Stream = 11,
 }
 
