@@ -275,7 +275,7 @@ where
         let slab = self.arena.alloc_mut(self.options.read_buffer_size);
 
         // Get stream reference only for I/O
-        let stream = self.stream.as_mut().unwrap(); // Safe: checked above
+        let stream = self.stream.as_mut().expect("BUG: stream must be Some — checked is_none() above");
 
         // Apply recv timeout
         let BufResult(result, slab) = match self.options.recv_timeout {
