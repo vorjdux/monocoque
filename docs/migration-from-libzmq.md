@@ -2,6 +2,11 @@
 
 This guide maps libzmq C API concepts to their monocoque equivalents.
 
+> **API layers**: monocoque exposes two levels. The high-level `monocoque::zmq` module
+> (feature `zmq`) provides ergonomic `bind`/`connect` constructors and uniform `recv`/`send`.
+> The lower-level `monocoque_zmtp` crate exposes individual socket structs that require
+> manual `TcpListener` management. Examples below use the high-level API.
+
 ---
 
 ## Socket creation
@@ -39,8 +44,8 @@ This guide maps libzmq C API concepts to their monocoque equivalents.
 
 ## Socket options (`zmq_setsockopt`)
 
-| libzmq constant | monocoque `SocketOptions` field / method |
-|-----------------|------------------------------------------|
+| libzmq constant | monocoque `SocketOptions` method |
+|-----------------|----------------------------------|
 | `ZMQ_RCVTIMEO` | `.with_recv_timeout(Duration::…)` |
 | `ZMQ_SNDTIMEO` | `.with_send_timeout(Duration::…)` |
 | `ZMQ_LINGER` | `.with_linger(Some(Duration::…))` |
@@ -50,8 +55,8 @@ This guide maps libzmq C API concepts to their monocoque equivalents.
 | `ZMQ_ROUTER_MANDATORY` | `.with_router_mandatory(true)` |
 | `ZMQ_ROUTER_HANDOVER` | `.with_router_handover(true)` |
 | `ZMQ_PROBE_ROUTER` | `.with_probe_router(true)` |
-| `ZMQ_SUBSCRIBE` | `.with_subscription(prefix)` |
-| `ZMQ_UNSUBSCRIBE` | `.with_unsubscription(prefix)` |
+| `ZMQ_SUBSCRIBE` | `.with_subscribe(prefix)` |
+| `ZMQ_UNSUBSCRIBE` | `.with_unsubscribe(prefix)` |
 | `ZMQ_XPUB_VERBOSE` | `.with_xpub_verbose(true)` |
 | `ZMQ_XPUB_MANUAL` | `.with_xpub_manual(true)` |
 | `ZMQ_XPUB_WELCOME_MSG` | `.with_xpub_welcome_msg(bytes)` |
@@ -70,15 +75,17 @@ This guide maps libzmq C API concepts to their monocoque equivalents.
 | `ZMQ_TCP_KEEPALIVE` | `.tcp_keepalive` field |
 | `ZMQ_IPV6` | `.ipv6` field |
 | `ZMQ_PLAIN_SERVER` | `.with_plain_server(true)` |
-| `ZMQ_PLAIN_USERNAME` | `.with_plain_username("user")` |
-| `ZMQ_PLAIN_PASSWORD` | `.with_plain_password("pass")` |
+| `ZMQ_PLAIN_USERNAME` + `ZMQ_PLAIN_PASSWORD` | `.with_plain_credentials("user", "pass")` |
 | `ZMQ_CURVE_SERVER` | `.with_curve_server(true)` |
-| `ZMQ_CURVE_PUBLICKEY` | `.with_curve_publickey([u8; 32])` |
-| `ZMQ_CURVE_SECRETKEY` | `.with_curve_secretkey([u8; 32])` |
-| `ZMQ_CURVE_SERVERKEY` | `.with_curve_serverkey([u8; 32])` |
+| `ZMQ_CURVE_PUBLICKEY` + `ZMQ_CURVE_SECRETKEY` | `.with_curve_keypair(pub_bytes, sec_bytes)` |
+| `ZMQ_CURVE_SERVERKEY` | `.with_curve_serverkey(server_pub_bytes)` |
 | `ZMQ_ZAP_DOMAIN` | `.with_zap_domain("domain")` |
 | `ZMQ_ROUTER_RAW` | `.with_router_raw(true)` |
 | `ZMQ_STREAM_NOTIFY` | `.with_stream_notify(true/false)` |
+
+> **Note on PLAIN/CURVE options**: Unlike libzmq which sets username and password
+> as separate `zmq_setsockopt` calls, monocoque combines them: `.with_plain_credentials(u, p)`
+> and `.with_curve_keypair(pub, sec)`. This prevents partial/invalid configuration.
 
 ---
 
@@ -88,8 +95,11 @@ This guide maps libzmq C API concepts to their monocoque equivalents.
 |--------|-----------|
 | `zmq_send(sock, data, len, 0)` | `socket.send(vec![Bytes::from(data)]).await?` |
 | `zmq_send(sock, part, len, ZMQ_SNDMORE)` | Include multiple frames in the Vec |
-| `zmq_recv(sock, buf, len, 0)` | `let frames = socket.recv().await?` |
+| `zmq_recv(sock, buf, len, 0)` | `let frames = socket.recv().await` |
 | `zmq_msg_send` / `zmq_msg_recv` | Same as above — monocoque always uses `Vec<Bytes>` |
+
+> **`recv()` return type**: High-level sockets return `Option<Vec<Bytes>>` (None on disconnect)
+> or `io::Result<Option<Vec<Bytes>>>`. Use pattern matching rather than `?` directly.
 
 ---
 
@@ -106,8 +116,8 @@ use Rust async primitives instead:
 use futures::future;
 
 let result = future::select(
-    socket_a.recv(),
-    socket_b.recv(),
+    Box::pin(socket_a.recv()),
+    Box::pin(socket_b.recv()),
 ).await;
 
 match result {
@@ -162,27 +172,37 @@ per-thread runtime — there is no global context.
 
 ### Request-Reply
 
+These examples use the high-level `monocoque::zmq` API (feature `zmq`).
+
 ```rust
+use monocoque::zmq::{ReqSocket, RepSocket};
+use bytes::Bytes;
+
 // REQ side
 let mut req = ReqSocket::connect("tcp://127.0.0.1:5555").await?;
 req.send(vec![Bytes::from("Hello")]).await?;
-let reply = req.recv().await?;
+let reply = req.recv().await; // returns Option<Vec<Bytes>>
 
 // REP side (in another task/thread)
 let mut rep = RepSocket::bind("tcp://127.0.0.1:5555").await?;
-let request = rep.recv().await?;
-rep.send(request).await?; // echo
+let request = rep.recv().await; // returns Option<Vec<Bytes>>
+if let Some(msg) = request {
+    rep.send(msg).await?; // echo
+}
 ```
 
 ### Pub-Sub
 
 ```rust
+use monocoque::zmq::{PubSocket, SubSocket};
+use bytes::Bytes;
+
 // PUB
 let mut pub_sock = PubSocket::bind("tcp://0.0.0.0:5556").await?;
-pub_sock.send(vec![Bytes::from("topic "), Bytes::from("data")]).await?;
+pub_sock.send(vec![Bytes::from("topic data")]).await?;
 
 // SUB
 let mut sub = SubSocket::connect("tcp://127.0.0.1:5556").await?;
 sub.subscribe(b"topic").await?;
-let msg = sub.recv().await?;
+let msg = sub.recv().await; // returns io::Result<Option<Vec<Bytes>>>
 ```

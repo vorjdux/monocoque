@@ -32,8 +32,9 @@ handler.add_user("alice", "s3cr3t");
 handler.add_user("bob",   "hunter2");
 
 // Spawn the ZAP server on inproc://zeromq.zap.01
+// spawn_zap_server is synchronous — it registers a background task, no .await needed.
 let zap = DefaultZapHandler::new(Arc::new(handler), false);
-spawn_zap_server(zap).await?;
+spawn_zap_server(Arc::new(zap))?;
 
 // Configure the server socket
 let opts = SocketOptions::default()
@@ -44,9 +45,9 @@ let opts = SocketOptions::default()
 ### Client side
 
 ```rust
+// with_plain_credentials takes (username, password) as a single combined call
 let opts = SocketOptions::default()
-    .with_plain_username("alice")
-    .with_plain_password("s3cr3t");
+    .with_plain_credentials("alice", "s3cr3t");
 ```
 
 ### Security warning
@@ -69,19 +70,23 @@ use monocoque_zmtp::security::CurveKeyPair;
 let server_keys = CurveKeyPair::generate();
 let client_keys = CurveKeyPair::generate();
 
+// Fields are .public (CurvePublicKey) and .secret (CurveSecretKey).
 // Persist keys securely — lose the secret key and the session cannot be
 // decrypted; expose it and an attacker can impersonate you.
-println!("server public:  {:?}", server_keys.public_key);
-println!("server secret:  {:?}", server_keys.secret_key); // keep private!
+println!("server public:  {:?}", server_keys.public);
+println!("server secret:  {:?}", server_keys.secret); // keep private!
 ```
 
 ### Server side
 
 ```rust
+// with_curve_keypair takes (public_key_bytes, secret_key_bytes) together.
 let opts = SocketOptions::default()
     .with_curve_server(true)
-    .with_curve_publickey(server_keys.public_key.as_bytes())
-    .with_curve_secretkey(server_keys.secret_key.as_bytes());
+    .with_curve_keypair(
+        server_keys.public.as_bytes(),
+        server_keys.secret.as_bytes(),
+    );
 ```
 
 ### Client side
@@ -90,9 +95,11 @@ The client must know the server's *public* key before connecting (shared out-of-
 
 ```rust
 let opts = SocketOptions::default()
-    .with_curve_publickey(client_keys.public_key.as_bytes())
-    .with_curve_secretkey(client_keys.secret_key.as_bytes())
-    .with_curve_serverkey(server_keys.public_key.as_bytes()); // server pubkey
+    .with_curve_keypair(
+        client_keys.public.as_bytes(),
+        client_keys.secret.as_bytes(),
+    )
+    .with_curve_serverkey(server_keys.public.as_bytes()); // server pubkey
 ```
 
 ### Key distribution

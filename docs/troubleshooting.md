@@ -135,13 +135,13 @@ If a fuzz target in `monocoque-fuzz/` produces a crash artifact:
 
 ```bash
 # Reproduce the crash
-cargo +nightly fuzz run --fuzz-dir monocoque-fuzz fuzz_frame_codec \
+cargo +nightly fuzz run --fuzz-dir monocoque-fuzz fuzz_frame_codec -- \
     monocoque-fuzz/artifacts/fuzz_frame_codec/<crash-file>
 ```
 
 Then minimise:
 ```bash
-cargo +nightly fuzz tmin --fuzz-dir monocoque-fuzz fuzz_frame_codec \
+cargo +nightly fuzz tmin --fuzz-dir monocoque-fuzz fuzz_frame_codec -- \
     monocoque-fuzz/artifacts/fuzz_frame_codec/<crash-file>
 ```
 
