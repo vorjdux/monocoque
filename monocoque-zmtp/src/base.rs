@@ -14,7 +14,7 @@
 use bytes::{BufMut, Bytes, BytesMut};
 use compio::io::{AsyncRead, AsyncWrite};
 use compio::net::TcpStream;
-use monocoque_core::alloc::{IoArena, IoBytes};
+use monocoque_core::alloc::IoArena;
 use monocoque_core::buffer::SegmentedBuffer;
 use monocoque_core::endpoint::Endpoint;
 use monocoque_core::options::SocketOptions;
@@ -547,7 +547,7 @@ where
 
         // Apply send timeout
         let BufResult(result, _) = match self.options.send_timeout {
-            None => AsyncWrite::write(stream, IoBytes::new(buf)).await,
+            None => AsyncWrite::write(stream, buf).await,
             Some(dur) if dur.is_zero() => {
                 return Err(io::Error::new(
                     io::ErrorKind::WouldBlock,
@@ -556,7 +556,7 @@ where
             }
             Some(dur) => {
                 use compio::time::timeout;
-                match timeout(dur, AsyncWrite::write(stream, IoBytes::new(buf))).await {
+                match timeout(dur, AsyncWrite::write(stream, buf)).await {
                     Ok(result) => result,
                     Err(_) => {
                         return Err(io::Error::new(
@@ -617,7 +617,7 @@ where
         let BufResult(result, _) = match self.options.send_timeout {
             None => {
                 // Blocking mode - no timeout
-                AsyncWrite::write(stream, IoBytes::new(buf)).await
+                AsyncWrite::write(stream, buf).await
             }
             Some(dur) if dur.is_zero() => {
                 // Non-blocking mode
@@ -629,7 +629,7 @@ where
             Some(dur) => {
                 // Timed mode - apply timeout
                 use compio::time::timeout;
-                match timeout(dur, AsyncWrite::write(stream, IoBytes::new(buf))).await {
+                match timeout(dur, AsyncWrite::write(stream, buf)).await {
                     Ok(result) => result,
                     Err(_) => {
                         return Err(io::Error::new(
