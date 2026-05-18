@@ -887,8 +887,6 @@ where
     use bytes::BytesMut;
     use compio::buf::BufResult;
     use compio::io::AsyncWrite;
-    use monocoque_core::alloc::IoBytes;
-
     // ZMTP ERROR command body: [5]"ERROR" [reason_len][reason...]
     // Command name is "ERROR" (5 bytes), prefixed with its 1-byte length
     let reason_bytes = reason.as_bytes();
@@ -905,7 +903,7 @@ where
     frame.extend_from_slice(&[0x04, body_len as u8]);
     frame.extend_from_slice(&body);
 
-    let BufResult(_, _) = AsyncWrite::write(stream, IoBytes::new(frame.freeze())).await;
+    let BufResult(_, _) = AsyncWrite::write(stream, frame.freeze()).await;
 }
 
 #[cfg(test)]
