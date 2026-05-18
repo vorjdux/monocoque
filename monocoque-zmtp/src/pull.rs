@@ -95,6 +95,16 @@ where
             loop {
                 match self.base.decoder.decode(&mut self.base.recv)? {
                     Some(frame) => {
+                        if frame.is_command() {
+                            if crate::base::is_ping_payload(&frame.payload) {
+                                let pong = crate::base::build_pong_frame();
+                                self.base.send_buffer.extend_from_slice(&pong);
+                                self.base.flush_send_buffer().await?;
+                            } else if crate::base::is_pong_payload(&frame.payload) {
+                                self.base.note_pong_received();
+                            }
+                            continue;
+                        }
                         let more = frame.more();
                         self.frames.push(frame.payload);
 
@@ -115,6 +125,9 @@ where
                 // EOF - connection closed
                 trace!("[PULL] Connection closed");
                 return Ok(None);
+            }
+            if self.base.check_heartbeat()? {
+                self.base.flush_send_buffer().await?;
             }
             // Continue decoding with new data
         }
@@ -160,6 +173,116 @@ impl PullSocket<TcpStream> {
         // Configure TCP optimizations including keepalive
         crate::utils::configure_tcp_stream(&stream, &options, "PULL")?;
         Self::with_options(stream, options).await
+    }
+
+    /// Connect to a remote PULL socket, storing the endpoint for automatic reconnection.
+    pub async fn connect(addr: impl compio::net::ToSocketAddrsAsync) -> io::Result<Self> {
+        Self::connect_with_options(addr, SocketOptions::default()).await
+    }
+
+    /// Connect with custom options, storing the endpoint for reconnection.
+    pub async fn connect_with_options(
+        addr: impl compio::net::ToSocketAddrsAsync,
+        options: SocketOptions,
+    ) -> io::Result<Self> {
+        let stream = TcpStream::connect(addr).await?;
+        let peer_addr = stream.peer_addr()?;
+        crate::utils::configure_tcp_stream(&stream, &options, "PULL")?;
+
+        let mut stream = stream;
+        let handshake_result = perform_handshake_with_options(
+            &mut stream,
+            SocketType::Pull,
+            None,
+            Some(options.handshake_timeout),
+            &options,
+        )
+        .await
+        .map_err(|e| io::Error::other(format!("Handshake failed: {}", e)))?;
+
+        debug!(
+            peer_identity = ?handshake_result.peer_identity,
+            peer_socket_type = ?handshake_result.peer_socket_type,
+            "[PULL] Connected to {} (endpoint stored for reconnection)",
+            peer_addr
+        );
+
+        let endpoint = monocoque_core::endpoint::Endpoint::Tcp(peer_addr);
+        Ok(Self {
+            base: crate::base::SocketBase::with_endpoint(
+                stream,
+                SocketType::Pull,
+                endpoint,
+                options,
+            ),
+            frames: SmallVec::new(),
+        })
+    }
+
+    /// Check if the socket is currently connected.
+    #[inline]
+    pub fn is_connected(&self) -> bool {
+        self.base.is_connected()
+    }
+
+    /// Try to reconnect to the stored endpoint.
+    pub async fn try_reconnect(&mut self) -> io::Result<()> {
+        self.base.try_reconnect(SocketType::Pull).await
+    }
+
+    /// Receive a message with automatic reconnection on EOF or network error.
+    ///
+    /// If the socket was created with `connect()` and stores an endpoint, this
+    /// method loops: on EOF or broken-pipe it clears the stream and calls
+    /// `try_reconnect()` (which applies exponential backoff), then retries `recv()`.
+    ///
+    /// Respects `max_reconnect_attempts` — returns `NotConnected` when exhausted.
+    pub async fn recv_with_reconnect(&mut self) -> io::Result<Option<Vec<Bytes>>> {
+        let max = self.base.options.max_reconnect_attempts;
+        let mut attempts = 0u32;
+
+        loop {
+            if self.base.stream.is_none() {
+                if let Some(limit) = max {
+                    if attempts >= limit {
+                        return Err(io::Error::new(
+                            io::ErrorKind::NotConnected,
+                            format!("Max {} reconnection attempts exceeded", limit),
+                        ));
+                    }
+                }
+                attempts += 1;
+                trace!(
+                    "[PULL] Stream disconnected, reconnecting (attempt {})",
+                    attempts
+                );
+                self.try_reconnect().await?;
+            }
+
+            match self.recv().await {
+                Ok(Some(msg)) => return Ok(Some(msg)),
+                // EOF: read_raw() already set stream = None
+                Ok(None) => {
+                    debug!("[PULL] EOF on recv, will reconnect");
+                }
+                Err(e) => {
+                    if self.base.stream.is_none()
+                        || matches!(
+                            e.kind(),
+                            io::ErrorKind::ConnectionReset
+                                | io::ErrorKind::ConnectionAborted
+                                | io::ErrorKind::BrokenPipe
+                                | io::ErrorKind::UnexpectedEof
+                        )
+                    {
+                        debug!("[PULL] Connection error on recv ({}), will reconnect", e);
+                        self.base.stream = None;
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
+        }
     }
 }
 

@@ -14,30 +14,6 @@ use std::thread;
 use std::time::Duration;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Start a compio runtime in a background thread that runs `f`, returning
-/// the address the StreamSocket bound to.
-#[allow(dead_code)]
-fn start_server<F>(f: F) -> std::net::SocketAddr
-where
-    F: FnOnce(StreamSocket) + Send + 'static,
-{
-    let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
-    thread::spawn(move || {
-        compio::runtime::Runtime::new()
-            .unwrap()
-            .block_on(async move {
-                let srv = StreamSocket::bind("127.0.0.1:0").await.unwrap();
-                addr_tx.send(srv.local_addr().unwrap()).unwrap();
-                f(srv);
-            });
-    });
-    addr_rx.recv().unwrap()
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Test: connection notification on accept
 // ─────────────────────────────────────────────────────────────────────────────
 
