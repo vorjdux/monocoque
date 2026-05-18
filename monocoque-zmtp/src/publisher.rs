@@ -106,8 +106,10 @@ impl WorkerSubscriber {
 
 /// Background task that reads subscription messages from a subscriber.
 ///
-/// Subscription messages are raw bytes: `\x01prefix` (subscribe) or `\x00prefix` (unsubscribe).
-/// These are sent by SubSocket after handshake and on each subscribe()/unsubscribe() call.
+/// Subscription messages are ZMTP frames carrying `\x01prefix` (subscribe) or
+/// `\x00prefix` (unsubscribe) payloads.  ZMTP framing provides a length header
+/// so consecutive messages can always be split correctly even if they arrive in
+/// the same TCP segment.
 async fn subscription_reader(
     id: SubscriberId,
     mut reader: OwnedReadHalf<TcpStream>,
@@ -115,33 +117,61 @@ async fn subscription_reader(
 ) {
     use compio::buf::BufResult;
     use compio::io::AsyncRead;
+    use monocoque_core::buffer::SegmentedBuffer;
 
     trace!("[PUB] Subscription reader started for subscriber {}", id);
 
+    let mut recv_buf = SegmentedBuffer::new();
+    let mut decoder = crate::codec::ZmtpDecoder::new();
+
     loop {
+        // Read a chunk from the subscriber.
         let buf = vec![0u8; 256];
         let BufResult(result, buf) = reader.read(buf).await;
 
         match result {
             Ok(0) => {
-                // EOF — subscriber disconnected
                 debug!("[PUB] Subscriber {} disconnected (subscription reader)", id);
                 break;
             }
             Ok(n) => {
-                // Parse subscription message
-                if let Some(event) = SubscriptionEvent::from_message(&buf[..n]) {
-                    let mut subs = subscriptions.write();
-                    match event {
-                        SubscriptionEvent::Subscribe(prefix) => {
-                            if !subs.contains(&prefix) {
-                                trace!("[PUB] Subscriber {} subscribed to {:?}", id, prefix);
-                                subs.push(prefix);
+                recv_buf.push(Bytes::from(buf[..n].to_vec()));
+
+                // Drain all complete ZMTP frames from the accumulated buffer.
+                loop {
+                    match decoder.decode(&mut recv_buf) {
+                        Ok(Some(frame)) => {
+                            if let Some(event) =
+                                SubscriptionEvent::from_message(&frame.payload)
+                            {
+                                let mut subs = subscriptions.write();
+                                match event {
+                                    SubscriptionEvent::Subscribe(prefix) => {
+                                        if !subs.contains(&prefix) {
+                                            trace!(
+                                                "[PUB] Subscriber {} subscribed to {:?}",
+                                                id, prefix
+                                            );
+                                            subs.push(prefix);
+                                        }
+                                    }
+                                    SubscriptionEvent::Unsubscribe(prefix) => {
+                                        trace!(
+                                            "[PUB] Subscriber {} unsubscribed from {:?}",
+                                            id, prefix
+                                        );
+                                        subs.retain(|s| s != &prefix);
+                                    }
+                                }
                             }
                         }
-                        SubscriptionEvent::Unsubscribe(prefix) => {
-                            trace!("[PUB] Subscriber {} unsubscribed from {:?}", id, prefix);
-                            subs.retain(|s| s != &prefix);
+                        Ok(None) => break, // need more data
+                        Err(e) => {
+                            debug!(
+                                "[PUB] Subscription reader for subscriber {} decode error: {}",
+                                id, e
+                            );
+                            break;
                         }
                     }
                 }

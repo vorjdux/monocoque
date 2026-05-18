@@ -48,7 +48,11 @@ where
     }
 
     /// Create a new SUB socket with custom buffer configuration and socket options.
-    pub async fn with_options(mut stream: S, options: SocketOptions) -> io::Result<Self> {
+    ///
+    /// Subscriptions and unsubscriptions set via [`SocketOptions::with_subscribe`] /
+    /// [`SocketOptions::with_unsubscribe`] are sent to the peer immediately after
+    /// the handshake completes, before this function returns.
+    pub async fn with_options(mut stream: S, mut options: SocketOptions) -> io::Result<Self> {
         debug!("[SUB] Creating new direct SUB socket");
 
         // Perform ZMTP handshake
@@ -68,20 +72,34 @@ where
             "[SUB] Handshake complete"
         );
 
-        debug!("[SUB] Socket initialized");
+        // Extract subscription lists before moving options into SocketBase.
+        let initial_subs = std::mem::take(&mut options.subscriptions);
+        let initial_unsubs = std::mem::take(&mut options.unsubscriptions);
 
-        Ok(Self {
+        let mut socket = Self {
             base: SocketBase::new(stream, SocketType::Sub, options),
             frames: SmallVec::new(),
             subscriptions: Vec::new(),
-        })
+        };
+
+        // Apply subscriptions/unsubscriptions declared in options.
+        for prefix in initial_subs {
+            socket.subscribe(prefix).await?;
+        }
+        for prefix in initial_unsubs {
+            socket.unsubscribe(&prefix).await?;
+        }
+
+        debug!("[SUB] Socket initialized");
+
+        Ok(socket)
     }
 
     /// Subscribe to messages with the given prefix.
     ///
     /// An empty prefix subscribes to all messages.
     ///
-    /// This sends a subscription message to the PUB socket per ZMTP protocol.
+    /// This sends a subscription message to the PUB socket as a ZMTP frame.
     pub async fn subscribe(&mut self, prefix: impl Into<Bytes>) -> io::Result<()> {
         let prefix = prefix.into();
         trace!("[SUB] Adding subscription: {:?}", prefix);
@@ -91,60 +109,48 @@ where
             self.subscriptions.sort();
         }
 
-        // Send subscription message to PUB socket
-        // Format: [0x01] [subscription prefix...]
-        use compio::buf::BufResult;
-        use compio::io::AsyncWrite;
-        use monocoque_core::alloc::IoBytes;
-
-        let mut sub_msg = BytesMut::with_capacity(prefix.len() + 1);
-        sub_msg.extend_from_slice(&[0x01]); // Subscribe command
-        sub_msg.extend_from_slice(&prefix);
-
-        let buf = sub_msg.freeze();
-        trace!("[SUB] Sending subscription message ({} bytes)", buf.len());
-
-        let stream =
-            self.base.stream.as_mut().ok_or_else(|| {
-                io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
-            })?;
-        let BufResult(result, _) = AsyncWrite::write(stream, IoBytes::new(buf)).await;
-        result?;
-
-        trace!("[SUB] Subscription message sent successfully");
-
-        Ok(())
+        self.send_sub_event(0x01, &prefix).await
     }
 
     /// Unsubscribe from messages with the given prefix.
     ///
-    /// This sends an unsubscription message to the PUB socket per ZMTP protocol.
+    /// This sends an unsubscription message to the PUB socket as a ZMTP frame.
     pub async fn unsubscribe(&mut self, prefix: &Bytes) -> io::Result<()> {
         trace!("[SUB] Removing subscription: {:?}", prefix);
         self.subscriptions.retain(|s| s != prefix);
 
-        // Send unsubscription message to PUB socket
-        // Format: [0x00] [subscription prefix...]
+        self.send_sub_event(0x00, prefix).await
+    }
+
+    /// Encode and send a subscription/unsubscription event as a ZMTP frame.
+    ///
+    /// Wire format: [flags][len][cmd: 0x01|0x00][prefix...]
+    /// Using ZMTP framing ensures the PUB's subscription_reader can split
+    /// consecutive messages even when they arrive in the same TCP segment.
+    async fn send_sub_event(&mut self, cmd: u8, prefix: &[u8]) -> io::Result<()> {
         use compio::buf::BufResult;
-        use compio::io::AsyncWrite;
-        use monocoque_core::alloc::IoBytes;
+        use compio::io::AsyncWriteExt;
+        // Build payload: [cmd][prefix]
+        let mut payload = BytesMut::with_capacity(1 + prefix.len());
+        payload.extend_from_slice(&[cmd]);
+        payload.extend_from_slice(prefix);
+        let payload = payload.freeze();
 
-        let mut unsub_msg = BytesMut::with_capacity(prefix.len() + 1);
-        unsub_msg.extend_from_slice(&[0x00]); // Unsubscribe command
-        unsub_msg.extend_from_slice(prefix);
+        // ZMTP-frame it (single-frame message)
+        let mut wire = BytesMut::new();
+        crate::codec::encode_multipart(&[payload], &mut wire);
+        let wire = wire.freeze();
 
-        let buf = unsub_msg.freeze();
-        trace!("[SUB] Sending unsubscription message ({} bytes)", buf.len());
+        trace!("[SUB] Sending subscription event ({} wire bytes)", wire.len());
 
-        let stream =
-            self.base.stream.as_mut().ok_or_else(|| {
-                io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
-            })?;
-        let BufResult(result, _) = AsyncWrite::write(stream, IoBytes::new(buf)).await;
+        let stream = self.base.stream.as_mut().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
+        })?;
+        let data = wire.to_vec();
+        let BufResult(result, _) = stream.write_all(data).await;
         result?;
 
-        trace!("[SUB] Unsubscription message sent successfully");
-
+        trace!("[SUB] Subscription event sent successfully");
         Ok(())
     }
 
@@ -164,6 +170,16 @@ where
                 loop {
                     match self.base.decoder.decode(&mut self.base.recv)? {
                         Some(frame) => {
+                            if frame.is_command() {
+                                if crate::base::is_ping_payload(&frame.payload) {
+                                    let pong = crate::base::build_pong_frame();
+                                    self.base.send_buffer.extend_from_slice(&pong);
+                                    self.base.flush_send_buffer().await?;
+                                } else if crate::base::is_pong_payload(&frame.payload) {
+                                    self.base.note_pong_received();
+                                }
+                                continue;
+                            }
                             let more = frame.more();
                             self.frames.push(frame.payload);
 
@@ -203,6 +219,9 @@ where
                     // EOF
                     trace!("[SUB] Connection closed");
                     return Ok(None);
+                }
+                if self.base.check_heartbeat()? {
+                    self.base.flush_send_buffer().await?;
                 }
                 // Continue decoding with new data
             }
@@ -304,6 +323,122 @@ impl SubSocket<TcpStream> {
         // Configure TCP optimizations including keepalive
         crate::utils::configure_tcp_stream(&stream, &options, "SUB")?;
         Self::with_options(stream, options).await
+    }
+
+    /// Connect to a remote SUB socket, storing the endpoint for automatic reconnection.
+    pub async fn connect(addr: impl compio::net::ToSocketAddrsAsync) -> io::Result<Self> {
+        Self::connect_with_options(addr, SocketOptions::default()).await
+    }
+
+    /// Connect with custom options, storing the endpoint for reconnection.
+    pub async fn connect_with_options(
+        addr: impl compio::net::ToSocketAddrsAsync,
+        options: SocketOptions,
+    ) -> io::Result<Self> {
+        let stream = TcpStream::connect(addr).await?;
+        let peer_addr = stream.peer_addr()?;
+        crate::utils::configure_tcp_stream(&stream, &options, "SUB")?;
+
+        let mut stream = stream;
+        let handshake_result = perform_handshake_with_options(
+            &mut stream,
+            SocketType::Sub,
+            None,
+            Some(options.handshake_timeout),
+            &options,
+        )
+        .await
+        .map_err(|e| io::Error::other(format!("Handshake failed: {}", e)))?;
+
+        debug!(
+            peer_identity = ?handshake_result.peer_identity,
+            peer_socket_type = ?handshake_result.peer_socket_type,
+            "[SUB] Connected to {} (endpoint stored for reconnection)",
+            peer_addr
+        );
+
+        let endpoint = monocoque_core::endpoint::Endpoint::Tcp(peer_addr);
+        Ok(Self {
+            base: crate::base::SocketBase::with_endpoint(
+                stream,
+                SocketType::Sub,
+                endpoint,
+                options,
+            ),
+            frames: SmallVec::new(),
+            subscriptions: Vec::new(),
+        })
+    }
+
+    /// Check if the socket is currently connected.
+    #[inline]
+    pub fn is_connected(&self) -> bool {
+        self.base.is_connected()
+    }
+
+    /// Try to reconnect to the stored endpoint and re-send all active subscriptions.
+    pub async fn try_reconnect(&mut self) -> io::Result<()> {
+        self.base.try_reconnect(SocketType::Sub).await?;
+        let subs: Vec<bytes::Bytes> = self.subscriptions.clone();
+        for prefix in subs {
+            self.send_sub_event(0x01, &prefix.clone()).await?;
+        }
+        Ok(())
+    }
+
+    /// Receive a message with automatic reconnection on EOF or network error.
+    ///
+    /// If the socket was created with `connect()` and stores an endpoint, this
+    /// method loops: on EOF or broken-pipe it clears the stream and calls
+    /// `try_reconnect()` (which applies exponential backoff), then retries `recv()`.
+    ///
+    /// Respects `max_reconnect_attempts` — returns `NotConnected` when exhausted.
+    pub async fn recv_with_reconnect(&mut self) -> io::Result<Option<Vec<Bytes>>> {
+        let max = self.base.options.max_reconnect_attempts;
+        let mut attempts = 0u32;
+
+        loop {
+            if self.base.stream.is_none() {
+                if let Some(limit) = max {
+                    if attempts >= limit {
+                        return Err(io::Error::new(
+                            io::ErrorKind::NotConnected,
+                            format!("Max {} reconnection attempts exceeded", limit),
+                        ));
+                    }
+                }
+                attempts += 1;
+                trace!(
+                    "[SUB] Stream disconnected, reconnecting (attempt {})",
+                    attempts
+                );
+                self.try_reconnect().await?;
+            }
+
+            match self.recv().await {
+                Ok(Some(msg)) => return Ok(Some(msg)),
+                // EOF: read_raw() already set stream = None
+                Ok(None) => {
+                    debug!("[SUB] EOF on recv, will reconnect");
+                }
+                Err(e) => {
+                    if self.base.stream.is_none()
+                        || matches!(
+                            e.kind(),
+                            io::ErrorKind::ConnectionReset
+                                | io::ErrorKind::ConnectionAborted
+                                | io::ErrorKind::BrokenPipe
+                                | io::ErrorKind::UnexpectedEof
+                        )
+                    {
+                        debug!("[SUB] Connection error on recv ({}), will reconnect", e);
+                        self.base.stream = None;
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
+        }
     }
 }
 

@@ -184,6 +184,16 @@ where
             loop {
                 match self.base.decoder.decode(&mut self.base.recv)? {
                     Some(frame) => {
+                        if frame.is_command() {
+                            if crate::base::is_ping_payload(&frame.payload) {
+                                let pong = crate::base::build_pong_frame();
+                                self.base.send_buffer.extend_from_slice(&pong);
+                                self.base.flush_send_buffer().await?;
+                            } else if crate::base::is_pong_payload(&frame.payload) {
+                                self.base.note_pong_received();
+                            }
+                            continue;
+                        }
                         let more = frame.more();
                         self.frames.push(frame.payload);
 
@@ -205,6 +215,9 @@ where
                 // EOF - connection closed
                 trace!("[REP] Connection closed");
                 return Ok(None);
+            }
+            if self.base.check_heartbeat()? {
+                self.base.flush_send_buffer().await?;
             }
             // Continue decoding with new data
         }

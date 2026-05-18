@@ -94,6 +94,11 @@ where
         // Delegate to base for writing
         self.base.write_from_buf().await?;
 
+        // Check heartbeat: send PING if the connection has been idle too long
+        if self.base.check_heartbeat()? {
+            self.base.flush_send_buffer().await?;
+        }
+
         trace!("[PUSH] Message sent successfully");
         Ok(())
     }
@@ -138,6 +143,99 @@ impl PushSocket<TcpStream> {
         // Configure TCP optimizations including keepalive
         crate::utils::configure_tcp_stream(&stream, &options, "PUSH")?;
         Self::with_options(stream, options).await
+    }
+
+    /// Connect to a remote PUSH socket, storing the endpoint for automatic reconnection.
+    pub async fn connect(addr: impl compio::net::ToSocketAddrsAsync) -> io::Result<Self> {
+        Self::connect_with_options(addr, SocketOptions::default()).await
+    }
+
+    /// Connect with custom options, storing the endpoint for reconnection.
+    pub async fn connect_with_options(
+        addr: impl compio::net::ToSocketAddrsAsync,
+        options: SocketOptions,
+    ) -> io::Result<Self> {
+        let stream = TcpStream::connect(addr).await?;
+        let peer_addr = stream.peer_addr()?;
+        crate::utils::configure_tcp_stream(&stream, &options, "PUSH")?;
+
+        let mut stream = stream;
+        let handshake_result = perform_handshake_with_options(
+            &mut stream,
+            SocketType::Push,
+            None,
+            Some(options.handshake_timeout),
+            &options,
+        )
+        .await
+        .map_err(|e| io::Error::other(format!("Handshake failed: {}", e)))?;
+
+        debug!(
+            peer_identity = ?handshake_result.peer_identity,
+            peer_socket_type = ?handshake_result.peer_socket_type,
+            "[PUSH] Connected to {} (endpoint stored for reconnection)",
+            peer_addr
+        );
+
+        let endpoint = monocoque_core::endpoint::Endpoint::Tcp(peer_addr);
+        Ok(Self {
+            base: crate::base::SocketBase::with_endpoint(
+                stream,
+                SocketType::Push,
+                endpoint,
+                options,
+            ),
+        })
+    }
+
+    /// Check if the socket is currently connected.
+    #[inline]
+    pub fn is_connected(&self) -> bool {
+        self.base.is_connected()
+    }
+
+    /// Try to reconnect to the stored endpoint.
+    pub async fn try_reconnect(&mut self) -> io::Result<()> {
+        self.base.try_reconnect(SocketType::Push).await
+    }
+
+    /// Send a message with automatic reconnection on network error.
+    ///
+    /// On BrokenPipe / ConnectionReset, `write_from_buf()` already sets
+    /// `stream = None`, so the next loop iteration reconnects automatically.
+    ///
+    /// Respects `max_reconnect_attempts` — returns `NotConnected` when exhausted.
+    pub async fn send_with_reconnect(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
+        let max = self.base.options.max_reconnect_attempts;
+        let mut attempts = 0u32;
+
+        loop {
+            if self.base.stream.is_none() {
+                if let Some(limit) = max {
+                    if attempts >= limit {
+                        return Err(io::Error::new(
+                            io::ErrorKind::NotConnected,
+                            format!("Max {} reconnection attempts exceeded", limit),
+                        ));
+                    }
+                }
+                attempts += 1;
+                trace!(
+                    "[PUSH] Stream disconnected, reconnecting (attempt {})",
+                    attempts
+                );
+                self.try_reconnect().await?;
+            }
+
+            match self.send(msg.clone()).await {
+                Ok(()) => return Ok(()),
+                Err(_) if self.base.stream.is_none() => {
+                    // write_from_buf set stream = None → network error, retry
+                    debug!("[PUSH] Send failed (stream lost), will reconnect");
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
 }
 
