@@ -37,13 +37,13 @@ use std::io;
 /// socket.send(vec![Bytes::from("REQUEST")]).await?;
 ///
 /// // Must receive before next send
-/// if let Some(reply) = socket.recv().await {
+/// if let Ok(Some(reply)) = socket.recv().await {
 ///     println!("Got reply: {:?}", reply);
 /// }
 ///
 /// // Now can send again
 /// socket.send(vec![Bytes::from("ANOTHER")]).await?;
-/// if let Some(reply) = socket.recv().await {
+/// if let Ok(Some(reply)) = socket.recv().await {
 ///     println!("Got reply: {:?}", reply);
 /// }
 /// # Ok(())
@@ -352,11 +352,8 @@ where
     /// # Returns
     ///
     /// - `Ok(Some(msg))` - Received a multipart message
-    /// - `Ok(None)` - Connection closed gracefully
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the underlying channel fails.
+    /// - `Ok(None)` - Connection closed gracefully (peer disconnected)
+    /// - `Err(e)` - Network or I/O error
     ///
     /// # Example
     ///
@@ -364,7 +361,7 @@ where
     /// use monocoque::zmq::ReqSocket;
     ///
     /// # async fn example(socket: &mut ReqSocket) -> std::io::Result<()> {
-    /// if let Some(reply) = socket.recv().await {
+    /// if let Some(reply) = socket.recv().await? {
     ///     for (i, frame) in reply.iter().enumerate() {
     ///         println!("Frame {}: {:?}", i, frame);
     ///     }
@@ -372,8 +369,8 @@ where
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn recv(&mut self) -> Option<Vec<Bytes>> {
-        self.inner.recv().await.ok().flatten()
+    pub async fn recv(&mut self) -> io::Result<Option<Vec<Bytes>>> {
+        self.inner.recv().await
     }
 
     /// Get a reference to the socket options.

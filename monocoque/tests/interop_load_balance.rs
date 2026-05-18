@@ -18,7 +18,7 @@ fn test_router_load_balancer_basic() {
 
             let mut router = RouterSocket::from_tcp(stream).await.unwrap();
 
-            let msg = router.recv().await.unwrap();
+            let msg = router.recv().await.unwrap().unwrap();
 
             router
                 .send(vec![msg[0].clone(), Bytes::from("Response from Router")])

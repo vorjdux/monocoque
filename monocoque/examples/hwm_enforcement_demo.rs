@@ -33,7 +33,7 @@ async fn main() -> std::io::Result<()> {
         if let Ok((stream, _)) = listener.accept().await {
             if let Ok(mut router) = RouterSocket::from_tcp(stream).await {
                 let mut count = 0;
-                while let Some(_) = router.recv().await {
+                while let Ok(Some(_)) = router.recv().await {
                     count += 1;
                     if count % 5 == 0 {
                         println!("   [SERVER] Received {} messages", count);

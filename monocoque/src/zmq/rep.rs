@@ -40,7 +40,7 @@ use std::io;
 ///
 /// loop {
 ///     // Receive request
-///     if let Some(request) = socket.recv().await {
+///     if let Ok(Some(request)) = socket.recv().await {
 ///         println!("Got request: {:?}", request);
 ///         
 ///         // Send reply
@@ -70,7 +70,7 @@ impl RepSocket {
     ///
     /// # async fn example() -> std::io::Result<()> {
     /// let (_listener, mut socket) = RepSocket::bind("127.0.0.1:5555").await?;
-    /// if let Some(req) = socket.recv().await {
+    /// if let Ok(Some(req)) = socket.recv().await {
     ///     socket.send(vec![Bytes::from("PONG")]).await?;
     /// }
     /// # Ok(())
@@ -170,8 +170,8 @@ where
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn recv(&mut self) -> Option<Vec<Bytes>> {
-        self.inner.recv().await.ok().flatten()
+    pub async fn recv(&mut self) -> io::Result<Option<Vec<Bytes>>> {
+        self.inner.recv().await
     }
 
     /// Get the socket type.

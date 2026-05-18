@@ -44,7 +44,7 @@ async fn worker(id: u32, crash_after: Option<u32>) -> std::io::Result<()> {
         }
 
         // Process requests
-        if let Some(msg) = socket.recv().await {
+        if let Ok(Some(msg)) = socket.recv().await {
             count += 1;
             if let Some(first) = msg.first() {
                 info!(
@@ -80,7 +80,7 @@ async fn client(id: u32, requests: u32) -> std::io::Result<()> {
 
         socket.send(vec![Bytes::from(req)]).await?;
 
-        if let Some(reply) = socket.recv().await {
+        if let Ok(Some(reply)) = socket.recv().await {
             if let Some(first) = reply.first() {
                 info!(
                     "[Client-{}] 📬 Reply: {}",
@@ -114,12 +114,12 @@ async fn broker() -> std::io::Result<()> {
     loop {
         select! {
             msg = frontend.recv().fuse() => {
-                if let Some(m) = msg {
+                if let Ok(Some(m)) = msg {
                     backend.send(m).await?;
                 }
             }
             msg = backend.recv().fuse() => {
-                if let Some(m) = msg {
+                if let Ok(Some(m)) = msg {
                     frontend.send(m).await?;
                 }
             }

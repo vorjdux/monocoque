@@ -164,7 +164,7 @@ async fn run_server(secret_key_hex: &str) {
     // Handle encrypted requests
     for i in 1..=10 {
         match socket.recv().await {
-            Some(msg) => {
+            Ok(Some(msg)) => {
                 let request = String::from_utf8_lossy(&msg[0]);
                 info!("📨 Encrypted request #{}: {}", i, request);
 
@@ -173,7 +173,7 @@ async fn run_server(secret_key_hex: &str) {
 
                 info!("📤 Sent encrypted response #{}", i);
             }
-            None => {
+            _ => {
                 info!("ℹ️  Connection closed");
                 break;
             }
@@ -238,11 +238,11 @@ async fn run_client(server_public_key_hex: &str) {
         }
 
         match socket.recv().await {
-            Some(msg) => {
+            Ok(Some(msg)) => {
                 let response = String::from_utf8_lossy(&msg[0]);
                 info!("📨 Decrypted response: {}", response);
             }
-            None => {
+            _ => {
                 error!("❌ Empty response");
                 return;
             }

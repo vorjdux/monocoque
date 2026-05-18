@@ -80,7 +80,7 @@ async fn run_worker(worker_id: u32, crash_after: Option<u32>) -> std::io::Result
         }
 
         // Receive and process requests (non-blocking)
-        if let Some(mut msg) = socket.recv().await {
+        if let Ok(Some(mut msg)) = socket.recv().await {
             if !msg.is_empty() {
                 // Skip empty delimiter frame if present
                 if msg[0].is_empty() && msg.len() > 1 {
@@ -138,7 +138,7 @@ async fn run_client(client_id: u32, num_requests: u32) -> std::io::Result<()> {
         socket.send(vec![Bytes::from(request)]).await?;
 
         // Wait for reply (REQ/REP guarantees request-reply pairs)
-        if let Some(reply) = socket.recv().await {
+        if let Ok(Some(reply)) = socket.recv().await {
             if let Some(reply_text) = reply.first() {
                 info!(
                     "[Client-{}] 📬 Received: {:?}",

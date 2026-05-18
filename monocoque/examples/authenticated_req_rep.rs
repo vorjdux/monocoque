@@ -46,7 +46,7 @@ async fn main() -> std::io::Result<()> {
 
         println!("[SERVER] Waiting for requests...");
         for i in 1..=2 {
-            if let Some(request) = server.recv().await {
+            if let Ok(Some(request)) = server.recv().await {
                 let msg = String::from_utf8_lossy(&request[0]);
                 println!("[SERVER] Request {}: {}", i, msg);
                 let reply = vec![Bytes::from(format!("Reply {}: OK", i))];
@@ -66,7 +66,7 @@ async fn main() -> std::io::Result<()> {
     println!("[ALICE] Connected");
 
     alice.send(vec![Bytes::from("Hello from Alice")]).await?;
-    if let Some(response) = alice.recv().await {
+    if let Ok(Some(response)) = alice.recv().await {
         println!(
             "[ALICE] Received: {}",
             String::from_utf8_lossy(&response[0])
@@ -81,7 +81,7 @@ async fn main() -> std::io::Result<()> {
     println!("[BOB] Connected");
 
     bob.send(vec![Bytes::from("Hello from Bob")]).await?;
-    if let Some(response) = bob.recv().await {
+    if let Ok(Some(response)) = bob.recv().await {
         println!("[BOB] Received: {}", String::from_utf8_lossy(&response[0]));
     }
 
