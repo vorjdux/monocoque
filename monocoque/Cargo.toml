@@ -71,6 +71,10 @@ name = "simple_perf"
 harness = false
 required-features = ["zmq"]
 
+[[bench]]
+name = "allocation"
+harness = false
+
 [[example]]
 name = "protocol_namespaces"
 required-features = ["zmq"]
@@ -280,6 +284,9 @@ required-features = ["zmq"]
 [[test]]
 name = "interop_push_pull"
 required-features = ["zmq"]
+
+[lints]
+workspace = true
 
 [dependencies]
 # Internal implementation crates (not exposed)
