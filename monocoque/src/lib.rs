@@ -38,7 +38,7 @@
 //! socket.send(vec![b"Hello".to_vec().into(), b"World".to_vec().into()]).await?;
 //!
 //! // Receive a reply
-//! if let Some(msg) = socket.recv().await {
+//! if let Ok(Some(msg)) = socket.recv().await {
 //!     println!("Received: {:?}", msg);
 //! }
 //! # Ok(())
@@ -57,7 +57,7 @@
 //! let (listener, mut socket) = RouterSocket::bind("127.0.0.1:5555").await?;
 //!
 //! // Echo server
-//! while let Some(msg) = socket.recv().await {
+//! while let Ok(Some(msg)) = socket.recv().await {
 //!     socket.send(msg).await?;
 //! }
 //! # Ok(())

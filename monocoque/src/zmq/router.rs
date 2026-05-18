@@ -38,7 +38,7 @@ use std::io;
 /// let (listener, mut socket) = RouterSocket::bind("127.0.0.1:5555").await?;
 ///
 /// // Echo server
-/// while let Some(msg) = socket.recv().await {
+/// while let Ok(Some(msg)) = socket.recv().await {
 ///     // msg[0] = identity, msg[1] = delimiter, msg[2+] = payload
 ///     socket.send(msg).await?; // Echo back to sender
 /// }
@@ -135,14 +135,7 @@ impl RouterSocket {
         })
     }
 
-    /// Create a ROUTER socket from an existing TCP stream with custom buffer configuration.
-    ///
-    /// # Buffer Configuration
-    /// - Use `SocketOptions` with `with_buffer_sizes()` instead
-    /// - Small buffers (4KB) for low-latency routing with small messages
-    /// - Large buffers (16KB) for high-throughput routing with large messages (recommended)
-    ///
-    ///   Create a ROUTER socket from a TCP stream with TCP_NODELAY enabled.
+    /// Create a ROUTER socket from an existing TCP stream with TCP_NODELAY enabled.
     pub async fn from_tcp(stream: TcpStream) -> io::Result<Self> {
         Ok(Self {
             inner: InternalRouter::from_tcp(stream).await?,
@@ -452,7 +445,7 @@ where
     /// ```rust,no_run
     /// # use monocoque::zmq::RouterSocket;
     /// # async fn example(mut socket: RouterSocket) -> Result<(), Box<dyn std::error::Error>> {
-    /// while let Some(msg) = socket.recv().await {
+    /// while let Ok(Some(msg)) = socket.recv().await {
     ///     let identity = &msg[0];
     ///     let payload = &msg[2..]; // Skip identity and delimiter
     ///     println!("From {:?}: {:?}", identity, payload);
@@ -460,8 +453,8 @@ where
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn recv(&mut self) -> Option<Vec<Bytes>> {
-        self.inner.recv().await.ok().flatten()
+    pub async fn recv(&mut self) -> io::Result<Option<Vec<Bytes>>> {
+        self.inner.recv().await
     }
 }
 
@@ -501,7 +494,7 @@ impl monocoque_zmtp::proxy::ProxySocket for RouterSocket<TcpStream> {
         'life0: 'async_trait,
         Self: 'async_trait,
     {
-        Box::pin(async move { Ok(self.recv().await) })
+        Box::pin(async move { self.recv().await })
     }
 
     fn send_multipart<'life0, 'async_trait>(

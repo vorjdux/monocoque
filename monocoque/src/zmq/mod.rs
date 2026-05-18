@@ -35,7 +35,7 @@
 //! let mut socket = DealerSocket::connect("127.0.0.1:5555").await?;
 //! socket.send(vec![Bytes::from("REQUEST")]).await?;
 //!
-//! if let Some(reply) = socket.recv().await {
+//! if let Ok(Some(reply)) = socket.recv().await {
 //!     println!("Got reply: {:?}", reply);
 //! }
 //! # Ok(())
@@ -50,7 +50,7 @@
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let (listener, mut socket) = RouterSocket::bind("127.0.0.1:5555").await?;
 //!
-//! while let Some(msg) = socket.recv().await {
+//! while let Ok(Some(msg)) = socket.recv().await {
 //!     socket.send(msg).await?; // Echo back
 //! }
 //! # Ok(())

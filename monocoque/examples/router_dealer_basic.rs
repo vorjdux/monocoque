@@ -64,7 +64,7 @@ async fn router_server(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     // Receive request
     info!("[ROUTER] Waiting for request...");
-    let request = socket.recv().await.ok_or("Connection closed")?;
+    let request = socket.recv().await?.ok_or("Connection closed")?;
 
     info!("[ROUTER] Received {} frames:", request.len());
     for (i, frame) in request.iter().enumerate() {
@@ -110,7 +110,7 @@ async fn dealer_client(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     // Receive reply
     info!("[DEALER] Waiting for reply...");
-    let reply = socket.recv().await.ok_or("Connection closed")?;
+    let reply = socket.recv().await?.ok_or("Connection closed")?;
 
     info!("[DEALER] Received {} frames:", reply.len());
     for (i, frame) in reply.iter().enumerate() {

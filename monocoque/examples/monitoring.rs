@@ -78,7 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Try to receive (will likely timeout since no server is running)
     println!("Attempting to receive...");
-    if let Some(msg) = socket.recv().await {
+    if let Ok(Some(msg)) = socket.recv().await {
         println!("✓ Received {} parts\n", msg.len());
     } else {
         println!("✗ No message received (connection closed or no server)\n");

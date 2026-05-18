@@ -12,3 +12,18 @@ where
 {
     result.map_err(|e| io::Error::new(io::ErrorKind::BrokenPipe, e))
 }
+
+/// Parse a TCP endpoint string into a `SocketAddr`.
+///
+/// Accepts both URL form (`tcp://127.0.0.1:5555`) and bare form (`127.0.0.1:5555`).
+pub(super) fn parse_tcp_endpoint(endpoint: &str) -> io::Result<std::net::SocketAddr> {
+    if let Ok(monocoque_core::endpoint::Endpoint::Tcp(addr)) =
+        monocoque_core::endpoint::Endpoint::parse(endpoint)
+    {
+        Ok(addr)
+    } else {
+        endpoint
+            .parse::<std::net::SocketAddr>()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))
+    }
+}

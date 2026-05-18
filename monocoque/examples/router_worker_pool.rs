@@ -60,7 +60,7 @@ async fn handle_worker(stream: compio::net::TcpStream, task_counter: Arc<AtomicU
         match socket.send(vec![Bytes::from(task)]).await {
             Ok(()) => {
                 // Wait for completion response
-                if let Some(response) = socket.recv().await {
+                if let Ok(Some(response)) = socket.recv().await {
                     if let Some(result) = response.last() {
                         if let Ok(s) = std::str::from_utf8(result) {
                             info!("Worker completed: {s}");

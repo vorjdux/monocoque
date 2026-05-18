@@ -18,7 +18,7 @@ fn test_router_explicit_routing() {
 
             let mut router = RouterSocket::from_tcp(stream).await.unwrap();
 
-            let msg = router.recv().await.unwrap();
+            let msg = router.recv().await.unwrap().unwrap();
             if msg[0] != b"CLIENT_A"[..] {
                 result_tx
                     .send(Err(format!("Expected CLIENT_A identity, got {:?}", msg[0])))

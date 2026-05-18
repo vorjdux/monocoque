@@ -52,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Workers receive and process tasks
     println!("\n[Worker 1] Waiting for tasks...");
-    if let Some(msg) = worker1.recv().await {
+    if let Ok(Some(msg)) = worker1.recv().await {
         println!(
             "[Worker 1] Received: {:?}",
             String::from_utf8_lossy(&msg[0])
@@ -60,7 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("[Worker 2] Waiting for tasks...");
-    if let Some(msg) = worker2.recv().await {
+    if let Ok(Some(msg)) = worker2.recv().await {
         println!(
             "[Worker 2] Received: {:?}",
             String::from_utf8_lossy(&msg[0])
@@ -88,7 +88,7 @@ async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
     println!("[Server] First peer identity: {:?}\n", peer_identity);
 
     // Receive registration from first worker
-    if let Some(msg) = router.recv().await {
+    if let Ok(Some(msg)) = router.recv().await {
         let identity = &msg[0];
         let payload = &msg[2..]; // Skip identity and delimiter
         println!(
@@ -110,7 +110,7 @@ async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Receive registration from second worker
-    if let Some(msg) = router2.recv().await {
+    if let Ok(Some(msg)) = router2.recv().await {
         let identity = &msg[0];
         let payload = &msg[2..];
         println!(
