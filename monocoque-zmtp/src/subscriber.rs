@@ -48,7 +48,11 @@ where
     }
 
     /// Create a new SUB socket with custom buffer configuration and socket options.
-    pub async fn with_options(mut stream: S, options: SocketOptions) -> io::Result<Self> {
+    ///
+    /// Subscriptions and unsubscriptions set via [`SocketOptions::with_subscribe`] /
+    /// [`SocketOptions::with_unsubscribe`] are sent to the peer immediately after
+    /// the handshake completes, before this function returns.
+    pub async fn with_options(mut stream: S, mut options: SocketOptions) -> io::Result<Self> {
         debug!("[SUB] Creating new direct SUB socket");
 
         // Perform ZMTP handshake
@@ -68,20 +72,34 @@ where
             "[SUB] Handshake complete"
         );
 
-        debug!("[SUB] Socket initialized");
+        // Extract subscription lists before moving options into SocketBase.
+        let initial_subs = std::mem::take(&mut options.subscriptions);
+        let initial_unsubs = std::mem::take(&mut options.unsubscriptions);
 
-        Ok(Self {
+        let mut socket = Self {
             base: SocketBase::new(stream, SocketType::Sub, options),
             frames: SmallVec::new(),
             subscriptions: Vec::new(),
-        })
+        };
+
+        // Apply subscriptions/unsubscriptions declared in options.
+        for prefix in initial_subs {
+            socket.subscribe(prefix).await?;
+        }
+        for prefix in initial_unsubs {
+            socket.unsubscribe(&prefix).await?;
+        }
+
+        debug!("[SUB] Socket initialized");
+
+        Ok(socket)
     }
 
     /// Subscribe to messages with the given prefix.
     ///
     /// An empty prefix subscribes to all messages.
     ///
-    /// This sends a subscription message to the PUB socket per ZMTP protocol.
+    /// This sends a subscription message to the PUB socket as a ZMTP frame.
     pub async fn subscribe(&mut self, prefix: impl Into<Bytes>) -> io::Result<()> {
         let prefix = prefix.into();
         trace!("[SUB] Adding subscription: {:?}", prefix);
@@ -91,60 +109,48 @@ where
             self.subscriptions.sort();
         }
 
-        // Send subscription message to PUB socket
-        // Format: [0x01] [subscription prefix...]
-        use compio::buf::BufResult;
-        use compio::io::AsyncWrite;
-        use monocoque_core::alloc::IoBytes;
-
-        let mut sub_msg = BytesMut::with_capacity(prefix.len() + 1);
-        sub_msg.extend_from_slice(&[0x01]); // Subscribe command
-        sub_msg.extend_from_slice(&prefix);
-
-        let buf = sub_msg.freeze();
-        trace!("[SUB] Sending subscription message ({} bytes)", buf.len());
-
-        let stream =
-            self.base.stream.as_mut().ok_or_else(|| {
-                io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
-            })?;
-        let BufResult(result, _) = AsyncWrite::write(stream, IoBytes::new(buf)).await;
-        result?;
-
-        trace!("[SUB] Subscription message sent successfully");
-
-        Ok(())
+        self.send_sub_event(0x01, &prefix).await
     }
 
     /// Unsubscribe from messages with the given prefix.
     ///
-    /// This sends an unsubscription message to the PUB socket per ZMTP protocol.
+    /// This sends an unsubscription message to the PUB socket as a ZMTP frame.
     pub async fn unsubscribe(&mut self, prefix: &Bytes) -> io::Result<()> {
         trace!("[SUB] Removing subscription: {:?}", prefix);
         self.subscriptions.retain(|s| s != prefix);
 
-        // Send unsubscription message to PUB socket
-        // Format: [0x00] [subscription prefix...]
+        self.send_sub_event(0x00, prefix).await
+    }
+
+    /// Encode and send a subscription/unsubscription event as a ZMTP frame.
+    ///
+    /// Wire format: [flags][len][cmd: 0x01|0x00][prefix...]
+    /// Using ZMTP framing ensures the PUB's subscription_reader can split
+    /// consecutive messages even when they arrive in the same TCP segment.
+    async fn send_sub_event(&mut self, cmd: u8, prefix: &[u8]) -> io::Result<()> {
         use compio::buf::BufResult;
-        use compio::io::AsyncWrite;
-        use monocoque_core::alloc::IoBytes;
+        use compio::io::AsyncWriteExt;
+        // Build payload: [cmd][prefix]
+        let mut payload = BytesMut::with_capacity(1 + prefix.len());
+        payload.extend_from_slice(&[cmd]);
+        payload.extend_from_slice(prefix);
+        let payload = payload.freeze();
 
-        let mut unsub_msg = BytesMut::with_capacity(prefix.len() + 1);
-        unsub_msg.extend_from_slice(&[0x00]); // Unsubscribe command
-        unsub_msg.extend_from_slice(prefix);
+        // ZMTP-frame it (single-frame message)
+        let mut wire = BytesMut::new();
+        crate::codec::encode_multipart(&[payload], &mut wire);
+        let wire = wire.freeze();
 
-        let buf = unsub_msg.freeze();
-        trace!("[SUB] Sending unsubscription message ({} bytes)", buf.len());
+        trace!("[SUB] Sending subscription event ({} wire bytes)", wire.len());
 
-        let stream =
-            self.base.stream.as_mut().ok_or_else(|| {
-                io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
-            })?;
-        let BufResult(result, _) = AsyncWrite::write(stream, IoBytes::new(buf)).await;
+        let stream = self.base.stream.as_mut().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
+        })?;
+        let data = wire.to_vec();
+        let BufResult(result, _) = stream.write_all(data).await;
         result?;
 
-        trace!("[SUB] Unsubscription message sent successfully");
-
+        trace!("[SUB] Subscription event sent successfully");
         Ok(())
     }
 
