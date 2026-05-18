@@ -42,5 +42,11 @@ path = "fuzz_targets/fuzz_subscription_trie.rs"
 test = false
 doc = false
 
+[[bin]]
+name = "fuzz_curve_handshake"
+path = "fuzz_targets/fuzz_curve_handshake.rs"
+test = false
+doc = false
+
 [profile.release]
 debug = 1

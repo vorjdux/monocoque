@@ -28,7 +28,7 @@ use monocoque_core::alloc::IoBytes;
 use monocoque_core::options::SocketOptions;
 use monocoque_core::timeout::{read_exact_with_timeout, write_all_with_timeout};
 use std::time::Duration;
-use tracing::debug;
+use tracing::{debug, warn};
 
 /// Result of a successful handshake
 #[derive(Debug)]
@@ -100,8 +100,14 @@ where
     let io_buf = IoBytes::new(greeting_bytes.clone());
     let BufResult(write_res, _) = write_all_with_timeout(stream, io_buf, timeout)
         .await
-        .map_err(|_| ZmtpError::Protocol)?;
-    write_res.map_err(|_| ZmtpError::Protocol)?;
+        .map_err(|e| {
+            warn!("[HANDSHAKE] Step 1: Failed to send ZMTP greeting: {}", e);
+            ZmtpError::Protocol
+        })?;
+    write_res.map_err(|e| {
+        warn!("[HANDSHAKE] Step 1: Failed to write ZMTP greeting bytes: {}", e);
+        ZmtpError::Protocol
+    })?;
     debug!(
         "[HANDSHAKE] Step 1 DONE: Sent greeting ({} bytes)",
         greeting_bytes.len()
@@ -112,12 +118,22 @@ where
     let greeting_buf = [0u8; 64];
     let BufResult(read_res, greeting_buf) = read_exact_with_timeout(stream, greeting_buf, timeout)
         .await
-        .map_err(|_| ZmtpError::Protocol)?;
-    read_res.map_err(|_| ZmtpError::Protocol)?;
+        .map_err(|e| {
+            warn!("[HANDSHAKE] Step 2: Failed to receive ZMTP greeting: {}", e);
+            ZmtpError::Protocol
+        })?;
+    read_res.map_err(|e| {
+        warn!("[HANDSHAKE] Step 2: Failed to read ZMTP greeting bytes: {}", e);
+        ZmtpError::Protocol
+    })?;
     debug!("[HANDSHAKE] Step 2 DONE: Received peer greeting (64 bytes)");
 
     // Validate greeting signature
     if greeting_buf[0] != 0xFF {
+        warn!(
+            "[HANDSHAKE] ZMTP greeting: expected signature byte 0xff at offset 0, got 0x{:02x}",
+            greeting_buf[0]
+        );
         return Err(ZmtpError::Protocol);
     }
 
@@ -141,8 +157,14 @@ where
     let io_buf = IoBytes::new(ready_frame.clone());
     let BufResult(write_res, _) = write_all_with_timeout(stream, io_buf, timeout)
         .await
-        .map_err(|_| ZmtpError::Protocol)?;
-    write_res.map_err(|_| ZmtpError::Protocol)?;
+        .map_err(|e| {
+            warn!("[HANDSHAKE] Step 4: Failed to send ZMTP READY command: {}", e);
+            ZmtpError::Protocol
+        })?;
+    write_res.map_err(|e| {
+        warn!("[HANDSHAKE] Step 4: Failed to write ZMTP READY command bytes: {}", e);
+        ZmtpError::Protocol
+    })?;
     debug!(
         "[HANDSHAKE] Step 4 DONE: Sent READY command ({} bytes)",
         ready_frame.len()
@@ -153,8 +175,14 @@ where
     let header_buf = [0u8; 2];
     let BufResult(read_res, header_buf) = read_exact_with_timeout(stream, header_buf, timeout)
         .await
-        .map_err(|_| ZmtpError::Protocol)?;
-    read_res.map_err(|_| ZmtpError::Protocol)?;
+        .map_err(|e| {
+            warn!("[HANDSHAKE] Step 5: Failed to receive ZMTP READY frame header: {}", e);
+            ZmtpError::Protocol
+        })?;
+    read_res.map_err(|e| {
+        warn!("[HANDSHAKE] Step 5: Failed to read ZMTP READY frame header bytes: {}", e);
+        ZmtpError::Protocol
+    })?;
     debug!(
         "[HANDSHAKE] Step 5a DONE: Read header [{:02x}, {:02x}]",
         header_buf[0], header_buf[1]
@@ -165,7 +193,11 @@ where
     let is_long = (flags & 0x02) != 0;
 
     if !is_command {
-        debug!("[HANDSHAKE] ERROR: Expected COMMAND frame, got data frame");
+        warn!(
+            "[HANDSHAKE] ZMTP READY step: expected COMMAND frame (flags & 0x04 != 0), \
+             got flags=0x{:02x} — peer sent a data frame instead of READY",
+            flags
+        );
         return Err(ZmtpError::Protocol);
     }
 
@@ -174,8 +206,14 @@ where
         let len_buf = [0u8; 8];
         let BufResult(read_res, len_buf) = read_exact_with_timeout(stream, len_buf, timeout)
             .await
-            .map_err(|_| ZmtpError::Protocol)?;
-        read_res.map_err(|_| ZmtpError::Protocol)?;
+            .map_err(|e| {
+                warn!("[HANDSHAKE] Step 5: Failed to receive ZMTP READY long-frame length: {}", e);
+                ZmtpError::Protocol
+            })?;
+        read_res.map_err(|e| {
+            warn!("[HANDSHAKE] Step 5: Failed to read ZMTP READY long-frame length bytes: {}", e);
+            ZmtpError::Protocol
+        })?;
         u64::from_be_bytes(len_buf) as usize
     } else {
         header_buf[1] as usize
@@ -185,17 +223,23 @@ where
     // Read body
     const MAX_READY_SIZE: usize = 512;
     if body_len > MAX_READY_SIZE {
-        debug!(
-            "[HANDSHAKE] ERROR: READY body too large: {} bytes",
-            body_len
+        warn!(
+            "[HANDSHAKE] ZMTP READY body too large: got {} bytes, maximum allowed is {} bytes",
+            body_len, MAX_READY_SIZE
         );
         return Err(ZmtpError::Protocol);
     }
     let body_buf = vec![0u8; body_len];
     let BufResult(read_res, body_buf) = read_exact_with_timeout(stream, body_buf, timeout)
         .await
-        .map_err(|_| ZmtpError::Protocol)?;
-    read_res.map_err(|_| ZmtpError::Protocol)?;
+        .map_err(|e| {
+            warn!("[HANDSHAKE] Step 5: Failed to receive ZMTP READY body ({} bytes): {}", body_len, e);
+            ZmtpError::Protocol
+        })?;
+    read_res.map_err(|e| {
+        warn!("[HANDSHAKE] Step 5: Failed to read ZMTP READY body bytes: {}", e);
+        ZmtpError::Protocol
+    })?;
     debug!("[HANDSHAKE] Step 5c DONE: Read {} bytes of body", body_len);
 
     // Parse READY command
@@ -275,7 +319,10 @@ where
 
     if options.curve_server {
         debug!("[HANDSHAKE] Running CURVE server exchange");
-        let secret_bytes = options.curve_secretkey.ok_or(ZmtpError::Protocol)?;
+        let secret_bytes = options.curve_secretkey.ok_or_else(|| {
+            warn!("[HANDSHAKE] CURVE server mode requires curve_secretkey to be set, but it is missing");
+            ZmtpError::Protocol
+        })?;
         let server_secret = CurveSecretKey::from_bytes(secret_bytes);
         let server_public = server_secret.public_key();
         let server_keypair = CurveKeyPair::from_keys(server_public, server_secret);
@@ -294,7 +341,11 @@ where
         let mut curve_client = CurveClient::new(client_keypair, server_public);
         curve_client.handshake(stream, timeout).await
     } else if options.curve_secretkey.is_some() {
-        // Public key set but no server key: can't proceed.
+        // curve_secretkey set for a client but curve_serverkey is absent.
+        warn!(
+            "[HANDSHAKE] CURVE client mode requires both curve_secretkey and curve_serverkey, \
+             but curve_serverkey (server's public key) is missing"
+        );
         Err(ZmtpError::Protocol)
     } else {
         Ok(())
@@ -345,11 +396,23 @@ fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), Zmtp
     // - Properties as key-value pairs
 
     if body.len() < 6 {
+        warn!(
+            "[HANDSHAKE] ZMTP READY parse: body too short — got {} bytes, need at least 6",
+            body.len()
+        );
         return Err(ZmtpError::Protocol);
     }
 
     let name_len = body[0] as usize;
     if name_len != 5 || &body[1..6] != b"READY" {
+        warn!(
+            "[HANDSHAKE] ZMTP READY parse: expected command name \"READY\" (length=5), \
+             got length={} name={:?}",
+            name_len,
+            body.get(1..1 + name_len.min(body.len().saturating_sub(1)))
+                .map(|b| String::from_utf8_lossy(b).into_owned())
+                .unwrap_or_default()
+        );
         return Err(ZmtpError::Protocol);
     }
 
@@ -408,12 +471,15 @@ fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), Zmtp
         }
     }
 
-    let socket_type = socket_type.ok_or(ZmtpError::Protocol)?;
+    let socket_type = socket_type.ok_or_else(|| {
+        warn!("[HANDSHAKE] ZMTP READY parse: peer READY command is missing the required \"Socket-Type\" property");
+        ZmtpError::Protocol
+    })?;
     Ok((socket_type, identity))
 }
 
 /// Parse socket type from bytes
-const fn parse_socket_type(value: &[u8]) -> Result<SocketType, ZmtpError> {
+fn parse_socket_type(value: &[u8]) -> Result<SocketType, ZmtpError> {
     match value {
         b"PAIR" => Ok(SocketType::Pair),
         b"DEALER" => Ok(SocketType::Dealer),
@@ -426,6 +492,12 @@ const fn parse_socket_type(value: &[u8]) -> Result<SocketType, ZmtpError> {
         b"REP" => Ok(SocketType::Rep),
         b"PUSH" => Ok(SocketType::Push),
         b"PULL" => Ok(SocketType::Pull),
-        _ => Err(ZmtpError::Protocol),
+        _ => {
+            warn!(
+                "[HANDSHAKE] ZMTP READY parse: unknown Socket-Type value {:?}",
+                String::from_utf8_lossy(value)
+            );
+            Err(ZmtpError::Protocol)
+        }
     }
 }
