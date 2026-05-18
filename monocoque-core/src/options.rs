@@ -357,6 +357,55 @@ pub struct SocketOptions {
     /// - `None`: Retry indefinitely (default, matches libzmq behaviour)
     /// - `Some(n)`: Give up and return `NotConnected` after n attempts
     pub max_reconnect_attempts: Option<u32>,
+
+    /// ZMTP heartbeat interval (`ZMQ_HEARTBEAT_IVL` = 75)
+    ///
+    /// How often to send PING heartbeat commands on an otherwise idle connection.
+    /// - `None`: Disabled (default)
+    /// - `Some(dur)`: Send PING every `dur` of inactivity
+    pub heartbeat_ivl: Option<Duration>,
+
+    /// ZMTP heartbeat TTL (`ZMQ_HEARTBEAT_TTL` = 76)
+    ///
+    /// Time-to-live for the remote peer's heartbeat (sent in PING command).
+    /// The remote will disconnect if it doesn't receive a heartbeat within this interval.
+    /// - `None`: Use `heartbeat_ivl` (default)
+    /// - `Some(dur)`: Override TTL sent to peer
+    pub heartbeat_ttl: Option<Duration>,
+
+    /// ZMTP heartbeat timeout (`ZMQ_HEARTBEAT_TIMEOUT` = 77)
+    ///
+    /// How long to wait for a PONG reply before considering the connection dead.
+    /// - `None`: Use `heartbeat_ivl` (default)
+    /// - `Some(dur)`: Custom timeout (recommended: 2–5× heartbeat_ivl)
+    pub heartbeat_timeout: Option<Duration>,
+
+    /// ROUTER raw mode (`ZMQ_ROUTER_RAW` = 41)
+    ///
+    /// Put ROUTER socket into raw mode (no ZMTP handshake, acts like STREAM).
+    /// - `false` (default): Normal ZMTP routing
+    /// - `true`: Raw TCP bridging mode
+    pub router_raw: bool,
+
+    /// STREAM connect/disconnect notifications (`ZMQ_STREAM_NOTIFY` = 73)
+    ///
+    /// Send empty notification frames on connect and disconnect.
+    /// - `true` (default): Send notification frames
+    /// - `false`: Suppress notification frames
+    pub stream_notify: bool,
+
+    /// XPUB no-drop mode (`ZMQ_XPUB_NODROP` = 69)
+    ///
+    /// - `false` (default): Drop messages silently when HWM is reached
+    /// - `true`: Return error (`EAGAIN`) instead of dropping
+    pub xpub_nodrop: bool,
+
+    /// Invert topic matching (`ZMQ_INVERT_MATCHING` = 74)
+    ///
+    /// Invert the subscription filter logic for PUB/SUB and XPUB/XSUB.
+    /// - `false` (default): Deliver messages matching subscriptions
+    /// - `true`: Deliver messages NOT matching any subscription
+    pub invert_matching: bool,
 }
 
 impl Default for SocketOptions {
@@ -412,6 +461,13 @@ impl Default for SocketOptions {
             subscriptions: Vec::new(),    // No subscriptions
             unsubscriptions: Vec::new(),  // No unsubscriptions
             max_reconnect_attempts: None, // Retry indefinitely
+            heartbeat_ivl: None,
+            heartbeat_ttl: None,
+            heartbeat_timeout: None,
+            router_raw: false,
+            stream_notify: true,
+            xpub_nodrop: false,
+            invert_matching: false,
         }
     }
 }
@@ -523,6 +579,48 @@ impl SocketOptions {
     /// Set connection timeout.
     pub const fn with_connect_timeout(mut self, timeout: Duration) -> Self {
         self.connect_timeout = timeout;
+        self
+    }
+
+    /// Set heartbeat interval (`ZMQ_HEARTBEAT_IVL`).
+    pub const fn with_heartbeat_ivl(mut self, ivl: Duration) -> Self {
+        self.heartbeat_ivl = Some(ivl);
+        self
+    }
+
+    /// Set heartbeat TTL (`ZMQ_HEARTBEAT_TTL`).
+    pub const fn with_heartbeat_ttl(mut self, ttl: Duration) -> Self {
+        self.heartbeat_ttl = Some(ttl);
+        self
+    }
+
+    /// Set heartbeat timeout (`ZMQ_HEARTBEAT_TIMEOUT`).
+    pub const fn with_heartbeat_timeout(mut self, timeout: Duration) -> Self {
+        self.heartbeat_timeout = Some(timeout);
+        self
+    }
+
+    /// Enable or disable ROUTER raw mode (`ZMQ_ROUTER_RAW`).
+    pub const fn with_router_raw(mut self, raw: bool) -> Self {
+        self.router_raw = raw;
+        self
+    }
+
+    /// Enable or disable STREAM connect/disconnect notifications (`ZMQ_STREAM_NOTIFY`).
+    pub const fn with_stream_notify(mut self, notify: bool) -> Self {
+        self.stream_notify = notify;
+        self
+    }
+
+    /// Enable XPUB no-drop mode (`ZMQ_XPUB_NODROP`).
+    pub const fn with_xpub_nodrop(mut self, nodrop: bool) -> Self {
+        self.xpub_nodrop = nodrop;
+        self
+    }
+
+    /// Enable inverted topic matching (`ZMQ_INVERT_MATCHING`).
+    pub const fn with_invert_matching(mut self, invert: bool) -> Self {
+        self.invert_matching = invert;
         self
     }
 
