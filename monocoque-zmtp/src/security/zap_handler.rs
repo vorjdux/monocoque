@@ -362,4 +362,137 @@ mod tests {
             assert_eq!(response.status_code, ZapStatus::Failure);
         });
     }
+
+    /// A ZAP handler that rejects connections from a configurable deny-list of
+    /// IP addresses by returning a 400 (Failure) response.
+    struct IpDenyListHandler {
+        denied_ips: Vec<String>,
+    }
+
+    impl IpDenyListHandler {
+        fn new(denied_ips: Vec<&str>) -> Self {
+            Self {
+                denied_ips: denied_ips.into_iter().map(str::to_string).collect(),
+            }
+        }
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl ZapHandler for IpDenyListHandler {
+        async fn authenticate(&self, request: &ZapRequest) -> ZapResponse {
+            // Reject if the peer address starts with any denied IP prefix
+            if self.denied_ips.iter().any(|ip| request.address.starts_with(ip.as_str())) {
+                return ZapResponse::failure(
+                    request.request_id.clone(),
+                    format!("Address {} is blocked", request.address),
+                );
+            }
+            ZapResponse::success(request.request_id.clone(), String::new())
+        }
+    }
+
+    /// Verify that a ZAP handler which returns 400 for specific IP addresses
+    /// causes those addresses to be treated as rejected, while others are accepted.
+    #[test]
+    fn test_ip_based_rejection() {
+        compio::runtime::Runtime::new().unwrap().block_on(async {
+            let handler = IpDenyListHandler::new(vec!["192.168.1.100", "10.0.0.1"]);
+
+            // --- Denied address: should receive a Failure (400) response ---
+            let denied_request = ZapRequest {
+                version: "1.0".to_string(),
+                request_id: "deny-1".to_string(),
+                domain: "global".to_string(),
+                address: "192.168.1.100".to_string(), // in the deny list
+                identity: Bytes::new(),
+                mechanism: ZapMechanism::Null,
+                credentials: vec![],
+            };
+            let denied_response = handler.authenticate(&denied_request).await;
+            assert_eq!(
+                denied_response.status_code,
+                ZapStatus::Failure,
+                "connections from denied IPs must be rejected with status 400"
+            );
+            assert!(
+                denied_response.status_text.contains("192.168.1.100"),
+                "failure message should name the blocked address"
+            );
+
+            // --- Another denied address ---
+            let denied_request2 = ZapRequest {
+                version: "1.0".to_string(),
+                request_id: "deny-2".to_string(),
+                domain: "global".to_string(),
+                address: "10.0.0.1".to_string(), // also in the deny list
+                identity: Bytes::new(),
+                mechanism: ZapMechanism::Null,
+                credentials: vec![],
+            };
+            let denied_response2 = handler.authenticate(&denied_request2).await;
+            assert_eq!(
+                denied_response2.status_code,
+                ZapStatus::Failure,
+                "10.0.0.1 is on the deny list and must be rejected"
+            );
+
+            // --- Allowed address: should receive a Success (200) response ---
+            let allowed_request = ZapRequest {
+                version: "1.0".to_string(),
+                request_id: "allow-1".to_string(),
+                domain: "global".to_string(),
+                address: "127.0.0.1".to_string(), // NOT in the deny list
+                identity: Bytes::new(),
+                mechanism: ZapMechanism::Null,
+                credentials: vec![],
+            };
+            let allowed_response = handler.authenticate(&allowed_request).await;
+            assert_eq!(
+                allowed_response.status_code,
+                ZapStatus::Success,
+                "connections from allowed IPs must succeed with status 200"
+            );
+        });
+    }
+
+    /// Verify that an IP subnet prefix match also blocks sub-addresses correctly.
+    #[test]
+    fn test_ip_subnet_prefix_rejection() {
+        compio::runtime::Runtime::new().unwrap().block_on(async {
+            // Block the entire 10.0.0.x range using a prefix
+            let handler = IpDenyListHandler::new(vec!["10.0.0."]);
+
+            let blocked = ZapRequest {
+                version: "1.0".to_string(),
+                request_id: "subnet-1".to_string(),
+                domain: "global".to_string(),
+                address: "10.0.0.55".to_string(),
+                identity: Bytes::new(),
+                mechanism: ZapMechanism::Null,
+                credentials: vec![],
+            };
+            let resp = handler.authenticate(&blocked).await;
+            assert_eq!(
+                resp.status_code,
+                ZapStatus::Failure,
+                "addresses matching a denied subnet prefix must be rejected"
+            );
+
+            let allowed = ZapRequest {
+                version: "1.0".to_string(),
+                request_id: "subnet-2".to_string(),
+                domain: "global".to_string(),
+                address: "10.0.1.1".to_string(), // different subnet
+                identity: Bytes::new(),
+                mechanism: ZapMechanism::Null,
+                credentials: vec![],
+            };
+            let resp2 = handler.authenticate(&allowed).await;
+            assert_eq!(
+                resp2.status_code,
+                ZapStatus::Success,
+                "addresses not matching a denied prefix must be accepted"
+            );
+        });
+    }
 }
