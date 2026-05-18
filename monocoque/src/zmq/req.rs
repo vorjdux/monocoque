@@ -94,12 +94,35 @@ impl ReqSocket {
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?
         };
 
-        let stream = TcpStream::connect(addr).await?;
-        let sock = Self::from_tcp(stream).await?;
+        let sock = Self {
+            inner: InternalReq::connect(addr).await?,
+            monitor: None,
+        };
         sock.emit_event(SocketEvent::Connected(
             monocoque_core::endpoint::Endpoint::Tcp(addr),
         ));
         Ok(sock)
+    }
+
+    /// Check if the socket is currently connected.
+    #[inline]
+    pub fn is_connected(&self) -> bool {
+        self.inner.is_connected()
+    }
+
+    /// Try to reconnect to the stored endpoint.
+    pub async fn try_reconnect(&mut self) -> io::Result<()> {
+        self.inner.try_reconnect().await
+    }
+
+    /// Send with automatic reconnection on network error.
+    pub async fn send_with_reconnect(&mut self, msg: Vec<bytes::Bytes>) -> io::Result<()> {
+        self.inner.send_with_reconnect(msg).await
+    }
+
+    /// Receive with automatic reconnection on EOF or network error.
+    pub async fn recv_with_reconnect(&mut self) -> io::Result<Option<Vec<bytes::Bytes>>> {
+        self.inner.recv_with_reconnect().await
     }
 
     /// Connect to a ZeroMQ peer with custom socket options.

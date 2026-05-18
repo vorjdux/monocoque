@@ -265,6 +265,16 @@ impl XPubSocket {
                     loop {
                         match sub.decoder.decode(&mut sub.recv_buf) {
                             Ok(Some(frame)) => {
+                                if frame.is_command() {
+                                    if crate::base::is_ping_payload(&frame.payload) {
+                                        use compio::buf::BufResult;
+                                        use compio::io::AsyncWriteExt;
+                                        let pong = crate::base::build_pong_frame();
+                                        let BufResult(result, _) = sub.stream.write_all(pong.to_vec()).await;
+                                        let _ = result; // best-effort; disconnect handled elsewhere
+                                    }
+                                    continue;
+                                }
                                 if let Some(event) = SubscriptionEvent::from_message(&frame.payload) {
                                     trace!(
                                         "[XPUB] Subscription event from subscriber {}: {:?}",

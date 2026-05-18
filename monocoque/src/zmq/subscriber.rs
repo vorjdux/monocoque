@@ -82,12 +82,30 @@ impl SubSocket {
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?
         };
 
-        let stream = TcpStream::connect(addr).await?;
-        let sock = Self::from_tcp(stream).await?;
+        let sock = Self {
+            inner: InternalSub::connect(addr).await?,
+            monitor: None,
+        };
         sock.emit_event(SocketEvent::Connected(
             monocoque_core::endpoint::Endpoint::Tcp(addr),
         ));
         Ok(sock)
+    }
+
+    /// Check if the socket is currently connected.
+    #[inline]
+    pub fn is_connected(&self) -> bool {
+        self.inner.is_connected()
+    }
+
+    /// Try to reconnect to the stored endpoint, re-sending all active subscriptions.
+    pub async fn try_reconnect(&mut self) -> io::Result<()> {
+        self.inner.try_reconnect().await
+    }
+
+    /// Receive with automatic reconnection on EOF or network error.
+    pub async fn recv_with_reconnect(&mut self) -> io::Result<Option<Vec<bytes::Bytes>>> {
+        self.inner.recv_with_reconnect().await
     }
 
     /// Connect to a PUB peer via IPC (Unix domain sockets).

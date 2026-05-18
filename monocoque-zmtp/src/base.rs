@@ -379,12 +379,7 @@ where
     /// - `Ok(true)`  — a PING was appended to `send_buffer`; caller must flush.
     /// - `Ok(false)` — nothing to do or heartbeat is disabled.
     /// - `Err(e)`    — a pending PONG timed out; connection should be closed.
-    ///
-    /// # Stub note
-    ///
-    /// Timeout-based disconnection (`Err` path) is implemented here but the
-    /// callers in individual socket types do not yet propagate the error to
-    /// application code — that wiring is left for a follow-up PR.
+    ///   Callers propagate this with `?` so the error surfaces to the application.
     pub fn check_heartbeat(&mut self) -> io::Result<bool> {
         let ivl = match self.options.heartbeat_ivl {
             Some(ivl) => ivl,
@@ -711,11 +706,11 @@ impl SocketBase<TcpStream> {
             }
         };
 
-        // Perform handshake
+        // Perform handshake — preserve routing identity from options
         perform_handshake_with_options(
             &mut new_stream,
             socket_type,
-            None, // Identity not supported in reconnection yet
+            self.options.routing_id.as_deref(),
             Some(self.options.handshake_timeout),
             &self.options,
         )
