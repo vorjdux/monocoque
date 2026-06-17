@@ -1,6 +1,6 @@
 # Implementation Summary: TCP Keepalive & REQ Modes
 **Date**: January 19, 2026  
-**Author**: GitHub Copilot  
+**Author**: Matheus Santos  
 **Status**: ✅ Completed
 
 ---

@@ -41,7 +41,7 @@ fn bench_bytes_construction(c: &mut Criterion) {
         });
     });
 
-    // Cloning Bytes is an Arc reference-count bump — O(1), no allocation
+    // Cloning Bytes is an Arc reference-count bump  -  O(1), no allocation
     let frozen = Bytes::from(vec![0u8; 1024]);
     group.bench_function("clone_arc_1kb", |b| {
         b.iter(|| {

@@ -6,8 +6,8 @@ A five-minute guide to sending your first message with Monocoque.
 
 - **31-37% faster latency** than libzmq (23 μs vs 33-36 μs round-trip)
 - **3.24 M msg/sec throughput** with the batching API
-- **Pure Rust** — no C dependencies, full async/await
-- **Memory safe** — zero unsafe code in the protocol layer
+- **Pure Rust**  -  no C dependencies, full async/await
+- **Memory safe**  -  zero unsafe code in the protocol layer
 
 ---
 
@@ -158,10 +158,10 @@ cargo test --workspace
 
 ## Next Steps
 
-- [Architecture Decision Records](ADR.md) — why io_uring, worker pools, and `Bytes`
-- [Performance Tuning Guide](PERFORMANCE_TUNING.md) — buffer sizes, worker counts, TCP options
-- [Security Guide](SECURITY_GUIDE.md) — PLAIN and CURVE authentication
-- [Migration Guide](MIGRATION.md) — coming from `zmq` (rust-zmq) or libzmq
+- [Architecture Decision Records](ADR.md)  -  why io_uring, worker pools, and `Bytes`
+- [Performance Tuning Guide](PERFORMANCE_TUNING.md)  -  buffer sizes, worker counts, TCP options
+- [Security Guide](SECURITY_GUIDE.md)  -  PLAIN and CURVE authentication
+- [Migration Guide](MIGRATION.md)  -  coming from `zmq` (rust-zmq) or libzmq
 - API docs: `cargo doc --no-deps --open -p monocoque`
 
 ---

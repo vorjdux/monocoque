@@ -2,7 +2,7 @@
 
 ## ZMTP Version Support
 
-Monocoque implements **ZMTP 3.x** (ZeroMQ Message Transport Protocol), ensuring compatibility with all modern ZeroMQ versions.
+Monocoque implements **ZMTP 3.x** (ZeroMQ Message Transport Protocol), compatible with all modern ZeroMQ versions.
 
 ### Supported ZeroMQ Versions
 
@@ -34,7 +34,7 @@ if major < 3 {
 b.extend_from_slice(&[0x03, 0x00]);
 ```
 
-**Why 3.0?** Sending ZMTP 3.0 ensures backward compatibility while accepting any 3.x version allows forward compatibility.
+**Why 3.0?** Sending ZMTP 3.0 provides backward compatibility; accepting any 3.x version provides forward compatibility.
 
 ### Socket Type Compatibility
 
@@ -158,7 +158,7 @@ let minor = src[11];  // Byte 11: minor version (0 or 1)
 // 3.1 = ZMQ 4.2+
 ```
 
-Monocoque parses the minor version and supports ZMTP 3.1 features (heartbeating via PING/PONG) when both peers advertise 3.1.
+monocoque parses the minor version and enables ZMTP 3.1 features (heartbeating via PING/PONG) when both peers advertise 3.1.
 
 ## References
 

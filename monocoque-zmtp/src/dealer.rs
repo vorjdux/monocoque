@@ -711,7 +711,7 @@ impl DealerSocket<TcpStream> {
     /// method loops: on EOF or broken-pipe it clears the stream and calls
     /// `try_reconnect()` (which applies exponential backoff), then retries `recv()`.
     ///
-    /// Respects `max_reconnect_attempts` — returns `NotConnected` when exhausted.
+    /// Respects `max_reconnect_attempts`  -  returns `NotConnected` when exhausted.
     pub async fn recv_with_reconnect(&mut self) -> io::Result<Option<Vec<Bytes>>> {
         let max = self.base.options.max_reconnect_attempts;
         let mut attempts = 0u32;
@@ -768,7 +768,7 @@ impl DealerSocket<TcpStream> {
     /// On BrokenPipe / ConnectionReset, `write_from_buf()` already sets
     /// `stream = None`, so the next loop iteration reconnects automatically.
     ///
-    /// Respects `max_reconnect_attempts` — returns `NotConnected` when exhausted.
+    /// Respects `max_reconnect_attempts`  -  returns `NotConnected` when exhausted.
     pub async fn send_with_reconnect(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
         let max = self.base.options.max_reconnect_attempts;
         let mut attempts = 0u32;

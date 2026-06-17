@@ -95,8 +95,8 @@ mode) and no message is queued. Either:
 2. **Send timeout too short**: If `send_timeout` fires before the reconnection
    succeeds, the operation fails rather than waiting for reconnect.
 
-3. **Inproc transport**: Inproc endpoints do not reconnect — they require the
-   server to be bound before the client connects.
+3. **Inproc transport**: Inproc endpoints do not reconnect. The server must be
+   bound before the client connects.
 
 ---
 

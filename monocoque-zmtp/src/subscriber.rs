@@ -392,7 +392,7 @@ impl SubSocket<TcpStream> {
     /// method loops: on EOF or broken-pipe it clears the stream and calls
     /// `try_reconnect()` (which applies exponential backoff), then retries `recv()`.
     ///
-    /// Respects `max_reconnect_attempts` — returns `NotConnected` when exhausted.
+    /// Respects `max_reconnect_attempts`  -  returns `NotConnected` when exhausted.
     pub async fn recv_with_reconnect(&mut self) -> io::Result<Option<Vec<Bytes>>> {
         let max = self.base.options.max_reconnect_attempts;
         let mut attempts = 0u32;

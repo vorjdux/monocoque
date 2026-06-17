@@ -74,7 +74,7 @@ fn test_sub_options_subscriptions_are_applied() {
             .block_on(async move {
                 let stream = compio::net::TcpStream::connect(addr).await.unwrap();
 
-                // Create SUB with subscription declared in options — no manual subscribe().
+                // Create SUB with subscription declared in options  -  no manual subscribe().
                 let opts = SocketOptions::default()
                     .with_subscribe(Bytes::from("news."));
                 let mut sub = SubSocket::with_options(stream, opts).await.unwrap();

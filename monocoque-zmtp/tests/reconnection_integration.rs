@@ -1,7 +1,7 @@
 //! Integration tests for automatic reconnection functionality.
 //!
 //! Design principles:
-//! - Each OS thread has its own compio Runtime — avoids residual-timer crosstalk.
+//! - Each OS thread has its own compio Runtime  -  avoids residual-timer crosstalk.
 //! - The server holds the TcpListener open across connections so the client
 //!   can reconnect without racing a new bind.
 //! - The server sends messages *proactively* (no client request needed) so that
@@ -206,7 +206,7 @@ fn test_send_with_reconnect_after_server_restart() {
 
                 // Wait for server to signal drop, then drain the EOF.
                 drop_rx.recv().unwrap();
-                let _ = dealer.recv().await; // Ok(None) or Err — both fine
+                let _ = dealer.recv().await; // Ok(None) or Err  -  both fine
 
                 // send_with_reconnect reconnects and delivers the message.
                 let payload = vec![Bytes::new(), Bytes::from("hello-reconnect")];
@@ -251,7 +251,7 @@ fn test_reconnect_max_attempts_exceeded() {
                 addr_tx.send(listener.local_addr().unwrap()).unwrap();
                 let (stream, _) = listener.accept().await.unwrap();
                 let _router = RouterSocket::from_tcp(stream).await.unwrap();
-                // Drop both — no more accepts available.
+                // Drop both  -  no more accepts available.
             });
     });
 
