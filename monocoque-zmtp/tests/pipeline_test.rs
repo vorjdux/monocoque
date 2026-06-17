@@ -137,7 +137,7 @@ fn test_push_pull_multi_message() {
 // Test: reversed topology (PULL binds, PUSH connects)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// PULL binds and PUSH connects — confirms messages flow in this topology too.
+/// PULL binds and PUSH connects  -  confirms messages flow in this topology too.
 #[test]
 fn test_pull_bind_push_connect() {
     let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();

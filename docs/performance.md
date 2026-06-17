@@ -42,7 +42,7 @@ let opts = SocketOptions::default()
     .with_recv_hwm(2000); // double the default recv queue
 ```
 
-Setting HWM to 0 disables the limit entirely (unbounded queue — use with care).
+Setting HWM to 0 disables the limit entirely (unbounded queue  -  use with care).
 
 ---
 
@@ -53,8 +53,8 @@ the full benefit; older kernels fall back to thread-pool I/O.
 
 - **SQ/CQ ring size**: Controlled by compio's runtime builder. Larger rings
   reduce submission overhead for high-connection-count servers.
-- **SQPOLL**: Enables kernel-side submission polling — eliminates `io_uring_enter`
-  syscalls entirely at the cost of a dedicated CPU core. Useful only for
+- **SQPOLL**: Enables kernel-side submission polling, eliminating `io_uring_enter`
+  syscalls at the cost of a dedicated CPU core. Useful only for
   sustained > 500k msg/s workloads.
 - **Fixed buffers**: compio's arena allocator already pins buffers for io_uring
   registered buffers. No extra work needed.
@@ -78,13 +78,13 @@ for _ in 0..num_cpus::get() {
 }
 ```
 
-Avoid sharing sockets across threads — monocoque sockets are `!Send`.
+Avoid sharing sockets across threads; monocoque sockets are `!Send`.
 
 ---
 
 ## Inproc vs TCP
 
-`inproc://` transport skips the network stack entirely — messages are passed
+`inproc://` transport skips the network stack entirely. Messages are passed
 via `flume` channels with no serialisation.
 
 | Transport | Typical latency | Zero-copy |
@@ -132,4 +132,4 @@ let opts = SocketOptions::default()
 2. **Lock contention**: Use `tokio-console` or `perf lock` on the routing/pubsub
    hubs under many-peer workloads.
 3. **CPU affinity**: Pin runtime threads to specific cores with `nix::sched::sched_setaffinity`.
-4. **Kernel version**: Verify io_uring is active (`/proc/$(pidof yourapp)/fdinfo` — look for `uring`).
+4. **Kernel version**: Verify io_uring is active (`/proc/$(pidof yourapp)/fdinfo`  -  look for `uring`).

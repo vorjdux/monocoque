@@ -11,7 +11,7 @@ fuzz_target!(|data: &[u8]| {
     let mut buf = SegmentedBuffer::new();
     buf.push(Bytes::copy_from_slice(data));
 
-    // The result must be Ok(Some), Ok(None), or Err — never a panic.
+    // The result must be Ok(Some), Ok(None), or Err  -  never a panic.
     let _ = decoder.decode(&mut buf);
 
     // --- Encode path: derive a frame size from the first 2 bytes and encode ---
@@ -47,7 +47,7 @@ fuzz_target!(|data: &[u8]| {
                 assert_eq!(decoded_frame.payload.len(), size);
             }
             Ok(None) => {
-                // Incomplete — only possible for empty payloads under fragmentation,
+                // Incomplete  -  only possible for empty payloads under fragmentation,
                 // which should not happen for a complete encoded frame.
                 // Accept it to keep the fuzz target panic-free.
             }

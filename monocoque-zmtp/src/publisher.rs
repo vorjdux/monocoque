@@ -497,7 +497,7 @@ impl PubSocket {
     /// Number of messages dropped due to full worker channels (HWM backpressure).
     ///
     /// Increments when `send()` calls `try_send` on a worker channel that is at
-    /// capacity. Reset by creating a new socket — this counter is never cleared.
+    /// capacity. Reset by creating a new socket  -  this counter is never cleared.
     #[inline]
     pub fn drop_count(&self) -> u64 {
         self.drop_count.load(Ordering::Relaxed)

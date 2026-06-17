@@ -273,13 +273,13 @@ proxy::proxy(&mut frontend, &mut backend, Option::<&mut XSubSocket>::None).await
 
 **Example:**
 ```rust
-// Ventilator (task producer) — binds, workers connect to it
+// Ventilator (task producer)  -  binds, workers connect to it
 let (_listener, mut ventilator) = PushSocket::bind("127.0.0.1:5557").await?;
 for i in 0..100 {
     ventilator.send(vec![Bytes::from(format!("Task {}", i))]).await?;
 }
 
-// Worker — connects to ventilator and sink
+// Worker  -  connects to ventilator and sink
 let mut receiver = PullSocket::connect("127.0.0.1:5557").await?;
 let mut sender = PushSocket::connect("127.0.0.1:5558").await?;
 while let Ok(Some(task)) = receiver.recv().await {
@@ -288,7 +288,7 @@ while let Ok(Some(task)) = receiver.recv().await {
     sender.send(result).await?;
 }
 
-// Sink (result collector) — binds, workers connect to it
+// Sink (result collector)  -  binds, workers connect to it
 let (_listener, mut sink) = PullSocket::bind("127.0.0.1:5558").await?;
 for _ in 0..100 {
     if let Ok(Some(result)) = sink.recv().await {
@@ -310,11 +310,11 @@ Username/password authentication:
 ```rust
 use monocoque::zmq::{RepSocket, ReqSocket, SocketOptions};
 
-// Server — enable PLAIN server mode, then bind
+// Server  -  enable PLAIN server mode, then bind
 let options = SocketOptions::new().with_plain_server(true);
 let (_listener, mut server) = RepSocket::bind_with_options("127.0.0.1:5555", options).await?;
 
-// Client — attach credentials, then connect
+// Client  -  attach credentials, then connect
 let options = SocketOptions::new()
     .with_plain_credentials("admin", "secret123");
 let mut client = ReqSocket::connect_with_options("127.0.0.1:5555", options).await?;
@@ -528,7 +528,7 @@ let options = SocketOptions::new()
 
 ### Zero-Copy Operations
 
-Leverage `Bytes` reference counting:
+Use `Bytes` reference counting:
 
 ```rust
 let data = Bytes::from(vec![0u8; 1024]);

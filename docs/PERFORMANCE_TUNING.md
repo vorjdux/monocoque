@@ -14,7 +14,7 @@ use monocoque::zmq::PubSocket;
 // Default: one worker per logical CPU (good for ≥4 cores)
 let socket = PubSocket::bind("127.0.0.1:5555").await?;
 
-// Override — tune this when:
+// Override  -  tune this when:
 //   • you have many other CPU-heavy tasks on the same host
 //   • you have very few subscribers (1 worker is enough)
 //   • you are running in a container with a low CPU quota
@@ -41,7 +41,7 @@ The `read_buffer_size` and `write_buffer_size` fields on `SocketOptions` control
 use monocoque::zmq::{DealerSocket, SocketOptions};
 
 let options = SocketOptions::default()
-    .with_read_buffer_size(64 * 1024)   // 64 KB — good for large messages
+    .with_read_buffer_size(64 * 1024)   // 64 KB  -  good for large messages
     .with_write_buffer_size(64 * 1024);
 
 let socket = DealerSocket::connect_with_options("127.0.0.1:5555", options).await?;
@@ -91,10 +91,10 @@ When both ends of a socket pair live in the same process, use the inproc transpo
 ```rust,no_run
 use monocoque::zmq::ipc; // inproc helpers (Unix only)
 
-// TCP loopback — crosses kernel network stack (~5–10 μs overhead)
+// TCP loopback  -  crosses kernel network stack (~5–10 μs overhead)
 let dealer = DealerSocket::connect("127.0.0.1:5555").await?;
 
-// IPC (Unix domain socket) — stays in kernel, skips TCP framing (~7–17% faster)
+// IPC (Unix domain socket)  -  stays in kernel, skips TCP framing (~7–17% faster)
 let dealer = DealerSocket::connect("ipc:///tmp/myapp.sock").await?;
 ```
 
@@ -121,14 +121,14 @@ let options = SocketOptions::default()
     .with_recv_hwm(5_000);
 ```
 
-For `PubSocket`, a full worker channel drops the message and increments an internal counter accessible via `socket.drop_count()`. Monitor this in production — a non-zero value means subscribers are too slow.
+For `PubSocket`, a full worker channel drops the message and increments an internal counter accessible via `socket.drop_count()`. Monitor this in production  -  a non-zero value means subscribers are too slow.
 
 ---
 
 ## 6. Quick-Reference Checklist
 
-- [ ] `cargo build --release` — debug builds are 5-10× slower
-- [ ] Linux kernel ≥ 5.11 — earlier kernels have slower io_uring paths
+- [ ] `cargo build --release`  -  debug builds are 5-10× slower
+- [ ] Linux kernel ≥ 5.11  -  earlier kernels have slower io_uring paths
 - [ ] Set `PubSocket` worker count to match subscriber concurrency
 - [ ] Size read/write buffers to match your 99th-percentile message size
 - [ ] Leave `TCP_NODELAY` enabled (default)

@@ -8,7 +8,7 @@ All are negotiated during the ZMTP handshake before any application data is exch
 
 ## NULL (default)
 
-NULL is the default. Any peer can connect — no authentication or encryption.
+NULL is the default. Any peer can connect with no authentication or encryption.
 Use only on loopback or within a fully-trusted network.
 
 ---
@@ -32,7 +32,7 @@ handler.add_user("alice", "s3cr3t");
 handler.add_user("bob",   "hunter2");
 
 // Spawn the ZAP server on inproc://zeromq.zap.01
-// spawn_zap_server is synchronous — it registers a background task, no .await needed.
+// spawn_zap_server is synchronous  -  it registers a background task, no .await needed.
 let zap = DefaultZapHandler::new(Arc::new(handler), false);
 spawn_zap_server(Arc::new(zap))?;
 
@@ -71,7 +71,7 @@ let server_keys = CurveKeyPair::generate();
 let client_keys = CurveKeyPair::generate();
 
 // Fields are .public (CurvePublicKey) and .secret (CurveSecretKey).
-// Persist keys securely — lose the secret key and the session cannot be
+// Persist keys securely  -  lose the secret key and the session cannot be
 // decrypted; expose it and an attacker can impersonate you.
 println!("server public:  {:?}", server_keys.public);
 println!("server secret:  {:?}", server_keys.secret); // keep private!

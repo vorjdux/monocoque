@@ -15,7 +15,7 @@ fuzz_target!(|data: &[u8]| {
         let mut key_bytes = [0u8; CURVE_KEY_SIZE];
         key_bytes.copy_from_slice(&data[..CURVE_KEY_SIZE]);
 
-        // from_bytes / as_bytes round-trip — must never panic
+        // from_bytes / as_bytes round-trip  -  must never panic
         let public_key = CurvePublicKey::from_bytes(key_bytes);
         let _ = public_key.as_bytes();
         let _ = public_key.to_x25519();
@@ -33,13 +33,13 @@ fuzz_target!(|data: &[u8]| {
         // Derived public key must also be valid (no panic).
         let _ = derived_public.as_bytes();
 
-        // ECDH with fuzz-supplied key as peer — must not panic, only return bytes.
+        // ECDH with fuzz-supplied key as peer  -  must not panic, only return bytes.
         let shared = secret_key.diffie_hellman(&public_key);
         assert_eq!(shared.len(), CURVE_KEY_SIZE);
     }
 
     // -----------------------------------------------------------------------
-    // 2. CurveKeyPair generation — exercises the generate() path
+    // 2. CurveKeyPair generation  -  exercises the generate() path
     // -----------------------------------------------------------------------
     {
         let kp = CurveKeyPair::generate();
@@ -75,14 +75,14 @@ fuzz_target!(|data: &[u8]| {
     // Both CurveClient and CurveServer are public structs with public
     // decrypt_message methods.  Calling decrypt_message before the async
     // handshake has completed means message_box is None, so the call returns
-    // Err(ProtocolViolation) — it must never panic regardless of the input.
+    // Err(ProtocolViolation)  -  it must never panic regardless of the input.
     // -----------------------------------------------------------------------
     {
         let client_kp = CurveKeyPair::generate();
         let server_kp = CurveKeyPair::generate();
 
         let mut client = CurveClient::new(client_kp, server_kp.public);
-        // Err, not panic — message_box is None before handshake.
+        // Err, not panic  -  message_box is None before handshake.
         let _ = client.decrypt_message(data);
     }
 
@@ -91,7 +91,7 @@ fuzz_target!(|data: &[u8]| {
         use monocoque_zmtp::security::curve::CurveServer;
 
         let mut server = CurveServer::new(server_kp);
-        // Err, not panic — message_box is None before handshake.
+        // Err, not panic  -  message_box is None before handshake.
         let _ = server.decrypt_message(data);
     }
 

@@ -284,13 +284,13 @@ pub fn connect_inproc_bidi(endpoint: &str) -> io::Result<(InprocSender, InprocRe
     // is the correct semantic for a DEALER↔ROUTER or REQ↔REP pair.)
     INPROC_REPLY_REGISTRY.insert(name.to_string(), our_reply_tx);
 
-    // The server also needs to be told to write to us — we accomplish this by
+    // The server also needs to be told to write to us  -  we accomplish this by
     // updating the reply registry.  The server reads from the channel whose tx
     // we just stored.  But the server's *rx* was already created in
     // bind_inproc_bidi and is owned by the caller there.
     //
     // For simplicity, we just use the original server_to_client_tx (from_server)
-    // to send back — the server already has server_to_client_rx.
+    // to send back  -  the server already has server_to_client_rx.
     // Drop the original from_server (it was just a reference clone of the
     // server→client tx) and use the server_to_client_tx we stored in the
     // registry as the SENDER that the server will use.  The caller of
