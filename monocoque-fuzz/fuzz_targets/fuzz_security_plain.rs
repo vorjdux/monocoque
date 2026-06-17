@@ -26,7 +26,7 @@ fuzz_target!(|data: &[u8]| {
                 .collect()
         };
 
-        // Must not panic — only Ok or Err.
+        // Must not panic  -  only Ok or Err.
         let _ = ZapRequest::decode(&frames);
     }
 
@@ -54,7 +54,7 @@ fuzz_target!(|data: &[u8]| {
         let username_bytes = &data[1..split.min(data.len())];
         let password_bytes = &data[split.min(data.len())..];
 
-        // from_utf8 lossy — keep going even if not valid UTF-8.
+        // from_utf8 lossy  -  keep going even if not valid UTF-8.
         let username = String::from_utf8_lossy(username_bytes).into_owned();
         let password = String::from_utf8_lossy(password_bytes).into_owned();
 

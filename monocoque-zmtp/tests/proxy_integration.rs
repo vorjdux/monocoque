@@ -21,7 +21,7 @@ async fn pair_connected() -> (PairSocket, PairSocket) {
     (server, client)
 }
 
-/// ProxyCommand byte parsing is a pure function — no runtime needed.
+/// ProxyCommand byte parsing is a pure function  -  no runtime needed.
 #[test]
 fn test_proxy_command_parsing() {
     assert_eq!(

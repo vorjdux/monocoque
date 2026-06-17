@@ -192,7 +192,7 @@ where
     if !is_command {
         warn!(
             "[HANDSHAKE] ZMTP READY step: expected COMMAND frame (flags & 0x04 != 0), \
-             got flags=0x{:02x} — peer sent a data frame instead of READY",
+             got flags=0x{:02x}  -  peer sent a data frame instead of READY",
             flags
         );
         return Err(ZmtpError::Protocol);
@@ -280,7 +280,7 @@ where
         // For a proper server you would supply a real PlainAuthHandler; the simplest
         // approach is a StaticPlainHandler pre-loaded with no users (reject everything).
         // Callers that want custom validation should use the security API directly.
-        // We build a handler that always rejects — real auth should go through ZAP.
+        // We build a handler that always rejects  -  real auth should go through ZAP.
         // Use plain_server_handshake with a trivial reject-all handler.
         let handler = StaticPlainHandler::new(); // empty → rejects all
         let domain = options.zap_domain.as_str();
@@ -394,7 +394,7 @@ fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), Zmtp
 
     if body.len() < 6 {
         warn!(
-            "[HANDSHAKE] ZMTP READY parse: body too short — got {} bytes, need at least 6",
+            "[HANDSHAKE] ZMTP READY parse: body too short  -  got {} bytes, need at least 6",
             body.len()
         );
         return Err(ZmtpError::Protocol);

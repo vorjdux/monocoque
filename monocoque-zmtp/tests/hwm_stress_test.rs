@@ -57,7 +57,7 @@ fn test_pub_hwm_drops_with_slow_subscriber() {
                 std::thread::sleep(Duration::from_millis(30));
 
                 for i in 0..MSGS {
-                    // Ignore errors — the point is to flood the worker channel.
+                    // Ignore errors  -  the point is to flood the worker channel.
                     let _ = pub_sock
                         .send(vec![Bytes::new(), Bytes::from(format!("{}", i))])
                         .await;

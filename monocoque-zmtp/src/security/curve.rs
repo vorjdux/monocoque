@@ -234,7 +234,7 @@ pub enum CurveError {
 pub struct CurveClient {
     /// Client's long-term key pair
     client_keypair: CurveKeyPair,
-    /// Server's long-term public key — needed to verify the WELCOME message signature
+    /// Server's long-term public key  -  needed to verify the WELCOME message signature
     /// when full CurveZMQ server authentication is implemented.
     _server_public: CurvePublicKey,
     /// Client's short-term (ephemeral) key pair
@@ -243,7 +243,7 @@ pub struct CurveClient {
     server_short_public: Option<CurvePublicKey>,
     /// Send nonce counter
     send_nonce: u64,
-    /// Receive nonce counter — needed for replay-attack detection when message
+    /// Receive nonce counter  -  needed for replay-attack detection when message
     /// authentication is fully implemented.
     _recv_nonce: u64,
     /// Encryption box for messages (after READY)
@@ -493,7 +493,7 @@ impl CurveClient {
 
 /// CURVE server state machine
 pub struct CurveServer {
-    /// Server's long-term key pair — needed to sign the WELCOME message nonce
+    /// Server's long-term key pair  -  needed to sign the WELCOME message nonce
     /// when full CurveZMQ server authentication is implemented.
     _server_keypair: CurveKeyPair,
     /// Server's short-term (ephemeral) key pair
@@ -504,7 +504,7 @@ pub struct CurveServer {
     client_public: Option<CurvePublicKey>,
     /// Send nonce counter
     send_nonce: u64,
-    /// Receive nonce counter — needed for replay-attack detection when message
+    /// Receive nonce counter  -  needed for replay-attack detection when message
     /// authentication is fully implemented.
     _recv_nonce: u64,
     /// Encryption box for messages (after READY)

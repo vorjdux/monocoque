@@ -383,7 +383,7 @@ Direct equivalent of every `zmq::Socket` method used in everyday code:
 | `socket.send(data, 0)` | `socket.send(vec![Bytes::from(data)]).await?` |
 | `socket.send_multipart(parts, 0)` | `socket.send(parts.into_iter().map(Bytes::from).collect()).await?` |
 | `socket.recv_bytes(0)` | `socket.recv().await?.map(|m| m[0].to_vec())` |
-| `socket.recv_multipart(0)` | `socket.recv().await?` — returns `Vec<Bytes>` |
+| `socket.recv_multipart(0)` | `socket.recv().await?`  -  returns `Vec<Bytes>` |
 | `socket.recv_msg(0)` | `socket.recv().await?` |
 | `socket.connect(endpoint)` | `DealerSocket::connect(endpoint).await?` |
 | `socket.bind(endpoint)` | `RouterSocket::bind(endpoint).await?` |

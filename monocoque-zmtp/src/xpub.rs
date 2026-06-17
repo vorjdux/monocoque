@@ -307,7 +307,7 @@ impl XPubSocket {
                     }
                 }
                 Err(_) => {
-                    // Timeout — no data available from this subscriber
+                    // Timeout  -  no data available from this subscriber
                 }
             }
         }
@@ -579,7 +579,7 @@ mod tests {
             pub_sock.accept_subscriber(&pub_listener).await.unwrap();
             // Give the subscription reader time to process Subscribe("weather").
             compio::time::sleep(std::time::Duration::from_millis(50)).await;
-            // Broadcast a matching message — should reach the upstream XSubSocket.
+            // Broadcast a matching message  -  should reach the upstream XSubSocket.
             pub_sock
                 .send(vec![Bytes::from("weather"), Bytes::from("sunny")])
                 .await

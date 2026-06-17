@@ -27,7 +27,7 @@ Use **compio** as the sole async runtime. compio exposes io_uring's submission-q
 | Windows / macOS | ✅ | ❌ (io_uring is Linux-only) |
 | Ecosystem size | Large | Small but growing |
 
-**Trade-off accepted**: Linux-only in exchange for the 31-37% latency improvement demonstrated in benchmarks. macOS/Windows could be added later via a feature-gated Tokio backend behind the same `AsyncRead + AsyncWrite` abstraction — the protocol layer is runtime-agnostic.
+**Trade-off accepted**: Linux-only in exchange for the 31-37% latency improvement demonstrated in benchmarks. macOS/Windows could be added later via a feature-gated Tokio backend behind the same `AsyncRead + AsyncWrite` abstraction  -  the protocol layer is runtime-agnostic.
 
 ---
 
@@ -41,7 +41,7 @@ Use **compio** as the sole async runtime. compio exposes io_uring's submission-q
 `PubSocket` must fan out each published message to potentially thousands of concurrent TCP subscribers. Two approaches were evaluated:
 
 - **Option A**: Single async task, `futures::select!` over all subscriber streams.
-- **Option B**: Fixed worker pool — N OS threads each running their own compio runtime, each owning a shard of subscribers.
+- **Option B**: Fixed worker pool  -  N OS threads each running their own compio runtime, each owning a shard of subscribers.
 
 ### Decision
 
@@ -73,7 +73,7 @@ Every multipart message travels through at least one channel (inbound queue, out
 
 ### Decision
 
-Use **`bytes::Bytes`** — an atomically reference-counted, immutable byte slice — as the canonical frame type throughout the entire stack.
+Use **`bytes::Bytes`**  -  an atomically reference-counted, immutable byte slice  -  as the canonical frame type throughout the entire stack.
 
 ### Rationale
 
@@ -83,9 +83,9 @@ send(vec![Bytes::from("topic"), payload.clone()])
          O(1) clone (ref bump)   O(1) clone (ref bump)
 ```
 
-- **Fan-out is free**: The PUB worker pool clones `Arc<Bytes>` to N workers — no heap allocation per worker.
+- **Fan-out is free**: The PUB worker pool clones `Arc<Bytes>` to N workers  -  no heap allocation per worker.
 - **recv is zero-copy**: The TCP reader fills a `BytesMut`, then calls `.freeze()` to get a `Bytes` without any copy.
-- **No lifetime complexity**: `Bytes` is `'static` — it can cross thread and task boundaries without borrow-checker gymnastics.
+- **No lifetime complexity**: `Bytes` is `'static`  -  it can cross thread and task boundaries without borrow-checker gymnastics.
 - **`BytesMut` for mutable staging**: Protocol framing (ZMTP length prefix, flags) builds into `BytesMut` then freezes once complete.
 
 **Trade-off accepted**: Reference counting adds a 1–2 ns atomic increment per clone. At our message rates this is unmeasurable next to the I/O cost. For single-subscriber paths where no fan-out occurs, a copy would be marginally cheaper per message but would require a different type throughout the API, increasing complexity.

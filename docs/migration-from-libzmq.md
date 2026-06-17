@@ -16,8 +16,8 @@ This guide maps libzmq C API concepts to their monocoque equivalents.
 | `zmq_ctx_new()` + `zmq_socket(ctx, ZMQ_PUSH)` | `PushSocket::connect("tcp://…").await?` |
 | `zmq_bind(sock, "tcp://*:5555")` | `PushSocket::bind("tcp://0.0.0.0:5555").await?` |
 | `zmq_connect(sock, "tcp://…")` | `DealerSocket::connect("tcp://…").await?` |
-| `zmq_close(sock)` | Drop the socket — Rust RAII handles cleanup |
-| `zmq_ctx_destroy(ctx)` | Not needed — no global context |
+| `zmq_close(sock)` | Drop the socket  -  Rust RAII handles cleanup |
+| `zmq_ctx_destroy(ctx)` | Not needed  -  no global context |
 
 ---
 
@@ -96,7 +96,7 @@ This guide maps libzmq C API concepts to their monocoque equivalents.
 | `zmq_send(sock, data, len, 0)` | `socket.send(vec![Bytes::from(data)]).await?` |
 | `zmq_send(sock, part, len, ZMQ_SNDMORE)` | Include multiple frames in the Vec |
 | `zmq_recv(sock, buf, len, 0)` | `let frames = socket.recv().await` |
-| `zmq_msg_send` / `zmq_msg_recv` | Same as above — monocoque always uses `Vec<Bytes>` |
+| `zmq_msg_send` / `zmq_msg_recv` | Same as above  -  monocoque always uses `Vec<Bytes>` |
 
 > **`recv()` return type**: High-level sockets return `Option<Vec<Bytes>>` (None on disconnect)
 > or `io::Result<Option<Vec<Bytes>>>`. Use pattern matching rather than `?` directly.
@@ -112,7 +112,7 @@ use Rust async primitives instead:
 // libzmq style (blocking)
 // zmq_poll(items, 2, timeout_ms);
 
-// monocoque style — race two receives
+// monocoque style  -  race two receives
 use futures::future;
 
 let result = future::select(
@@ -147,7 +147,7 @@ its own task communicating over a `flume` channel.
 ## Context / threading
 
 libzmq uses a context object and internal I/O threads. monocoque uses compio's
-per-thread runtime — there is no global context.
+per-thread runtime; there is no global context.
 
 - **No `zmq_ctx_set(ZMQ_IO_THREADS, n)`**: Use one compio runtime per OS thread.
 - **No `zmq_ctx_set(ZMQ_MAX_SOCKETS, n)`**: No global socket limit.

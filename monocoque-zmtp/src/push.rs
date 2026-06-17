@@ -204,7 +204,7 @@ impl PushSocket<TcpStream> {
     /// On BrokenPipe / ConnectionReset, `write_from_buf()` already sets
     /// `stream = None`, so the next loop iteration reconnects automatically.
     ///
-    /// Respects `max_reconnect_attempts` — returns `NotConnected` when exhausted.
+    /// Respects `max_reconnect_attempts`  -  returns `NotConnected` when exhausted.
     pub async fn send_with_reconnect(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
         let max = self.base.options.max_reconnect_attempts;
         let mut attempts = 0u32;

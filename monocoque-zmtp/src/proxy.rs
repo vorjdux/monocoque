@@ -219,7 +219,7 @@ pub enum ProxyCommand {
     Resume,
     /// Terminate the proxy loop
     Terminate,
-    /// Report statistics — replies with `"messages_forwarded=N"` on the control socket.
+    /// Report statistics  -  replies with `"messages_forwarded=N"` on the control socket.
     Statistics,
 }
 
