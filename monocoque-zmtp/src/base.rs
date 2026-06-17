@@ -14,7 +14,7 @@
 use bytes::{BufMut, Bytes, BytesMut};
 use compio::io::{AsyncRead, AsyncWrite};
 use compio::net::TcpStream;
-use monocoque_core::alloc::{IoArena, IoBytes};
+use monocoque_core::alloc::IoArena;
 use monocoque_core::buffer::SegmentedBuffer;
 use monocoque_core::endpoint::Endpoint;
 use monocoque_core::options::SocketOptions;
@@ -195,7 +195,7 @@ where
             last_endpoint: None,
             is_poisoned: false,
             buffered_messages: 0,
-            // Heartbeat fields — initialised to idle state
+            // Heartbeat fields  -  initialised to idle state
             last_recv_instant: None,
             ping_sent_at: None,
             awaiting_pong: false,
@@ -229,7 +229,7 @@ where
             last_endpoint: Some(endpoint_str),
             is_poisoned: false,
             buffered_messages: 0,
-            // Heartbeat fields — initialised to idle state
+            // Heartbeat fields  -  initialised to idle state
             last_recv_instant: None,
             ping_sent_at: None,
             awaiting_pong: false,
@@ -361,7 +361,7 @@ where
     #[inline]
     pub fn note_pong_received(&mut self) {
         if self.awaiting_pong {
-            trace!("[SocketBase] PONG received — heartbeat round-trip complete");
+            trace!("[SocketBase] PONG received  -  heartbeat round-trip complete");
             self.awaiting_pong = false;
             self.ping_sent_at = None;
         }
@@ -376,9 +376,9 @@ where
     ///
     /// # Return value
     ///
-    /// - `Ok(true)`  — a PING was appended to `send_buffer`; caller must flush.
-    /// - `Ok(false)` — nothing to do or heartbeat is disabled.
-    /// - `Err(e)`    — a pending PONG timed out; connection should be closed.
+    /// - `Ok(true)`   -  a PING was appended to `send_buffer`; caller must flush.
+    /// - `Ok(false)`  -  nothing to do or heartbeat is disabled.
+    /// - `Err(e)`     -  a pending PONG timed out; connection should be closed.
     ///   Callers propagate this with `?` so the error surfaces to the application.
     pub fn check_heartbeat(&mut self) -> io::Result<bool> {
         let ivl = match self.options.heartbeat_ivl {
@@ -397,7 +397,7 @@ where
                     .unwrap_or(ivl); // default to ivl when not set
                 if now.duration_since(ping_at) > timeout {
                     warn!(
-                        "[SocketBase] Heartbeat PONG not received within {:?} — peer considered dead",
+                        "[SocketBase] Heartbeat PONG not received within {:?}  -  peer considered dead",
                         timeout
                     );
                     // Mark disconnected
@@ -410,13 +410,13 @@ where
                     ));
                 }
             }
-            // Still waiting for PONG — don't send another PING
+            // Still waiting for PONG  -  don't send another PING
             return Ok(false);
         }
 
         // ── Check whether we should send a PING ─────────────────────────
         let idle_since = self.last_recv_instant.unwrap_or_else(|| {
-            // No frame received yet — treat as idle from the start
+            // No frame received yet  -  treat as idle from the start
             now.checked_sub(ivl + ivl).unwrap_or(now)
         });
 
@@ -468,7 +468,7 @@ where
         let slab = self.arena.alloc_mut(self.options.read_buffer_size);
 
         // Get stream reference only for I/O
-        let stream = self.stream.as_mut().expect("BUG: stream must be Some — checked is_none() above");
+        let stream = self.stream.as_mut().expect("BUG: stream must be Some  -  checked is_none() above");
 
         // Apply recv timeout
         let BufResult(result, slab) = match self.options.recv_timeout {
@@ -547,7 +547,7 @@ where
 
         // Apply send timeout
         let BufResult(result, _) = match self.options.send_timeout {
-            None => AsyncWrite::write(stream, IoBytes::new(buf)).await,
+            None => AsyncWrite::write(stream, buf).await,
             Some(dur) if dur.is_zero() => {
                 return Err(io::Error::new(
                     io::ErrorKind::WouldBlock,
@@ -556,7 +556,7 @@ where
             }
             Some(dur) => {
                 use compio::time::timeout;
-                match timeout(dur, AsyncWrite::write(stream, IoBytes::new(buf))).await {
+                match timeout(dur, AsyncWrite::write(stream, buf)).await {
                     Ok(result) => result,
                     Err(_) => {
                         return Err(io::Error::new(
@@ -617,7 +617,7 @@ where
         let BufResult(result, _) = match self.options.send_timeout {
             None => {
                 // Blocking mode - no timeout
-                AsyncWrite::write(stream, IoBytes::new(buf)).await
+                AsyncWrite::write(stream, buf).await
             }
             Some(dur) if dur.is_zero() => {
                 // Non-blocking mode
@@ -629,7 +629,7 @@ where
             Some(dur) => {
                 // Timed mode - apply timeout
                 use compio::time::timeout;
-                match timeout(dur, AsyncWrite::write(stream, IoBytes::new(buf))).await {
+                match timeout(dur, AsyncWrite::write(stream, buf)).await {
                     Ok(result) => result,
                     Err(_) => {
                         return Err(io::Error::new(
@@ -706,7 +706,7 @@ impl SocketBase<TcpStream> {
             }
         };
 
-        // Perform handshake — preserve routing identity from options
+        // Perform handshake  -  preserve routing identity from options
         perform_handshake_with_options(
             &mut new_stream,
             socket_type,
@@ -808,7 +808,7 @@ mod tests {
     /// `note_recv` must not panic when heartbeating is disabled.
     #[test]
     fn test_note_recv_no_op_when_disabled() {
-        // We only test the public helpers — SocketBase itself requires a
+        // We only test the public helpers  -  SocketBase itself requires a
         // concrete stream type which is difficult to instantiate in unit tests.
         // The logic here is purely tested through the helper functions.
         // Full integration is covered by the heartbeat field initialisation

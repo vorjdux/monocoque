@@ -38,7 +38,7 @@ fuzz_target!(|data: &[u8]| {
                 trie.unsubscribe(&prefix);
             }
             0x02 => {
-                // match — assert no panic, discard result
+                // match  -  assert no panic, discard result
                 let _ = trie.matches(topic);
             }
             0x03 => {
@@ -46,7 +46,7 @@ fuzz_target!(|data: &[u8]| {
                 trie.clear();
             }
             _ => {
-                // len / is_empty introspection — assert no panic
+                // len / is_empty introspection  -  assert no panic
                 let _ = trie.len();
                 let _ = trie.is_empty();
                 let _ = trie.subscriptions();

@@ -234,7 +234,7 @@ pub enum CurveError {
 pub struct CurveClient {
     /// Client's long-term key pair
     client_keypair: CurveKeyPair,
-    /// Server's long-term public key — needed to verify the WELCOME message signature
+    /// Server's long-term public key  -  needed to verify the WELCOME message signature
     /// when full CurveZMQ server authentication is implemented.
     _server_public: CurvePublicKey,
     /// Client's short-term (ephemeral) key pair
@@ -243,7 +243,7 @@ pub struct CurveClient {
     server_short_public: Option<CurvePublicKey>,
     /// Send nonce counter
     send_nonce: u64,
-    /// Receive nonce counter — needed for replay-attack detection when message
+    /// Receive nonce counter  -  needed for replay-attack detection when message
     /// authentication is fully implemented.
     _recv_nonce: u64,
     /// Encryption box for messages (after READY)
@@ -493,7 +493,7 @@ impl CurveClient {
 
 /// CURVE server state machine
 pub struct CurveServer {
-    /// Server's long-term key pair — needed to sign the WELCOME message nonce
+    /// Server's long-term key pair  -  needed to sign the WELCOME message nonce
     /// when full CurveZMQ server authentication is implemented.
     _server_keypair: CurveKeyPair,
     /// Server's short-term (ephemeral) key pair
@@ -504,7 +504,7 @@ pub struct CurveServer {
     client_public: Option<CurvePublicKey>,
     /// Send nonce counter
     send_nonce: u64,
-    /// Receive nonce counter — needed for replay-attack detection when message
+    /// Receive nonce counter  -  needed for replay-attack detection when message
     /// authentication is fully implemented.
     _recv_nonce: u64,
     /// Encryption box for messages (after READY)
@@ -887,8 +887,6 @@ where
     use bytes::BytesMut;
     use compio::buf::BufResult;
     use compio::io::AsyncWrite;
-    use monocoque_core::alloc::IoBytes;
-
     // ZMTP ERROR command body: [5]"ERROR" [reason_len][reason...]
     // Command name is "ERROR" (5 bytes), prefixed with its 1-byte length
     let reason_bytes = reason.as_bytes();
@@ -905,7 +903,7 @@ where
     frame.extend_from_slice(&[0x04, body_len as u8]);
     frame.extend_from_slice(&body);
 
-    let BufResult(_, _) = AsyncWrite::write(stream, IoBytes::new(frame.freeze())).await;
+    let BufResult(_, _) = AsyncWrite::write(stream, frame.freeze()).await;
 }
 
 #[cfg(test)]

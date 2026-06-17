@@ -24,7 +24,6 @@ use crate::utils::{build_ready, encode_frame, FLAG_COMMAND};
 use bytes::{Bytes, BytesMut};
 use compio::buf::BufResult;
 use compio::io::{AsyncRead, AsyncWrite};
-use monocoque_core::alloc::IoBytes;
 use monocoque_core::options::SocketOptions;
 use monocoque_core::timeout::{read_exact_with_timeout, write_all_with_timeout};
 use std::time::Duration;
@@ -97,8 +96,7 @@ where
     // Step 1: Send our greeting
     debug!("[HANDSHAKE] Step 1: Sending greeting...");
     let greeting_bytes = build_greeting_with_mechanism(mechanism, options);
-    let io_buf = IoBytes::new(greeting_bytes.clone());
-    let BufResult(write_res, _) = write_all_with_timeout(stream, io_buf, timeout)
+    let BufResult(write_res, _) = write_all_with_timeout(stream, greeting_bytes.clone(), timeout)
         .await
         .map_err(|e| {
             warn!("[HANDSHAKE] Step 1: Failed to send ZMTP greeting: {}", e);
@@ -154,8 +152,7 @@ where
     debug!("[HANDSHAKE] Step 4: Sending READY command...");
     let ready_body = build_ready(local_socket_type.as_str(), identity);
     let ready_frame = encode_frame(FLAG_COMMAND, &ready_body);
-    let io_buf = IoBytes::new(ready_frame.clone());
-    let BufResult(write_res, _) = write_all_with_timeout(stream, io_buf, timeout)
+    let BufResult(write_res, _) = write_all_with_timeout(stream, ready_frame.clone(), timeout)
         .await
         .map_err(|e| {
             warn!("[HANDSHAKE] Step 4: Failed to send ZMTP READY command: {}", e);
@@ -195,7 +192,7 @@ where
     if !is_command {
         warn!(
             "[HANDSHAKE] ZMTP READY step: expected COMMAND frame (flags & 0x04 != 0), \
-             got flags=0x{:02x} — peer sent a data frame instead of READY",
+             got flags=0x{:02x}  -  peer sent a data frame instead of READY",
             flags
         );
         return Err(ZmtpError::Protocol);
@@ -283,7 +280,7 @@ where
         // For a proper server you would supply a real PlainAuthHandler; the simplest
         // approach is a StaticPlainHandler pre-loaded with no users (reject everything).
         // Callers that want custom validation should use the security API directly.
-        // We build a handler that always rejects — real auth should go through ZAP.
+        // We build a handler that always rejects  -  real auth should go through ZAP.
         // Use plain_server_handshake with a trivial reject-all handler.
         let handler = StaticPlainHandler::new(); // empty → rejects all
         let domain = options.zap_domain.as_str();
@@ -397,7 +394,7 @@ fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), Zmtp
 
     if body.len() < 6 {
         warn!(
-            "[HANDSHAKE] ZMTP READY parse: body too short — got {} bytes, need at least 6",
+            "[HANDSHAKE] ZMTP READY parse: body too short  -  got {} bytes, need at least 6",
             body.len()
         );
         return Err(ZmtpError::Protocol);

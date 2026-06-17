@@ -170,10 +170,9 @@ impl XPubSocket {
                     use compio::buf::BufResult;
                     use compio::io::AsyncWriteExt;
 
-                    let mut buf = BytesMut::new();
+                    let mut buf = BytesMut::with_capacity(welcome_msg.len() + 9);
                     crate::codec::encode_multipart(std::slice::from_ref(welcome_msg), &mut buf);
-                    let data = buf.freeze().to_vec();
-                    let BufResult(result, _) = stream.write_all(data).await;
+                    let BufResult(result, _) = stream.write_all(buf.freeze()).await;
                     if let Err(e) = result {
                         trace!(
                             "[XPUB] Failed to send welcome message to subscriber {}: {}",
@@ -270,7 +269,7 @@ impl XPubSocket {
                                         use compio::buf::BufResult;
                                         use compio::io::AsyncWriteExt;
                                         let pong = crate::base::build_pong_frame();
-                                        let BufResult(result, _) = sub.stream.write_all(pong.to_vec()).await;
+                                        let BufResult(result, _) = sub.stream.write_all(pong).await;
                                         let _ = result; // best-effort; disconnect handled elsewhere
                                     }
                                     continue;
@@ -308,7 +307,7 @@ impl XPubSocket {
                     }
                 }
                 Err(_) => {
-                    // Timeout — no data available from this subscriber
+                    // Timeout  -  no data available from this subscriber
                 }
             }
         }
@@ -346,6 +345,11 @@ impl XPubSocket {
 
         trace!("[XPUB] Broadcasting message with {} frames", msg.len());
 
+        // Encode once, broadcast via O(1) Bytes::clone() per subscriber.
+        let mut wire_buf = BytesMut::new();
+        crate::codec::encode_multipart(&msg, &mut wire_buf);
+        let wire = wire_buf.freeze();
+
         let mut dead_subs = Vec::new();
 
         for sub in self.subscribers.values_mut() {
@@ -353,11 +357,7 @@ impl XPubSocket {
                 continue;
             }
 
-            let mut buf = BytesMut::new();
-            crate::codec::encode_multipart(&msg, &mut buf);
-            let data = buf.freeze().to_vec();
-
-            let BufResult(result, _) = sub.stream.write_all(data).await;
+            let BufResult(result, _) = sub.stream.write_all(wire.clone()).await;
             if let Err(e) = result {
                 debug!("[XPUB] Failed to send to subscriber {}: {}", sub.id, e);
                 dead_subs.push(sub.id);
@@ -579,7 +579,7 @@ mod tests {
             pub_sock.accept_subscriber(&pub_listener).await.unwrap();
             // Give the subscription reader time to process Subscribe("weather").
             compio::time::sleep(std::time::Duration::from_millis(50)).await;
-            // Broadcast a matching message — should reach the upstream XSubSocket.
+            // Broadcast a matching message  -  should reach the upstream XSubSocket.
             pub_sock
                 .send(vec![Bytes::from("weather"), Bytes::from("sunny")])
                 .await

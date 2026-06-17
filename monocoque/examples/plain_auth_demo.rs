@@ -89,14 +89,14 @@ async fn run_server() {
 
     for i in 1..=3 {
         match socket.recv().await {
-            Some(msg) => {
+            Ok(Some(msg)) => {
                 let request = String::from_utf8_lossy(&msg[0]);
                 println!("Request #{}: {}", i, request);
 
                 let response = format!("Server says: {}", request);
                 socket.send(vec![Bytes::from(response)]).await.ok();
             }
-            None => {
+            _ => {
                 println!("Connection closed");
                 break;
             }
@@ -130,11 +130,11 @@ async fn run_client(username: &str, password: &str) {
             .expect("Send failed");
 
         match socket.recv().await {
-            Some(msg) => {
+            Ok(Some(msg)) => {
                 let response = String::from_utf8_lossy(&msg[0]);
                 println!("Response: {}", response);
             }
-            None => {
+            _ => {
                 println!("Empty response");
                 return;
             }

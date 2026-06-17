@@ -1,6 +1,6 @@
 //! DEALER socket implementation.
 
-use super::common::channel_to_io_error;
+use super::common::{channel_to_io_error, parse_tcp_endpoint};
 use bytes::Bytes;
 use compio::net::TcpStream;
 use monocoque_core::monitor::{create_monitor, SocketEvent, SocketEventSender, SocketMonitor};
@@ -34,7 +34,7 @@ use std::io;
 /// socket.send(vec![Bytes::from("REQUEST")]).await?;
 ///
 /// // Receive reply
-/// if let Some(reply) = socket.recv().await {
+/// if let Ok(Some(reply)) = socket.recv().await {
 ///     println!("Got reply: {:?}", reply);
 /// }
 /// # Ok(())
@@ -82,165 +82,40 @@ impl DealerSocket {
     /// # }
     /// ```
     pub async fn connect(endpoint: &str) -> io::Result<Self> {
-        // Try parsing as endpoint, fall back to raw address
-        let addr = if let Ok(monocoque_core::endpoint::Endpoint::Tcp(a)) =
-            monocoque_core::endpoint::Endpoint::parse(endpoint)
-        {
-            a
-        } else {
-            endpoint
-                .parse::<std::net::SocketAddr>()
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?
-        };
-
-        let stream = TcpStream::connect(addr).await?;
-        let sock = Self::from_tcp(stream).await?;
-        sock.emit_event(SocketEvent::Connected(
-            monocoque_core::endpoint::Endpoint::Tcp(addr),
-        ));
+        let addr = parse_tcp_endpoint(endpoint)?;
+        let inner = InternalDealer::connect_with_options(addr, monocoque_core::options::SocketOptions::default()).await?;
+        let sock = Self { inner, monitor: None };
+        sock.emit_event(SocketEvent::Connected(monocoque_core::endpoint::Endpoint::Tcp(addr)));
         Ok(sock)
     }
 
-    /// Connect to a ZeroMQ peer with automatic reconnection support.
+    /// Connect to a ZeroMQ peer with custom socket options.
     ///
-    /// This method enables the socket to automatically detect disconnections
-    /// and attempt reconnection with exponential backoff. Unlike the basic
-    /// `connect()` method, this stores the endpoint and manages the underlying
-    /// connection lifecycle.
-    ///
-    /// Supports TCP endpoints only:
-    /// - TCP: `"tcp://127.0.0.1:5555"`
-    ///
-    /// # Reconnection Behavior
-    ///
-    /// When a disconnection is detected (EOF, write error, poisoned socket):
-    /// - The socket enters a disconnected state
-    /// - Next `send()` or `recv()` will attempt reconnection
-    /// - Backoff delays: 100ms → 200ms → 400ms → ... (capped at 30s)
-    /// - Successful reconnection resets the backoff
-    ///
-    /// # Arguments
-    ///
-    /// * `endpoint` - TCP endpoint to connect to (e.g., "tcp://127.0.0.1:5555")
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - The initial connection fails
-    /// - DNS resolution fails
-    /// - Invalid endpoint format
-    /// - IPC endpoints (not supported for generic reconnection)
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// use monocoque::zmq::DealerSocket;
-    /// use bytes::Bytes;
-    ///
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// // Create socket with reconnection support
-    /// let mut socket = DealerSocket::connect_with_reconnect("tcp://127.0.0.1:5555").await?;
-    ///
-    /// // Send will automatically reconnect on disconnection
-    /// loop {
-    ///     match socket.send(vec![Bytes::from("REQUEST")]).await {
-    ///         Ok(_) => println!("Sent successfully"),
-    ///         Err(e) if e.kind() == std::io::ErrorKind::NotConnected => {
-    ///             println!("Disconnected, will retry on next send");
-    ///         }
-    ///         Err(e) => return Err(e.into()),
-    ///     }
-    /// }
-    /// # Ok(())
-    /// # }
-    /// ```
-    ///
-    /// # Notes
-    ///
-    /// - For IPC/Unix sockets, use `connect_ipc()` without reconnection
-    /// - For explicit stream control without reconnection, use `from_tcp()`
-    /// - Reconnection only works for TCP streams
-    pub async fn connect_with_reconnect(endpoint: &str) -> io::Result<Self> {
-        // Parse endpoint for connecting
-        let parsed = monocoque_core::endpoint::Endpoint::parse(endpoint)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-
-        // Connect using the internal simple connect
-        let inner = InternalDealer::connect(endpoint).await?;
-
-        let sock = Self {
-            inner,
-            monitor: None,
-        };
-
-        sock.emit_event(SocketEvent::Connected(parsed));
-        Ok(sock)
-    }
-
-    /// Connect to a ZeroMQ peer with automatic reconnection and custom options.
-    ///
-    /// Same as `connect_with_reconnect()` but allows customizing socket behavior:
-    /// - Buffer sizes (send/recv)
-    /// - High water marks (HWM)
-    /// - Timeouts
-    /// - Identity
+    /// Stores the endpoint so the socket can reconnect automatically after failures.
     ///
     /// # Example
     ///
     /// ```rust,no_run
     /// use monocoque::zmq::{DealerSocket, SocketOptions};
-    /// use bytes::Bytes;
+    /// use std::time::Duration;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let mut socket = DealerSocket::connect_with_reconnect_and_options(
+    /// let mut socket = DealerSocket::connect_with_options(
     ///     "tcp://127.0.0.1:5555",
-    ///     SocketOptions::default()
-    ///         .with_send_hwm(100)
+    ///     SocketOptions::default().with_send_hwm(100),
     /// ).await?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn connect_with_reconnect_and_options(
-        endpoint: &str,
-        options: monocoque_core::options::SocketOptions,
-    ) -> io::Result<Self> {
-        // Parse endpoint
-        let parsed = monocoque_core::endpoint::Endpoint::parse(endpoint)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-
-        // For now, only TCP is supported for connect with options
-        let monocoque_core::endpoint::Endpoint::Tcp(addr) = parsed else {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "connect_with_options only supports TCP endpoints",
-            ));
-        };
-
-        // Connect TCP stream manually
-        let stream = compio::net::TcpStream::connect(addr).await?;
-
-        // Create socket with options
-        let inner = InternalDealer::from_tcp_with_options(stream, options).await?;
-
-        let sock = Self {
-            inner,
-            monitor: None,
-        };
-
-        sock.emit_event(SocketEvent::Connected(
-            monocoque_core::endpoint::Endpoint::Tcp(addr),
-        ));
-        Ok(sock)
-    }
-
-    /// Alias for `connect_with_reconnect_and_options` for convenience.
-    ///
-    /// Connects to an endpoint with custom socket options.
     pub async fn connect_with_options(
         endpoint: &str,
         options: monocoque_core::options::SocketOptions,
     ) -> io::Result<Self> {
-        Self::connect_with_reconnect_and_options(endpoint, options).await
+        let addr = parse_tcp_endpoint(endpoint)?;
+        let inner = InternalDealer::connect_with_options(addr, options).await?;
+        let sock = Self { inner, monitor: None };
+        sock.emit_event(SocketEvent::Connected(monocoque_core::endpoint::Endpoint::Tcp(addr)));
+        Ok(sock)
     }
 
     /// Connect to a ZeroMQ peer via IPC (Unix domain sockets).
@@ -577,14 +452,14 @@ where
     /// ```rust,no_run
     /// # use monocoque::zmq::DealerSocket;
     /// # async fn example(mut socket: DealerSocket) -> Result<(), Box<dyn std::error::Error>> {
-    /// while let Some(msg) = socket.recv().await {
+    /// while let Ok(Some(msg)) = socket.recv().await {
     ///     println!("Received {} parts", msg.len());
     /// }
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn recv(&mut self) -> Option<Vec<Bytes>> {
-        self.inner.recv().await.ok().flatten()
+    pub async fn recv(&mut self) -> io::Result<Option<Vec<Bytes>>> {
+        self.inner.recv().await
     }
 }
 
@@ -677,7 +552,7 @@ impl monocoque_zmtp::proxy::ProxySocket for DealerSocket<TcpStream> {
         'life0: 'async_trait,
         Self: 'async_trait,
     {
-        Box::pin(async move { Ok(self.recv().await) })
+        Box::pin(async move { self.recv().await })
     }
 
     fn send_multipart<'life0, 'async_trait>(

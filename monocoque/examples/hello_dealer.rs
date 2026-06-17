@@ -31,7 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Message sent. Waiting for response...");
 
     // Receive response
-    let response = socket.recv().await.ok_or("Connection closed")?;
+    let response = socket.recv().await?.ok_or("Connection closed")?;
 
     info!("Received response: {} frames", response.len());
     for (i, frame) in response.iter().enumerate() {
