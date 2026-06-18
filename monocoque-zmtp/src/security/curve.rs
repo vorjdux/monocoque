@@ -47,7 +47,7 @@ use chacha20poly1305::{
     aead::{Aead, KeyInit, OsRng},
     ChaCha20Poly1305, Nonce,
 };
-use compio::io::{AsyncRead, AsyncWrite};
+use compio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use rand::RngCore;
 use std::time::Duration;
 use thiserror::Error;
@@ -886,7 +886,7 @@ where
 {
     use bytes::BytesMut;
     use compio::buf::BufResult;
-    use compio::io::AsyncWrite;
+
     // ZMTP ERROR command body: [5]"ERROR" [reason_len][reason...]
     // Command name is "ERROR" (5 bytes), prefixed with its 1-byte length
     let reason_bytes = reason.as_bytes();
@@ -903,12 +903,84 @@ where
     frame.extend_from_slice(&[0x04, body_len as u8]);
     frame.extend_from_slice(&body);
 
-    let BufResult(_, _) = AsyncWrite::write(stream, frame.freeze()).await;
+    let BufResult(_, _) = stream.write_all(frame.freeze()).await;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use compio::buf::{BufResult, IoBuf, IoBufMut};
+    use std::collections::VecDeque;
+    use std::io;
+
+    const ERROR_REASON: &str = "denied";
+
+    #[derive(Debug)]
+    struct PartialWriteStream {
+        write_limits: VecDeque<usize>,
+        written: Vec<u8>,
+    }
+
+    impl PartialWriteStream {
+        fn new(write_limits: impl IntoIterator<Item = usize>) -> Self {
+            Self {
+                write_limits: write_limits.into_iter().collect(),
+                written: Vec::new(),
+            }
+        }
+
+        fn written(&self) -> &[u8] {
+            &self.written
+        }
+    }
+
+    impl AsyncRead for PartialWriteStream {
+        async fn read<B: IoBufMut>(&mut self, buf: B) -> BufResult<usize, B> {
+            BufResult(Ok(0), buf)
+        }
+    }
+
+    impl AsyncWrite for PartialWriteStream {
+        async fn write<B: IoBuf>(&mut self, buf: B) -> BufResult<usize, B> {
+            let len = self
+                .write_limits
+                .pop_front()
+                .unwrap_or_else(|| buf.buf_len())
+                .min(buf.buf_len());
+            self.written.extend_from_slice(&buf.as_slice()[..len]);
+            BufResult(Ok(len), buf)
+        }
+
+        async fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+
+        async fn shutdown(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn expected_zmtp_error_frame(reason: &str) -> Vec<u8> {
+        let reason = reason.as_bytes();
+        let reason_len = reason.len().min(255);
+        let mut frame = Vec::with_capacity(2 + 7 + reason_len);
+        frame.push(0x04);
+        frame.push((7 + reason_len) as u8);
+        frame.extend_from_slice(b"\x05ERROR");
+        frame.push(reason_len as u8);
+        frame.extend_from_slice(&reason[..reason_len]);
+        frame
+    }
+
+    async fn assert_zmtp_error_survives_partial_writes(
+        write_limits: impl IntoIterator<Item = usize>,
+    ) {
+        let mut stream = PartialWriteStream::new(write_limits);
+
+        send_zmtp_error(&mut stream, ERROR_REASON).await;
+
+        assert_eq!(stream.written(), expected_zmtp_error_frame(ERROR_REASON));
+    }
 
     #[test]
     fn test_keypair_generation() {
@@ -959,5 +1031,15 @@ mod tests {
         assert_eq!(request.mechanism, ZapMechanism::Curve);
         assert_eq!(request.credentials.len(), 1);
         assert_eq!(request.credentials[0].len(), CURVE_KEY_SIZE);
+    }
+
+    #[compio::test]
+    async fn test_send_zmtp_error_retries_short_writes() {
+        assert_zmtp_error_survives_partial_writes([2, 3]).await;
+    }
+
+    #[compio::test]
+    async fn test_send_zmtp_error_retries_short_body_writes() {
+        assert_zmtp_error_survives_partial_writes([9, 2]).await;
     }
 }

@@ -12,7 +12,7 @@
 //! - **Reconnection support**: Optional endpoint storage and backoff logic
 
 use bytes::{BufMut, Bytes, BytesMut};
-use compio::io::{AsyncRead, AsyncWrite};
+use compio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use compio::net::TcpStream;
 use monocoque_core::alloc::IoArena;
 use monocoque_core::buffer::SegmentedBuffer;
@@ -531,32 +531,33 @@ where
             ));
         }
 
-        // Ensure we have a connected stream
-        let stream = self
-            .stream
-            .as_mut()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "Socket not connected"))?;
+        if self.options.send_timeout.is_some_and(|dur| dur.is_zero()) {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "Socket is in non-blocking mode and cannot flush immediately",
+            ));
+        }
 
         trace!("[SocketBase] Flushing {} bytes", self.send_buffer.len());
 
         use compio::buf::BufResult;
         let buf = self.send_buffer.split().freeze();
 
+        // Ensure we have a connected stream
+        let stream = self
+            .stream
+            .as_mut()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "Socket not connected"))?;
+
         // Arm poison guard
         let guard = PoisonGuard::new(&mut self.is_poisoned);
 
         // Apply send timeout
         let BufResult(result, _) = match self.options.send_timeout {
-            None => AsyncWrite::write(stream, buf).await,
-            Some(dur) if dur.is_zero() => {
-                return Err(io::Error::new(
-                    io::ErrorKind::WouldBlock,
-                    "Socket is in non-blocking mode and cannot flush immediately",
-                ));
-            }
+            None => stream.write_all(buf).await,
             Some(dur) => {
                 use compio::time::timeout;
-                match timeout(dur, AsyncWrite::write(stream, buf)).await {
+                match timeout(dur, stream.write_all(buf)).await {
                     Ok(result) => result,
                     Err(_) => {
                         return Err(io::Error::new(
@@ -599,11 +600,12 @@ where
             ));
         }
 
-        // Ensure we have a connected stream
-        let stream = self
-            .stream
-            .as_mut()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "Socket not connected"))?;
+        if self.options.send_timeout.is_some_and(|dur| dur.is_zero()) {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "Socket is in non-blocking mode and cannot send immediately",
+            ));
+        }
 
         // Arm poison guard
         let guard = PoisonGuard::new(&mut self.is_poisoned);
@@ -611,25 +613,24 @@ where
         // Send write_buf contents
         let buf = self.write_buf.split().freeze();
 
+        // Ensure we have a connected stream
+        let stream = self
+            .stream
+            .as_mut()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "Socket not connected"))?;
+
         use compio::buf::BufResult;
 
         // Apply send timeout from options
         let BufResult(result, _) = match self.options.send_timeout {
             None => {
                 // Blocking mode - no timeout
-                AsyncWrite::write(stream, buf).await
-            }
-            Some(dur) if dur.is_zero() => {
-                // Non-blocking mode
-                return Err(io::Error::new(
-                    io::ErrorKind::WouldBlock,
-                    "Socket is in non-blocking mode and cannot send immediately",
-                ));
+                stream.write_all(buf).await
             }
             Some(dur) => {
                 // Timed mode - apply timeout
                 use compio::time::timeout;
-                match timeout(dur, AsyncWrite::write(stream, buf)).await {
+                match timeout(dur, stream.write_all(buf)).await {
                     Ok(result) => result,
                     Err(_) => {
                         return Err(io::Error::new(
@@ -758,6 +759,50 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use compio::buf::{BufResult, IoBuf, IoBufMut};
+    use monocoque_core::options::SocketOptions;
+    use std::io;
+
+    #[derive(Debug)]
+    struct ShortWriteStream {
+        max_write: usize,
+        writes: Vec<Vec<u8>>,
+    }
+
+    impl ShortWriteStream {
+        fn new(max_write: usize) -> Self {
+            Self {
+                max_write,
+                writes: Vec::new(),
+            }
+        }
+
+        fn written_bytes(&self) -> Vec<u8> {
+            self.writes.concat()
+        }
+    }
+
+    impl AsyncRead for ShortWriteStream {
+        async fn read<B: IoBufMut>(&mut self, buf: B) -> BufResult<usize, B> {
+            BufResult(Ok(0), buf)
+        }
+    }
+
+    impl AsyncWrite for ShortWriteStream {
+        async fn write<B: IoBuf>(&mut self, buf: B) -> BufResult<usize, B> {
+            let n = self.max_write.min(buf.buf_len());
+            self.writes.push(buf.as_slice()[..n].to_vec());
+            BufResult(Ok(n), buf)
+        }
+
+        async fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+
+        async fn shutdown(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
 
     // ── PING / PONG frame builders ────────────────────────────────────────────
 
@@ -835,5 +880,71 @@ mod tests {
         let frame_max = build_ping_frame(u16::MAX);
         let ttl_max = u16::from_be_bytes([frame_max[7], frame_max[8]]);
         assert_eq!(ttl_max, u16::MAX);
+    }
+
+    #[compio::test]
+    async fn test_write_from_buf_retries_short_writes_before_disarming() {
+        let stream = ShortWriteStream::new(2);
+        let mut base = SocketBase::new(stream, SocketType::Dealer, SocketOptions::default());
+        base.write_buf.extend_from_slice(b"abcdef");
+
+        base.write_from_buf().await.unwrap();
+
+        let stream = base.stream.as_ref().unwrap();
+        assert_eq!(stream.written_bytes(), b"abcdef");
+        assert_eq!(stream.writes.len(), 3);
+        assert!(base.write_buf.is_empty());
+        assert!(!base.is_poisoned());
+    }
+
+    #[compio::test]
+    async fn test_flush_send_buffer_retries_short_writes_before_disarming() {
+        let stream = ShortWriteStream::new(3);
+        let mut base = SocketBase::new(stream, SocketType::Dealer, SocketOptions::default());
+        base.send_buffer.extend_from_slice(b"abcdefg");
+        base.buffered_messages = 2;
+
+        base.flush_send_buffer().await.unwrap();
+
+        let stream = base.stream.as_ref().unwrap();
+        assert_eq!(stream.written_bytes(), b"abcdefg");
+        assert_eq!(stream.writes.len(), 3);
+        assert!(base.send_buffer.is_empty());
+        assert_eq!(base.buffered_messages, 0);
+        assert!(!base.is_poisoned());
+    }
+
+    #[compio::test]
+    async fn test_nonblocking_write_from_buf_keeps_buffer_and_health() {
+        let stream = ShortWriteStream::new(2);
+        let mut options = SocketOptions::default();
+        options.send_timeout = Some(std::time::Duration::ZERO);
+        let mut base = SocketBase::new(stream, SocketType::Dealer, options);
+        base.write_buf.extend_from_slice(b"abcdef");
+
+        let err = base.write_from_buf().await.unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(&base.write_buf[..], b"abcdef");
+        assert_eq!(base.stream.as_ref().unwrap().written_bytes(), b"");
+        assert!(!base.is_poisoned());
+    }
+
+    #[compio::test]
+    async fn test_nonblocking_flush_keeps_buffer_and_health() {
+        let stream = ShortWriteStream::new(2);
+        let mut options = SocketOptions::default();
+        options.send_timeout = Some(std::time::Duration::ZERO);
+        let mut base = SocketBase::new(stream, SocketType::Dealer, options);
+        base.send_buffer.extend_from_slice(b"abcdef");
+        base.buffered_messages = 1;
+
+        let err = base.flush_send_buffer().await.unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(&base.send_buffer[..], b"abcdef");
+        assert_eq!(base.buffered_messages, 1);
+        assert_eq!(base.stream.as_ref().unwrap().written_bytes(), b"");
+        assert!(!base.is_poisoned());
     }
 }
