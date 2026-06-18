@@ -158,6 +158,13 @@ where
         );
         return Err(ZmtpError::Protocol);
     }
+    if greeting_buf[9] != 0x7F {
+        warn!(
+            "[HANDSHAKE] ZMTP greeting: expected signature byte 0x7f at offset 9, got 0x{:02x}",
+            greeting_buf[9]
+        );
+        return Err(ZmtpError::Protocol);
+    }
 
     // Step 3: Run security-mechanism-specific exchange (between greeting and READY)
     let curve_cipher: Option<crate::security::curve::CurveMessageCipher> = None;
@@ -607,6 +614,14 @@ fn parse_socket_type(value: &[u8]) -> Result<SocketType, ZmtpError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytes::BytesMut;
+    use compio::buf::BufResult;
+    use compio::net::{TcpListener, TcpStream};
+    use compio::runtime;
+    use monocoque_core::options::SocketOptions;
+    use monocoque_core::timeout::{read_exact_with_timeout, write_all_with_timeout};
+
+    const TEST_TIMEOUT: Duration = Duration::from_secs(1);
 
     fn ready_body(properties: &[(&[u8], &[u8])]) -> Bytes {
         let mut body = Vec::new();
@@ -644,5 +659,100 @@ mod tests {
             parse_ready_command(&body),
             Err(ZmtpError::Protocol)
         ));
+    }
+
+    async fn read_client_greeting(stream: &mut TcpStream) {
+        let greeting = [0u8; 64];
+        let BufResult(read_res, _) = read_exact_with_timeout(stream, greeting, Some(TEST_TIMEOUT))
+            .await
+            .unwrap();
+        read_res.unwrap();
+    }
+
+    async fn write_greeting(stream: &mut TcpStream, greeting: Vec<u8>) {
+        let BufResult(write_res, _) = write_all_with_timeout(stream, greeting, Some(TEST_TIMEOUT))
+            .await
+            .unwrap();
+        write_res.unwrap();
+    }
+
+    async fn maybe_complete_ready_exchange(stream: &mut TcpStream) {
+        let header = [0u8; 2];
+        let Ok(BufResult(read_res, header)) =
+            read_exact_with_timeout(stream, header, Some(TEST_TIMEOUT)).await
+        else {
+            return;
+        };
+        if read_res.is_err() {
+            return;
+        }
+
+        let body = vec![0u8; header[1] as usize];
+        let Ok(BufResult(read_res, _)) =
+            read_exact_with_timeout(stream, body, Some(TEST_TIMEOUT)).await
+        else {
+            return;
+        };
+        if read_res.is_err() {
+            return;
+        }
+
+        let ready_body = crate::utils::build_ready("PAIR", None);
+        let ready_frame = crate::utils::encode_frame(crate::utils::FLAG_COMMAND, &ready_body);
+        let Ok(BufResult(write_res, _)) =
+            write_all_with_timeout(stream, ready_frame.to_vec(), Some(TEST_TIMEOUT)).await
+        else {
+            return;
+        };
+        let _ = write_res;
+    }
+
+    #[test]
+    fn ready_parser_rejects_truncated_property_after_socket_type() {
+        let mut body = BytesMut::from(crate::utils::build_ready("PAIR", None).as_ref());
+        body.extend_from_slice(&[8]);
+        body.extend_from_slice(b"Identity");
+        body.extend_from_slice(&5u32.to_be_bytes());
+        body.extend_from_slice(b"a");
+
+        assert!(
+            parse_ready_command(&body.freeze()).is_err(),
+            "READY parser accepted a command with truncated trailing identity metadata"
+        );
+    }
+
+    #[compio::test]
+    async fn handshake_rejects_peer_greeting_with_invalid_signature_tail() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let peer_task = runtime::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            read_client_greeting(&mut stream).await;
+
+            let mut bad_greeting =
+                build_greeting_with_mechanism(SecurityMechanism::Null, &SocketOptions::new())
+                    .to_vec();
+            bad_greeting[9] = 0x00;
+            write_greeting(&mut stream, bad_greeting).await;
+            maybe_complete_ready_exchange(&mut stream).await;
+        });
+
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        let result = perform_handshake_with_options(
+            &mut stream,
+            SocketType::Req,
+            None,
+            Some(TEST_TIMEOUT),
+            &SocketOptions::new(),
+        )
+        .await;
+
+        assert!(
+            result.is_err(),
+            "handshake accepted a peer greeting with an invalid ZMTP signature tail"
+        );
+
+        let _ = peer_task.await;
     }
 }
