@@ -607,17 +607,17 @@ where
             ));
         }
 
-        // Arm poison guard
-        let guard = PoisonGuard::new(&mut self.is_poisoned);
-
-        // Send write_buf contents
-        let buf = self.write_buf.split().freeze();
-
         // Ensure we have a connected stream
         let stream = self
             .stream
             .as_mut()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "Socket not connected"))?;
+
+        // Arm poison guard
+        let guard = PoisonGuard::new(&mut self.is_poisoned);
+
+        // Send write_buf contents
+        let buf = self.write_buf.split().freeze();
 
         use compio::buf::BufResult;
 
@@ -927,6 +927,19 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
         assert_eq!(&base.write_buf[..], b"abcdef");
         assert_eq!(base.stream.as_ref().unwrap().written_bytes(), b"");
+        assert!(!base.is_poisoned());
+    }
+
+    #[compio::test]
+    async fn test_write_from_buf_not_connected_does_not_poison() {
+        let stream = ShortWriteStream::new(2);
+        let mut base = SocketBase::new(stream, SocketType::Dealer, SocketOptions::default());
+        base.write_buf.extend_from_slice(b"abcdef");
+        base.stream = None;
+
+        let err = base.write_from_buf().await.unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::NotConnected);
         assert!(!base.is_poisoned());
     }
 
