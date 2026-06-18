@@ -63,6 +63,7 @@ const CURVE_WELCOME: &[u8] = b"\x07WELCOME";
 const CURVE_INITIATE: &[u8] = b"\x08INITIATE";
 const CURVE_READY: &[u8] = b"\x05READY";
 const CURVE_MESSAGE: &[u8] = b"\x07MESSAGE";
+const CURVE_MESSAGE_NONCE_SIZE: usize = 8;
 
 /// CURVE key sizes
 pub const CURVE_KEY_SIZE: usize = 32;
@@ -202,6 +203,28 @@ impl CurveBox {
             .decrypt(nonce, ciphertext)
             .map_err(|_| CurveError::DecryptionFailed)
     }
+}
+
+struct CurveMessageParts<'a> {
+    short_nonce: &'a [u8],
+    ciphertext: &'a [u8],
+}
+
+#[inline(always)]
+fn parse_curve_message(message: &[u8]) -> Result<CurveMessageParts<'_>, CurveError> {
+    let command_len = CURVE_MESSAGE.len();
+    if message.len() < command_len + CURVE_MESSAGE_NONCE_SIZE {
+        return Err(CurveError::ProtocolViolation);
+    }
+
+    if &message[..command_len] != CURVE_MESSAGE {
+        return Err(CurveError::ProtocolViolation);
+    }
+
+    Ok(CurveMessageParts {
+        short_nonce: &message[command_len..command_len + CURVE_MESSAGE_NONCE_SIZE],
+        ciphertext: &message[command_len + CURVE_MESSAGE_NONCE_SIZE..],
+    })
 }
 
 /// CURVE-specific errors
@@ -468,15 +491,7 @@ impl CurveClient {
 
     /// Decrypt a message
     pub fn decrypt_message(&mut self, message: &[u8]) -> Result<Bytes, CurveError> {
-        let command_len = CURVE_MESSAGE.len();
-        if message.len() < command_len + 8 {
-            return Err(CurveError::ProtocolViolation);
-        }
-
-        if &message[..command_len] != CURVE_MESSAGE {
-            return Err(CurveError::ProtocolViolation);
-        }
-
+        let parts = parse_curve_message(message)?;
         let message_box = self
             .message_box
             .as_ref()
@@ -485,9 +500,9 @@ impl CurveClient {
         // Reconstruct nonce
         let mut nonce = [0u8; CURVE_NONCE_SIZE];
         nonce[..16].copy_from_slice(b"CurveZMQMESSAGES");
-        nonce[16..].copy_from_slice(&message[command_len..command_len + 8]);
+        nonce[16..].copy_from_slice(parts.short_nonce);
 
-        let plaintext = message_box.decrypt(&message[command_len + 8..], &nonce)?;
+        let plaintext = message_box.decrypt(parts.ciphertext, &nonce)?;
         Ok(Bytes::from(plaintext))
     }
 }
@@ -744,15 +759,7 @@ impl CurveServer {
 
     /// Decrypt a message
     pub fn decrypt_message(&mut self, message: &[u8]) -> Result<Bytes, CurveError> {
-        let command_len = CURVE_MESSAGE.len();
-        if message.len() < command_len + 8 {
-            return Err(CurveError::ProtocolViolation);
-        }
-
-        if &message[..command_len] != CURVE_MESSAGE {
-            return Err(CurveError::ProtocolViolation);
-        }
-
+        let parts = parse_curve_message(message)?;
         let message_box = self
             .message_box
             .as_ref()
@@ -761,9 +768,9 @@ impl CurveServer {
         // Reconstruct nonce
         let mut nonce = [0u8; CURVE_NONCE_SIZE];
         nonce[..16].copy_from_slice(b"CurveZMQMESSAGEC");
-        nonce[16..].copy_from_slice(&message[command_len..command_len + 8]);
+        nonce[16..].copy_from_slice(parts.short_nonce);
 
-        let plaintext = message_box.decrypt(&message[command_len + 8..], &nonce)?;
+        let plaintext = message_box.decrypt(parts.ciphertext, &nonce)?;
         Ok(Bytes::from(plaintext))
     }
 }
