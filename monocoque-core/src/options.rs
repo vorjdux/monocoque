@@ -892,7 +892,11 @@ impl SocketOptions {
     /// let opts = SocketOptions::new().with_read_buffer_size(16384);
     /// ```
     pub const fn with_read_buffer_size(mut self, size: usize) -> Self {
-        self.read_buffer_size = size;
+        self.read_buffer_size = if size > crate::alloc::PAGE_SIZE {
+            crate::alloc::PAGE_SIZE
+        } else {
+            size
+        };
         self
     }
 
@@ -913,7 +917,11 @@ impl SocketOptions {
     /// let opts = SocketOptions::new().with_buffer_sizes(4096, 4096);
     /// ```
     pub const fn with_buffer_sizes(mut self, read_size: usize, write_size: usize) -> Self {
-        self.read_buffer_size = read_size;
+        self.read_buffer_size = if read_size > crate::alloc::PAGE_SIZE {
+            crate::alloc::PAGE_SIZE
+        } else {
+            read_size
+        };
         self.write_buffer_size = write_size;
         self
     }
