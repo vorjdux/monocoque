@@ -428,6 +428,21 @@ mod tests {
     }
 
     #[test]
+    fn default_zap_handler_rejects_invalid_utf8_plain_credentials() {
+        compio::runtime::Runtime::new().unwrap().block_on(async {
+            let handler = default_plain_handler();
+            let request = plain_request(vec![Bytes::from(vec![0xff]), Bytes::from("secret")]);
+
+            let response = handler.authenticate(&request).await;
+            assert_eq!(
+                response.status_code,
+                ZapStatus::Failure,
+                "Default ZAP handler authenticated invalid UTF-8 PLAIN credentials after lossy conversion"
+            );
+        });
+    }
+
+    #[test]
     fn test_default_zap_handler_plain_failure() {
         monocoque_core::rt::LocalRuntime::new()
             .unwrap()
