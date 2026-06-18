@@ -330,8 +330,8 @@ impl CurveClient {
 
         debug!("[CURVE CLIENT] Waiting for WELCOME");
 
-        // Read WELCOME header (7 bytes)
-        let header = vec![0u8; 7];
+        // Read WELCOME command name including the length prefix.
+        let header = vec![0u8; CURVE_WELCOME.len()];
         let buf_result = read_exact_with_timeout(stream, header, timeout)
             .await
             .map_err(ZmtpError::from)?;
@@ -416,8 +416,8 @@ impl CurveClient {
 
         debug!("[CURVE CLIENT] Waiting for READY");
 
-        // Read READY header (5 bytes)
-        let header = vec![0u8; 5];
+        // Read READY command name including the length prefix.
+        let header = vec![0u8; CURVE_READY.len()];
         let buf_result = read_exact_with_timeout(stream, header, timeout)
             .await
             .map_err(ZmtpError::from)?;
@@ -468,11 +468,12 @@ impl CurveClient {
 
     /// Decrypt a message
     pub fn decrypt_message(&mut self, message: &[u8]) -> Result<Bytes, CurveError> {
-        if message.len() < 7 + 8 {
+        let command_len = CURVE_MESSAGE.len();
+        if message.len() < command_len + 8 {
             return Err(CurveError::ProtocolViolation);
         }
 
-        if &message[..7] != CURVE_MESSAGE {
+        if &message[..command_len] != CURVE_MESSAGE {
             return Err(CurveError::ProtocolViolation);
         }
 
@@ -484,9 +485,9 @@ impl CurveClient {
         // Reconstruct nonce
         let mut nonce = [0u8; CURVE_NONCE_SIZE];
         nonce[..16].copy_from_slice(b"CurveZMQMESSAGES");
-        nonce[16..].copy_from_slice(&message[7..15]);
+        nonce[16..].copy_from_slice(&message[command_len..command_len + 8]);
 
-        let plaintext = message_box.decrypt(&message[15..], &nonce)?;
+        let plaintext = message_box.decrypt(&message[command_len + 8..], &nonce)?;
         Ok(Bytes::from(plaintext))
     }
 }
@@ -557,8 +558,8 @@ impl CurveServer {
 
         debug!("[CURVE SERVER] Waiting for HELLO");
 
-        // Read HELLO header (5 bytes)
-        let header = vec![0u8; 5];
+        // Read HELLO command name including the length prefix.
+        let header = vec![0u8; CURVE_HELLO.len()];
         let buf_result = read_exact_with_timeout(stream, header, timeout)
             .await
             .map_err(ZmtpError::from)?;
@@ -646,8 +647,8 @@ impl CurveServer {
 
         debug!("[CURVE SERVER] Waiting for INITIATE");
 
-        // Read INITIATE header (8 bytes)
-        let header = vec![0u8; 8];
+        // Read INITIATE command name including the length prefix.
+        let header = vec![0u8; CURVE_INITIATE.len()];
         let buf_result = read_exact_with_timeout(stream, header, timeout)
             .await
             .map_err(ZmtpError::from)?;
@@ -743,11 +744,12 @@ impl CurveServer {
 
     /// Decrypt a message
     pub fn decrypt_message(&mut self, message: &[u8]) -> Result<Bytes, CurveError> {
-        if message.len() < 7 + 8 {
+        let command_len = CURVE_MESSAGE.len();
+        if message.len() < command_len + 8 {
             return Err(CurveError::ProtocolViolation);
         }
 
-        if &message[..7] != CURVE_MESSAGE {
+        if &message[..command_len] != CURVE_MESSAGE {
             return Err(CurveError::ProtocolViolation);
         }
 
@@ -759,9 +761,9 @@ impl CurveServer {
         // Reconstruct nonce
         let mut nonce = [0u8; CURVE_NONCE_SIZE];
         nonce[..16].copy_from_slice(b"CurveZMQMESSAGEC");
-        nonce[16..].copy_from_slice(&message[7..15]);
+        nonce[16..].copy_from_slice(&message[command_len..command_len + 8]);
 
-        let plaintext = message_box.decrypt(&message[15..], &nonce)?;
+        let plaintext = message_box.decrypt(&message[command_len + 8..], &nonce)?;
         Ok(Bytes::from(plaintext))
     }
 }
@@ -1015,6 +1017,86 @@ mod tests {
         let decrypted = box_.decrypt(&ciphertext, &nonce).unwrap();
 
         assert_eq!(plaintext, decrypted.as_slice());
+    }
+
+    #[test]
+    fn client_decrypt_message_accepts_valid_curve_message_command_header() {
+        let shared_secret = [42u8; CURVE_KEY_SIZE];
+        let box_ = CurveBox::new(&shared_secret);
+
+        let mut nonce = [0u8; CURVE_NONCE_SIZE];
+        nonce[..16].copy_from_slice(b"CurveZMQMESSAGES");
+        nonce[16..].copy_from_slice(&1u64.to_be_bytes());
+
+        let ciphertext = box_.encrypt(b"server message", &nonce).unwrap();
+        let mut frame = BytesMut::new();
+        frame.extend_from_slice(CURVE_MESSAGE);
+        frame.extend_from_slice(&nonce[16..]);
+        frame.extend_from_slice(&ciphertext);
+
+        let client_keypair = CurveKeyPair::generate();
+        let server_public = CurveKeyPair::generate().public;
+        let mut client = CurveClient::new(client_keypair, server_public);
+        client.message_box = Some(CurveBox::new(&shared_secret));
+
+        let plaintext = client.decrypt_message(&frame).unwrap();
+
+        assert_eq!(plaintext.as_ref(), b"server message");
+    }
+
+    #[test]
+    fn server_decrypt_message_accepts_valid_curve_message_command_header() {
+        let shared_secret = [43u8; CURVE_KEY_SIZE];
+        let box_ = CurveBox::new(&shared_secret);
+
+        let mut nonce = [0u8; CURVE_NONCE_SIZE];
+        nonce[..16].copy_from_slice(b"CurveZMQMESSAGEC");
+        nonce[16..].copy_from_slice(&2u64.to_be_bytes());
+
+        let ciphertext = box_.encrypt(b"client message", &nonce).unwrap();
+        let mut frame = BytesMut::new();
+        frame.extend_from_slice(CURVE_MESSAGE);
+        frame.extend_from_slice(&nonce[16..]);
+        frame.extend_from_slice(&ciphertext);
+
+        let server_keypair = CurveKeyPair::generate();
+        let mut server = CurveServer::new(server_keypair);
+        server.message_box = Some(CurveBox::new(&shared_secret));
+
+        let plaintext = server.decrypt_message(&frame).unwrap();
+
+        assert_eq!(plaintext.as_ref(), b"client message");
+    }
+
+    #[test]
+    fn decrypt_message_rejects_invalid_curve_message_command_header() {
+        let client_keypair = CurveKeyPair::generate();
+        let server_public = CurveKeyPair::generate().public;
+        let mut client = CurveClient::new(client_keypair, server_public);
+        client.message_box = Some(CurveBox::new(&[42u8; CURVE_KEY_SIZE]));
+
+        let mut frame = BytesMut::new();
+        frame.extend_from_slice(b"\x05READY");
+        frame.extend_from_slice(&1u64.to_be_bytes());
+        frame.extend_from_slice(&[0u8; CURVE_BOX_OVERHEAD]);
+
+        assert!(matches!(
+            client.decrypt_message(&frame),
+            Err(CurveError::ProtocolViolation)
+        ));
+    }
+
+    #[test]
+    fn decrypt_message_rejects_missing_curve_message_nonce() {
+        let client_keypair = CurveKeyPair::generate();
+        let server_public = CurveKeyPair::generate().public;
+        let mut client = CurveClient::new(client_keypair, server_public);
+        client.message_box = Some(CurveBox::new(&[42u8; CURVE_KEY_SIZE]));
+
+        assert!(matches!(
+            client.decrypt_message(CURVE_MESSAGE),
+            Err(CurveError::ProtocolViolation)
+        ));
     }
 
     #[test]
