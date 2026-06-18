@@ -175,6 +175,15 @@ where
         return Err(ZmtpError::Protocol);
     }
 
+    let peer_mechanism = parse_greeting_mechanism(&greeting_buf[12..32])?;
+    if peer_mechanism != mechanism {
+        warn!(
+            "[HANDSHAKE] security mechanism mismatch: local {:?}, peer {:?}",
+            mechanism, peer_mechanism
+        );
+        return Err(ZmtpError::Protocol);
+    }
+
     // Step 3: Run security-mechanism-specific exchange (between greeting and READY)
     let curve_cipher: Option<crate::security::curve::CurveMessageCipher> = None;
     match mechanism {
@@ -480,6 +489,19 @@ fn build_greeting_with_mechanism(mechanism: SecurityMechanism, options: &SocketO
     b.extend_from_slice(&[0u8; 31]);
 
     b.freeze()
+}
+
+fn parse_greeting_mechanism(field: &[u8]) -> Result<SecurityMechanism, ZmtpError> {
+    let len = field
+        .iter()
+        .position(|&byte| byte == 0)
+        .unwrap_or(field.len());
+    match &field[..len] {
+        b"NULL" => Ok(SecurityMechanism::Null),
+        b"PLAIN" => Ok(SecurityMechanism::Plain),
+        b"CURVE" => Ok(SecurityMechanism::Curve),
+        _ => Err(ZmtpError::Protocol),
+    }
 }
 
 /// Parse READY command to extract socket type and identity
@@ -815,6 +837,40 @@ mod tests {
             result.is_err(),
             "non-NULL handshake accepted an unsupported ZMTP major version during security negotiation"
         );
+
+        let _ = peer_task.await;
+    }
+
+    #[compio::test]
+    async fn plain_client_does_not_send_credentials_to_peer_advertising_null() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let peer_task = runtime::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+
+            read_client_greeting(&mut stream).await;
+
+            let peer_greeting =
+                build_greeting_with_mechanism(SecurityMechanism::Null, &SocketOptions::new());
+            write_greeting(&mut stream, peer_greeting.to_vec()).await;
+
+            assert!(
+                maybe_read_plain_hello(&mut stream).await.as_ref() != Some(b"\x05HELLO"),
+                "PLAIN client sent credentials to a peer that advertised NULL security"
+            );
+        });
+
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        let options = SocketOptions::new().with_plain_credentials("alice", "secret");
+        let _ = perform_handshake_with_options(
+            &mut stream,
+            SocketType::Req,
+            None,
+            Some(TEST_TIMEOUT),
+            &options,
+        )
+        .await;
 
         let _ = peer_task.await;
     }
