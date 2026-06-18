@@ -522,6 +522,75 @@ impl fmt::Debug for SocketOptions {
     }
 }
 
+impl fmt::Debug for SocketOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SocketOptions")
+            .field("read_buffer_size", &self.read_buffer_size)
+            .field("write_buffer_size", &self.write_buffer_size)
+            .field("recv_timeout", &self.recv_timeout)
+            .field("send_timeout", &self.send_timeout)
+            .field("handshake_timeout", &self.handshake_timeout)
+            .field("linger", &self.linger)
+            .field("reconnect_ivl", &self.reconnect_ivl)
+            .field("reconnect_ivl_max", &self.reconnect_ivl_max)
+            .field("connect_timeout", &self.connect_timeout)
+            .field("recv_hwm", &self.recv_hwm)
+            .field("send_hwm", &self.send_hwm)
+            .field("immediate", &self.immediate)
+            .field("max_msg_size", &self.max_msg_size)
+            .field("routing_id", &self.routing_id)
+            .field("connect_routing_id", &self.connect_routing_id)
+            .field("router_mandatory", &self.router_mandatory)
+            .field("router_handover", &self.router_handover)
+            .field("probe_router", &self.probe_router)
+            .field("xpub_verbose", &self.xpub_verbose)
+            .field("xpub_manual", &self.xpub_manual)
+            .field("xpub_welcome_msg", &self.xpub_welcome_msg)
+            .field("xsub_verbose_unsubs", &self.xsub_verbose_unsubs)
+            .field("conflate", &self.conflate)
+            .field("tcp_keepalive", &self.tcp_keepalive)
+            .field("tcp_keepalive_cnt", &self.tcp_keepalive_cnt)
+            .field("tcp_keepalive_idle", &self.tcp_keepalive_idle)
+            .field("tcp_keepalive_intvl", &self.tcp_keepalive_intvl)
+            .field("req_correlate", &self.req_correlate)
+            .field("req_relaxed", &self.req_relaxed)
+            .field("rate", &self.rate)
+            .field("recovery_ivl", &self.recovery_ivl)
+            .field("sndbuf", &self.sndbuf)
+            .field("rcvbuf", &self.rcvbuf)
+            .field("multicast_hops", &self.multicast_hops)
+            .field("tos", &self.tos)
+            .field("multicast_maxtpdu", &self.multicast_maxtpdu)
+            .field("ipv6", &self.ipv6)
+            .field("bind_to_device", &self.bind_to_device)
+            .field("plain_server", &self.plain_server)
+            .field("plain_username", &self.plain_username)
+            .field(
+                "plain_password",
+                &self.plain_password.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("curve_server", &self.curve_server)
+            .field("curve_publickey", &self.curve_publickey)
+            .field(
+                "curve_secretkey",
+                &self.curve_secretkey.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("curve_serverkey", &self.curve_serverkey)
+            .field("zap_domain", &self.zap_domain)
+            .field("subscriptions", &self.subscriptions)
+            .field("unsubscriptions", &self.unsubscriptions)
+            .field("max_reconnect_attempts", &self.max_reconnect_attempts)
+            .field("heartbeat_ivl", &self.heartbeat_ivl)
+            .field("heartbeat_ttl", &self.heartbeat_ttl)
+            .field("heartbeat_timeout", &self.heartbeat_timeout)
+            .field("router_raw", &self.router_raw)
+            .field("stream_notify", &self.stream_notify)
+            .field("xpub_nodrop", &self.xpub_nodrop)
+            .field("invert_matching", &self.invert_matching)
+            .finish()
+    }
+}
+
 impl Default for SocketOptions {
     fn default() -> Self {
         Self {
@@ -1378,6 +1447,34 @@ mod tests {
         assert_eq!(
             opts.connect_routing_id,
             Some(bytes::Bytes::from_static(b"peer-123"))
+        );
+    }
+
+    #[test]
+    fn debug_output_redacts_security_options() {
+        let opts = SocketOptions::new()
+            .with_plain_credentials("alice", "super-secret-password")
+            .with_curve_keypair([1u8; 32], [7u8; 32]);
+
+        let debug = format!("{opts:?}");
+
+        assert!(
+            !debug.contains("super-secret-password"),
+            "SocketOptions Debug output exposes the PLAIN password"
+        );
+        assert!(
+            !debug.contains("curve_secretkey: Some([7, 7, 7"),
+            "SocketOptions Debug output exposes the CURVE secret key"
+        );
+    }
+
+    #[test]
+    fn read_buffer_size_cannot_exceed_arena_page_size() {
+        let opts = SocketOptions::new().with_read_buffer_size(crate::alloc::PAGE_SIZE + 1);
+
+        assert!(
+            opts.read_buffer_size <= crate::alloc::PAGE_SIZE,
+            "SocketOptions allowed a read buffer size larger than the arena page"
         );
     }
 
