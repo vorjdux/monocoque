@@ -170,7 +170,6 @@ impl fmt::Debug for ZapRequestCredentialsDebug {
         }
     }
 }
-
 impl ZapRequest {
     /// Create a new ZAP request with a caller-supplied request ID.
     ///

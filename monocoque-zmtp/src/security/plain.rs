@@ -108,9 +108,17 @@ pub trait PlainAuthHandler {
 ///
 /// Validates against a static HashMap of username → password.
 /// For production use, implement PlainAuthHandler with database lookup.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct StaticPlainHandler {
     credentials: std::collections::HashMap<String, String>,
+}
+
+impl fmt::Debug for StaticPlainHandler {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StaticPlainHandler")
+            .field("credential_count", &self.credentials.len())
+            .finish()
+    }
 }
 
 impl StaticPlainHandler {
@@ -513,5 +521,66 @@ mod tests {
         assert_eq!(request.credentials.len(), 2);
         assert_eq!(&request.credentials[0][..], b"testuser");
         assert_eq!(&request.credentials[1][..], b"testpass");
+    }
+
+    #[compio::test]
+    async fn plain_server_rejects_hello_with_trailing_credential_bytes() {
+        use compio::buf::BufResult;
+        use compio::net::{TcpListener, TcpStream};
+        use compio::runtime;
+        use monocoque_core::timeout::{read_exact_with_timeout, write_all_with_timeout};
+        use std::time::Duration;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server_task = runtime::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut handler = StaticPlainHandler::new();
+            handler.add_user("admin", "secret");
+
+            plain_server_handshake(
+                &mut stream,
+                &handler,
+                "global",
+                "127.0.0.1:1",
+                Some(Duration::from_secs(1)),
+            )
+            .await
+        });
+
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        let mut hello = plain_hello(b"admin", b"secret");
+        hello.extend_from_slice(b"\x05extra");
+        let BufResult(write_result, _) =
+            write_all_with_timeout(&mut stream, hello, Some(Duration::from_secs(1)))
+                .await
+                .unwrap();
+        write_result.unwrap();
+
+        let response = vec![0u8; PLAIN_WELCOME.len()];
+        let BufResult(read_result, response) =
+            read_exact_with_timeout(&mut stream, response, Some(Duration::from_secs(1)))
+                .await
+                .unwrap();
+        let _ = read_result;
+
+        let result = server_task.await;
+        assert!(
+            result.is_err() && response.as_slice() != PLAIN_WELCOME,
+            "PLAIN server authenticated a HELLO command with trailing credential bytes"
+        );
+    }
+
+    #[test]
+    fn debug_output_redacts_static_plain_handler_passwords() {
+        let mut handler = StaticPlainHandler::new();
+        handler.add_user("alice", "handler-password");
+
+        let debug = format!("{handler:?}");
+
+        assert!(
+            !debug.contains("handler-password"),
+            "StaticPlainHandler Debug output exposes stored PLAIN passwords"
+        );
     }
 }
