@@ -166,6 +166,15 @@ where
         return Err(ZmtpError::Protocol);
     }
 
+    let peer_major = greeting_buf[10];
+    if mechanism != SecurityMechanism::Null && peer_major != 3 {
+        warn!(
+            "[HANDSHAKE] non-NULL mechanism {:?} cannot negotiate with ZMTP major version {}",
+            mechanism, peer_major
+        );
+        return Err(ZmtpError::Protocol);
+    }
+
     // Step 3: Run security-mechanism-specific exchange (between greeting and READY)
     let curve_cipher: Option<crate::security::curve::CurveMessageCipher> = None;
     match mechanism {
@@ -676,6 +685,17 @@ mod tests {
         write_res.unwrap();
     }
 
+    async fn maybe_read_plain_hello(stream: &mut TcpStream) -> Option<[u8; 6]> {
+        let header = [0u8; 6];
+        let Ok(BufResult(read_res, header)) =
+            read_exact_with_timeout(stream, header, Some(TEST_TIMEOUT)).await
+        else {
+            return None;
+        };
+        read_res.ok()?;
+        Some(header)
+    }
+
     async fn maybe_complete_ready_exchange(stream: &mut TcpStream) {
         let header = [0u8; 2];
         let Ok(BufResult(read_res, header)) =
@@ -751,6 +771,49 @@ mod tests {
         assert!(
             result.is_err(),
             "handshake accepted a peer greeting with an invalid ZMTP signature tail"
+        );
+
+        let _ = peer_task.await;
+    }
+
+    #[compio::test]
+    async fn non_null_handshake_rejects_peer_greeting_with_unsupported_major_version() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let peer_task = runtime::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+
+            read_client_greeting(&mut stream).await;
+
+            let mut bad_greeting = build_greeting_with_mechanism(
+                SecurityMechanism::Plain,
+                &SocketOptions::new().with_plain_server(true),
+            )
+            .to_vec();
+            bad_greeting[10] = 2;
+            write_greeting(&mut stream, bad_greeting).await;
+
+            assert!(
+                maybe_read_plain_hello(&mut stream).await.as_ref() != Some(b"\x05HELLO"),
+                "PLAIN client sent security commands to a ZMTP 2.x peer"
+            );
+        });
+
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        let options = SocketOptions::new().with_plain_credentials("alice", "secret");
+        let result = perform_handshake_with_options(
+            &mut stream,
+            SocketType::Req,
+            None,
+            Some(TEST_TIMEOUT),
+            &options,
+        )
+        .await;
+
+        assert!(
+            result.is_err(),
+            "non-NULL handshake accepted an unsupported ZMTP major version during security negotiation"
         );
 
         let _ = peer_task.await;
