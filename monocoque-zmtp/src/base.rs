@@ -760,39 +760,81 @@ where
 mod tests {
     use super::*;
     use compio::buf::{BufResult, IoBuf, IoBufMut};
-    use monocoque_core::options::SocketOptions;
+    use std::collections::VecDeque;
     use std::io;
+    use std::sync::{Arc, Mutex};
 
-    #[derive(Debug)]
-    struct ShortWriteStream {
-        max_write: usize,
-        writes: Vec<Vec<u8>>,
+    const PAYLOAD: &[u8] = b"abcdef";
+
+    #[derive(Clone, Debug, Default)]
+    struct WriteLog(Arc<Mutex<Vec<Vec<u8>>>>);
+
+    impl WriteLog {
+        fn push(&self, bytes: &[u8]) {
+            self.0.lock().unwrap().push(bytes.to_vec());
+        }
+
+        fn bytes(&self) -> Vec<u8> {
+            self.0.lock().unwrap().concat()
+        }
+
+        fn write_count(&self) -> usize {
+            self.0.lock().unwrap().len()
+        }
+
+        fn is_empty(&self) -> bool {
+            self.0.lock().unwrap().is_empty()
+        }
     }
 
-    impl ShortWriteStream {
-        fn new(max_write: usize) -> Self {
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum WriteStep {
+        Bytes(usize),
+        Error(io::ErrorKind),
+    }
+
+    #[derive(Debug)]
+    struct ScriptedWriteStream {
+        steps: VecDeque<WriteStep>,
+        log: WriteLog,
+    }
+
+    impl ScriptedWriteStream {
+        fn new(steps: impl IntoIterator<Item = WriteStep>) -> Self {
             Self {
-                max_write,
-                writes: Vec::new(),
+                steps: steps.into_iter().collect(),
+                log: WriteLog::default(),
             }
         }
 
-        fn written_bytes(&self) -> Vec<u8> {
-            self.writes.concat()
+        fn log(&self) -> WriteLog {
+            self.log.clone()
         }
     }
 
-    impl AsyncRead for ShortWriteStream {
+    impl AsyncRead for ScriptedWriteStream {
         async fn read<B: IoBufMut>(&mut self, buf: B) -> BufResult<usize, B> {
             BufResult(Ok(0), buf)
         }
     }
 
-    impl AsyncWrite for ShortWriteStream {
+    impl AsyncWrite for ScriptedWriteStream {
         async fn write<B: IoBuf>(&mut self, buf: B) -> BufResult<usize, B> {
-            let n = self.max_write.min(buf.buf_len());
-            self.writes.push(buf.as_slice()[..n].to_vec());
-            BufResult(Ok(n), buf)
+            match self.steps.pop_front() {
+                Some(WriteStep::Bytes(n)) => {
+                    let n = n.min(buf.buf_len());
+                    self.log.push(&buf.as_slice()[..n]);
+                    BufResult(Ok(n), buf)
+                }
+                Some(WriteStep::Error(kind)) => {
+                    BufResult(Err(io::Error::new(kind, "scripted write error")), buf)
+                }
+                None => {
+                    let n = buf.buf_len();
+                    self.log.push(buf.as_slice());
+                    BufResult(Ok(n), buf)
+                }
+            }
         }
 
         async fn flush(&mut self) -> io::Result<()> {
@@ -802,6 +844,339 @@ mod tests {
         async fn shutdown(&mut self) -> io::Result<()> {
             Ok(())
         }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum WritePath {
+        WriteFromBuf,
+        FlushSendBuffer,
+    }
+
+    impl WritePath {
+        fn buffer_payload(self, base: &mut SocketBase<ScriptedWriteStream>) {
+            match self {
+                Self::WriteFromBuf => base.write_buf.extend_from_slice(PAYLOAD),
+                Self::FlushSendBuffer => {
+                    base.send_buffer.extend_from_slice(PAYLOAD);
+                    base.buffered_messages = 1;
+                }
+            }
+        }
+
+        async fn write(self, base: &mut SocketBase<ScriptedWriteStream>) -> io::Result<()> {
+            match self {
+                Self::WriteFromBuf => base.write_from_buf().await,
+                Self::FlushSendBuffer => base.flush_send_buffer().await,
+            }
+        }
+
+        fn assert_drained(self, base: &SocketBase<ScriptedWriteStream>) {
+            match self {
+                Self::WriteFromBuf => assert!(base.write_buf.is_empty()),
+                Self::FlushSendBuffer => {
+                    assert!(base.send_buffer.is_empty());
+                    assert_eq!(base.buffered_messages, 0);
+                }
+            }
+        }
+
+        fn assert_payload_buffered(self, base: &SocketBase<ScriptedWriteStream>) {
+            match self {
+                Self::WriteFromBuf => assert_eq!(&base.write_buf[..], PAYLOAD),
+                Self::FlushSendBuffer => {
+                    assert_eq!(&base.send_buffer[..], PAYLOAD);
+                    assert_eq!(base.buffered_messages, 1);
+                }
+            }
+        }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum StreamState {
+        Connected,
+        Disconnected,
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum WriteStatus {
+        Ok,
+        Err(io::ErrorKind),
+    }
+
+    impl WriteStatus {
+        fn from_result(result: &io::Result<()>) -> Self {
+            match result {
+                Ok(()) => Self::Ok,
+                Err(err) => Self::Err(err.kind()),
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    struct ExpectedWriteOutcome {
+        status: WriteStatus,
+        written: Vec<u8>,
+    }
+
+    fn simulate_write_all(payload: &[u8], script: &[WriteStep]) -> ExpectedWriteOutcome {
+        let mut offset = 0;
+        let mut written = Vec::new();
+
+        for step in script {
+            if offset == payload.len() {
+                return ExpectedWriteOutcome {
+                    status: WriteStatus::Ok,
+                    written,
+                };
+            }
+
+            match *step {
+                WriteStep::Bytes(0) => {
+                    return ExpectedWriteOutcome {
+                        status: WriteStatus::Err(io::ErrorKind::WriteZero),
+                        written,
+                    };
+                }
+                WriteStep::Bytes(n) => {
+                    let n = n.min(payload.len() - offset);
+                    written.extend_from_slice(&payload[offset..offset + n]);
+                    offset += n;
+                }
+                WriteStep::Error(io::ErrorKind::Interrupted) => {}
+                WriteStep::Error(kind) => {
+                    return ExpectedWriteOutcome {
+                        status: WriteStatus::Err(kind),
+                        written,
+                    };
+                }
+            }
+        }
+
+        if offset < payload.len() {
+            written.extend_from_slice(&payload[offset..]);
+        }
+
+        ExpectedWriteOutcome {
+            status: WriteStatus::Ok,
+            written,
+        }
+    }
+
+    fn byte_steps(chunks: impl IntoIterator<Item = usize>) -> Vec<WriteStep> {
+        chunks.into_iter().map(WriteStep::Bytes).collect()
+    }
+
+    fn nonblocking_options() -> SocketOptions {
+        let mut options = SocketOptions::default();
+        options.send_timeout = Some(std::time::Duration::ZERO);
+        options
+    }
+
+    fn socket_with_payload(
+        path: WritePath,
+        steps: impl IntoIterator<Item = WriteStep>,
+        options: SocketOptions,
+    ) -> (SocketBase<ScriptedWriteStream>, WriteLog) {
+        let stream = ScriptedWriteStream::new(steps);
+        let log = stream.log();
+        let mut base = SocketBase::new(stream, SocketType::Dealer, options);
+        path.buffer_payload(&mut base);
+        (base, log)
+    }
+
+    async fn assert_short_writes_complete(
+        path: WritePath,
+        chunks: impl IntoIterator<Item = usize>,
+    ) {
+        let (mut base, log) =
+            socket_with_payload(path, byte_steps(chunks), SocketOptions::default());
+
+        path.write(&mut base).await.unwrap();
+
+        assert_eq!(log.bytes(), PAYLOAD);
+        assert!(log.write_count() > 1);
+        assert!(base.stream.is_some());
+        path.assert_drained(&base);
+        assert!(!base.is_poisoned());
+    }
+
+    async fn assert_write_failure_after_progress(
+        path: WritePath,
+        script: impl IntoIterator<Item = WriteStep>,
+        expected_kind: io::ErrorKind,
+        expected_written: &[u8],
+    ) {
+        let (mut base, log) = socket_with_payload(path, script, SocketOptions::default());
+
+        let err = path.write(&mut base).await.unwrap_err();
+
+        assert_eq!(err.kind(), expected_kind);
+        assert_eq!(log.bytes(), expected_written);
+        assert!(base.stream.is_none());
+        assert!(base.is_poisoned());
+    }
+
+    async fn assert_write_success(path: WritePath, script: impl IntoIterator<Item = WriteStep>) {
+        let (mut base, log) = socket_with_payload(path, script, SocketOptions::default());
+
+        path.write(&mut base).await.unwrap();
+
+        assert_eq!(log.bytes(), PAYLOAD);
+        assert!(base.stream.is_some());
+        path.assert_drained(&base);
+        assert!(!base.is_poisoned());
+    }
+
+    async fn assert_pre_io_error_preserves_buffer(
+        path: WritePath,
+        options: SocketOptions,
+        stream_state: StreamState,
+        expected_kind: io::ErrorKind,
+    ) {
+        let (mut base, log) = socket_with_payload(path, [], options);
+        if matches!(stream_state, StreamState::Disconnected) {
+            base.stream = None;
+        }
+
+        let err = path.write(&mut base).await.unwrap_err();
+
+        assert_eq!(err.kind(), expected_kind);
+        assert!(log.is_empty());
+        match stream_state {
+            StreamState::Connected => assert!(base.stream.is_some()),
+            StreamState::Disconnected => assert!(base.stream.is_none()),
+        }
+        path.assert_payload_buffered(&base);
+        assert!(!base.is_poisoned());
+    }
+
+    fn write_step_scripts(max_len: usize) -> Vec<Vec<WriteStep>> {
+        const STEPS: &[WriteStep] = &[
+            WriteStep::Bytes(0),
+            WriteStep::Bytes(1),
+            WriteStep::Bytes(2),
+            WriteStep::Error(io::ErrorKind::Interrupted),
+            WriteStep::Error(io::ErrorKind::BrokenPipe),
+        ];
+
+        fn extend_scripts(
+            scripts: &mut Vec<Vec<WriteStep>>,
+            current: &mut Vec<WriteStep>,
+            steps: &[WriteStep],
+            max_len: usize,
+        ) {
+            scripts.push(current.clone());
+            if current.len() == max_len {
+                return;
+            }
+
+            for step in steps {
+                current.push(*step);
+                extend_scripts(scripts, current, steps, max_len);
+                current.pop();
+            }
+        }
+
+        let mut scripts = Vec::new();
+        extend_scripts(&mut scripts, &mut Vec::new(), STEPS, max_len);
+        scripts
+    }
+
+    fn short_write_scripts(max_len: usize) -> Vec<Vec<WriteStep>> {
+        write_step_scripts(max_len)
+            .into_iter()
+            .filter(|script| matches!(script.first(), Some(WriteStep::Bytes(1 | 2))))
+            .collect()
+    }
+
+    async fn scripted_write_case_failures(path: WritePath, script: &[WriteStep]) -> Vec<String> {
+        let stream = ScriptedWriteStream::new(script.iter().copied());
+        let log = stream.log();
+        let mut base = SocketBase::new(stream, SocketType::Dealer, SocketOptions::default());
+        path.buffer_payload(&mut base);
+
+        let expected = simulate_write_all(PAYLOAD, script);
+        let result = path.write(&mut base).await;
+
+        let mut failures = Vec::new();
+        let actual_status = WriteStatus::from_result(&result);
+        if actual_status != expected.status {
+            failures.push(format!(
+                "path={path:?} script={script:?}: result {actual_status:?} != {:?}",
+                expected.status
+            ));
+        }
+
+        let actual_written = log.bytes();
+        if actual_written != expected.written {
+            failures.push(format!(
+                "path={path:?} script={script:?}: written {actual_written:?} != {:?}",
+                expected.written
+            ));
+        }
+
+        match expected.status {
+            WriteStatus::Ok => {
+                if base.stream.is_none() {
+                    failures.push(format!(
+                        "path={path:?} script={script:?}: stream disconnected after expected success"
+                    ));
+                }
+                if base.is_poisoned() {
+                    failures.push(format!(
+                        "path={path:?} script={script:?}: socket poisoned after expected success"
+                    ));
+                }
+                match path {
+                    WritePath::WriteFromBuf if !base.write_buf.is_empty() => {
+                        failures.push(format!(
+                            "path={path:?} script={script:?}: write_buf not empty after expected success"
+                        ));
+                    }
+                    WritePath::FlushSendBuffer if !base.send_buffer.is_empty() => {
+                        failures.push(format!(
+                            "path={path:?} script={script:?}: send_buffer not empty after expected success"
+                        ));
+                    }
+                    WritePath::FlushSendBuffer if base.buffered_messages != 0 => {
+                        failures.push(format!(
+                            "path={path:?} script={script:?}: buffered_messages {} != 0 after expected success",
+                            base.buffered_messages
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            WriteStatus::Err(_) => {
+                if base.stream.is_some() {
+                    failures.push(format!(
+                        "path={path:?} script={script:?}: stream still connected after expected failure"
+                    ));
+                }
+                if !base.is_poisoned() {
+                    failures.push(format!(
+                        "path={path:?} script={script:?}: socket not poisoned after expected failure"
+                    ));
+                }
+            }
+        }
+
+        failures
+    }
+
+    async fn assert_scripted_write_cases(path: WritePath, scripts: Vec<Vec<WriteStep>>) {
+        let mut failures = Vec::new();
+
+        for script in scripts {
+            failures.extend(scripted_write_case_failures(path, &script).await);
+        }
+
+        assert!(
+            failures.is_empty(),
+            "{} scripted write failures:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
     }
 
     // ── PING / PONG frame builders ────────────────────────────────────────────
@@ -884,131 +1259,163 @@ mod tests {
 
     #[compio::test]
     async fn test_write_from_buf_retries_short_writes_before_disarming() {
-        let stream = ShortWriteStream::new(2);
-        let mut base = SocketBase::new(stream, SocketType::Dealer, SocketOptions::default());
-        base.write_buf.extend_from_slice(b"abcdef");
-
-        base.write_from_buf().await.unwrap();
-
-        let stream = base.stream.as_ref().unwrap();
-        assert_eq!(stream.written_bytes(), b"abcdef");
-        assert_eq!(stream.writes.len(), 3);
-        assert!(base.write_buf.is_empty());
-        assert!(!base.is_poisoned());
+        assert_short_writes_complete(WritePath::WriteFromBuf, [2, 2]).await;
     }
 
     #[compio::test]
     async fn test_flush_send_buffer_retries_short_writes_before_disarming() {
-        let stream = ShortWriteStream::new(3);
-        let mut base = SocketBase::new(stream, SocketType::Dealer, SocketOptions::default());
-        base.send_buffer.extend_from_slice(b"abcdefg");
-        base.buffered_messages = 2;
+        assert_short_writes_complete(WritePath::FlushSendBuffer, [2, 2]).await;
+    }
 
-        base.flush_send_buffer().await.unwrap();
+    #[compio::test]
+    async fn test_write_from_buf_write_zero_poisons_and_disconnects() {
+        assert_write_failure_after_progress(
+            WritePath::WriteFromBuf,
+            [WriteStep::Bytes(2), WriteStep::Bytes(0)],
+            io::ErrorKind::WriteZero,
+            b"ab",
+        )
+        .await;
+    }
 
-        let stream = base.stream.as_ref().unwrap();
-        assert_eq!(stream.written_bytes(), b"abcdefg");
-        assert_eq!(stream.writes.len(), 3);
-        assert!(base.send_buffer.is_empty());
-        assert_eq!(base.buffered_messages, 0);
-        assert!(!base.is_poisoned());
+    #[compio::test]
+    async fn test_flush_send_buffer_write_zero_poisons_and_disconnects() {
+        assert_write_failure_after_progress(
+            WritePath::FlushSendBuffer,
+            [WriteStep::Bytes(2), WriteStep::Bytes(0)],
+            io::ErrorKind::WriteZero,
+            b"ab",
+        )
+        .await;
+    }
+
+    #[compio::test]
+    async fn test_write_from_buf_write_error_after_progress_poisons_and_disconnects() {
+        assert_write_failure_after_progress(
+            WritePath::WriteFromBuf,
+            [
+                WriteStep::Bytes(2),
+                WriteStep::Error(io::ErrorKind::BrokenPipe),
+            ],
+            io::ErrorKind::BrokenPipe,
+            b"ab",
+        )
+        .await;
+    }
+
+    #[compio::test]
+    async fn test_flush_send_buffer_write_error_after_progress_poisons_and_disconnects() {
+        assert_write_failure_after_progress(
+            WritePath::FlushSendBuffer,
+            [
+                WriteStep::Bytes(2),
+                WriteStep::Error(io::ErrorKind::BrokenPipe),
+            ],
+            io::ErrorKind::BrokenPipe,
+            b"ab",
+        )
+        .await;
+    }
+
+    #[compio::test]
+    async fn test_write_from_buf_interrupted_write_retries_without_poisoning() {
+        assert_write_success(
+            WritePath::WriteFromBuf,
+            [
+                WriteStep::Error(io::ErrorKind::Interrupted),
+                WriteStep::Bytes(2),
+                WriteStep::Bytes(4),
+            ],
+        )
+        .await;
+    }
+
+    #[compio::test]
+    async fn test_flush_send_buffer_interrupted_write_retries_without_poisoning() {
+        assert_write_success(
+            WritePath::FlushSendBuffer,
+            [
+                WriteStep::Error(io::ErrorKind::Interrupted),
+                WriteStep::Bytes(2),
+                WriteStep::Bytes(4),
+            ],
+        )
+        .await;
+    }
+
+    #[compio::test]
+    async fn test_scripted_write_from_buf_short_write_sequences_match_socket_state() {
+        assert_scripted_write_cases(WritePath::WriteFromBuf, short_write_scripts(4)).await;
+    }
+
+    #[compio::test]
+    async fn test_scripted_flush_send_buffer_short_write_sequences_match_socket_state() {
+        assert_scripted_write_cases(WritePath::FlushSendBuffer, short_write_scripts(4)).await;
     }
 
     #[compio::test]
     async fn test_nonblocking_write_from_buf_keeps_buffer_and_health() {
-        let stream = ShortWriteStream::new(2);
-        let mut options = SocketOptions::default();
-        options.send_timeout = Some(std::time::Duration::ZERO);
-        let mut base = SocketBase::new(stream, SocketType::Dealer, options);
-        base.write_buf.extend_from_slice(b"abcdef");
-
-        let err = base.write_from_buf().await.unwrap_err();
-
-        assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
-        assert_eq!(&base.write_buf[..], b"abcdef");
-        assert_eq!(base.stream.as_ref().unwrap().written_bytes(), b"");
-        assert!(!base.is_poisoned());
+        assert_pre_io_error_preserves_buffer(
+            WritePath::WriteFromBuf,
+            nonblocking_options(),
+            StreamState::Connected,
+            io::ErrorKind::WouldBlock,
+        )
+        .await;
     }
 
     #[compio::test]
     async fn test_write_from_buf_not_connected_does_not_poison() {
-        let stream = ShortWriteStream::new(2);
-        let mut base = SocketBase::new(stream, SocketType::Dealer, SocketOptions::default());
-        base.write_buf.extend_from_slice(b"abcdef");
-        base.stream = None;
-
-        let err = base.write_from_buf().await.unwrap_err();
-
-        assert_eq!(err.kind(), io::ErrorKind::NotConnected);
-        assert_eq!(&base.write_buf[..], b"abcdef");
-        assert!(!base.is_poisoned());
+        assert_pre_io_error_preserves_buffer(
+            WritePath::WriteFromBuf,
+            SocketOptions::default(),
+            StreamState::Disconnected,
+            io::ErrorKind::NotConnected,
+        )
+        .await;
     }
 
     #[compio::test]
     async fn test_write_from_buf_not_connected_takes_precedence_over_nonblocking() {
-        let stream = ShortWriteStream::new(2);
-        let mut options = SocketOptions::default();
-        options.send_timeout = Some(std::time::Duration::ZERO);
-        let mut base = SocketBase::new(stream, SocketType::Dealer, options);
-        base.write_buf.extend_from_slice(b"abcdef");
-        base.stream = None;
-
-        let err = base.write_from_buf().await.unwrap_err();
-
-        assert_eq!(err.kind(), io::ErrorKind::NotConnected);
-        assert_eq!(&base.write_buf[..], b"abcdef");
-        assert!(!base.is_poisoned());
+        assert_pre_io_error_preserves_buffer(
+            WritePath::WriteFromBuf,
+            nonblocking_options(),
+            StreamState::Disconnected,
+            io::ErrorKind::NotConnected,
+        )
+        .await;
     }
 
     #[compio::test]
     async fn test_nonblocking_flush_keeps_buffer_and_health() {
-        let stream = ShortWriteStream::new(2);
-        let mut options = SocketOptions::default();
-        options.send_timeout = Some(std::time::Duration::ZERO);
-        let mut base = SocketBase::new(stream, SocketType::Dealer, options);
-        base.send_buffer.extend_from_slice(b"abcdef");
-        base.buffered_messages = 1;
-
-        let err = base.flush_send_buffer().await.unwrap_err();
-
-        assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
-        assert_eq!(&base.send_buffer[..], b"abcdef");
-        assert_eq!(base.buffered_messages, 1);
-        assert_eq!(base.stream.as_ref().unwrap().written_bytes(), b"");
-        assert!(!base.is_poisoned());
+        assert_pre_io_error_preserves_buffer(
+            WritePath::FlushSendBuffer,
+            nonblocking_options(),
+            StreamState::Connected,
+            io::ErrorKind::WouldBlock,
+        )
+        .await;
     }
 
     #[compio::test]
     async fn test_flush_send_buffer_not_connected_keeps_buffer_and_health() {
-        let stream = ShortWriteStream::new(2);
-        let mut base = SocketBase::new(stream, SocketType::Dealer, SocketOptions::default());
-        base.send_buffer.extend_from_slice(b"abcdef");
-        base.buffered_messages = 1;
-        base.stream = None;
-
-        let err = base.flush_send_buffer().await.unwrap_err();
-
-        assert_eq!(err.kind(), io::ErrorKind::NotConnected);
-        assert_eq!(&base.send_buffer[..], b"abcdef");
-        assert_eq!(base.buffered_messages, 1);
-        assert!(!base.is_poisoned());
+        assert_pre_io_error_preserves_buffer(
+            WritePath::FlushSendBuffer,
+            SocketOptions::default(),
+            StreamState::Disconnected,
+            io::ErrorKind::NotConnected,
+        )
+        .await;
     }
 
     #[compio::test]
     async fn test_flush_send_buffer_not_connected_takes_precedence_over_nonblocking() {
-        let stream = ShortWriteStream::new(2);
-        let mut options = SocketOptions::default();
-        options.send_timeout = Some(std::time::Duration::ZERO);
-        let mut base = SocketBase::new(stream, SocketType::Dealer, options);
-        base.send_buffer.extend_from_slice(b"abcdef");
-        base.buffered_messages = 1;
-        base.stream = None;
-
-        let err = base.flush_send_buffer().await.unwrap_err();
-
-        assert_eq!(err.kind(), io::ErrorKind::NotConnected);
-        assert_eq!(&base.send_buffer[..], b"abcdef");
-        assert_eq!(base.buffered_messages, 1);
-        assert!(!base.is_poisoned());
+        assert_pre_io_error_preserves_buffer(
+            WritePath::FlushSendBuffer,
+            nonblocking_options(),
+            StreamState::Disconnected,
+            io::ErrorKind::NotConnected,
+        )
+        .await;
     }
 }
