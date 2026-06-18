@@ -531,6 +531,12 @@ where
             ));
         }
 
+        // Ensure we have a connected stream
+        let stream = self
+            .stream
+            .as_mut()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "Socket not connected"))?;
+
         if self.options.send_timeout.is_some_and(|dur| dur.is_zero()) {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
@@ -540,17 +546,11 @@ where
 
         trace!("[SocketBase] Flushing {} bytes", self.send_buffer.len());
 
-        use compio::buf::BufResult;
-        let buf = self.send_buffer.split().freeze();
-
-        // Ensure we have a connected stream
-        let stream = self
-            .stream
-            .as_mut()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "Socket not connected"))?;
-
         // Arm poison guard
         let guard = PoisonGuard::new(&mut self.is_poisoned);
+
+        use compio::buf::BufResult;
+        let buf = self.send_buffer.split().freeze();
 
         // Apply send timeout
         let BufResult(result, _) = match self.options.send_timeout {
@@ -600,18 +600,18 @@ where
             ));
         }
 
+        // Ensure we have a connected stream
+        let stream = self
+            .stream
+            .as_mut()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "Socket not connected"))?;
+
         if self.options.send_timeout.is_some_and(|dur| dur.is_zero()) {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
                 "Socket is in non-blocking mode and cannot send immediately",
             ));
         }
-
-        // Ensure we have a connected stream
-        let stream = self
-            .stream
-            .as_mut()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "Socket not connected"))?;
 
         // Arm poison guard
         let guard = PoisonGuard::new(&mut self.is_poisoned);
@@ -940,6 +940,23 @@ mod tests {
         let err = base.write_from_buf().await.unwrap_err();
 
         assert_eq!(err.kind(), io::ErrorKind::NotConnected);
+        assert_eq!(&base.write_buf[..], b"abcdef");
+        assert!(!base.is_poisoned());
+    }
+
+    #[compio::test]
+    async fn test_write_from_buf_not_connected_takes_precedence_over_nonblocking() {
+        let stream = ShortWriteStream::new(2);
+        let mut options = SocketOptions::default();
+        options.send_timeout = Some(std::time::Duration::ZERO);
+        let mut base = SocketBase::new(stream, SocketType::Dealer, options);
+        base.write_buf.extend_from_slice(b"abcdef");
+        base.stream = None;
+
+        let err = base.write_from_buf().await.unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::NotConnected);
+        assert_eq!(&base.write_buf[..], b"abcdef");
         assert!(!base.is_poisoned());
     }
 
@@ -958,6 +975,40 @@ mod tests {
         assert_eq!(&base.send_buffer[..], b"abcdef");
         assert_eq!(base.buffered_messages, 1);
         assert_eq!(base.stream.as_ref().unwrap().written_bytes(), b"");
+        assert!(!base.is_poisoned());
+    }
+
+    #[compio::test]
+    async fn test_flush_send_buffer_not_connected_keeps_buffer_and_health() {
+        let stream = ShortWriteStream::new(2);
+        let mut base = SocketBase::new(stream, SocketType::Dealer, SocketOptions::default());
+        base.send_buffer.extend_from_slice(b"abcdef");
+        base.buffered_messages = 1;
+        base.stream = None;
+
+        let err = base.flush_send_buffer().await.unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::NotConnected);
+        assert_eq!(&base.send_buffer[..], b"abcdef");
+        assert_eq!(base.buffered_messages, 1);
+        assert!(!base.is_poisoned());
+    }
+
+    #[compio::test]
+    async fn test_flush_send_buffer_not_connected_takes_precedence_over_nonblocking() {
+        let stream = ShortWriteStream::new(2);
+        let mut options = SocketOptions::default();
+        options.send_timeout = Some(std::time::Duration::ZERO);
+        let mut base = SocketBase::new(stream, SocketType::Dealer, options);
+        base.send_buffer.extend_from_slice(b"abcdef");
+        base.buffered_messages = 1;
+        base.stream = None;
+
+        let err = base.flush_send_buffer().await.unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::NotConnected);
+        assert_eq!(&base.send_buffer[..], b"abcdef");
+        assert_eq!(base.buffered_messages, 1);
         assert!(!base.is_poisoned());
     }
 }
