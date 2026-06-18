@@ -1694,6 +1694,29 @@ mod tests {
     }
 
     #[test]
+    fn curve_box_uses_message_counter_bytes_in_aead_nonce() {
+        let shared_secret = [42u8; CURVE_KEY_SIZE];
+        let box_ = CurveBox::new(&shared_secret);
+        let plaintext = b"same plaintext";
+
+        let mut nonce_one = [0u8; CURVE_NONCE_SIZE];
+        nonce_one[..16].copy_from_slice(b"CurveZMQMESSAGEC");
+        nonce_one[16..].copy_from_slice(&1u64.to_be_bytes());
+
+        let mut nonce_two = [0u8; CURVE_NONCE_SIZE];
+        nonce_two[..16].copy_from_slice(b"CurveZMQMESSAGEC");
+        nonce_two[16..].copy_from_slice(&2u64.to_be_bytes());
+
+        let ciphertext_one = box_.encrypt(plaintext, &nonce_one).unwrap();
+        let ciphertext_two = box_.encrypt(plaintext, &nonce_two).unwrap();
+
+        assert_ne!(
+            ciphertext_one, ciphertext_two,
+            "CURVE encryption ignored the message counter bytes and reused the AEAD nonce"
+        );
+    }
+
+    #[test]
     fn client_decrypt_message_accepts_valid_curve_message_command_header() {
         let shared_secret = [42u8; CURVE_KEY_SIZE];
         let box_ = CurveBox::new(&shared_secret);
