@@ -512,6 +512,26 @@ mod tests {
     }
 
     #[test]
+    fn default_zap_handler_rejects_curve_request_with_extra_credentials() {
+        compio::runtime::Runtime::new().unwrap().block_on(async {
+            let handler = default_handler(true);
+
+            let public_key = CurveKeyPair::generate().public;
+            let request = curve_request(vec![
+                Bytes::copy_from_slice(public_key.as_bytes()),
+                Bytes::from("ignored-injected-frame"),
+            ]);
+
+            let response = handler.authenticate(&request).await;
+            assert_eq!(
+                response.status_code,
+                ZapStatus::Failure,
+                "Default ZAP handler authenticated a malformed CURVE request with extra credential frames"
+            );
+        });
+    }
+
+    #[test]
     fn test_default_zap_handler_curve_disabled() {
         monocoque_core::rt::LocalRuntime::new()
             .unwrap()
