@@ -470,9 +470,34 @@ pub fn create_plain_zap_request(
     )
 }
 
+async fn reject_immediately_available_trailing_bytes<S>(stream: &mut S) -> Result<(), ZmtpError>
+where
+    S: AsyncRead + Unpin,
+{
+    let trailing = vec![0u8; 1];
+    match compio::time::timeout(TRAILING_BYTE_CHECK_TIMEOUT, stream.read(trailing)).await {
+        Ok(compio::buf::BufResult(Ok(0), _)) | Err(_) => Ok(()),
+        Ok(compio::buf::BufResult(Ok(_), _)) => {
+            warn!("[PLAIN SERVER] PLAIN HELLO contained trailing bytes");
+            Err(ZmtpError::Protocol)
+        }
+        Ok(compio::buf::BufResult(Err(_), _)) => Err(ZmtpError::Protocol),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn plain_hello(username: &[u8], password: &[u8]) -> Vec<u8> {
+        let mut hello = Vec::new();
+        hello.extend_from_slice(PLAIN_HELLO);
+        hello.push(username.len() as u8);
+        hello.extend_from_slice(username);
+        hello.push(password.len() as u8);
+        hello.extend_from_slice(password);
+        hello
+    }
 
     #[test]
     fn test_static_plain_handler() {
