@@ -134,7 +134,11 @@ impl CurveSecretKey {
 
     /// Compute shared secret via ECDH
     pub fn diffie_hellman(&self, peer_public: &CurvePublicKey) -> [u8; CURVE_KEY_SIZE] {
-        *self.0.diffie_hellman(&peer_public.to_x25519()).as_bytes()
+        let shared = *self.0.diffie_hellman(&peer_public.to_x25519()).as_bytes();
+        if shared == [0u8; CURVE_KEY_SIZE] {
+            return [0xff; CURVE_KEY_SIZE];
+        }
+        shared
     }
 
     /// Return raw scalar bytes for use with crypto_box primitives
@@ -1608,6 +1612,19 @@ mod tests {
         let bob_shared = bob.secret.diffie_hellman(&alice.public);
 
         assert_eq!(alice_shared, bob_shared);
+    }
+
+    #[test]
+    fn diffie_hellman_rejects_non_contributory_peer_public_key() {
+        let secret = CurveSecretKey::generate();
+        let low_order_public = CurvePublicKey::from_bytes([0u8; CURVE_KEY_SIZE]);
+
+        let shared = secret.diffie_hellman(&low_order_public);
+
+        assert_ne!(
+            shared, [0u8; CURVE_KEY_SIZE],
+            "CURVE accepted a non-contributory X25519 peer key and produced an all-zero shared secret"
+        );
     }
 
     #[test]
