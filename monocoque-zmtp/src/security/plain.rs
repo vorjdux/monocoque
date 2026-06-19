@@ -36,6 +36,7 @@
 //! ```
 
 use crate::codec::ZmtpError;
+use crate::security::protocol::reject_immediately_available_trailing_bytes;
 use crate::security::zap::{ZapMechanism, ZapRequest, ZapStatus};
 use bytes::{Bytes, BytesMut};
 use compio_io::{AsyncRead, AsyncWrite};
@@ -47,6 +48,7 @@ use tracing::{debug, warn};
 const PLAIN_HELLO: &[u8] = b"\x05HELLO";
 const PLAIN_WELCOME: &[u8] = b"\x07WELCOME";
 const PLAIN_ERROR: &[u8] = b"\x05ERROR";
+const TRAILING_BYTE_CHECK_TIMEOUT: Duration = Duration::from_millis(1);
 
 /// PLAIN client credentials
 #[derive(Clone)]
@@ -296,6 +298,7 @@ where
     let BufResult(result, password_buf) = buf_result;
     result?;
     let password = String::from_utf8(password_buf).map_err(|_| ZmtpError::Protocol)?;
+    reject_immediately_available_trailing_bytes(stream, TRAILING_BYTE_CHECK_TIMEOUT).await?;
 
     debug!("[PLAIN SERVER] Received credentials for user: {}", username);
 
@@ -391,6 +394,7 @@ where
     let BufResult(result, password_buf) = buf_result;
     result?;
     let password = String::from_utf8(password_buf).map_err(|_| ZmtpError::Protocol)?;
+    reject_immediately_available_trailing_bytes(stream, TRAILING_BYTE_CHECK_TIMEOUT).await?;
 
     debug!(
         "[PLAIN SERVER ZAP] Received credentials for user: {}, sending ZAP request",
