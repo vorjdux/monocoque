@@ -766,6 +766,25 @@ impl SocketOptions {
         self
     }
 
+    /// Get the configured PLAIN password, if any.
+    pub fn plain_password(&self) -> Option<&str> {
+        self.plain_password.as_deref()
+    }
+
+    /// Get the configured CURVE secret key, if any.
+    pub const fn curve_secretkey(&self) -> Option<&[u8; 32]> {
+        self.curve_secretkey.as_ref()
+    }
+
+    /// Get the configured read buffer size after applying the page-size cap.
+    pub const fn read_buffer_size(&self) -> usize {
+        if self.read_buffer_size > crate::alloc::PAGE_SIZE {
+            crate::alloc::PAGE_SIZE
+        } else {
+            self.read_buffer_size
+        }
+    }
+
     /// Set receive high water mark.
     pub const fn with_recv_hwm(mut self, hwm: usize) -> Self {
         self.recv_hwm = hwm;
