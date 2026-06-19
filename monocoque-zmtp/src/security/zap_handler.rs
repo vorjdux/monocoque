@@ -4,7 +4,7 @@
 /// ZAP handlers run on inproc://zeromq.zap.01 and process authentication
 /// requests from server sockets.
 use crate::security::plain::PlainAuthHandler;
-use crate::security::zap::{ZapMechanism, ZapRequest, ZapResponse};
+use crate::security::zap::{ZAP_VERSION, ZapMechanism, ZapRequest, ZapResponse};
 use crate::{DealerSocket, inproc_stream::InprocStream};
 use monocoque_core::options::SocketOptions;
 use std::io;
@@ -58,6 +58,13 @@ impl<H: PlainAuthHandler> DefaultZapHandler<H> {
 #[async_trait::async_trait(?Send)]
 impl<H: PlainAuthHandler> ZapHandler for DefaultZapHandler<H> {
     async fn authenticate(&self, request: &ZapRequest) -> ZapResponse {
+        if request.version != ZAP_VERSION {
+            return ZapResponse::failure(
+                request.request_id.clone(),
+                "Unsupported ZAP request version",
+            );
+        }
+
         match request.mechanism {
             ZapMechanism::Null => {
                 // NULL mechanism - always accept
@@ -65,17 +72,33 @@ impl<H: PlainAuthHandler> ZapHandler for DefaultZapHandler<H> {
             }
             ZapMechanism::Plain => {
                 // Extract username and password
-                if request.credentials.len() < 2 {
+                if request.credentials.len() != 2 {
                     return ZapResponse::failure(request.request_id.clone(), "Missing credentials");
                 }
 
-                let username = String::from_utf8_lossy(&request.credentials[0]);
-                let password = String::from_utf8_lossy(&request.credentials[1]);
+                let username = match std::str::from_utf8(&request.credentials[0]) {
+                    Ok(username) => username,
+                    Err(_) => {
+                        return ZapResponse::failure(
+                            request.request_id.clone(),
+                            "Invalid UTF-8 username",
+                        );
+                    }
+                };
+                let password = match std::str::from_utf8(&request.credentials[1]) {
+                    Ok(password) => password,
+                    Err(_) => {
+                        return ZapResponse::failure(
+                            request.request_id.clone(),
+                            "Invalid UTF-8 password",
+                        );
+                    }
+                };
 
                 // Call PLAIN handler
                 match self
                     .plain_handler
-                    .authenticate(&username, &password, &request.domain, &request.address)
+                    .authenticate(username, password, &request.domain, &request.address)
                     .await
                 {
                     Ok(user_id) => ZapResponse::success(request.request_id.clone(), user_id),
@@ -88,7 +111,7 @@ impl<H: PlainAuthHandler> ZapHandler for DefaultZapHandler<H> {
                 }
 
                 // CURVE mechanism - verify public key is present
-                if request.credentials.is_empty() {
+                if request.credentials.len() != 1 {
                     return ZapResponse::failure(
                         request.request_id.clone(),
                         "Missing CURVE public key",
@@ -100,6 +123,12 @@ impl<H: PlainAuthHandler> ZapHandler for DefaultZapHandler<H> {
                     return ZapResponse::failure(
                         request.request_id.clone(),
                         "Invalid CURVE key length",
+                    );
+                }
+                if public_key.iter().all(|&byte| byte == 0) {
+                    return ZapResponse::failure(
+                        request.request_id.clone(),
+                        "Invalid CURVE public key",
                     );
                 }
 
@@ -355,7 +384,7 @@ mod tests {
                 let plain_handler = Arc::new(StaticPlainHandler::new());
                 let handler = DefaultZapHandler::new(plain_handler, true);
 
-                let public_key = [0u8; 32];
+                let public_key = [1u8; 32];
                 let request = ZapRequest {
                     version: "1.0".to_string(),
                     request_id: "4".to_string(),

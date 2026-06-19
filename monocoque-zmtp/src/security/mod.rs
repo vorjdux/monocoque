@@ -12,8 +12,8 @@ pub mod zap_handler;
 
 pub use curve::{CurveKeyPair, CurvePublicKey, CurveSecretKey};
 pub use plain::{PlainAuthHandler, PlainCredentials, StaticPlainHandler};
-pub use zap::{ZAP_ENDPOINT, ZAP_VERSION, ZapMechanism, ZapRequest, ZapResponse, ZapStatus};
+pub use zap::{ZapMechanism, ZapRequest, ZapResponse, ZapStatus, ZAP_ENDPOINT, ZAP_VERSION};
 pub use zap_client::ZapClient;
 pub use zap_handler::{
-    DefaultZapHandler, ZapHandler, ZapServer, spawn_zap_server, start_default_zap_server,
+    spawn_zap_server, start_default_zap_server, DefaultZapHandler, ZapHandler, ZapServer,
 };

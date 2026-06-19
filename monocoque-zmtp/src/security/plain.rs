@@ -39,6 +39,7 @@ use crate::codec::ZmtpError;
 use crate::security::zap::{ZapMechanism, ZapRequest, ZapStatus};
 use bytes::{Bytes, BytesMut};
 use compio_io::{AsyncRead, AsyncWrite};
+use std::fmt;
 use std::time::Duration;
 use tracing::{debug, warn};
 
@@ -48,12 +49,21 @@ const PLAIN_WELCOME: &[u8] = b"\x07WELCOME";
 const PLAIN_ERROR: &[u8] = b"\x05ERROR";
 
 /// PLAIN client credentials
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct PlainCredentials {
     /// Plaintext username.
     pub username: String,
     /// Plaintext password.
     pub password: String,
+}
+
+impl fmt::Debug for PlainCredentials {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PlainCredentials")
+            .field("username", &self.username)
+            .field("password", &"<redacted>")
+            .finish()
+    }
 }
 
 impl PlainCredentials {
