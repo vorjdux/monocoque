@@ -121,6 +121,16 @@ impl SubscriptionTrie {
     }
 }
 
+/// Check whether a topic matches any subscription prefix.
+///
+/// An empty prefix matches all topics. An empty prefix list matches none.
+#[must_use]
+pub fn topic_matches_prefixes(topic: &[u8], prefixes: &[Bytes]) -> bool {
+    prefixes
+        .iter()
+        .any(|prefix| prefix.is_empty() || topic.starts_with(prefix))
+}
+
 /// Subscription event for XPUB socket
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubscriptionEvent {

@@ -10,6 +10,7 @@ use bytes::Bytes;
 use monocoque_core::options::SocketOptions;
 use monocoque_zmtp::dealer::DealerSocket;
 use monocoque_zmtp::publisher::PubSocket as InternalPub;
+use monocoque_zmtp::router::RouterSocket;
 use monocoque_zmtp::subscriber::SubSocket;
 use std::sync::mpsc;
 use std::thread;
@@ -156,6 +157,76 @@ fn test_dealer_send_buffered_hwm_returns_would_block() {
                 err.kind()
             );
         });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ROUTER send_buffered HWM → WouldBlock
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `RouterSocket::send_buffered()` must enforce `send_hwm` just like DEALER.
+/// Once the buffer holds `send_hwm` messages, the next call should return
+/// `WouldBlock` instead of letting the buffer grow without bound.
+#[test]
+fn test_router_send_buffered_hwm_returns_would_block() {
+    const HWM: usize = 5;
+
+    let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
+    let (result_tx, result_rx) = mpsc::channel::<std::io::ErrorKind>();
+
+    // Server: accept and hold open.
+    thread::spawn(move || {
+        compio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                addr_tx.send(listener.local_addr().unwrap()).unwrap();
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut router = RouterSocket::from_tcp_with_options(
+                    stream,
+                    SocketOptions::default().with_send_hwm(HWM),
+                )
+                .await
+                .unwrap();
+
+                for _ in 0..HWM {
+                    router
+                        .send_buffered(vec![Bytes::from("x")])
+                        .expect("should succeed below HWM");
+                }
+
+                let err = router
+                    .send_buffered(vec![Bytes::from("overflow")])
+                    .expect_err("expected WouldBlock at HWM");
+                result_tx.send(err.kind()).unwrap();
+            });
+    });
+
+    let addr = addr_rx.recv().unwrap();
+
+    // Client: connect and hold the handshake open.
+    thread::spawn(move || {
+        compio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let opts = SocketOptions::default().with_send_hwm(HWM);
+                let dealer = DealerSocket::connect_with_options(addr, opts)
+                    .await
+                    .unwrap();
+                std::thread::sleep(Duration::from_secs(5));
+                drop(dealer);
+            });
+    });
+
+    let err_kind = result_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("router thread did not finish");
+
+    assert_eq!(
+        err_kind,
+        std::io::ErrorKind::WouldBlock,
+        "expected WouldBlock, got {:?}",
+        err_kind
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

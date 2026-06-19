@@ -207,7 +207,11 @@ impl StreamSocket {
         let (read_half, write_half) = stream.into_split();
 
         // Per-peer outbound channel.
-        let (out_tx, out_rx) = flume::unbounded::<Bytes>();
+        let (out_tx, out_rx) = if self.options.send_hwm == 0 {
+            flume::unbounded::<Bytes>()
+        } else {
+            flume::bounded::<Bytes>(self.options.send_hwm)
+        };
         self.peers.insert(routing_id.clone(), out_tx);
 
         // Spawn reader.
@@ -283,8 +287,15 @@ impl StreamSocket {
 
         match self.peers.get(&routing_id) {
             Some(tx) => {
-                tx.try_send(data).map_err(|e| {
-                    io::Error::other(format!("Peer {:?} send failed: {}", routing_id, e))
+                tx.try_send(data).map_err(|e| match e {
+                    flume::TrySendError::Full(_) => io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        format!("Peer {:?} send queue reached send_hwm", routing_id),
+                    ),
+                    flume::TrySendError::Disconnected(_) => io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        format!("Peer {:?} send channel disconnected", routing_id),
+                    ),
                 })?;
                 trace!("[STREAM] Queued data for peer {:?}", routing_id);
             }
