@@ -1,604 +1,104 @@
 # Migration Guide
 
-**Migrating to monocoque from libzmq or zmq.rs**
-
-**Last Updated**: January 25, 2026
+This covers migrating to monocoque from libzmq (C) or rust-zmq.
 
 ---
 
-## Table of Contents
+## Dependency change
 
-1. [From libzmq (C/C++)](#from-libzmq)
-2. [From zmq.rs (rust-zmq)](#from-zmqrs)
-3. [API Mapping Reference](#api-mapping-reference)
-4. [Feature Parity Table](#feature-parity-table)
-5. [Common Patterns](#common-patterns)
-6. [Breaking Changes](#breaking-changes)
+Remove `zmq` from your `Cargo.toml` and add:
+
+```toml
+[dependencies]
+monocoque = "0.1"
+bytes = "1.0"
+compio = "0.12"
+```
+
+You no longer need libzmq installed on the system. Monocoque is pure Rust.
 
 ---
 
-## From libzmq
+## The big differences
 
-### Conceptual Differences
+**No context.** libzmq and rust-zmq require a `Context` object that owns all sockets. Monocoque sockets are independent — just create them directly.
 
-| Concept | libzmq | monocoque |
-|---------|--------|-----------|
-| **Runtime** | Blocking / callbacks | Async/await with compio |
-| **Messages** | `zmq_msg_t` | `Vec<Bytes>` |
-| **Context** | `zmq_ctx_t` (global) | No context (per-socket) |
-| **Polling** | `zmq_poll()` | `futures::select!` |
-| **Errors** | `errno` codes | `std::io::Error` |
+**Async everywhere.** All socket operations are `async`. You need a compio runtime: add `#[compio::main]` to your entry point. There's no blocking API.
 
-### Socket Creation
+**`recv()` returns `Result<Option<Vec<Bytes>>>`.** This is the change that will touch the most code. In rust-zmq, `recv_msg(0)` returns `Result<Message>` where the error encodes both I/O problems and timeouts (via errno). In monocoque, `Ok(None)` means the connection closed or a timeout elapsed — it's not an error. `Err(e)` is an actual I/O problem. Update all your recv callsites:
 
-**libzmq:**
-```c
-void *context = zmq_ctx_new();
-void *socket = zmq_socket(context, ZMQ_DEALER);
-zmq_connect(socket, "tcp://localhost:5555");
-```
-
-**monocoque:**
 ```rust
-let socket = DealerSocket::from_tcp("tcp://localhost:5555").await?;
-```
-
-### Socket Options
-
-**libzmq:**
-```c
-int timeout = 5000;  // milliseconds
-zmq_setsockopt(socket, ZMQ_RCVTIMEO, &timeout, sizeof(timeout));
-
-int hwm = 1000;
-zmq_setsockopt(socket, ZMQ_RCVHWM, &hwm, sizeof(hwm));
-```
-
-**monocoque:**
-```rust
-use std::time::Duration;
-
-let options = SocketOptions::new()
-    .with_recv_timeout(Duration::from_secs(5))
-    .with_recv_hwm(1000);
-    
-let socket = DealerSocket::with_options(options);
-```
-
-### Send/Receive
-
-**libzmq:**
-```c
-// Send
-char buf[] = "Hello";
-zmq_send(socket, buf, strlen(buf), 0);
-
-// Receive
-char buffer[256];
-int size = zmq_recv(socket, buffer, 256, 0);
-```
-
-**monocoque:**
-```rust
-// Send
-socket.send(vec![Bytes::from("Hello")]).await?;
-
-// Receive
-if let Some(msg) = socket.recv().await? {
-    println!("Received: {:?}", msg);
-}
-```
-
-### Multipart Messages
-
-**libzmq:**
-```c
-zmq_send(socket, "frame1", 6, ZMQ_SNDMORE);
-zmq_send(socket, "frame2", 6, ZMQ_SNDMORE);
-zmq_send(socket, "frame3", 6, 0);  // Last frame
-
-// Check for more
-int more;
-size_t more_size = sizeof(more);
-zmq_getsockopt(socket, ZMQ_RCVMORE, &more, &more_size);
-```
-
-**monocoque:**
-```rust
-// Send multipart
-let msg = vec![
-    Bytes::from("frame1"),
-    Bytes::from("frame2"),
-    Bytes::from("frame3"),
-];
-socket.send(msg).await?;
-
-// All frames received together as Vec<Bytes>
-let msg = socket.recv().await?;
-
-// Check for more (in same logical message)
-if socket.has_more() {
-    // More frames available
-}
-```
-
-### Security
-
-**libzmq (PLAIN):**
-```c
-zmq_setsockopt(socket, ZMQ_PLAIN_SERVER, &server, sizeof(server));
-zmq_setsockopt(socket, ZMQ_PLAIN_USERNAME, "admin", 5);
-zmq_setsockopt(socket, ZMQ_PLAIN_PASSWORD, "secret", 6);
-```
-
-**monocoque:**
-```rust
-let options = SocketOptions::new()
-    .with_plain_server(true)
-    .with_plain_credentials("admin", "secret");
-```
-
-**libzmq (CURVE):**
-```c
-char server_public[32];
-char server_secret[32];
-zmq_curve_keypair(server_public, server_secret);
-
-zmq_setsockopt(socket, ZMQ_CURVE_SERVER, &server, sizeof(server));
-zmq_setsockopt(socket, ZMQ_CURVE_SECRETKEY, server_secret, 32);
-```
-
-**monocoque:**
-```rust
-let keypair = CurveKeyPair::generate();
-let options = SocketOptions::new()
-    .with_curve_server(true)
-    .with_curve_keypair(
-        *keypair.public.as_bytes(),
-        *keypair.public.as_bytes()  // Store secret securely
-    );
-```
-
-### Proxy/Device
-
-**libzmq:**
-```c
-void *frontend = zmq_socket(ctx, ZMQ_ROUTER);
-void *backend = zmq_socket(ctx, ZMQ_DEALER);
-
-zmq_bind(frontend, "tcp://*:5559");
-zmq_bind(backend, "tcp://*:5560");
-
-zmq_proxy(frontend, backend, NULL);
-```
-
-**monocoque:**
-```rust
-let mut frontend = RouterSocket::from_tcp("tcp://*:5559").await?;
-let mut backend = DealerSocket::from_tcp("tcp://*:5560").await?;
-
-proxy(&mut frontend, &mut backend, None).await?;
-```
-
----
-
-## From zmq.rs
-
-### High-Level Differences
-
-| Feature | zmq.rs | monocoque |
-|---------|--------|-----------|
-| **Async** | Blocking by default | Async/await native |
-| **Runtime** | Threads | compio (io_uring) |
-| **Messages** | `Message` type | `Vec<Bytes>` |
-| **Context** | `Context` required | No context needed |
-| **Builder** | No | `SocketOptions` builder |
-
-### Socket Creation
-
-**zmq.rs:**
-```rust
-let context = zmq::Context::new();
-let socket = context.socket(zmq::DEALER)?;
-socket.connect("tcp://localhost:5555")?;
-```
-
-**monocoque:**
-```rust
-// Simpler - no context needed
-let socket = DealerSocket::from_tcp("tcp://localhost:5555").await?;
-```
-
-### Send/Receive
-
-**zmq.rs:**
-```rust
-// Send
-socket.send("Hello", 0)?;
-
-// Receive
+// rust-zmq
 let msg = socket.recv_msg(0)?;
-let data = msg.as_str().unwrap();
+
+// monocoque — handle the None case
+match socket.recv().await {
+    Ok(Some(msg)) => { /* use msg */ }
+    Ok(None) => { /* timeout or peer closed */ }
+    Err(e) => { /* I/O error */ }
+}
 ```
 
-**monocoque:**
-```rust
-// Send
-socket.send(vec![Bytes::from("Hello")]).await?;
+If you're confident the socket is live and you just want to unwrap, `socket.recv().await.expect("connection closed")` is the common idiom in examples, but you probably want proper error handling in production.
 
-// Receive
-let msg = socket.recv().await?;
-let data = std::str::from_utf8(&msg[0])?;
+**Multipart messages are `Vec<Bytes>`.** Instead of calling `send` multiple times with `ZMQ_SNDMORE`, or building up frames with `recv` + `get_more()`, you send and receive the entire multipart message at once. Frame 0 is frame 0 in the vec, etc.
+
+```rust
+// rust-zmq multipart send
+socket.send("part1", zmq::SNDMORE)?;
+socket.send("part2", 0)?;
+
+// monocoque
+socket.send(vec![Bytes::from("part1"), Bytes::from("part2")]).await?;
 ```
 
-### Multipart Messages
+**Socket options use a builder.** Instead of individual setter calls, build a `SocketOptions` and pass it at construction:
 
-**zmq.rs:**
 ```rust
-// Send
-socket.send("frame1", zmq::SNDMORE)?;
-socket.send("frame2", zmq::SNDMORE)?;
-socket.send("frame3", 0)?;
-
-// Receive
-let mut msg = zmq::Message::new();
-socket.recv(&mut msg, 0)?;
-let more = msg.get_more();
-```
-
-**monocoque:**
-```rust
-// Send (all at once)
-let msg = vec![
-    Bytes::from("frame1"),
-    Bytes::from("frame2"),
-    Bytes::from("frame3"),
-];
-socket.send(msg).await?;
-
-// Receive (all at once)
-let msg = socket.recv().await?;
-// msg is Vec<Bytes> with all frames
-```
-
-### Socket Options
-
-**zmq.rs:**
-```rust
-socket.set_rcvtimeo(5000)?;  // milliseconds
+// rust-zmq
+socket.set_rcvtimeo(5000)?;
 socket.set_rcvhwm(1000)?;
-socket.set_linger(100)?;
-```
 
-**monocoque:**
-```rust
+// monocoque
 let options = SocketOptions::new()
-    .with_recv_timeout(Duration::from_secs(5))
-    .with_recv_hwm(1000)
-    .with_linger(Duration::from_millis(100));
-    
-let socket = DealerSocket::with_options(options);
+    .with_recv_timeout(Duration::from_millis(5000))
+    .with_recv_hwm(1000);
+let socket = DealerSocket::connect_with_options("127.0.0.1:5555", options).await?;
 ```
 
-### Async Usage
+**Transport strings.** Monocoque currently only supports TCP and IPC. The address format for TCP is a bare host:port string, not `tcp://...`:
 
-**zmq.rs:**
 ```rust
-// Requires external async adapter
-use async_zmq::*;
+// libzmq / rust-zmq
+socket.connect("tcp://localhost:5555")?;
 
-let dealer = async_zmq::dealer("tcp://localhost:5555")?;
-dealer.send(vec!["Hello"]).await?;
-let msg = dealer.recv().await?;
+// monocoque
+DealerSocket::connect("127.0.0.1:5555").await?;
 ```
 
-**monocoque:**
-```rust
-// Native async/await
-let mut socket = DealerSocket::from_tcp("tcp://localhost:5555").await?;
-socket.send(vec![Bytes::from("Hello")]).await?;
-let msg = socket.recv().await?;
-```
+**Socket type names.** `ZMQ_DEALER` becomes `DealerSocket`, `ZMQ_ROUTER` becomes `RouterSocket`, and so on. The pattern is consistent for all 11 socket types.
 
 ---
 
-## API Mapping Reference
+## What's not there yet
 
-### Socket Types
+- **inproc transport** — partially supported via a channel bridge, but not the same as libzmq inproc.
+- **`zmq_poll()`** — use `futures::select!` to multiplex across sockets.
+- **`ZMQ_STREAM`** — `StreamSocket` exists but check current docs for limitations.
 
-| libzmq/zmq.rs | monocoque |
-|---------------|-----------|
-| `ZMQ_REQ` | `ReqSocket` |
-| `ZMQ_REP` | `RepSocket` |
-| `ZMQ_DEALER` | `DealerSocket` |
-| `ZMQ_ROUTER` | `RouterSocket` |
-| `ZMQ_PUB` | `PubSocket` |
-| `ZMQ_SUB` | `SubSocket` |
-| `ZMQ_XPUB` | `XPubSocket` |
-| `ZMQ_XSUB` | `XSubSocket` |
-| `ZMQ_PUSH` | `PushSocket` |
-| `ZMQ_PULL` | `PullSocket` |
-| `ZMQ_PAIR` | `PairSocket` |
-
-### Socket Options
-
-| libzmq Constant | monocoque Method |
-|-----------------|------------------|
-| `ZMQ_RCVTIMEO` | `.with_recv_timeout()` |
-| `ZMQ_SNDTIMEO` | `.with_send_timeout()` |
-| `ZMQ_RCVHWM` | `.with_recv_hwm()` |
-| `ZMQ_SNDHWM` | `.with_send_hwm()` |
-| `ZMQ_LINGER` | `.with_linger()` |
-| `ZMQ_IMMEDIATE` | `.with_immediate()` |
-| `ZMQ_CONFLATE` | `.with_conflate()` |
-| `ZMQ_ROUTING_ID` | `.with_routing_id()` |
-| `ZMQ_CONNECT_ROUTING_ID` | `.with_connect_routing_id()` |
-| `ZMQ_ROUTER_MANDATORY` | `.with_router_mandatory()` |
-| `ZMQ_TCP_KEEPALIVE` | `.with_tcp_keepalive()` |
-| `ZMQ_TCP_KEEPALIVE_IDLE` | `.with_tcp_keepalive_idle()` |
-| `ZMQ_PLAIN_SERVER` | `.with_plain_server()` |
-| `ZMQ_PLAIN_USERNAME` | `.with_plain_credentials()` |
-| `ZMQ_CURVE_SERVER` | `.with_curve_server()` |
-| `ZMQ_CURVE_PUBLICKEY` | `.with_curve_keypair()` |
-| `ZMQ_REQ_CORRELATE` | `.with_req_correlate()` |
-| `ZMQ_REQ_RELAXED` | `.with_req_relaxed()` |
+Everything else — DEALER/ROUTER, PUB/SUB, PUSH/PULL, PAIR, XPUB/XSUB, PLAIN/CURVE security, ZAP, socket monitor, proxy — is supported.
 
 ---
 
-## Feature Parity Table
+## Migration checklist
 
-Comparing the `zmq` crate (rust-zmq, wrapping libzmq) with `monocoque`:
-
-| Feature | `zmq` (rust-zmq) | monocoque |
-|---------|-----------------|-----------|
-| **REQ/REP** | ✅ `zmq::REQ` / `zmq::REP` | ✅ `ReqSocket` / `RepSocket` |
-| **DEALER/ROUTER** | ✅ | ✅ |
-| **PUB/SUB** | ✅ | ✅ |
-| **PUSH/PULL** | ✅ | ✅ |
-| **PAIR** | ✅ | ✅ |
-| **XPUB/XSUB** | ✅ | ✅ |
-| **STREAM** | ✅ | ✅ `StreamSocket` |
-| **Async/await** | ❌ (blocking only) | ✅ native |
-| **io_uring** | ❌ | ✅ (Linux 5.1+) |
-| **IPC transport** | ✅ | ✅ (Unix only) |
-| **inproc transport** | ✅ | Partial (via channel bridge) |
-| **NULL security** | ✅ | ✅ |
-| **PLAIN security** | ✅ | ✅ |
-| **CURVE security** | ✅ | ✅ |
-| **ZAP handler** | ✅ | ✅ |
-| **Socket monitor** | ✅ | ✅ `socket.monitor()` |
-| **Proxy / device** | ✅ | ✅ `monocoque::zmq::proxy` |
-| **Multipart send** | ✅ (SNDMORE flag) | ✅ (`Vec<Bytes>`, no flag) |
-| **TCP keepalive** | ✅ | ✅ |
-| **High-water mark** | ✅ | ✅ |
-| **Global context** | Required | Not needed |
-| **C dependency** | ✅ (libzmq) | ❌ (pure Rust) |
-
-### `zmq::Socket` Method Mapping
-
-Direct equivalent of every `zmq::Socket` method used in everyday code:
-
-| `zmq::Socket` (rust-zmq) | `monocoque::zmq::*` equivalent |
-|--------------------------|-------------------------------|
-| `socket.send(data, 0)` | `socket.send(vec![Bytes::from(data)]).await?` |
-| `socket.send_multipart(parts, 0)` | `socket.send(parts.into_iter().map(Bytes::from).collect()).await?` |
-| `socket.recv_bytes(0)` | `socket.recv().await?.map(|m| m[0].to_vec())` |
-| `socket.recv_multipart(0)` | `socket.recv().await?`  -  returns `Vec<Bytes>` |
-| `socket.recv_msg(0)` | `socket.recv().await?` |
-| `socket.connect(endpoint)` | `DealerSocket::connect(endpoint).await?` |
-| `socket.bind(endpoint)` | `RouterSocket::bind(endpoint).await?` |
-| `socket.set_rcvtimeo(ms)` | `opts.with_recv_timeout(Duration::from_millis(ms))` |
-| `socket.set_sndtimeo(ms)` | `opts.with_send_timeout(Duration::from_millis(ms))` |
-| `socket.set_rcvhwm(n)` | `opts.with_recv_hwm(n)` |
-| `socket.set_sndhwm(n)` | `opts.with_send_hwm(n)` |
-| `socket.set_linger(ms)` | `opts.with_linger(Some(Duration::from_millis(ms)))` |
-| `socket.set_subscribe(topic)` | `sub_socket.subscribe(topic).await?` |
-| `socket.set_unsubscribe(topic)` | `sub_socket.unsubscribe(topic).await?` |
-| `socket.set_identity(id)` | `opts.with_routing_id(Bytes::from(id))` |
-| `socket.get_rcvmore()` | `socket.has_more()` |
-| `socket.monitor(addr, events)` | `let mon = socket.monitor()` |
-
----
-
-## Common Patterns
-
-### Pattern 1: Request-Reply
-
-**libzmq:**
-```c
-void *req = zmq_socket(ctx, ZMQ_REQ);
-zmq_connect(req, "tcp://localhost:5555");
-zmq_send(req, "Hello", 5, 0);
-char buf[256];
-zmq_recv(req, buf, 256, 0);
-```
-
-**monocoque:**
-```rust
-let mut req = ReqSocket::from_tcp("tcp://localhost:5555").await?;
-req.send(vec![Bytes::from("Hello")]).await?;
-let reply = req.recv().await?;
-```
-
-### Pattern 2: Publish-Subscribe
-
-**libzmq:**
-```c
-void *sub = zmq_socket(ctx, ZMQ_SUB);
-zmq_connect(sub, "tcp://localhost:5556");
-zmq_setsockopt(sub, ZMQ_SUBSCRIBE, "weather", 7);
-
-while (1) {
-    char buf[256];
-    zmq_recv(sub, buf, 256, 0);
-}
-```
-
-**monocoque:**
-```rust
-let mut sub = SubSocket::from_tcp("tcp://localhost:5556").await?;
-sub.subscribe(b"weather").await?;
-
-while let Some(msg) = sub.recv().await? {
-    println!("Update: {:?}", msg);
-}
-```
-
-### Pattern 3: Pipeline
-
-**libzmq:**
-```c
-void *push = zmq_socket(ctx, ZMQ_PUSH);
-zmq_bind(push, "tcp://*:5557");
-zmq_send(push, "task", 4, 0);
-```
-
-**monocoque:**
-```rust
-let mut push = PushSocket::from_tcp("tcp://*:5557").await?;
-push.send(vec![Bytes::from("task")]).await?;
-```
-
----
-
-## Breaking Changes
-
-### No Global Context
-
-**Before (libzmq/zmq.rs):**
-```rust
-let ctx = zmq::Context::new();
-let socket1 = ctx.socket(zmq::DEALER)?;
-let socket2 = ctx.socket(zmq::ROUTER)?;
-```
-
-**After (monocoque):**
-```rust
-// Each socket is independent
-let socket1 = DealerSocket::new();
-let socket2 = RouterSocket::new();
-```
-
-### Async Everywhere
-
-**Before (zmq.rs blocking):**
-```rust
-let msg = socket.recv_msg(0)?;  // Blocks thread
-```
-
-**After (monocoque async):**
-```rust
-let msg = socket.recv().await?;  // Async, yields to runtime
-```
-
-### No SNDMORE Flag
-
-**Before (libzmq):**
-```c
-zmq_send(socket, "part1", 5, ZMQ_SNDMORE);
-zmq_send(socket, "part2", 5, 0);
-```
-
-**After (monocoque):**
-```rust
-// Send all frames at once
-socket.send(vec![
-    Bytes::from("part1"),
-    Bytes::from("part2"),
-]).await?;
-```
-
-### Message Type
-
-**Before (zmq.rs):**
-```rust
-let msg: zmq::Message = socket.recv_msg(0)?;
-let bytes = msg.as_bytes();
-```
-
-**After (monocoque):**
-```rust
-let msg: Vec<Bytes> = socket.recv().await?.unwrap();
-let bytes = &msg[0];
-```
-
-### Timeout Handling
-
-**Before (libzmq errno):**
-```c
-if (zmq_recv(socket, buf, size, 0) == -1) {
-    if (errno == EAGAIN) {
-        // Timeout
-    }
-}
-```
-
-**After (monocoque Option):**
-```rust
-match socket.recv().await? {
-    Some(msg) => println!("Got: {:?}", msg),
-    None => println!("Timeout"),
-}
-```
-
----
-
-## Migration Checklist
-
-- [ ] Replace `zmq::Context::new()` with direct socket creation
-- [ ] Convert blocking calls to `async/await`
-- [ ] Change `zmq::Message` to `Vec<Bytes>`
-- [ ] Replace SNDMORE flag with multipart vectors
-- [ ] Update socket option calls to builder pattern
-- [ ] Convert errno checks to `Result<Option<T>>` matching
-- [ ] Replace `zmq_poll()` with `futures::select!`
-- [ ] Update security configuration (PLAIN/CURVE)
-- [ ] Add `#[compio::main]` to entry point
-- [ ] Update dependencies in Cargo.toml
-
----
-
-## Performance Considerations
-
-### Memory Usage
-
-**monocoque** uses `Bytes` for zero-copy message sharing:
-
-```rust
-let data = Bytes::from(vec![0u8; 1024]);
-
-// Cheap clone (just ref count increment)
-let data2 = data.clone();  // No copy!
-```
-
-### Runtime
-
-**monocoque** uses compio (io_uring on Linux):
-
-- Better CPU efficiency
-- Higher throughput
-- Lower latency for concurrent connections
-
-### Buffer Sizes
-
-Tune for your workload:
-
-```rust
-let options = SocketOptions::new()
-    .with_read_buffer_size(64 * 1024)   // Large messages
-    .with_write_buffer_size(64 * 1024);
-```
-
----
-
-## Getting Help
-
-- **Examples**: See [examples/](../examples/) directory
-- **User Guide**: [USER_GUIDE.md](USER_GUIDE.md)
-- **API Docs**: https://docs.rs/monocoque
-- **Issues**: https://github.com/vorjdux/monocoque/issues
-
----
-
-**Last Updated**: January 25, 2026  
-**License**: MIT OR Apache-2.0
+- Remove libzmq system dependency
+- Replace `zmq` crate with `monocoque` + `bytes` + `compio`
+- Add `#[compio::main]` to entry points
+- Remove `Context::new()`, create sockets directly
+- Convert all recv callsites to handle `Result<Option<Vec<Bytes>>>`
+- Replace `SNDMORE` multi-send with `Vec<Bytes>` single send
+- Replace `recv` + `get_more()` loops with single `recv()` returning all frames
+- Convert socket option setters to `SocketOptions` builder
+- Strip `tcp://` prefix from addresses (use bare `host:port`)
+- Replace `zmq_poll()` with `futures::select!`
