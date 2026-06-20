@@ -1,189 +1,81 @@
 # Publishing to Crates.io
 
-This guide documents the process for publishing Monocoque crates to crates.io.
+## Pre-publish checklist
 
-## Pre-Publication Checklist
+Before publishing any crate, verify:
 
-### 1. Documentation
+- All public APIs have rustdoc comments, including `# Errors` sections where relevant
+- Examples compile and run correctly
+- CHANGELOG.md is up to date
+- `cargo test --workspace --all-features` passes
+- `cargo clippy --workspace --all-features` passes
+- `cargo doc --workspace --no-deps` builds cleanly
+- `cargo audit` shows no unresolved advisories
+- All changes are committed to git
 
--   [x] All public APIs have rustdoc comments
--   [x] Examples compile and run correctly
--   [x] README.md is comprehensive
--   [x] CHANGELOG.md exists and is up-to-date
--   [x] Blueprint documentation is complete
+## Publication order
 
-### 2. Cargo.toml Metadata
+Crates have internal dependencies and must be published in this order:
 
-All crates must have:
+1. `monocoque-core` — no internal dependencies
+2. `monocoque-zmtp` — depends on monocoque-core
+3. `monocoque` — depends on monocoque-core and monocoque-zmtp
 
--   [x] `description`
--   [x] `keywords` (max 5)
--   [x] `categories`
--   [x] `license`
--   [x] `repository`
--   [x] `homepage`
--   [x] `documentation`
--   [x] `readme`
--   [x] `rust-version`
+Wait roughly a minute between publishes so crates.io finishes indexing each one before the next is submitted.
 
-### 3. Code Quality
-
--   [x] All tests pass: `cargo test --workspace --all-features`
--   [x] Clippy passes: `cargo clippy --workspace --all-features`
--   [x] Documentation builds: `cargo doc --workspace --no-deps`
--   [x] No uncommitted changes (or use `--allow-dirty` for testing)
-
-### 4. Error Handling
-
--   [x] All error types use `thiserror`
--   [x] Result type aliases defined (`pub type Result<T>`)
--   [x] Errors documented in API docs (`# Errors`)
-
-### 5. Version Control
-
--   [x] `Cargo.lock` in `.gitignore` (proper for libraries)
--   [x] All changes committed to git
--   [x] Version tags created (`v0.1.0`)
-
-## Publication Order
-
-Crates must be published in dependency order:
-
-```
-1. monocoque-core    (no internal dependencies)
-2. monocoque-zmtp    (depends on monocoque-core)
-3. monocoque         (depends on monocoque-core, monocoque-zmtp)
-```
-
-## Publishing Commands
-
-### Dry Run (Test Without Publishing)
+## Commands
 
 ```bash
-# Test each crate in order
+# Dry run — validates packaging without uploading
 cargo publish --dry-run -p monocoque-core
 cargo publish --dry-run -p monocoque-zmtp
 cargo publish --dry-run -p monocoque
-```
 
-### Actual Publication
-
-```bash
-# Login to crates.io (one-time)
+# Authenticate (one-time setup)
 cargo login
 
-# Publish in dependency order
+# Publish in order
 cargo publish -p monocoque-core
 cargo publish -p monocoque-zmtp
 cargo publish -p monocoque
 ```
 
-**Important**: Wait ~1 minute between publishes to allow crates.io to index the dependencies.
+## After publishing
 
-## Post-Publication
+Tag the release and push:
 
-1. **Tag the release**:
+```bash
+git tag -a v0.1.0 -m "Release v0.1.0"
+git push origin v0.1.0
+```
 
-    ```bash
-    git tag -a v0.1.0 -m "Release v0.1.0"
-    git push origin v0.1.0
-    ```
+Create a GitHub release from the tag and paste the relevant CHANGELOG section as the description. Docs.rs will pick up the new version automatically; check https://docs.rs/monocoque once indexing finishes.
 
-2. **Create GitHub release**:
+## Version bumps
 
-    - Go to https://github.com/vorjdux/monocoque/releases
-    - Create release from tag
-    - Copy CHANGELOG.md content
-
-3. **Update documentation**:
-
-    - Docs.rs will automatically build documentation
-    - Verify at https://docs.rs/monocoque
-
-4. **Announce**:
-    - Reddit: r/rust
-    - Twitter/X
-    - This Week in Rust newsletter
-
-## Version Updates
-
-Follow [Semantic Versioning](https://semver.org/):
-
--   **Patch** (0.1.1): Bug fixes, no API changes
--   **Minor** (0.2.0): New features, backward compatible
--   **Major** (1.0.0): Breaking changes
-
-Update versions in `Cargo.toml` workspace section:
+Follow semver. Update the shared version in the workspace `Cargo.toml`:
 
 ```toml
 [workspace.package]
 version = "0.2.0"
 ```
 
-## Yanking Releases
+Patch (0.1.x) for bug fixes, minor (0.x.0) for backward-compatible additions, major (x.0.0) for breaking changes.
 
-If a critical bug is found:
+## Yanking a broken release
 
 ```bash
-# Yank the broken version
 cargo yank --version 0.1.0 monocoque
-
-# Publish fixed version
+# Then fix the bug and publish a patch release
 cargo publish -p monocoque
 ```
 
-## Common Issues
+## Common errors
 
-### "crate X depends on Y that does not exist"
+**"crate X depends on Y that does not exist"** — you published out of order, or crates.io hasn't finished indexing yet. Wait a minute and retry.
 
-**Solution**: Publish dependencies first, wait for indexing.
+**"no verified email address"** — verify your email on crates.io before publishing.
 
-### "no verified email address"
+**"authentication token not found"** — run `cargo login` with your API token from crates.io account settings.
 
-**Solution**: Verify your email on crates.io.
-
-### "authentication token not found"
-
-**Solution**: Run `cargo login` with your crates.io API token.
-
-### "uncommitted changes"
-
-**Options**:
-
--   Commit your changes (recommended)
--   Use `--allow-dirty` flag for testing only
-
-## Maintenance
-
-### Security Advisories
-
--   Monitor https://rustsec.org/
--   Update dependencies regularly: `cargo update`
--   Run `cargo audit` before releases
-
-### Dependency Updates
-
-```bash
-# Check for outdated dependencies
-cargo outdated
-
-# Update within semver constraints
-cargo update
-
-# Update to latest (may break)
-cargo upgrade
-```
-
-## Resources
-
--   [Cargo Book - Publishing](https://doc.rust-lang.org/cargo/reference/publishing.html)
--   [Crates.io Policies](https://crates.io/policies)
--   [API Guidelines](https://rust-lang.github.io/api-guidelines/)
--   [Rust RFC 1105 - API Evolution](https://rust-lang.github.io/rfcs/1105-api-evolution.html)
-
-## Support
-
-For publication issues:
-
--   Crates.io help: help@crates.io
--   Cargo GitHub: https://github.com/rust-lang/cargo/issues
+**"uncommitted changes"** — commit first. Pass `--allow-dirty` only for local dry-run testing.
