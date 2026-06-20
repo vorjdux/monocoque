@@ -29,8 +29,9 @@ fn main() {
             info!("[Monocoque REP] Client connected\n");
 
             // First request-reply cycle
-            let request = socket.recv().await.expect("Failed to receive");
-            if let Some(msg) = request {
+            let request = socket.recv().await.expect("Failed to receive").expect("Connection closed");
+            {
+                let msg = request;
                 info!("[Monocoque REP] Received request:");
                 for (i, frame) in msg.iter().enumerate() {
                     info!("  Frame {}: {:?}", i, String::from_utf8_lossy(frame));
@@ -47,8 +48,10 @@ fn main() {
             let request = socket
                 .recv()
                 .await
-                .expect("Failed to receive second request");
-            if let Some(msg) = request {
+                .expect("Failed to receive second request")
+                .expect("Connection closed");
+            {
+                let msg = request;
                 info!("\n[Monocoque REP] Received second request:");
                 for (i, frame) in msg.iter().enumerate() {
                     info!("  Frame {}: {:?}", i, String::from_utf8_lossy(frame));

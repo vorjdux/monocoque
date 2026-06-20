@@ -45,7 +45,7 @@ fn test_stream_connection_notification() {
 
     let addr = addr_rx.recv().unwrap();
 
-    // Connect with a plain TCP client — no ZMTP.
+    // Connect with a plain TCP client  -  no ZMTP.
     let _client = std::net::TcpStream::connect(addr).unwrap();
 
     let msg = notif_rx.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -144,7 +144,7 @@ fn test_stream_send_raw_data() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Test: echo server — bidirectional raw TCP
+// Test: echo server  -  bidirectional raw TCP
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Full round-trip: client sends data, server echoes it back.
@@ -192,7 +192,7 @@ fn test_stream_echo() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Test: multiple peers — routing IDs are unique
+// Test: multiple peers  -  routing IDs are unique
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Three TCP clients connect; each gets a distinct routing ID.

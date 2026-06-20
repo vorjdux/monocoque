@@ -1,179 +1,54 @@
 # Protocol Compatibility
 
-## ZMTP Version Support
+Monocoque implements ZMTP 3.x and is wire-compatible with all ZeroMQ 4.x releases (minimum 4.1). It sends ZMTP 3.0 greetings for backward compatibility and accepts any 3.x peer, so it interoperates with libzmq 4.1 through 4.4 without configuration.
 
-Monocoque implements **ZMTP 3.x** (ZeroMQ Message Transport Protocol), ensuring compatibility with all modern ZeroMQ versions.
+When both peers advertise ZMTP 3.1, Monocoque enables heartbeating via PING/PONG (RFC 37). With a 3.0 peer, heartbeating is disabled automatically.
 
-### Supported ZeroMQ Versions
+## Supported socket types
 
-| ZeroMQ Version | ZMTP Version | Status                  | Notes                    |
-| -------------- | ------------ | ----------------------- | ------------------------ |
-| **4.1.x**      | 3.0          | ✅ **Fully Compatible** | Initial ZMTP 3.0 release |
-| **4.2.x**      | 3.1          | ✅ **Fully Compatible** | Added heartbeating       |
-| **4.3.x**      | 3.1          | ✅ **Fully Compatible** | Enhanced security        |
-| **4.4.x**      | 3.1          | ✅ **Fully Compatible** | Latest stable            |
+All standard socket types are implemented: DEALER, ROUTER, PUB, SUB, REQ, REP, PUSH, PULL, XPUB, XSUB, PAIR.
 
-### Compatibility Implementation
+## Supported protocol features
 
-#### Version Negotiation
+- NULL security mechanism (no authentication, default)
+- PLAIN security (username/password)
+- CURVE security (CurveZMQ public-key encryption)
+- ZAP authentication protocol
+- ZMTP framing — 1-byte and 8-byte length frames
+- Multipart messages (MORE flag)
+- Command frames — READY, PING, PONG
+- Heartbeating — ZMTP 3.1 PING/PONG (RFC 37)
+- ROUTER fair-queuing and routing IDs
+- PUB/SUB topic filtering
+- Automatic reconnection with exponential backoff
+- Full socket options API equivalent to `zmq_setsockopt`
 
-```rust
-// greeting.rs - Accepts any ZMTP 3.x version
-let major = src[10];
-if major < 3 {
-    return Err(ZmtpError::Protocol);
-}
-// Accepts 3.0, 3.1, 3.2, etc.
-```
+## Behavioral differences from libzmq
 
-#### Greeting Format
+Monocoque is async-first. There is no blocking `send`/`recv` API; all socket operations are `async fn`. This is a design choice, not a limitation — it eliminates the need for thread-per-connection and generally improves performance under load.
 
-```rust
-// session.rs - Sends ZMTP 3.0 greeting
-// Version bytes: [0x03, 0x00]
-b.extend_from_slice(&[0x03, 0x00]);
-```
+Socket types are enforced at compile time rather than at runtime. Attempting an invalid pattern (e.g., connecting PUB to PUB) is a type error, not a runtime failure.
 
-**Why 3.0?** Sending ZMTP 3.0 ensures backward compatibility while accepting any 3.x version allows forward compatibility.
+The wire protocol is byte-for-byte compatible. Framing, handshake, and READY command formats match RFC 23/ZMTP exactly, so Monocoque peers are indistinguishable from libzmq peers on the wire.
 
-### Socket Type Compatibility
+## Running interoperability tests
 
-| Socket Type | ZMQ 4.1+ | Monocoque | Implementation Status |
-| ----------- | -------- | --------- | --------------------- |
-| DEALER      | ✅       | ✅        | Phase 2 - Complete    |
-| ROUTER      | ✅       | ✅        | Phase 2 - Complete    |
-| PUB         | ✅       | ✅        | Phase 3 - Complete    |
-| SUB         | ✅       | ✅        | Phase 3 - Complete    |
-| REQ         | ✅       | ✅        | Phase 4 - Complete    |
-| REP         | ✅       | ✅        | Phase 4 - Complete    |
-| PUSH        | ✅       | ✅        | Complete              |
-| PULL        | ✅       | ✅        | Complete              |
-| XPUB        | ✅       | ✅        | Complete              |
-| XSUB        | ✅       | ✅        | Complete              |
-| PAIR        | ✅       | ✅        | Complete              |
-
-### Feature Compatibility
-
-#### Core Protocol Features
-
--   ✅ **NULL Security Mechanism** - No authentication (default)
--   ✅ **ZMTP Framing** - 1-byte and 8-byte length frames
--   ✅ **Multipart Messages** - MORE flag handling
--   ✅ **Command Frames** - READY, PING, PONG commands
--   ✅ **Heartbeating** - ZMTP 3.1 PING/PONG (RFC 23)
--   ✅ **PLAIN Security** - Username/password authentication
--   ✅ **CURVE Security** - CurveZMQ public-key encryption
--   ✅ **ZAP Authentication** - ZeroMQ Authentication Protocol
-
-#### Socket Patterns
-
--   ✅ **Load Balancing** - ROUTER fair-queuing
--   ✅ **Pub-Sub Filtering** - Topic-based subscriptions
--   ✅ **Asynchronous I/O** - Non-blocking operations
--   ✅ **Request-Reply** - REQ/REP strict state machine with relaxed mode
--   ✅ **Pipeline** - PUSH/PULL patterns with reconnection support
--   ✅ **Automatic Reconnection** - Exponential backoff on all socket types
--   ✅ **Socket Options** - Full `zmq_setsockopt` equivalents via `SocketOptions`
-
-## Interoperability Testing
-
-### Testing Against libzmq
-
-The test suite includes interoperability tests with official libzmq:
+The test suite includes interop tests against a live libzmq installation:
 
 ```bash
-# Install libzmq (ZMQ 4.1+)
-sudo apt install libzmq3-dev  # Ubuntu/Debian
-brew install zeromq           # macOS
+# Install libzmq
+sudo apt install libzmq3-dev   # Ubuntu/Debian
+brew install zeromq            # macOS
 
-# Run interoperability tests
+# Run interop tests
 cargo test --package monocoque --features zmq --test interop_pair
 cargo test --package monocoque --features zmq --test interop_router
 cargo test --package monocoque --features zmq --test interop_pubsub
 cargo test --package monocoque --features zmq --test interop_load_balance
 ```
 
-### Test Coverage
-
-| Test                   | Description                 | Verifies                    |
-| ---------------------- | --------------------------- | --------------------------- |
-| `interop_pair`         | DEALER-DEALER communication | Basic framing, handshake    |
-| `interop_router`       | ROUTER-DEALER patterns      | Routing IDs, load balancing |
-| `interop_pubsub`       | PUB-SUB messaging           | Subscription filtering      |
-| `interop_load_balance` | ROUTER fair-queuing         | Worker pool patterns        |
-
-## Migration from libzmq
-
-### API Mapping
-
-```rust
-// libzmq (C API)
-void *dealer = zmq_socket(ctx, ZMQ_DEALER);
-zmq_connect(dealer, "tcp://127.0.0.1:5555");
-
-// Monocoque (Rust async)
-use monocoque::zmq::DealerSocket;
-let socket = DealerSocket::connect("127.0.0.1:5555").await?;
-```
-
-### Protocol Guarantees
-
-1. **Wire Compatibility**: Byte-for-byte compatible with libzmq on the wire
-2. **Handshake Compatibility**: Accepts libzmq greetings, sends standard ZMTP 3.0
-3. **Frame Compatibility**: Uses identical framing format (flags, length, payload)
-4. **Command Compatibility**: READY command format matches RFC 23/ZMTP
-
-### Known Limitations
-
-#### Behavioral Differences
-
--   **Async-First Design** - No blocking API (by design)
-    -   Benefit: Better performance, no thread-per-connection
--   **Type Safety** - Socket types enforced at compile-time
-    -   Benefit: Prevents invalid socket combinations (e.g., PUB→PUB)
-
-## Compatibility Testing Checklist
-
-When testing against legacy ZMQ 4.1+ systems:
-
--   [ ] Verify handshake completes (libzmq accepts ZMTP 3.0)
--   [ ] Test message exchange in both directions
--   [ ] Verify multipart message handling
--   [ ] Test error handling (connection drops, invalid frames)
--   [ ] Validate routing ID assignment (ROUTER sockets)
--   [ ] Check subscription filtering (PUB/SUB)
--   [ ] Test load balancing fairness (ROUTER fair-queue)
--   [ ] Verify interop with different libzmq versions (4.1, 4.2, 4.3)
-
-## Version Detection
-
-To detect peer ZMTP version:
-
-```rust
-// In greeting.rs parsing
-let major = src[10];  // Byte 10: major version (3)
-let minor = src[11];  // Byte 11: minor version (0 or 1)
-
-// 3.0 = ZMQ 4.1
-// 3.1 = ZMQ 4.2+
-```
-
-Monocoque parses the minor version and supports ZMTP 3.1 features (heartbeating via PING/PONG) when both peers advertise 3.1.
-
 ## References
 
--   [RFC 23/ZMTP](https://rfc.zeromq.org/spec:23/ZMTP/) - ZMTP 3.0 Specification
--   [RFC 37/ZMTP](https://rfc.zeromq.org/spec:37/ZMTP/) - ZMTP 3.1 Extensions
--   [libzmq Releases](https://github.com/zeromq/libzmq/releases) - Official implementation versions
--   [ZeroMQ Guide](https://zguide.zeromq.org/) - Patterns and best practices
-
-## Support
-
-**Minimum Supported Version**: ZeroMQ 4.1 (ZMTP 3.0)
-
-For issues with specific ZMQ versions, please open an issue with:
-
--   ZeroMQ version (`zmq_version()`)
--   Operating system
--   Wire capture (tcpdump/Wireshark)
--   Error messages from both sides
+- [RFC 23/ZMTP](https://rfc.zeromq.org/spec:23/ZMTP/) — ZMTP 3.0 specification
+- [RFC 37/ZMTP](https://rfc.zeromq.org/spec:37/ZMTP/) — ZMTP 3.1 extensions (heartbeating)
+- [ZeroMQ Guide](https://zguide.zeromq.org/) — patterns and usage

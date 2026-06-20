@@ -20,7 +20,7 @@ fn test_pubsub_basic() {
             pub_socket.accept_subscriber().await.unwrap();
 
             // Wait for subscriber to signal it is subscribed before broadcasting.
-            // Use a blocking recv — the publisher has nothing else to do while waiting,
+            // Use a blocking recv  -  the publisher has nothing else to do while waiting,
             // and compio::time::sleep interferes with the handshake timer state.
             sub_ready_rx.recv().unwrap();
 

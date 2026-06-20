@@ -73,7 +73,7 @@ fn test_proxy_steerable_terminate() {
                     .expect("io error")
                     .expect("connection closed");
 
-                // Send TERMINATE — proxy_steerable must return Ok(()).
+                // Send TERMINATE  -  proxy_steerable must return Ok(()).
                 ctrl_client
                     .send(vec![Bytes::from("TERMINATE")])
                     .await

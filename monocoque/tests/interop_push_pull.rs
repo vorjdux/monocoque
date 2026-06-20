@@ -18,7 +18,7 @@ fn test_monocoque_push_to_libzmq_pull() {
     let (result_tx, result_rx) = mpsc::channel::<Result<(), String>>();
     let (push_err_tx, push_err_rx) = mpsc::channel::<String>();
 
-    // libzmq PULL server — generous timeout so it outlasts our push thread
+    // libzmq PULL server  -  generous timeout so it outlasts our push thread
     thread::spawn(move || {
         let ctx = zmq::Context::new();
         let pull = ctx.socket(zmq::PULL).unwrap();
@@ -44,7 +44,7 @@ fn test_monocoque_push_to_libzmq_pull() {
     let endpoint = addr_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     let addr: std::net::SocketAddr = endpoint.strip_prefix("tcp://").unwrap().parse().unwrap();
 
-    // monocoque PUSH client — join to capture panics/errors
+    // monocoque PUSH client  -  join to capture panics/errors
     let push_thread = thread::spawn(move || {
         let t0 = Instant::now();
         let r = compio::runtime::Runtime::new()
