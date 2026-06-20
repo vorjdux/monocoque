@@ -19,7 +19,7 @@
 
 ## Performance and Operations
 
-- [Performance Benchmarks](PERFORMANCE.md) - Latency and throughput results vs. libzmq
+- [Performance](performance.md) - Benchmark results and tuning guide
 - [Production Deployment Guide](PRODUCTION_DEPLOYMENT.md) - Security configuration, tuning, monitoring, Kubernetes/Docker, migration from libzmq
 - [Fuzzing Guide](FUZZING.md) - Fuzz targets, crash triage, continuous fuzzing setup
 

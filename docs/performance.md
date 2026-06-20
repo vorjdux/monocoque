@@ -1,4 +1,32 @@
-# Performance Tuning
+# Performance
+
+## Benchmark results
+
+Measured on loopback TCP against rust-zmq (FFI bindings to libzmq):
+
+**Latency (REQ/REP round-trip)**
+
+| Message size | Monocoque | rust-zmq | Improvement |
+|---|---|---|---|
+| 64B | 23μs | 34μs | 31% faster |
+| 256B | 22μs | 35μs | 36% faster |
+| 1KB | 23μs | 36μs | 35% faster |
+
+**Throughput (DEALER/ROUTER, batching API, 10k messages)**
+
+| Message size | Throughput |
+|---|---|
+| 64B | 3.24M msg/s |
+| 256B | 2.49M msg/s |
+| 1KB | 1.08M msg/s |
+
+IPC (Unix domain sockets) runs 7-17% faster than TCP loopback for local communication.
+
+Run the benchmarks: `cargo bench --features zmq` from the `monocoque/` directory.
+
+---
+
+## Tuning
 
 monocoque is built on [compio](https://github.com/compio-rs/compio), which uses
 `io_uring` on Linux for minimal syscall overhead and zero-copy I/O. This guide
