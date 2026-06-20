@@ -102,15 +102,15 @@ Interop testing against libzmq: see [docs/INTEROP_TESTING.md](docs/INTEROP_TESTI
 
 Core features are complete. Possible future work:
 
-- io_uring fixed buffers (`IORING_OP_READ_FIXED`) — removes the last kernel-boundary copy per read; ~5-15% latency improvement at an already low baseline
-- Prefix trie for topic matching — only relevant with 100+ concurrent subscribers using deep topic hierarchies
-- Concurrent PUB fanout — prevents one slow subscriber from delaying others in large-subscriber deployments
+- io_uring fixed buffers (`IORING_OP_READ_FIXED`) - removes the last kernel-boundary copy per read; ~5-15% latency improvement at an already low baseline
+- Prefix trie for topic matching - only relevant with 100+ concurrent subscribers using deep topic hierarchies
+- Concurrent PUB fanout - prevents one slow subscriber from delaying others in large-subscriber deployments
 
 Long term: high-performance RPC, additional transports (QUIC, shared memory), custom protocol framework.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT - see [LICENSE](LICENSE).
 
 ---
 
