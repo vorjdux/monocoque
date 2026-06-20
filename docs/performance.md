@@ -153,11 +153,25 @@ let opts = SocketOptions::default()
 
 ---
 
-## Profiling checklist
+## TCP keepalive
 
-1. **Allocation hot spots**: Run under `dhat` or `heaptrack` and look for
-   `Bytes::copy_from_slice` in encode paths.
-2. **Lock contention**: Use `tokio-console` or `perf lock` on the routing/pubsub
-   hubs under many-peer workloads.
-3. **CPU affinity**: Pin runtime threads to specific cores with `nix::sched::sched_setaffinity`.
-4. **Kernel version**: Verify io_uring is active (`/proc/$(pidof yourapp)/fdinfo`  -  look for `uring`).
+TCP_NODELAY is on by default. For long-lived connections crossing NAT or firewalls, enable OS-level keepalive:
+
+```rust
+let opts = SocketOptions::default()
+    .with_tcp_keepalive(1)
+    .with_tcp_keepalive_idle(60)    // seconds before first probe
+    .with_tcp_keepalive_intvl(10)   // seconds between probes
+    .with_tcp_keepalive_cnt(5);     // probes before giving up
+```
+
+---
+
+## Checklist
+
+- Build with `--release` - debug builds are 5-10x slower
+- Linux kernel >= 5.11 for full io_uring benefit
+- Size read/write buffers to match your 99th-percentile message size
+- Use IPC instead of TCP loopback for co-located sockets
+- Run `dhat` or `heaptrack` to catch `Bytes::copy_from_slice` in hot paths
+- Verify io_uring is active: `/proc/$(pidof yourapp)/fdinfo` (look for `uring`)

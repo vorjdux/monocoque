@@ -1,56 +1,39 @@
 # Monocoque Documentation
 
-## Getting Started
+## Getting started
 
-- [Getting Started Guide](GETTING_STARTED.md) - Installation, basic setup, first socket
-- [Integration Guide](INTEGRATION_GUIDE.md) - Integrating Monocoque into an existing project
+- [Getting Started](GETTING_STARTED.md) - Installation and first socket
+- [User Guide](USER_GUIDE.md) - Socket patterns and common usage
+- [Integration Guide](INTEGRATION_GUIDE.md) - Integrating into an existing project
 
-## Protocol and Compatibility
+## Migration
 
-- [Implementation Status](IMPLEMENTATION_STATUS.md) - Which features are complete
-- [Compatibility](COMPATIBILITY.md) - ZeroMQ version compatibility matrix
-- [ZMTP Protocol](ZMTP_PROTOCOL.md) - Wire protocol internals and frame format
-- [Socket Patterns](SOCKET_PATTERNS.md) - REQ/REP, PUB/SUB, DEALER/ROUTER, and PUSH/PULL
+- [Migration from libzmq](MIGRATION.md) - API differences and how to port existing code
+
+## Protocol and compatibility
+
+- [Compatibility](COMPATIBILITY.md) - Which ZeroMQ features are supported
+- [Interop Testing](INTEROP_TESTING.md) - Running tests against libzmq
 
 ## Security
 
-- [ZAP Integration Guide](ZAP_INTEGRATION_GUIDE.md) - Authentication protocol (RFC 27), PLAIN and CURVE mechanisms, custom handlers
-- [Security Audit](SECURITY_AUDIT.md) - Threat model, cryptographic review, attack surface analysis
+- [Security Guide](SECURITY_GUIDE.md) - PLAIN, CURVE, and ZAP authentication
+- [ZAP Integration](ZAP_INTEGRATION_GUIDE.md) - Implementing a custom ZAP handler
 
-## Performance and Operations
+## Performance and operations
 
 - [Performance](performance.md) - Benchmark results and tuning guide
-- [Production Deployment Guide](PRODUCTION_DEPLOYMENT.md) - Security configuration, tuning, monitoring, Kubernetes/Docker, migration from libzmq
-- [Fuzzing Guide](FUZZING.md) - Fuzz targets, crash triage, continuous fuzzing setup
+- [Production Deployment](PRODUCTION_DEPLOYMENT.md) - OS tuning, monitoring, deployment checklist
+- [Reliability](RELIABILITY_AND_RESILIENCE.md) - Reconnection, heartbeating, HWM
 
-## Implementation Guides
+## Reference
 
-- [Identity and Routing](IDENTITY_ROUTING_OPTIONS.md) - How ROUTER identity envelopes work
-- [TCP Keepalive](IMPLEMENTATION_TCP_KEEPALIVE_REQ_MODES.md) - Keepalive options and REQ modes
-- [InProc Transport](INPROC_IMPLEMENTATION.md) - In-process socket transport
-- [MongoDB-Style API](MONGODB_STYLE_SOCKET_API.md) - Alternative socket API
-- [Interop Testing](INTEROP_TESTING.md) - Running interop tests against libzmq
+- [Routing and Identity](IDENTITY_ROUTING_OPTIONS.md) - How ROUTER identity envelopes work
+- [Fuzzing](FUZZING.md) - Fuzz targets and crash triage
+- [Publishing](PUBLISHING.md) - Releasing to crates.io
+- [Architecture Decisions](ADR.md) - Why key design choices were made
 
-## Tests
+## Blueprints
 
-Integration tests live in `tests/`. Interop tests (requiring libzmq and Python) live in `interop_tests/`. Run them with:
-
-```bash
-cargo test
-cd interop_tests && pytest -v
-```
-
-## Benchmarks
-
-```bash
-python benchmarks/libzmq_throughput.py
-cargo bench
-```
-
-## API Docs
-
-```bash
-cargo doc --open
-```
-
-Key modules: `monocoque::req`, `monocoque::rep`, `monocoque::pub`, `monocoque::sub`, `monocoque::dealer`, `monocoque::router`, `monocoque::security`.
+Internal design documents covering the architecture in depth:
+`blueprints/00-overview.md` through `blueprints/06-safety-model-and-unsafe-audit.md`
