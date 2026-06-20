@@ -149,11 +149,11 @@ Set `RUST_LOG=info,monocoque_zmtp=debug` during rollout. Drop to `info` once sta
 
 ## Troubleshooting
 
-**Connections hang or time out** — check firewall rules (`ss -tlnp`, `iptables -L`), verify the server is listening, and increase `handshake_timeout` for slow networks.
+**Connections hang or time out** - check firewall rules (`ss -tlnp`, `iptables -L`), verify the server is listening, and increase `handshake_timeout` for slow networks.
 
-**Low throughput** — check buffer sizes match your message sizes, consider disabling `tcp_nodelay` for PUB/SUB to allow batching.
+**Low throughput** - check buffer sizes match your message sizes, consider disabling `tcp_nodelay` for PUB/SUB to allow batching.
 
-**High CPU from CURVE** — this is expected at connection time; per-message overhead is small. If the handshake cost matters, pool connections.
+**High CPU from CURVE** - this is expected at connection time; per-message overhead is small. If the handshake cost matters, pool connections.
 
 ## Pre-Launch Checklist
 

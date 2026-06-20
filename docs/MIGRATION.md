@@ -21,17 +21,17 @@ You no longer need libzmq installed on the system. Monocoque is pure Rust.
 
 ## The big differences
 
-**No context.** libzmq and rust-zmq require a `Context` object that owns all sockets. Monocoque sockets are independent — just create them directly.
+**No context.** libzmq and rust-zmq require a `Context` object that owns all sockets. Monocoque sockets are independent - just create them directly.
 
 **Async everywhere.** All socket operations are `async`. You need a compio runtime: add `#[compio::main]` to your entry point. There's no blocking API.
 
-**`recv()` returns `Result<Option<Vec<Bytes>>>`.** This is the change that will touch the most code. In rust-zmq, `recv_msg(0)` returns `Result<Message>` where the error encodes both I/O problems and timeouts (via errno). In monocoque, `Ok(None)` means the connection closed or a timeout elapsed — it's not an error. `Err(e)` is an actual I/O problem. Update all your recv callsites:
+**`recv()` returns `Result<Option<Vec<Bytes>>>`.** This is the change that will touch the most code. In rust-zmq, `recv_msg(0)` returns `Result<Message>` where the error encodes both I/O problems and timeouts (via errno). In monocoque, `Ok(None)` means the connection closed or a timeout elapsed - it's not an error. `Err(e)` is an actual I/O problem. Update all your recv callsites:
 
 ```rust
 // rust-zmq
 let msg = socket.recv_msg(0)?;
 
-// monocoque — handle the None case
+// monocoque - handle the None case
 match socket.recv().await {
     Ok(Some(msg)) => { /* use msg */ }
     Ok(None) => { /* timeout or peer closed */ }
@@ -82,11 +82,11 @@ DealerSocket::connect("127.0.0.1:5555").await?;
 
 ## What's not there yet
 
-- **inproc transport** — partially supported via a channel bridge, but not the same as libzmq inproc.
-- **`zmq_poll()`** — use `futures::select!` to multiplex across sockets.
-- **`ZMQ_STREAM`** — `StreamSocket` exists but check current docs for limitations.
+- **inproc transport** - partially supported via a channel bridge, but not the same as libzmq inproc.
+- **`zmq_poll()`** - use `futures::select!` to multiplex across sockets.
+- **`ZMQ_STREAM`** - `StreamSocket` exists but check current docs for limitations.
 
-Everything else — DEALER/ROUTER, PUB/SUB, PUSH/PULL, PAIR, XPUB/XSUB, PLAIN/CURVE security, ZAP, socket monitor, proxy — is supported.
+Everything else - DEALER/ROUTER, PUB/SUB, PUSH/PULL, PAIR, XPUB/XSUB, PLAIN/CURVE security, ZAP, socket monitor, proxy - is supported.
 
 ---
 

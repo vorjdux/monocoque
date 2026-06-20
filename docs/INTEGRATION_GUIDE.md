@@ -11,7 +11,7 @@ compio = { version = "...", features = ["runtime"] }
 bytes = "1"
 ```
 
-monocoque runs on [compio](https://github.com/compio-rs/compio), a completion-based async runtime. If you're already using tokio, you can run compio on a separate thread or use it alongside tokio — they don't conflict.
+monocoque runs on [compio](https://github.com/compio-rs/compio), a completion-based async runtime. If you're already using tokio, you can run compio on a separate thread or use it alongside tokio - they don't conflict.
 
 ## Basic patterns
 
@@ -101,13 +101,13 @@ proxy_steerable(&mut frontend, &mut backend, None, &mut control).await?;
 
 The `examples/` directory covers the common patterns:
 
-- `req_rep.rs` — basic request/reply
-- `pub_sub.rs` — publish/subscribe with topic filtering
-- `router_dealer.rs` — async load balancing
-- `proxy_broker.rs` — ROUTER-DEALER proxy
-- `paranoid_pirate.rs` — reliable request/reply with heartbeating
-- `plain_auth_demo.rs` — PLAIN authentication
-- `curve_demo.rs` — CURVE encrypted messaging
-- `inproc_demo.rs` — in-process messaging
+- `req_rep.rs` - basic request/reply
+- `pub_sub.rs` - publish/subscribe with topic filtering
+- `router_dealer.rs` - async load balancing
+- `proxy_broker.rs` - ROUTER-DEALER proxy
+- `paranoid_pirate.rs` - reliable request/reply with heartbeating
+- `plain_auth_demo.rs` - PLAIN authentication
+- `curve_demo.rs` - CURVE encrypted messaging
+- `inproc_demo.rs` - in-process messaging
 
 For a broader overview of what's supported, see `docs/ZEROMQ_COMPATIBILITY_ROADMAP.md`. For migrating from an earlier monocoque API, see `docs/MIGRATION.md`.

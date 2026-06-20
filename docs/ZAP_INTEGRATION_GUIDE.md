@@ -39,7 +39,7 @@ impl ZapHandler for MyHandler {
 spawn_zap_server(Arc::new(MyHandler))?;
 ```
 
-`spawn_zap_server` binds to `inproc://zeromq.zap.01` and runs the handler in a background task. The handler must be running before any authenticated connections arrive — if the ZAP socket isn't bound, the server will time out waiting for a response.
+`spawn_zap_server` binds to `inproc://zeromq.zap.01` and runs the handler in a background task. The handler must be running before any authenticated connections arrive - if the ZAP socket isn't bound, the server will time out waiting for a response.
 
 ## Accepting and Rejecting Connections
 

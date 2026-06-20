@@ -14,10 +14,10 @@ All standard socket types are implemented: DEALER, ROUTER, PUB, SUB, REQ, REP, P
 - PLAIN security (username/password)
 - CURVE security (CurveZMQ public-key encryption)
 - ZAP authentication protocol
-- ZMTP framing — 1-byte and 8-byte length frames
+- ZMTP framing - 1-byte and 8-byte length frames
 - Multipart messages (MORE flag)
-- Command frames — READY, PING, PONG
-- Heartbeating — ZMTP 3.1 PING/PONG (RFC 37)
+- Command frames - READY, PING, PONG
+- Heartbeating - ZMTP 3.1 PING/PONG (RFC 37)
 - ROUTER fair-queuing and routing IDs
 - PUB/SUB topic filtering
 - Automatic reconnection with exponential backoff
@@ -25,7 +25,7 @@ All standard socket types are implemented: DEALER, ROUTER, PUB, SUB, REQ, REP, P
 
 ## Behavioral differences from libzmq
 
-Monocoque is async-first. There is no blocking `send`/`recv` API; all socket operations are `async fn`. This is a design choice, not a limitation — it eliminates the need for thread-per-connection and generally improves performance under load.
+Monocoque is async-first. There is no blocking `send`/`recv` API; all socket operations are `async fn`. This is a design choice, not a limitation - it eliminates the need for thread-per-connection and generally improves performance under load.
 
 Socket types are enforced at compile time rather than at runtime. Attempting an invalid pattern (e.g., connecting PUB to PUB) is a type error, not a runtime failure.
 
@@ -49,6 +49,6 @@ cargo test --package monocoque --features zmq --test interop_load_balance
 
 ## References
 
-- [RFC 23/ZMTP](https://rfc.zeromq.org/spec:23/ZMTP/) — ZMTP 3.0 specification
-- [RFC 37/ZMTP](https://rfc.zeromq.org/spec:37/ZMTP/) — ZMTP 3.1 extensions (heartbeating)
-- [ZeroMQ Guide](https://zguide.zeromq.org/) — patterns and usage
+- [RFC 23/ZMTP](https://rfc.zeromq.org/spec:23/ZMTP/) - ZMTP 3.0 specification
+- [RFC 37/ZMTP](https://rfc.zeromq.org/spec:37/ZMTP/) - ZMTP 3.1 extensions (heartbeating)
+- [ZeroMQ Guide](https://zguide.zeromq.org/) - patterns and usage

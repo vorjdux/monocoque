@@ -1,6 +1,6 @@
-# 📄 File 8 — `07-project-roadmap-and-future-phases.md`
+# 📄 File 8 - `07-project-roadmap-and-future-phases.md`
 
-# Monocoque — Full Project Roadmap & Future Phases
+# Monocoque - Full Project Roadmap & Future Phases
 
 _A complete, bounded plan from kernel to ecosystem_
 
@@ -48,7 +48,7 @@ monocoque-core/         ← Protocol-agnostic kernel
 └── (feature-gated, no protocols by default)
 ```
 
-### Phase 0 — Core Kernel
+### Phase 0 - Core Kernel
 
 **Goal:** Move bytes between kernel and user space safely and fast.
 
@@ -67,7 +67,7 @@ Implemented components:
 
 ---
 
-### Phase 1 — ZMTP Core Protocol
+### Phase 1 - ZMTP Core Protocol
 
 **Goal:** Speak ZeroMQ at the frame level.
 
@@ -86,7 +86,7 @@ Implemented components:
 
 ---
 
-### Phase 2 — Socket Behaviors
+### Phase 2 - Socket Behaviors
 
 **Goal:** Become a real ZeroMQ implementation.
 
@@ -105,7 +105,7 @@ Implemented components:
 
 ---
 
-### Phase 3 — PUB/SUB Engine
+### Phase 3 - PUB/SUB Engine
 
 **Goal:** High-performance topic-based fanout.
 
@@ -152,7 +152,7 @@ Features:
 
 ## 3. Immediate Priorities
 
-### Phase 3.1 — PUB/SUB Integration Tests
+### Phase 3.1 - PUB/SUB Integration Tests
 
 -   Multiple SUB clients
 -   Overlapping prefixes
@@ -162,7 +162,7 @@ Features:
 
 ---
 
-### Phase 3.2 — Socket Type Matrix
+### Phase 3.2 - Socket Type Matrix
 
 -   PUB
 -   SUB
@@ -171,7 +171,7 @@ Features:
 
 ---
 
-## 4. Phase 4 — High-Performance RPC (Optional, Strategic)
+## 4. Phase 4 - High-Performance RPC (Optional, Strategic)
 
 **Goal:** Beat gRPC on latency and CPU.
 
@@ -189,11 +189,11 @@ This is where Monocoque becomes more than ZMQ.
 
 ---
 
-## 5. Phase 5 — Custom Protocol Mode (Your Question Answered)
+## 5. Phase 5 - Custom Protocol Mode (Your Question Answered)
 
 > “Maybe create my own protocol in the future to outperform all?”
 
-**Yes — and Monocoque is built for exactly that.**
+**Yes - and Monocoque is built for exactly that.**
 
 Why it will work:
 
@@ -216,7 +216,7 @@ All without touching the kernel.
 
 ---
 
-## 6. Phase 6 — Transports Beyond TCP (Optional)
+## 6. Phase 6 - Transports Beyond TCP (Optional)
 
 Possible extensions:
 
@@ -254,7 +254,7 @@ This restraint is why it stays fast and correct.
 
 ## 9. Naming Check (Final Answer)
 
-### **Monocoque** — Is it good?
+### **Monocoque** - Is it good?
 
 Yes. For technical audiences, it is **excellent**.
 
@@ -276,7 +276,7 @@ It signals:
 
 **Is Monocoque worth developing?**
 
-✅ Yes — technically ✅ Yes — architecturally ✅ Yes — strategically
+✅ Yes - technically ✅ Yes - architecturally ✅ Yes - strategically
 
 You are not reinventing ZeroMQ. You are **rebuilding it correctly** for modern Rust, modern kernels, and modern performance expectations.
 

@@ -1,6 +1,6 @@
-# 📄 File 6 — `05-phase3-pubsub-and-subscription-index.md`
+# 📄 File 6 - `05-phase3-pubsub-and-subscription-index.md`
 
-# Phase 3 — PUB / SUB & the Sorted Prefix Engine
+# Phase 3 - PUB / SUB & the Sorted Prefix Engine
 
 > **Implementation Note**: This document describes the subscription matching algorithm and PubSubHub design. The current implementation has `PubSocket<S>` and `SubSocket<S>` working with direct stream I/O. The `PubSubHub` and `SubscriptionIndex` exist in `monocoque-core` for future multi-peer scenarios but are not yet used by the socket implementations.
 
@@ -165,7 +165,7 @@ Therefore:
 -   happens **after** matching
 -   uses `sort_unstable + dedup`
 
-This only runs when a peer subscribes redundantly — rare.
+This only runs when a peer subscribes redundantly - rare.
 
 ---
 

@@ -1,4 +1,4 @@
-# 📄 File 1 — `00-overview.md`
+# 📄 File 1 - `00-overview.md`
 
 # Monocoque Roadmap
 

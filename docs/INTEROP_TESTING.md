@@ -100,7 +100,7 @@ EOF
 
 ## CURVE Encryption Interop
 
-Monocoque implements CURVE (RFC 26) using X25519 + ChaCha20-Poly1305. Key exchange is compatible with libzmq, but note that libzmq uses Z85 encoding for keys while Monocoque uses raw 32-byte keys — conversion is required.
+Monocoque implements CURVE (RFC 26) using X25519 + ChaCha20-Poly1305. Key exchange is compatible with libzmq, but note that libzmq uses Z85 encoding for keys while Monocoque uses raw 32-byte keys - conversion is required.
 
 Generate keypairs:
 
@@ -135,7 +135,7 @@ cargo run --example curve_demo -- --server-key <public_key_hex>
 
 ## Troubleshooting
 
-**Tests hang and don't exit.** Use the standalone `cargo run --example` commands rather than `cargo test` — the compio runtime has known lifecycle issues inside the test harness.
+**Tests hang and don't exit.** Use the standalone `cargo run --example` commands rather than `cargo test` - the compio runtime has known lifecycle issues inside the test harness.
 
 **Connection refused.** Check that ports 5560–5564 are free before running examples.
 

@@ -1,6 +1,6 @@
 # Identity Routing in ROUTER Sockets
 
-ROUTER sockets deliver messages to specific peers rather than load-balancing or broadcasting. To do that, every connected peer must have an identity — a byte string that the ROUTER uses as an address.
+ROUTER sockets deliver messages to specific peers rather than load-balancing or broadcasting. To do that, every connected peer must have an identity - a byte string that the ROUTER uses as an address.
 
 By default, monocoque assigns a random identity when a peer connects. You can override this with a custom identity set on the connecting socket, or by assigning one on the ROUTER side before the connection is accepted.
 

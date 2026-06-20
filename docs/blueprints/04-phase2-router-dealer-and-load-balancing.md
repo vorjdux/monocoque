@@ -1,6 +1,6 @@
-# 📄 File 5 — `04-phase2-router-dealer-and-load-balancing.md`
+# 📄 File 5 - `04-phase2-router-dealer-and-load-balancing.md`
 
-# Phase 2 — ROUTER / DEALER Semantics & Load Balancing
+# Phase 2 - ROUTER / DEALER Semantics & Load Balancing
 
 > **Implementation Note**: This document describes design concepts for routing and load balancing. The current implementation uses **direct stream I/O** where each socket (`DealerSocket<S>`, `RouterSocket<S>`) directly manages its own stream. The semantic behavior (multipart, identity routing) remains as described, but is implemented inline within socket types. The `RouterHub` and related components exist in `monocoque-core` for future multi-peer scenarios.
 
