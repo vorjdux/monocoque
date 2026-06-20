@@ -16,7 +16,7 @@ for msg in messages {
     match dealer.send_buffered(msg) {
         Ok(()) => {}
         Err(e) if e.kind() == ErrorKind::WouldBlock => {
-            // Buffer full — flush before continuing
+            // Buffer full - flush before continuing
             dealer.flush().await?;
         }
         Err(e) => return Err(e),
@@ -32,7 +32,7 @@ A byte-based backpressure system (`SemaphorePermits`) exists in `monocoque-core/
 
 ## Cancellation Safety (Poison Flag)
 
-ZMTP sends multipart messages as sequential frames. If an async `flush()` is cancelled mid-write — for example, by a `timeout()` dropping the future — the peer has received some frames but not all. The stream is now in an invalid state and cannot be recovered.
+ZMTP sends multipart messages as sequential frames. If an async `flush()` is cancelled mid-write - for example, by a `timeout()` dropping the future - the peer has received some frames but not all. The stream is now in an invalid state and cannot be recovered.
 
 Monocoque handles this with a poison flag. Before any write, a `PoisonGuard` sets the flag. If the guard is dropped without being explicitly disarmed (i.e., the future is cancelled), the socket is marked poisoned. Subsequent operations on a poisoned socket return `BrokenPipe` immediately.
 
@@ -44,11 +44,11 @@ let result = timeout(Duration::from_secs(5), dealer.flush()).await;
 match result {
     Ok(Ok(())) => {}
     Ok(Err(e)) if e.kind() == ErrorKind::BrokenPipe => {
-        // Socket poisoned — reconnect
+        // Socket poisoned - reconnect
         dealer = DealerSocket::connect_with_reconnect("tcp://127.0.0.1:5555").await?;
     }
     Err(_timeout) => {
-        // Timeout cancelled flush — socket is poisoned
+        // Timeout cancelled flush - socket is poisoned
         dealer = DealerSocket::connect_with_reconnect("tcp://127.0.0.1:5555").await?;
     }
 }
@@ -71,7 +71,7 @@ loop {
     match dealer.send_with_reconnect(msg.clone()).await {
         Ok(()) => break,
         Err(e) if e.kind() == ErrorKind::NotConnected => {
-            // Reconnection attempt is in progress — back off and retry
+            // Reconnection attempt is in progress - back off and retry
             sleep(Duration::from_millis(100)).await;
         }
         Err(e) => return Err(e),
@@ -93,7 +93,7 @@ The original `from_tcp` and `connect` APIs still work as before. They do not sto
 
 `DealerSocket` exposes a few methods for observing internal state:
 
-- `is_connected()` — whether the underlying stream is present
-- `is_poisoned()` — whether the socket has been poisoned by a cancelled write
-- `buffered_messages()` — number of messages currently queued
-- `try_reconnect()` — attempt reconnection manually without sending
+- `is_connected()` - whether the underlying stream is present
+- `is_poisoned()` - whether the socket has been poisoned by a cancelled write
+- `buffered_messages()` - number of messages currently queued
+- `try_reconnect()` - attempt reconnection manually without sending

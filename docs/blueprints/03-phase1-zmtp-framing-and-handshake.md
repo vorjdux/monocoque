@@ -1,6 +1,6 @@
-# 📄 File 4 — `03-phase1-zmtp-framing-and-handshake.md`
+# 📄 File 4 - `03-phase1-zmtp-framing-and-handshake.md`
 
-# Phase 1 — ZMTP 3.1 Framing, Handshake, and Session Semantics
+# Phase 1 - ZMTP 3.1 Framing, Handshake, and Session Semantics
 
 _From raw bytes to a correct ZeroMQ peer_
 

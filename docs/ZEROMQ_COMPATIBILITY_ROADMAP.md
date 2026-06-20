@@ -53,13 +53,13 @@ Not implemented: ZMQ_EVENTS polling readiness, some advanced STREAM-specific opt
 
 | Feature | Status |
 |---------|--------|
-| proxy() | complete — bidirectional forwarding with optional capture socket |
-| proxy_steerable() | complete — adds PAUSE/RESUME/TERMINATE control socket |
-| Legacy devices (QUEUE, FORWARDER, STREAMER) | not implemented — deprecated in libzmq, use proxy() instead |
+| proxy() | complete - bidirectional forwarding with optional capture socket |
+| proxy_steerable() | complete - adds PAUSE/RESUME/TERMINATE control socket |
+| Legacy devices (QUEUE, FORWARDER, STREAMER) | not implemented - deprecated in libzmq, use proxy() instead |
 
 ## Polling
 
-`zmq_poll` / `zmq_poller` are not implemented. Use `futures::select!` or `tokio::select!` instead — Rust async is a better fit for this.
+`zmq_poll` / `zmq_poller` are not implemented. Use `futures::select!` or `tokio::select!` instead - Rust async is a better fit for this.
 
 ## Protocol
 

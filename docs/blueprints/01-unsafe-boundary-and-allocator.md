@@ -1,4 +1,4 @@
-# 📄 File 2 — `01-unsafe-boundary-and-allocator.md`
+# 📄 File 2 - `01-unsafe-boundary-and-allocator.md`
 
 # Unsafe Boundary & Allocator
 
@@ -108,7 +108,7 @@ This eliminates the `.to_vec()` memcpy that would otherwise occur on every write
 
 ## 4. Memory Safety Invariants (Non-Negotiable)
 
-### Invariant A — Pointer Stability
+### Invariant A - Pointer Stability
 
 **While a buffer is in-flight in the kernel, its pointer must not move.**
 
@@ -123,7 +123,7 @@ Guaranteed by:
 -   storing data in a `Vec<u8>` that might reallocate
 -   exposing a mutable slice that allows resizing
 
-### Invariant B — Exclusive Mutable Access
+### Invariant B - Exclusive Mutable Access
 
 **At most one mutable view exists over the same memory region at a time.**
 
@@ -133,7 +133,7 @@ Guaranteed by:
 -   not cloneable
 -   `IoBufMut` exposes pointer/len but does not allow aliasing
 
-### Invariant C — Correct Initialization Tracking
+### Invariant C - Correct Initialization Tracking
 
 **The kernel may write fewer bytes than requested. Uninitialized tail must never be visible.**
 
@@ -142,7 +142,7 @@ Guaranteed by:
 -   `SetBufInit` implementation (or equivalent internal tracking)
 -   `freeze(n)` only exposes `n` initialized bytes in returned `Bytes`
 
-### Invariant D — No Mutation After Freeze
+### Invariant D - No Mutation After Freeze
 
 **Once converted to `Bytes`, the region is immutable.**
 
@@ -180,25 +180,25 @@ The implementation must ensure:
 
 ## 6. The Top 5 Footguns (and How We Avoid Them)
 
-### Footgun 1 — Partial Write/Read Assumptions
+### Footgun 1 - Partial Write/Read Assumptions
 
 -   Fixed by `flush_vectored_all` advancing slices
 -   Read path uses decoder that can handle split frames
 
-### Footgun 2 — Dangling Pointer via Owner Drop
+### Footgun 2 - Dangling Pointer via Owner Drop
 
 -   Fixed by `Arc` owner captured inside `SlabMut`
 -   Owner lives until `Bytes` drops
 
-### Footgun 3 — Exposing Uninitialized Memory
+### Footgun 3 - Exposing Uninitialized Memory
 
 -   Fixed by strict `SetBufInit` + `freeze(n)` bounded view
 
-### Footgun 4 — Mutable Alias (UB)
+### Footgun 4 - Mutable Alias (UB)
 
 -   Fixed by move-only `SlabMut` and ownership-passing IO API
 
-### Footgun 5 — Reuse While Still Referenced (Use-after-free)
+### Footgun 5 - Reuse While Still Referenced (Use-after-free)
 
 -   Fixed by refcount behavior of `Bytes` owner or arena “graveyard”
 -   Reuse only allowed when strong count indicates no outstanding views

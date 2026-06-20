@@ -1,6 +1,6 @@
 # Security Guide
 
-Monocoque supports three security mechanisms: NULL (no security), PLAIN (username/password), and CURVE (public-key encryption). Security is negotiated during the ZMTP handshake — once a connection is established, all messages on it carry that security context.
+Monocoque supports three security mechanisms: NULL (no security), PLAIN (username/password), and CURVE (public-key encryption). Security is negotiated during the ZMTP handshake - once a connection is established, all messages on it carry that security context.
 
 Use NULL only for localhost or development. Use PLAIN only over an encrypted transport (TLS, VPN). Use CURVE for anything public-facing.
 
@@ -144,10 +144,10 @@ See `examples/zap_server_demo.rs` and `examples/authenticated_req_rep.rs` for fu
 
 ## Troubleshooting
 
-**Handshake timeout** — client and server are using different security mechanisms. Both sides must agree: if the server uses CURVE, the client must provide a keypair and the server's public key.
+**Handshake timeout** - client and server are using different security mechanisms. Both sides must agree: if the server uses CURVE, the client must provide a keypair and the server's public key.
 
-**Authentication always fails with PLAIN** — credentials are case-sensitive. Check that the handler is configured before the server socket starts accepting.
+**Authentication always fails with PLAIN** - credentials are case-sensitive. Check that the handler is configured before the server socket starts accepting.
 
-**CURVE key format errors** — monocoque uses raw 32-byte arrays, not Z85 encoding. `hex::decode(...).try_into().unwrap()` is the usual conversion from a hex string.
+**CURVE key format errors** - monocoque uses raw 32-byte arrays, not Z85 encoding. `hex::decode(...).try_into().unwrap()` is the usual conversion from a hex string.
 
-**ZAP request timeout** — the ZAP handler must be started before the server socket. See [ZAP_INTEGRATION_GUIDE.md](ZAP_INTEGRATION_GUIDE.md) for startup ordering.
+**ZAP request timeout** - the ZAP handler must be started before the server socket. See [ZAP_INTEGRATION_GUIDE.md](ZAP_INTEGRATION_GUIDE.md) for startup ordering.

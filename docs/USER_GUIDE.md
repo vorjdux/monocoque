@@ -17,12 +17,12 @@ All socket operations are async and require a compio runtime. Annotate your entr
 
 Monocoque implements 11 ZeroMQ socket types. Pick based on your communication pattern:
 
-- **REQ / REP** — synchronous request-reply. REQ sends then must receive before sending again; REP receives then must reply. Good for simple RPC.
-- **DEALER / ROUTER** — async request-reply. DEALER can send multiple requests without waiting; ROUTER receives framed messages with a client identity prefix and can route replies back. Use these when you need concurrency or load balancing.
-- **PUB / SUB** — one-to-many broadcast. SUB sockets filter by topic prefix. Publishers don't know or care who is subscribed.
-- **XPUB / XSUB** — extended pub/sub with subscription visibility. XPUB delivers subscription/unsubscription events as messages, useful for building brokers.
-- **PUSH / PULL** — pipeline. PUSH distributes tasks round-robin to connected PULL sockets. One-way, no replies.
-- **PAIR** — exclusive point-to-point. Exactly one peer.
+- **REQ / REP** - synchronous request-reply. REQ sends then must receive before sending again; REP receives then must reply. Good for simple RPC.
+- **DEALER / ROUTER** - async request-reply. DEALER can send multiple requests without waiting; ROUTER receives framed messages with a client identity prefix and can route replies back. Use these when you need concurrency or load balancing.
+- **PUB / SUB** - one-to-many broadcast. SUB sockets filter by topic prefix. Publishers don't know or care who is subscribed.
+- **XPUB / XSUB** - extended pub/sub with subscription visibility. XPUB delivers subscription/unsubscription events as messages, useful for building brokers.
+- **PUSH / PULL** - pipeline. PUSH distributes tasks round-robin to connected PULL sockets. One-way, no replies.
+- **PAIR** - exclusive point-to-point. Exactly one peer.
 
 ---
 
@@ -87,13 +87,13 @@ The first frame is the topic. SUB filters by prefix match against subscribed top
 ### Pipeline (PUSH/PULL)
 
 ```rust
-// Ventilator — distributes work
+// Ventilator - distributes work
 let (_listener, mut push) = PushSocket::bind("127.0.0.1:5557").await?;
 for i in 0..100 {
     push.send(vec![Bytes::from(format!("task {i}"))]).await?;
 }
 
-// Worker — pulls tasks, pushes results
+// Worker - pulls tasks, pushes results
 let mut pull = PullSocket::connect("127.0.0.1:5557").await?;
 let mut push = PushSocket::connect("127.0.0.1:5558").await?;
 while let Ok(Some(task)) = pull.recv().await {
@@ -101,20 +101,20 @@ while let Ok(Some(task)) = pull.recv().await {
 }
 ```
 
-PUSH distributes messages round-robin across connected PULL sockets. There's no reply path — use a separate PULL socket to collect results if needed.
+PUSH distributes messages round-robin across connected PULL sockets. There's no reply path - use a separate PULL socket to collect results if needed.
 
 ---
 
 ## Messages
 
-All messages are `Vec<Bytes>`. A single-frame message is `vec![Bytes::from("hello")]`. Multipart messages are just more elements in the vec — you send all frames together and receive all frames together, no flags needed.
+All messages are `Vec<Bytes>`. A single-frame message is `vec![Bytes::from("hello")]`. Multipart messages are just more elements in the vec - you send all frames together and receive all frames together, no flags needed.
 
 ```rust
 // ROUTER envelope: identity + empty delimiter + payload
 let reply = vec![identity.clone(), Bytes::new(), Bytes::from("ok")];
 ```
 
-`Bytes` is reference-counted, so cloning frames is cheap — no copying the underlying data.
+`Bytes` is reference-counted, so cloning frames is cheap - no copying the underlying data.
 
 ---
 
@@ -134,11 +134,11 @@ let socket = DealerSocket::connect_with_options("127.0.0.1:5555", options).await
 
 Key options:
 
-- `recv_timeout` / `send_timeout` — how long to wait before returning `None`. Defaults to no timeout (wait forever).
-- `recv_hwm` / `send_hwm` — high water marks. When the queue reaches this many messages, new messages are dropped or the sender blocks depending on socket type. Default 1000.
-- `linger` — how long to wait for queued messages to drain when a socket closes. Default 0 (discard immediately).
-- `conflate` — keep only the most recent message in the receive queue. Useful for telemetry or status updates where stale data is useless.
-- `tcp_keepalive` — detect dead connections. Use `with_tcp_keepalive(1)`, `with_tcp_keepalive_idle(60)`, `with_tcp_keepalive_intvl(10)`, `with_tcp_keepalive_cnt(3)` to enable.
+- `recv_timeout` / `send_timeout` - how long to wait before returning `None`. Defaults to no timeout (wait forever).
+- `recv_hwm` / `send_hwm` - high water marks. When the queue reaches this many messages, new messages are dropped or the sender blocks depending on socket type. Default 1000.
+- `linger` - how long to wait for queued messages to drain when a socket closes. Default 0 (discard immediately).
+- `conflate` - keep only the most recent message in the receive queue. Useful for telemetry or status updates where stale data is useless.
+- `tcp_keepalive` - detect dead connections. Use `with_tcp_keepalive(1)`, `with_tcp_keepalive_idle(60)`, `with_tcp_keepalive_intvl(10)`, `with_tcp_keepalive_cnt(3)` to enable.
 
 Buffer size presets: `SocketOptions::small()` (4KB, good for low-latency REQ/REP) and `SocketOptions::large()` (16KB, good for high-throughput DEALER/ROUTER).
 
@@ -164,7 +164,7 @@ Set a recv timeout if you need to detect hangs rather than waiting forever.
 
 ## Security
 
-PLAIN sends credentials in the clear — only use it over an already-encrypted channel.
+PLAIN sends credentials in the clear - only use it over an already-encrypted channel.
 
 ```rust
 // Server

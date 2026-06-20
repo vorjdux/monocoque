@@ -17,16 +17,16 @@ Before publishing any crate, verify:
 
 Crates have internal dependencies and must be published in this order:
 
-1. `monocoque-core` — no internal dependencies
-2. `monocoque-zmtp` — depends on monocoque-core
-3. `monocoque` — depends on monocoque-core and monocoque-zmtp
+1. `monocoque-core` - no internal dependencies
+2. `monocoque-zmtp` - depends on monocoque-core
+3. `monocoque` - depends on monocoque-core and monocoque-zmtp
 
 Wait roughly a minute between publishes so crates.io finishes indexing each one before the next is submitted.
 
 ## Commands
 
 ```bash
-# Dry run — validates packaging without uploading
+# Dry run - validates packaging without uploading
 cargo publish --dry-run -p monocoque-core
 cargo publish --dry-run -p monocoque-zmtp
 cargo publish --dry-run -p monocoque
@@ -72,10 +72,10 @@ cargo publish -p monocoque
 
 ## Common errors
 
-**"crate X depends on Y that does not exist"** — you published out of order, or crates.io hasn't finished indexing yet. Wait a minute and retry.
+**"crate X depends on Y that does not exist"** - you published out of order, or crates.io hasn't finished indexing yet. Wait a minute and retry.
 
-**"no verified email address"** — verify your email on crates.io before publishing.
+**"no verified email address"** - verify your email on crates.io before publishing.
 
-**"authentication token not found"** — run `cargo login` with your API token from crates.io account settings.
+**"authentication token not found"** - run `cargo login` with your API token from crates.io account settings.
 
-**"uncommitted changes"** — commit first. Pass `--allow-dirty` only for local dry-run testing.
+**"uncommitted changes"** - commit first. Pass `--allow-dirty` only for local dry-run testing.

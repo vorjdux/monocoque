@@ -1,4 +1,4 @@
-# 📄 File 7 — `06-safety-model-and-unsafe-audit.md`
+# 📄 File 7 - `06-safety-model-and-unsafe-audit.md`
 
 # Safety Model & Unsafe Code Audit
 
@@ -175,7 +175,7 @@ Never references.
 
 ## 9. Epoch Model & Memory Safety
 
-Epochs are not just correctness — they are **safety**.
+Epochs are not just correctness - they are **safety**.
 
 They prevent:
 
@@ -245,6 +245,6 @@ But the current architecture already supports safe extension.
 
 ## 14. Final Verdict
 
-> **Yes — Monocoque respects Rust’s memory guarantees.**
+> **Yes - Monocoque respects Rust’s memory guarantees.**
 
 Not by accident. By design, isolation, and discipline.
