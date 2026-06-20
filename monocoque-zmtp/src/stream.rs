@@ -261,6 +261,9 @@ impl StreamSocket {
     ///
     /// Returns an error if the message has no frames or if the peer's send
     /// channel has disconnected.
+    ///
+    /// Returns `WouldBlock` when the peer's send queue has reached the
+    /// configured `send_hwm` limit.
     pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
         if msg.is_empty() {
             return Err(io::Error::new(

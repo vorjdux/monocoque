@@ -282,7 +282,7 @@ where
 
     /// Set socket options.
     pub fn set_options(&mut self, options: SocketOptions) {
-        self.base.options = options;
+        self.base.set_options(options);
     }
 
     /// Get the current state of the REP socket.

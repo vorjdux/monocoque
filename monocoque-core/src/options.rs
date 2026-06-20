@@ -453,7 +453,7 @@ pub struct SocketOptions {
 impl fmt::Debug for SocketOptions {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SocketOptions")
-            .field("read_buffer_size", &self.read_buffer_size)
+            .field("read_buffer_size", &self.read_buffer_size())
             .field("write_buffer_size", &self.write_buffer_size)
             .field("recv_timeout", &self.recv_timeout)
             .field("send_timeout", &self.send_timeout)

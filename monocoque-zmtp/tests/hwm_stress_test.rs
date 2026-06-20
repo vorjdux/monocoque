@@ -204,7 +204,7 @@ fn test_router_send_buffered_hwm_returns_would_block() {
     let addr = addr_rx.recv().unwrap();
 
     // Client: connect and hold the handshake open.
-    thread::spawn(move || {
+    let client_handle = thread::spawn(move || {
         compio::runtime::Runtime::new()
             .unwrap()
             .block_on(async move {
@@ -227,6 +227,8 @@ fn test_router_send_buffered_hwm_returns_would_block() {
         "expected WouldBlock, got {:?}",
         err_kind
     );
+
+    client_handle.join().unwrap();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

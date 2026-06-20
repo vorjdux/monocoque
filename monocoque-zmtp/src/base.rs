@@ -298,10 +298,16 @@ where
         self.send_buffer.len()
     }
 
+    /// Update live socket options and keep derived decoder state in sync.
+    pub(crate) fn set_options(&mut self, options: SocketOptions) {
+        self.decoder.set_max_body_len(options.max_msg_size);
+        self.options = options;
+    }
+
     /// Check if send HWM has been reached.
     #[inline]
     pub const fn hwm_reached(&self) -> bool {
-        self.buffered_messages >= self.options.send_hwm
+        self.options.send_hwm != 0 && self.buffered_messages >= self.options.send_hwm
     }
 
     /// Get the endpoint this socket is connected/bound to, if any.
@@ -499,7 +505,7 @@ where
 
         // Read from stream
         use compio_buf::BufResult;
-        let slab = self.arena.alloc_mut(self.options.read_buffer_size);
+        let slab = self.arena.alloc_mut(self.options.read_buffer_size());
 
         // Get stream reference only for I/O
         let stream = self

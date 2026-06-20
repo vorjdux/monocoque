@@ -21,7 +21,7 @@ async fn main() -> std::io::Result<()> {
 
     println!("📊 Configuration:");
     println!("  send_hwm: {} messages", options.send_hwm);
-    println!("  read_buffer: {} bytes", options.read_buffer_size);
+    println!("  read_buffer: {} bytes", options.read_buffer_size());
     println!("  write_buffer: {} bytes\n", options.write_buffer_size);
 
     // Setup: Create TCP server/client pair

@@ -251,6 +251,16 @@ where
     /// doesn't match the connected peer, the message is dropped (or an error is
     /// returned in mandatory mode).
     pub fn send_buffered(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
+        if self.base.hwm_reached() {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                format!(
+                    "Send high water mark reached ({} messages). Flush or drop messages.",
+                    self.base.options.send_hwm
+                ),
+            ));
+        }
+
         trace!("[ROUTER] Buffering {} frames", msg.len());
 
         if msg.is_empty() {
@@ -260,24 +270,27 @@ where
             ));
         }
 
-        // Check routing identity
-        let identity = &msg[0];
-        if *identity != self.peer_identity {
-            if self.router_mandatory {
-                return Err(io::Error::new(
-                    io::ErrorKind::NotFound,
-                    format!("ROUTER mandatory: no route for identity {:?}", identity),
-                ));
+        let frames_to_send = if self.peer_identity.is_empty() {
+            msg.as_slice()
+        } else {
+            // Check routing identity
+            let identity = &msg[0];
+            if *identity != self.peer_identity {
+                if self.router_mandatory {
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!("ROUTER mandatory: no route for identity {:?}", identity),
+                    ));
+                }
+                trace!(
+                    "[ROUTER] Dropping buffered message to unknown identity {:?}",
+                    identity
+                );
+                self.base.buffered_messages += 1;
+                return Ok(());
             }
-            trace!(
-                "[ROUTER] Dropping buffered message to unknown identity {:?}",
-                identity
-            );
-            return Ok(());
-        }
-
-        // Skip the identity frame and encode the rest
-        let frames_to_send = &msg[1..];
+            &msg[1..]
+        };
         self.base.encode_message_to_send_buf(frames_to_send)?;
         Ok(())
     }
@@ -397,7 +410,7 @@ where
     /// Set socket options (builder-style).
     #[inline]
     pub fn set_options(&mut self, options: SocketOptions) {
-        self.base.options = options;
+        self.base.set_options(options);
     }
 
     /// Get the socket type.
