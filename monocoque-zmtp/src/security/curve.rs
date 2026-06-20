@@ -47,7 +47,7 @@ use chacha20poly1305::{
     aead::{Aead, KeyInit, OsRng},
     ChaCha20Poly1305, Nonce,
 };
-use compio::io::{AsyncRead, AsyncWrite};
+use compio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use rand::RngCore;
 use std::time::Duration;
 use thiserror::Error;
@@ -63,6 +63,7 @@ const CURVE_WELCOME: &[u8] = b"\x07WELCOME";
 const CURVE_INITIATE: &[u8] = b"\x08INITIATE";
 const CURVE_READY: &[u8] = b"\x05READY";
 const CURVE_MESSAGE: &[u8] = b"\x07MESSAGE";
+const CURVE_MESSAGE_NONCE_SIZE: usize = 8;
 
 /// CURVE key sizes
 pub const CURVE_KEY_SIZE: usize = 32;
@@ -204,6 +205,28 @@ impl CurveBox {
     }
 }
 
+struct CurveMessageParts<'a> {
+    short_nonce: &'a [u8],
+    ciphertext: &'a [u8],
+}
+
+#[inline(always)]
+fn parse_curve_message(message: &[u8]) -> Result<CurveMessageParts<'_>, CurveError> {
+    let command_len = CURVE_MESSAGE.len();
+    if message.len() < command_len + CURVE_MESSAGE_NONCE_SIZE {
+        return Err(CurveError::ProtocolViolation);
+    }
+
+    if &message[..command_len] != CURVE_MESSAGE {
+        return Err(CurveError::ProtocolViolation);
+    }
+
+    Ok(CurveMessageParts {
+        short_nonce: &message[command_len..command_len + CURVE_MESSAGE_NONCE_SIZE],
+        ciphertext: &message[command_len + CURVE_MESSAGE_NONCE_SIZE..],
+    })
+}
+
 /// CURVE-specific errors
 #[derive(Debug, Error)]
 pub enum CurveError {
@@ -330,8 +353,8 @@ impl CurveClient {
 
         debug!("[CURVE CLIENT] Waiting for WELCOME");
 
-        // Read WELCOME header (7 bytes)
-        let header = vec![0u8; 7];
+        // Read WELCOME command name including the length prefix.
+        let header = vec![0u8; CURVE_WELCOME.len()];
         let buf_result = read_exact_with_timeout(stream, header, timeout)
             .await
             .map_err(ZmtpError::from)?;
@@ -416,8 +439,8 @@ impl CurveClient {
 
         debug!("[CURVE CLIENT] Waiting for READY");
 
-        // Read READY header (5 bytes)
-        let header = vec![0u8; 5];
+        // Read READY command name including the length prefix.
+        let header = vec![0u8; CURVE_READY.len()];
         let buf_result = read_exact_with_timeout(stream, header, timeout)
             .await
             .map_err(ZmtpError::from)?;
@@ -468,14 +491,7 @@ impl CurveClient {
 
     /// Decrypt a message
     pub fn decrypt_message(&mut self, message: &[u8]) -> Result<Bytes, CurveError> {
-        if message.len() < 7 + 8 {
-            return Err(CurveError::ProtocolViolation);
-        }
-
-        if &message[..7] != CURVE_MESSAGE {
-            return Err(CurveError::ProtocolViolation);
-        }
-
+        let parts = parse_curve_message(message)?;
         let message_box = self
             .message_box
             .as_ref()
@@ -484,9 +500,9 @@ impl CurveClient {
         // Reconstruct nonce
         let mut nonce = [0u8; CURVE_NONCE_SIZE];
         nonce[..16].copy_from_slice(b"CurveZMQMESSAGES");
-        nonce[16..].copy_from_slice(&message[7..15]);
+        nonce[16..].copy_from_slice(parts.short_nonce);
 
-        let plaintext = message_box.decrypt(&message[15..], &nonce)?;
+        let plaintext = message_box.decrypt(parts.ciphertext, &nonce)?;
         Ok(Bytes::from(plaintext))
     }
 }
@@ -557,8 +573,8 @@ impl CurveServer {
 
         debug!("[CURVE SERVER] Waiting for HELLO");
 
-        // Read HELLO header (5 bytes)
-        let header = vec![0u8; 5];
+        // Read HELLO command name including the length prefix.
+        let header = vec![0u8; CURVE_HELLO.len()];
         let buf_result = read_exact_with_timeout(stream, header, timeout)
             .await
             .map_err(ZmtpError::from)?;
@@ -646,8 +662,8 @@ impl CurveServer {
 
         debug!("[CURVE SERVER] Waiting for INITIATE");
 
-        // Read INITIATE header (8 bytes)
-        let header = vec![0u8; 8];
+        // Read INITIATE command name including the length prefix.
+        let header = vec![0u8; CURVE_INITIATE.len()];
         let buf_result = read_exact_with_timeout(stream, header, timeout)
             .await
             .map_err(ZmtpError::from)?;
@@ -743,14 +759,7 @@ impl CurveServer {
 
     /// Decrypt a message
     pub fn decrypt_message(&mut self, message: &[u8]) -> Result<Bytes, CurveError> {
-        if message.len() < 7 + 8 {
-            return Err(CurveError::ProtocolViolation);
-        }
-
-        if &message[..7] != CURVE_MESSAGE {
-            return Err(CurveError::ProtocolViolation);
-        }
-
+        let parts = parse_curve_message(message)?;
         let message_box = self
             .message_box
             .as_ref()
@@ -759,9 +768,9 @@ impl CurveServer {
         // Reconstruct nonce
         let mut nonce = [0u8; CURVE_NONCE_SIZE];
         nonce[..16].copy_from_slice(b"CurveZMQMESSAGEC");
-        nonce[16..].copy_from_slice(&message[7..15]);
+        nonce[16..].copy_from_slice(parts.short_nonce);
 
-        let plaintext = message_box.decrypt(&message[15..], &nonce)?;
+        let plaintext = message_box.decrypt(parts.ciphertext, &nonce)?;
         Ok(Bytes::from(plaintext))
     }
 }
@@ -886,7 +895,7 @@ where
 {
     use bytes::BytesMut;
     use compio::buf::BufResult;
-    use compio::io::AsyncWrite;
+
     // ZMTP ERROR command body: [5]"ERROR" [reason_len][reason...]
     // Command name is "ERROR" (5 bytes), prefixed with its 1-byte length
     let reason_bytes = reason.as_bytes();
@@ -903,12 +912,84 @@ where
     frame.extend_from_slice(&[0x04, body_len as u8]);
     frame.extend_from_slice(&body);
 
-    let BufResult(_, _) = AsyncWrite::write(stream, frame.freeze()).await;
+    let BufResult(_, _) = stream.write_all(frame.freeze()).await;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use compio::buf::{BufResult, IoBuf, IoBufMut};
+    use std::collections::VecDeque;
+    use std::io;
+
+    const ERROR_REASON: &str = "denied";
+
+    #[derive(Debug)]
+    struct PartialWriteStream {
+        write_limits: VecDeque<usize>,
+        written: Vec<u8>,
+    }
+
+    impl PartialWriteStream {
+        fn new(write_limits: impl IntoIterator<Item = usize>) -> Self {
+            Self {
+                write_limits: write_limits.into_iter().collect(),
+                written: Vec::new(),
+            }
+        }
+
+        fn written(&self) -> &[u8] {
+            &self.written
+        }
+    }
+
+    impl AsyncRead for PartialWriteStream {
+        async fn read<B: IoBufMut>(&mut self, buf: B) -> BufResult<usize, B> {
+            BufResult(Ok(0), buf)
+        }
+    }
+
+    impl AsyncWrite for PartialWriteStream {
+        async fn write<B: IoBuf>(&mut self, buf: B) -> BufResult<usize, B> {
+            let len = self
+                .write_limits
+                .pop_front()
+                .unwrap_or_else(|| buf.buf_len())
+                .min(buf.buf_len());
+            self.written.extend_from_slice(&buf.as_slice()[..len]);
+            BufResult(Ok(len), buf)
+        }
+
+        async fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+
+        async fn shutdown(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn expected_zmtp_error_frame(reason: &str) -> Vec<u8> {
+        let reason = reason.as_bytes();
+        let reason_len = reason.len().min(255);
+        let mut frame = Vec::with_capacity(2 + 7 + reason_len);
+        frame.push(0x04);
+        frame.push((7 + reason_len) as u8);
+        frame.extend_from_slice(b"\x05ERROR");
+        frame.push(reason_len as u8);
+        frame.extend_from_slice(&reason[..reason_len]);
+        frame
+    }
+
+    async fn assert_zmtp_error_survives_partial_writes(
+        write_limits: impl IntoIterator<Item = usize>,
+    ) {
+        let mut stream = PartialWriteStream::new(write_limits);
+
+        send_zmtp_error(&mut stream, ERROR_REASON).await;
+
+        assert_eq!(stream.written(), expected_zmtp_error_frame(ERROR_REASON));
+    }
 
     #[test]
     fn test_keypair_generation() {
@@ -946,6 +1027,86 @@ mod tests {
     }
 
     #[test]
+    fn client_decrypt_message_accepts_valid_curve_message_command_header() {
+        let shared_secret = [42u8; CURVE_KEY_SIZE];
+        let box_ = CurveBox::new(&shared_secret);
+
+        let mut nonce = [0u8; CURVE_NONCE_SIZE];
+        nonce[..16].copy_from_slice(b"CurveZMQMESSAGES");
+        nonce[16..].copy_from_slice(&1u64.to_be_bytes());
+
+        let ciphertext = box_.encrypt(b"server message", &nonce).unwrap();
+        let mut frame = BytesMut::new();
+        frame.extend_from_slice(CURVE_MESSAGE);
+        frame.extend_from_slice(&nonce[16..]);
+        frame.extend_from_slice(&ciphertext);
+
+        let client_keypair = CurveKeyPair::generate();
+        let server_public = CurveKeyPair::generate().public;
+        let mut client = CurveClient::new(client_keypair, server_public);
+        client.message_box = Some(CurveBox::new(&shared_secret));
+
+        let plaintext = client.decrypt_message(&frame).unwrap();
+
+        assert_eq!(plaintext.as_ref(), b"server message");
+    }
+
+    #[test]
+    fn server_decrypt_message_accepts_valid_curve_message_command_header() {
+        let shared_secret = [43u8; CURVE_KEY_SIZE];
+        let box_ = CurveBox::new(&shared_secret);
+
+        let mut nonce = [0u8; CURVE_NONCE_SIZE];
+        nonce[..16].copy_from_slice(b"CurveZMQMESSAGEC");
+        nonce[16..].copy_from_slice(&2u64.to_be_bytes());
+
+        let ciphertext = box_.encrypt(b"client message", &nonce).unwrap();
+        let mut frame = BytesMut::new();
+        frame.extend_from_slice(CURVE_MESSAGE);
+        frame.extend_from_slice(&nonce[16..]);
+        frame.extend_from_slice(&ciphertext);
+
+        let server_keypair = CurveKeyPair::generate();
+        let mut server = CurveServer::new(server_keypair);
+        server.message_box = Some(CurveBox::new(&shared_secret));
+
+        let plaintext = server.decrypt_message(&frame).unwrap();
+
+        assert_eq!(plaintext.as_ref(), b"client message");
+    }
+
+    #[test]
+    fn decrypt_message_rejects_invalid_curve_message_command_header() {
+        let client_keypair = CurveKeyPair::generate();
+        let server_public = CurveKeyPair::generate().public;
+        let mut client = CurveClient::new(client_keypair, server_public);
+        client.message_box = Some(CurveBox::new(&[42u8; CURVE_KEY_SIZE]));
+
+        let mut frame = BytesMut::new();
+        frame.extend_from_slice(b"\x05READY");
+        frame.extend_from_slice(&1u64.to_be_bytes());
+        frame.extend_from_slice(&[0u8; CURVE_BOX_OVERHEAD]);
+
+        assert!(matches!(
+            client.decrypt_message(&frame),
+            Err(CurveError::ProtocolViolation)
+        ));
+    }
+
+    #[test]
+    fn decrypt_message_rejects_missing_curve_message_nonce() {
+        let client_keypair = CurveKeyPair::generate();
+        let server_public = CurveKeyPair::generate().public;
+        let mut client = CurveClient::new(client_keypair, server_public);
+        client.message_box = Some(CurveBox::new(&[42u8; CURVE_KEY_SIZE]));
+
+        assert!(matches!(
+            client.decrypt_message(CURVE_MESSAGE),
+            Err(CurveError::ProtocolViolation)
+        ));
+    }
+
+    #[test]
     fn test_curve_zap_request() {
         let keypair = CurveKeyPair::generate();
         let request = create_curve_zap_request(
@@ -959,5 +1120,15 @@ mod tests {
         assert_eq!(request.mechanism, ZapMechanism::Curve);
         assert_eq!(request.credentials.len(), 1);
         assert_eq!(request.credentials[0].len(), CURVE_KEY_SIZE);
+    }
+
+    #[compio::test]
+    async fn test_send_zmtp_error_retries_short_writes() {
+        assert_zmtp_error_survives_partial_writes([2, 3]).await;
+    }
+
+    #[compio::test]
+    async fn test_send_zmtp_error_retries_short_body_writes() {
+        assert_zmtp_error_survives_partial_writes([9, 2]).await;
     }
 }
