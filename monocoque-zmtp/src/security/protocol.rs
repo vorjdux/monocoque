@@ -47,24 +47,6 @@ where
     }
 }
 
-/// Require that at least one byte is immediately available; used for CURVE READY proof data.
-pub async fn require_immediately_available_byte<S>(
-    stream: &mut S,
-    timeout: Duration,
-) -> Result<(), ZmtpError>
-where
-    S: AsyncRead + Unpin,
-{
-    let trailing = vec![0u8; 1];
-    match compio::time::timeout(timeout, stream.read(trailing)).await {
-        Ok(BufResult(Ok(0), _)) | Err(_) => return Err(ZmtpError::Protocol),
-        Ok(BufResult(Ok(_), _)) => {}
-        Ok(BufResult(Err(_), _)) => return Err(ZmtpError::Protocol),
-    }
-
-    Ok(())
-}
-
 /// Parse a READY command body and return the socket type and optional identity.
 pub fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), ZmtpError> {
     if body.len() < 6 {

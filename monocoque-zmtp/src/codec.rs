@@ -106,7 +106,7 @@ impl ZmtpDecoder {
     /// Update the maximum body length enforced by the decoder.
     #[inline]
     pub fn set_max_body_len(&mut self, max_body_len: Option<usize>) {
-        self.max_body_len = max_body_len;
+        self.max_frame_size = max_body_len.unwrap_or(64 * 1024 * 1024);
     }
 
     /// Check if more message frames are expected (partial multipart message).
