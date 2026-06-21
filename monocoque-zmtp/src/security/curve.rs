@@ -45,6 +45,7 @@ use sha2::{Digest, Sha256};
 use std::time::Duration;
 use thiserror::Error;
 use tracing::{debug, warn};
+use zeroize::Zeroize;
 use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::codec::ZmtpError;
@@ -145,6 +146,15 @@ impl CurveSecretKey {
 impl std::fmt::Debug for CurveSecretKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("CurveSecretKey([REDACTED])")
+    }
+}
+
+impl Drop for CurveSecretKey {
+    fn drop(&mut self) {
+        // Zeroize the raw scalar bytes before deallocation to prevent
+        // secret key material from lingering in freed memory.
+        let mut raw = self.0.to_bytes();
+        raw.zeroize();
     }
 }
 
@@ -375,22 +385,28 @@ fn push_prop(out: &mut Vec<u8>, key: &[u8], value: &[u8]) {
 }
 
 /// Decode ZMTP property bytes, returning (socket_type, identity).
-fn decode_zmtp_props(mut data: &[u8]) -> (Option<Bytes>, Option<Bytes>) {
+fn decode_zmtp_props(mut data: &[u8]) -> Result<(Option<Bytes>, Option<Bytes>), ZmtpError> {
     let mut socket_type = None;
     let mut identity = None;
 
-    while data.len() >= 5 {
+    while !data.is_empty() {
+        if data.len() < 5 {
+            warn!("[CURVE] ZMTP property list truncated (remaining {} bytes)", data.len());
+            return Err(ZmtpError::Protocol);
+        }
         let klen = data[0] as usize;
         data = &data[1..];
         if data.len() < klen + 4 {
-            break;
+            warn!("[CURVE] ZMTP property key truncated (klen={})", klen);
+            return Err(ZmtpError::Protocol);
         }
         let key = &data[..klen];
         data = &data[klen..];
         let vlen = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
         data = &data[4..];
         if data.len() < vlen {
-            break;
+            warn!("[CURVE] ZMTP property value truncated (vlen={})", vlen);
+            return Err(ZmtpError::Protocol);
         }
         let value = Bytes::copy_from_slice(&data[..vlen]);
         data = &data[vlen..];
@@ -398,11 +414,15 @@ fn decode_zmtp_props(mut data: &[u8]) -> (Option<Bytes>, Option<Bytes>) {
         if key.eq_ignore_ascii_case(b"Socket-Type") {
             socket_type = Some(value);
         } else if key.eq_ignore_ascii_case(b"Identity") {
+            if vlen > 255 {
+                warn!("[CURVE] Identity property exceeds 255 bytes ({})", vlen);
+                return Err(ZmtpError::Protocol);
+            }
             identity = Some(value);
         }
     }
 
-    (socket_type, identity)
+    Ok((socket_type, identity))
 }
 
 // ── Post-handshake message cipher ────────────────────────────────────────────
@@ -816,7 +836,7 @@ impl CurveClient {
             ZmtpError::Protocol
         })?;
 
-        let (peer_st, peer_id) = decode_zmtp_props(&metadata_bytes);
+        let (peer_st, peer_id) = decode_zmtp_props(&metadata_bytes)?;
         if peer_st.is_none() {
             warn!("[CURVE CLIENT] CURVE READY missing Socket-Type");
             return Err(ZmtpError::Protocol);
@@ -1195,7 +1215,7 @@ impl CurveServer {
 
         // Parse metadata from initiate_pt[96..]
         let metadata = &initiate_pt[96..];
-        let (peer_st, peer_id) = decode_zmtp_props(metadata);
+        let (peer_st, peer_id) = decode_zmtp_props(metadata)?;
         if peer_st.is_none() {
             warn!("[CURVE SERVER] INITIATE missing Socket-Type in metadata");
             return Err(ZmtpError::Protocol);
@@ -1652,7 +1672,7 @@ mod tests {
     #[test]
     fn test_encode_decode_zmtp_props_round_trip() {
         let encoded = encode_zmtp_props("DEALER", Some(b"my-identity"));
-        let (st, id) = decode_zmtp_props(&encoded);
+        let (st, id) = decode_zmtp_props(&encoded).unwrap();
         assert_eq!(st.unwrap().as_ref(), b"DEALER");
         assert_eq!(id.unwrap().as_ref(), b"my-identity");
     }
@@ -1660,7 +1680,7 @@ mod tests {
     #[test]
     fn test_encode_decode_zmtp_props_no_identity() {
         let encoded = encode_zmtp_props("ROUTER", None);
-        let (st, id) = decode_zmtp_props(&encoded);
+        let (st, id) = decode_zmtp_props(&encoded).unwrap();
         assert_eq!(st.unwrap().as_ref(), b"ROUTER");
         assert!(id.is_none());
     }

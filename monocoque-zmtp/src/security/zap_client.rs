@@ -130,6 +130,18 @@ impl ZapClient {
             )
         })?;
 
+        // Verify the ZAP version (RFC 27 §5)
+        if response.version != crate::security::zap::ZAP_VERSION {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "ZAP response version mismatch: expected {}, got {}",
+                    crate::security::zap::ZAP_VERSION,
+                    response.version
+                ),
+            ));
+        }
+
         // Verify the response is for our request
         if response.request_id != request.request_id {
             return Err(io::Error::new(
