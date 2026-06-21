@@ -324,8 +324,21 @@ where
         let server_public = server_secret.public_key();
         let server_keypair = CurveKeyPair::from_keys(server_public, server_secret);
 
-        let mut curve_server = CurveServer::new(server_keypair);
-        curve_server.handshake(stream, timeout).await.map(|_| ())
+        if !options.zap_domain.is_empty() {
+            use crate::security::curve::curve_server_handshake_zap;
+            curve_server_handshake_zap(
+                stream,
+                server_keypair,
+                options.zap_domain.clone(),
+                timeout,
+                "unknown",
+            )
+            .await
+            .map(|_| ())
+        } else {
+            let mut curve_server = CurveServer::new(server_keypair);
+            curve_server.handshake(stream, timeout).await.map(|_| ())
+        }
     } else if let (Some(secret_bytes), Some(server_key_bytes)) =
         (options.curve_secretkey, options.curve_serverkey)
     {

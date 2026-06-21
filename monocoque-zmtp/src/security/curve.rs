@@ -45,7 +45,7 @@
 use bytes::{Bytes, BytesMut};
 use chacha20poly1305::{
     aead::{Aead, KeyInit, OsRng},
-    ChaCha20Poly1305, Nonce,
+    XChaCha20Poly1305, XNonce,
 };
 use compio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use rand::RngCore;
@@ -166,39 +166,34 @@ impl CurveKeyPair {
     }
 }
 
-/// CURVE encryption box (ChaCha20-Poly1305)
+/// CURVE encryption box (XChaCha20-Poly1305, 24-byte nonce)
 struct CurveBox {
-    cipher: ChaCha20Poly1305,
+    cipher: XChaCha20Poly1305,
 }
 
 impl CurveBox {
-    /// Create new box from shared secret
     fn new(shared_secret: &[u8; CURVE_KEY_SIZE]) -> Self {
-        let cipher = ChaCha20Poly1305::new(shared_secret.into());
+        let cipher = XChaCha20Poly1305::new(shared_secret.into());
         Self { cipher }
     }
 
-    /// Encrypt message with nonce
     fn encrypt(
         &self,
         plaintext: &[u8],
         nonce: &[u8; CURVE_NONCE_SIZE],
     ) -> Result<Vec<u8>, CurveError> {
-        // ChaCha20Poly1305 uses 12-byte nonces, take first 12 bytes of ZMQ's 24-byte nonce
-        let nonce = Nonce::from_slice(&nonce[..12]);
+        let nonce = XNonce::from_slice(nonce);
         self.cipher
             .encrypt(nonce, plaintext)
             .map_err(|_| CurveError::EncryptionFailed)
     }
 
-    /// Decrypt message with nonce
     fn decrypt(
         &self,
         ciphertext: &[u8],
         nonce: &[u8; CURVE_NONCE_SIZE],
     ) -> Result<Vec<u8>, CurveError> {
-        // ChaCha20Poly1305 uses 12-byte nonces, take first 12 bytes of ZMQ's 24-byte nonce
-        let nonce = Nonce::from_slice(&nonce[..12]);
+        let nonce = XNonce::from_slice(nonce);
         self.cipher
             .decrypt(nonce, ciphertext)
             .map_err(|_| CurveError::DecryptionFailed)
@@ -266,9 +261,8 @@ pub struct CurveClient {
     server_short_public: Option<CurvePublicKey>,
     /// Send nonce counter
     send_nonce: u64,
-    /// Receive nonce counter  -  needed for replay-attack detection when message
-    /// authentication is fully implemented.
-    _recv_nonce: u64,
+    /// Next expected receive nonce counter (replay protection)
+    recv_nonce: u64,
     /// Encryption box for messages (after READY)
     message_box: Option<CurveBox>,
 }
@@ -282,7 +276,7 @@ impl CurveClient {
             client_short_keypair: CurveKeyPair::generate(),
             server_short_public: None,
             send_nonce: 0,
-            _recv_nonce: 0,
+            recv_nonce: 0,
             message_box: None,
         }
     }
@@ -497,7 +491,14 @@ impl CurveClient {
             .as_ref()
             .ok_or(CurveError::ProtocolViolation)?;
 
-        // Reconstruct nonce
+        let counter = u64::from_be_bytes(
+            parts.short_nonce.try_into().map_err(|_| CurveError::InvalidNonce)?,
+        );
+        if counter < self.recv_nonce {
+            return Err(CurveError::ProtocolViolation); // replay
+        }
+        self.recv_nonce = counter + 1;
+
         let mut nonce = [0u8; CURVE_NONCE_SIZE];
         nonce[..16].copy_from_slice(b"CurveZMQMESSAGES");
         nonce[16..].copy_from_slice(parts.short_nonce);
@@ -520,9 +521,8 @@ pub struct CurveServer {
     client_public: Option<CurvePublicKey>,
     /// Send nonce counter
     send_nonce: u64,
-    /// Receive nonce counter  -  needed for replay-attack detection when message
-    /// authentication is fully implemented.
-    _recv_nonce: u64,
+    /// Next expected receive nonce counter (replay protection)
+    recv_nonce: u64,
     /// Encryption box for messages (after READY)
     message_box: Option<CurveBox>,
 }
@@ -536,7 +536,7 @@ impl CurveServer {
             client_short_public: None,
             client_public: None,
             send_nonce: 0,
-            _recv_nonce: 0,
+            recv_nonce: 0,
             message_box: None,
         }
     }
@@ -765,7 +765,14 @@ impl CurveServer {
             .as_ref()
             .ok_or(CurveError::ProtocolViolation)?;
 
-        // Reconstruct nonce
+        let counter = u64::from_be_bytes(
+            parts.short_nonce.try_into().map_err(|_| CurveError::InvalidNonce)?,
+        );
+        if counter < self.recv_nonce {
+            return Err(CurveError::ProtocolViolation); // replay
+        }
+        self.recv_nonce = counter + 1;
+
         let mut nonce = [0u8; CURVE_NONCE_SIZE];
         nonce[..16].copy_from_slice(b"CurveZMQMESSAGEC");
         nonce[16..].copy_from_slice(parts.short_nonce);
