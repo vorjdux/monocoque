@@ -188,17 +188,10 @@ impl XPubSocket {
 
                     let wire = if let Some(ref mut cipher) = curve_cipher {
                         let mut buf = BytesMut::new();
-                        match cipher.encrypt_frame(welcome_msg, false) {
-                            Ok(body) => {
-                                crate::base::append_zmtp_cmd_frame(&mut buf, &body);
-                                buf.freeze()
-                            }
-                            Err(_) => {
-                                let mut buf = BytesMut::with_capacity(welcome_msg.len() + 9);
-                                crate::codec::encode_multipart(std::slice::from_ref(welcome_msg), &mut buf);
-                                buf.freeze()
-                            }
-                        }
+                        let body = cipher.encrypt_frame(welcome_msg, false)
+                            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+                        crate::base::append_zmtp_cmd_frame(&mut buf, &body);
+                        buf.freeze()
                     } else {
                         let mut buf = BytesMut::with_capacity(welcome_msg.len() + 9);
                         crate::codec::encode_multipart(std::slice::from_ref(welcome_msg), &mut buf);

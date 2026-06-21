@@ -160,6 +160,9 @@ async fn subscription_reader(
                                 } else {
                                     continue;
                                 }
+                            } else if cipher.is_some() {
+                                // Reject plaintext data frames when CURVE is active.
+                                break;
                             } else {
                                 frame.payload
                             };

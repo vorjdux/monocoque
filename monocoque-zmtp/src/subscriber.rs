@@ -138,9 +138,15 @@ where
         payload.extend_from_slice(prefix);
         let payload = payload.freeze();
 
-        // ZMTP-frame it (single-frame message)
+        // Encrypt if CURVE is active; otherwise plain ZMTP frame.
         let mut wire = BytesMut::new();
-        crate::codec::encode_multipart(&[payload], &mut wire);
+        if let Some(ref mut cipher) = self.base.curve_cipher {
+            let body = cipher.encrypt_frame(&payload, false)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+            crate::base::append_zmtp_cmd_frame(&mut wire, &body);
+        } else {
+            crate::codec::encode_multipart(&[payload], &mut wire);
+        }
         let wire = wire.freeze();
 
         trace!("[SUB] Sending subscription event ({} wire bytes)", wire.len());
