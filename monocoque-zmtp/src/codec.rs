@@ -71,6 +71,8 @@ pub struct ZmtpDecoder {
     pending_flags: Option<u8>,
     expected_body_len: usize,
     staging: BytesMut,
+    /// Maximum allowed frame body size (enforcement of ZMQ_MAXMSGSIZE)
+    max_frame_size: usize,
 }
 
 impl Default for ZmtpDecoder {
@@ -86,6 +88,18 @@ impl ZmtpDecoder {
             pending_flags: None,
             expected_body_len: 0,
             staging: BytesMut::with_capacity(STAGING_BUF_INITIAL_CAP),
+            max_frame_size: 64 * 1024 * 1024, // 64MB default (generous but bounded)
+        }
+    }
+
+    /// Create a decoder with a custom maximum frame size.
+    #[must_use]
+    pub fn with_max_frame_size(max_frame_size: usize) -> Self {
+        Self {
+            pending_flags: None,
+            expected_body_len: 0,
+            staging: BytesMut::with_capacity(STAGING_BUF_INITIAL_CAP),
+            max_frame_size,
         }
     }
 
@@ -166,9 +180,17 @@ impl ZmtpDecoder {
                 return Err(ZmtpError::SizeTooLarge);
             }
 
-            size as usize
+            let body_len = size as usize;
+            if body_len > self.max_frame_size {
+                return Err(ZmtpError::SizeTooLarge);
+            }
+            body_len
         } else {
-            hdr[1] as usize
+            let body_len = hdr[1] as usize;
+            if body_len > self.max_frame_size {
+                return Err(ZmtpError::SizeTooLarge);
+            }
+            body_len
         };
 
         let total_len = header_len + body_len;
