@@ -293,8 +293,11 @@ impl ZapResponse {
         } else {
             let mut buf = Vec::new();
             for (key, value) in &self.metadata {
-                buf.push(key.len() as u8);
-                buf.extend_from_slice(key.as_bytes());
+                // RFC 35: key is 1-byte length-prefixed, so max 255 bytes.
+                let key_bytes = key.as_bytes();
+                let key_len = key_bytes.len().min(255);
+                buf.push(key_len as u8);
+                buf.extend_from_slice(&key_bytes[..key_len]);
                 let value_len = (value.len() as u32).to_be_bytes();
                 buf.extend_from_slice(&value_len);
                 buf.extend_from_slice(value.as_bytes());

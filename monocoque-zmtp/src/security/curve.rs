@@ -326,8 +326,8 @@ impl CurveClient {
             client_short_keypair: CurveKeyPair::generate(),
             server_short_public: None,
             cookie: None,
-            send_nonce: 0,
-            recv_nonce: 0,
+            send_nonce: 1,
+            recv_nonce: 1,
             message_box: None,
         }
     }
@@ -655,8 +655,8 @@ impl CurveServer {
             client_short_public: None,
             client_public: None,
             cookie_key,
-            send_nonce: 0,
-            recv_nonce: 0,
+            send_nonce: 1,
+            recv_nonce: 1,
             message_box: None,
         }
     }
@@ -725,10 +725,14 @@ impl CurveServer {
         c_prime_pk.copy_from_slice(&c_prime_pk_buf);
         self.client_short_public = Some(CurvePublicKey::from_bytes(c_prime_pk));
 
-        // nonce_suffix (8 bytes)
+        // nonce_suffix (8 bytes) — RFC 26 §5.2 requires the counter to be >= 1
         let BufResult(r, nonce_suffix) =
             read_exact_with_timeout(stream, vec![0u8; 8], timeout).await.map_err(ZmtpError::from)?;
         r?;
+        if u64::from_be_bytes(nonce_suffix.as_slice().try_into().unwrap_or([0u8; 8])) == 0 {
+            warn!("[CURVE SERVER] HELLO nonce counter is 0, must be >= 1");
+            return Err(ZmtpError::Protocol);
+        }
 
         // hello_box (80 bytes)
         let BufResult(r, hello_box) =
@@ -1134,17 +1138,19 @@ where
 {
     use compio::buf::BufResult;
 
+    // Cap reason at 248 bytes: body = 6 ("\x05ERROR") + 1 (len byte) + reason ≤ 255 (short-frame limit)
     let reason_bytes = reason.as_bytes();
-    let reason_len = reason_bytes.len().min(255) as u8;
+    let reason_len = reason_bytes.len().min(248) as u8;
 
     let mut body = BytesMut::with_capacity(7 + reason_len as usize);
     body.extend_from_slice(b"\x05ERROR");
     body.extend_from_slice(&[reason_len]);
     body.extend_from_slice(&reason_bytes[..reason_len as usize]);
+    // body.len() ≤ 255, so the short ZMTP frame format (0x04 + 1-byte length) is always valid.
 
-    let body_len = body.len();
-    let mut frame = BytesMut::with_capacity(2 + body_len);
-    frame.extend_from_slice(&[0x04, body_len as u8]);
+    let body_len = body.len() as u8;
+    let mut frame = BytesMut::with_capacity(2 + body_len as usize);
+    frame.extend_from_slice(&[0x04, body_len]);
     frame.extend_from_slice(&body);
 
     let BufResult(_, _) = stream.write_all(frame.freeze()).await;
