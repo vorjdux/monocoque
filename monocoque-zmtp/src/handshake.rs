@@ -35,6 +35,7 @@ use tracing::{debug, warn};
 pub struct HandshakeResult {
     pub peer_identity: Option<Bytes>,
     pub peer_socket_type: SocketType,
+    pub curve_cipher: Option<crate::security::curve::CurveMessageCipher>,
 }
 
 /// Security mechanism to use for the ZMTP handshake.
@@ -151,6 +152,7 @@ where
     }
 
     // Step 3: Run security-mechanism-specific exchange (between greeting and READY)
+    let mut curve_cipher: Option<crate::security::curve::CurveMessageCipher> = None;
     match mechanism {
         SecurityMechanism::Null => {
             // No mechanism-level exchange for NULL; proceed directly to READY.
@@ -172,6 +174,7 @@ where
             return Ok(HandshakeResult {
                 peer_identity: cr.peer_identity,
                 peer_socket_type,
+                curve_cipher: cr.cipher,
             });
         }
     }
@@ -279,6 +282,7 @@ where
     Ok(HandshakeResult {
         peer_identity,
         peer_socket_type,
+        curve_cipher,
     })
 }
 
@@ -298,21 +302,12 @@ async fn run_plain_exchange<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    use crate::security::plain::{
-        plain_client_handshake, plain_server_handshake, PlainCredentials, StaticPlainHandler,
-    };
+    use crate::security::plain::{plain_client_handshake, PlainCredentials};
 
     if options.plain_server {
         debug!("[HANDSHAKE] Running PLAIN server exchange");
-        // Use in-process handler: accept any user present in options or reject all.
-        // For a proper server you would supply a real PlainAuthHandler; the simplest
-        // approach is a StaticPlainHandler pre-loaded with no users (reject everything).
-        // Callers that want custom validation should use the security API directly.
-        // We build a handler that always rejects  -  real auth should go through ZAP.
-        // Use plain_server_handshake with a trivial reject-all handler.
-        let handler = StaticPlainHandler::new(); // empty → rejects all
         let domain = options.zap_domain.as_str();
-        plain_server_handshake(stream, &handler, domain, "unknown", timeout)
+        crate::security::plain::plain_server_handshake_zap(stream, domain, "unknown", timeout)
             .await
             .map(|_| ())
     } else if let Some(ref username) = options.plain_username {

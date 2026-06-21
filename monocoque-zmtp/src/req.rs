@@ -43,7 +43,6 @@
 //! ```
 
 use crate::base::SocketBase;
-use crate::codec::encode_multipart;
 use crate::{handshake::perform_handshake_with_options, session::SocketType};
 use bytes::Bytes;
 use compio::io::{AsyncRead, AsyncWrite};
@@ -175,8 +174,10 @@ where
 
         debug!("[REQ] Socket initialized");
 
+        let mut base = SocketBase::new(stream, SocketType::Req, options);
+        base.curve_cipher = handshake_result.curve_cipher;
         Ok(Self {
-            base: SocketBase::new(stream, SocketType::Req, options),
+            base,
             frames: SmallVec::new(),
             state: ReqState::Idle,
             request_id: 0,
@@ -236,9 +237,8 @@ where
             msg
         };
 
-        // Encode message into write_buf
-        self.base.write_buf.clear();
-        encode_multipart(&frames_to_send, &mut self.base.write_buf);
+        // Encode message into write_buf (with CURVE encryption if active)
+        self.base.encode_message_to_write_buf(&frames_to_send)?;
 
         // Delegate to base for writing
         self.base.write_from_buf().await?;
@@ -293,20 +293,16 @@ where
         loop {
             // Try to decode frames from buffer
             loop {
-                match self.base.decoder.decode(&mut self.base.recv)? {
-                    Some(frame) => {
-                        if frame.is_command() {
-                            if crate::base::is_ping_payload(&frame.payload) {
-                                let pong = crate::base::build_pong_frame();
-                                self.base.send_buffer.extend_from_slice(&pong);
-                                self.base.flush_send_buffer().await?;
-                            } else if crate::base::is_pong_payload(&frame.payload) {
-                                self.base.note_pong_received();
-                            }
-                            continue;
+                match self.base.process_frame()? {
+                    crate::base::FrameResult::NeedMore => break,
+                    crate::base::FrameResult::CommandHandled => {
+                        if !self.base.send_buffer.is_empty() {
+                            self.base.flush_send_buffer().await?;
                         }
-                        let more = frame.more();
-                        self.frames.push(frame.payload);
+                        continue;
+                    }
+                    crate::base::FrameResult::Data(more, payload) => {
+                        self.frames.push(payload);
 
                         if !more {
                             // Complete message received
@@ -368,7 +364,6 @@ where
                             return Ok(Some(validated_msg));
                         }
                     }
-                    None => break, // Need more data
                 }
             }
 
@@ -573,13 +568,15 @@ impl ReqSocket<TcpStream> {
         );
 
         let endpoint = monocoque_core::endpoint::Endpoint::Tcp(peer_addr);
+        let mut base = crate::base::SocketBase::with_endpoint(
+            stream,
+            SocketType::Req,
+            endpoint,
+            options,
+        );
+        base.curve_cipher = handshake_result.curve_cipher;
         Ok(Self {
-            base: crate::base::SocketBase::with_endpoint(
-                stream,
-                SocketType::Req,
-                endpoint,
-                options,
-            ),
+            base,
             frames: SmallVec::new(),
             state: ReqState::Idle,
             request_id: 0,
