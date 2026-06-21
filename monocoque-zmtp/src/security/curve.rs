@@ -312,7 +312,12 @@ where
             .await
             .map_err(ZmtpError::from)?;
         r?;
-        u64::from_be_bytes(len_buf) as usize
+        let raw_len = u64::from_be_bytes(len_buf);
+        if raw_len > usize::MAX as u64 {
+            warn!("ZMTP long-frame length overflows usize: {}", raw_len);
+            return Err(ZmtpError::Protocol);
+        }
+        raw_len as usize
     } else {
         let BufResult(r, len_buf) = read_exact_with_timeout(stream, [0u8; 1], timeout)
             .await
