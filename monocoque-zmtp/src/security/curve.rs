@@ -17,21 +17,18 @@
 //!   |                                      |
 //!   |--- INITIATE (cookie + vouch) ------>|
 //!   |                                      |
-//!   |<-- READY (confirmation) ------------|
+//!   |<-- READY (server metadata box) -----|
 //!   |                                      |
 //!   |<=== Encrypted MESSAGE frames ======>|
 //! ```
 //!
-//! ## Wire Sizes
-//!
-//! - HELLO:    198 bytes = 6 + 1 + 71 + 32 + 8 + 80
-//! - WELCOME:  168 bytes = 8 + 16 + 144
-//! - INITIATE: 257 bytes = 9 + 96 + 32 + 8 + 112  (empty metadata)
-//! - READY:      6 bytes (header only)
+//! All post-greeting messages are ZMTP frames (flag byte + length + body).
+//! Metadata (Socket-Type, Identity) is exchanged inside the CURVE boxes.
 //!
 //! ## References
 //!
 //! - RFC 26: <https://rfc.zeromq.org/spec/26/>
+//! - RFC 23 (ZMTP 3.1): <https://rfc.zeromq.org/spec/23/>
 
 use bytes::{Bytes, BytesMut};
 use chacha20poly1305::{
@@ -60,6 +57,13 @@ const CURVE_INITIATE: &[u8] = b"\x08INITIATE";
 const CURVE_READY: &[u8] = b"\x05READY";
 const CURVE_MESSAGE: &[u8] = b"\x07MESSAGE";
 const CURVE_MESSAGE_NONCE_SIZE: usize = 8;
+
+/// Maximum body size for INITIATE (supports variable-length metadata).
+const MAX_INITIATE_BODY: usize = 4096;
+/// Maximum body size for other CURVE commands (HELLO, WELCOME, READY).
+const MAX_CURVE_BODY: usize = 512;
+/// 16-byte nonce prefix for CURVE READY: "READY" + 11 NULs
+const CURVE_READY_NONCE_PREFIX: &[u8; 16] = b"READY\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
 
 /// CURVE key sizes
 pub const CURVE_KEY_SIZE: usize = 32;
@@ -267,6 +271,140 @@ fn derive_message_key(dh1: &[u8; 32], dh2: &[u8; 32], dh3: &[u8; 32]) -> [u8; 32
     h.finalize().into()
 }
 
+// ── ZMTP frame helpers ────────────────────────────────────────────────────────
+
+/// Read one ZMTP command frame and return its body.
+/// Rejects data frames (command flag 0x04 must be set).
+async fn read_zmtp_cmd<S>(
+    stream: &mut S,
+    timeout: Option<Duration>,
+    max_body: usize,
+) -> Result<Vec<u8>, ZmtpError>
+where
+    S: AsyncRead + Unpin,
+{
+    use compio::buf::BufResult;
+    use monocoque_core::timeout::read_exact_with_timeout;
+
+    let BufResult(r, flags_buf) = read_exact_with_timeout(stream, [0u8; 1], timeout)
+        .await
+        .map_err(ZmtpError::from)?;
+    r?;
+    let flags = flags_buf[0];
+
+    if flags & 0x04 == 0 {
+        warn!("Expected ZMTP command frame, got data frame (flags=0x{:02x})", flags);
+        return Err(ZmtpError::Protocol);
+    }
+
+    let body_len: usize = if flags & 0x02 != 0 {
+        let BufResult(r, len_buf) = read_exact_with_timeout(stream, [0u8; 8], timeout)
+            .await
+            .map_err(ZmtpError::from)?;
+        r?;
+        u64::from_be_bytes(len_buf) as usize
+    } else {
+        let BufResult(r, len_buf) = read_exact_with_timeout(stream, [0u8; 1], timeout)
+            .await
+            .map_err(ZmtpError::from)?;
+        r?;
+        len_buf[0] as usize
+    };
+
+    if body_len > max_body {
+        warn!("ZMTP command body too large: {} > {}", body_len, max_body);
+        return Err(ZmtpError::Protocol);
+    }
+
+    let BufResult(r, body) = read_exact_with_timeout(stream, vec![0u8; body_len], timeout)
+        .await
+        .map_err(ZmtpError::from)?;
+    r?;
+    Ok(body)
+}
+
+/// Write a slice as a ZMTP command frame (flag + length + body).
+async fn write_zmtp_cmd<S>(
+    stream: &mut S,
+    body: &[u8],
+    timeout: Option<Duration>,
+) -> Result<(), ZmtpError>
+where
+    S: AsyncWrite + Unpin,
+{
+    use compio::buf::BufResult;
+    use monocoque_core::timeout::write_all_with_timeout;
+
+    let len = body.len();
+    let mut frame = BytesMut::with_capacity(if len <= 255 { 2 + len } else { 9 + len });
+    if len <= 255 {
+        frame.extend_from_slice(&[0x04, len as u8]);
+    } else {
+        frame.extend_from_slice(&[0x06]);
+        frame.extend_from_slice(&(len as u64).to_be_bytes());
+    }
+    frame.extend_from_slice(body);
+
+    let BufResult(r, _) = write_all_with_timeout(stream, frame.freeze().to_vec(), timeout)
+        .await
+        .map_err(ZmtpError::from)?;
+    r.map_err(Into::into)
+}
+
+// ── ZMTP property helpers ─────────────────────────────────────────────────────
+
+/// Encode Socket-Type and optional Identity as ZMTP property bytes (RFC 23 §2.5).
+fn encode_zmtp_props(socket_type: &str, identity: Option<&[u8]>) -> Vec<u8> {
+    let mut out = Vec::with_capacity(64);
+    push_prop(&mut out, b"Socket-Type", socket_type.as_bytes());
+    if let Some(id) = identity {
+        if !id.is_empty() {
+            push_prop(&mut out, b"Identity", id);
+        }
+    }
+    out
+}
+
+#[inline]
+fn push_prop(out: &mut Vec<u8>, key: &[u8], value: &[u8]) {
+    debug_assert!(key.len() <= 255);
+    out.push(key.len() as u8);
+    out.extend_from_slice(key);
+    out.extend_from_slice(&(value.len() as u32).to_be_bytes());
+    out.extend_from_slice(value);
+}
+
+/// Decode ZMTP property bytes, returning (socket_type, identity).
+fn decode_zmtp_props(mut data: &[u8]) -> (Option<Bytes>, Option<Bytes>) {
+    let mut socket_type = None;
+    let mut identity = None;
+
+    while data.len() >= 5 {
+        let klen = data[0] as usize;
+        data = &data[1..];
+        if data.len() < klen + 4 {
+            break;
+        }
+        let key = &data[..klen];
+        data = &data[klen..];
+        let vlen = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
+        data = &data[4..];
+        if data.len() < vlen {
+            break;
+        }
+        let value = Bytes::copy_from_slice(&data[..vlen]);
+        data = &data[vlen..];
+
+        if key.eq_ignore_ascii_case(b"Socket-Type") {
+            socket_type = Some(value);
+        } else if key.eq_ignore_ascii_case(b"Identity") {
+            identity = Some(value);
+        }
+    }
+
+    (socket_type, identity)
+}
+
 // ── Errors ────────────────────────────────────────────────────────────────────
 
 /// CURVE-specific errors
@@ -295,6 +433,16 @@ pub enum CurveError {
     Io(#[from] std::io::Error),
 }
 
+/// Peer metadata returned after a completed CurveZMQ handshake.
+pub struct CurveHandshakeResult {
+    /// Raw peer socket-type bytes (e.g. `b"DEALER"`).
+    pub peer_socket_type: Bytes,
+    /// Peer identity, if announced.
+    pub peer_identity: Option<Bytes>,
+    /// Client's authenticated long-term public key (populated server-side only).
+    pub peer_public_key: Option<CurvePublicKey>,
+}
+
 // ── CurveClient ───────────────────────────────────────────────────────────────
 
 /// CURVE client state machine
@@ -309,6 +457,14 @@ pub struct CurveClient {
     server_short_public: Option<CurvePublicKey>,
     /// Cookie received in WELCOME, echoed back in INITIATE (96 bytes)
     cookie: Option<Vec<u8>>,
+    /// Local socket type to announce in INITIATE metadata
+    local_socket_type: String,
+    /// Local identity to announce in INITIATE metadata
+    local_identity: Option<Bytes>,
+    /// Peer socket type received in READY metadata
+    peer_socket_type: Option<Bytes>,
+    /// Peer identity received in READY metadata
+    peer_identity_recv: Option<Bytes>,
     /// Send nonce counter
     send_nonce: u64,
     /// Next expected receive nonce counter (replay protection)
@@ -319,13 +475,22 @@ pub struct CurveClient {
 
 impl CurveClient {
     /// Create new CURVE client
-    pub fn new(client_keypair: CurveKeyPair, server_public: CurvePublicKey) -> Self {
+    pub fn new(
+        client_keypair: CurveKeyPair,
+        server_public: CurvePublicKey,
+        local_socket_type: impl Into<String>,
+        local_identity: Option<Bytes>,
+    ) -> Self {
         Self {
             client_keypair,
             server_public,
             client_short_keypair: CurveKeyPair::generate(),
             server_short_public: None,
             cookie: None,
+            local_socket_type: local_socket_type.into(),
+            local_identity,
+            peer_socket_type: None,
+            peer_identity_recv: None,
             send_nonce: 1,
             recv_nonce: 1,
             message_box: None,
@@ -337,7 +502,7 @@ impl CurveClient {
         &mut self,
         stream: &mut S,
         timeout: Option<Duration>,
-    ) -> Result<(), ZmtpError>
+    ) -> Result<CurveHandshakeResult, ZmtpError>
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
@@ -345,12 +510,16 @@ impl CurveClient {
         self.recv_welcome(stream, timeout).await?;
         self.send_initiate(stream, timeout).await?;
         self.recv_ready(stream, timeout).await?;
-        Ok(())
+        Ok(CurveHandshakeResult {
+            peer_socket_type: self.peer_socket_type.clone().ok_or(ZmtpError::Protocol)?,
+            peer_identity: self.peer_identity_recv.clone(),
+            peer_public_key: None,
+        })
     }
 
-    /// Send HELLO command (198 bytes)
+    /// Send HELLO command wrapped in a ZMTP command frame.
     ///
-    /// Body: version(1) + padding(71) + c'.pk(32) + nonce_suffix(8) + hello_box(80)
+    /// Body: version(1) + padding(71) + c'.pk(32) + nonce_suffix(8) + hello_box(80) = 198 bytes
     ///
     /// hello_box = SalsaBox(c'→S).encrypt([0u8;64], "CurveZMQHELLO---" ‖ nonce_suffix)
     async fn send_hello<S>(
@@ -361,9 +530,6 @@ impl CurveClient {
     where
         S: AsyncWrite + Unpin,
     {
-        use compio::buf::BufResult;
-        use monocoque_core::timeout::write_all_with_timeout;
-
         debug!("[CURVE CLIENT] Sending HELLO");
 
         let nonce_counter: u64 = 1;
@@ -389,16 +555,12 @@ impl CurveClient {
         frame.extend_from_slice(&hello_box);                                      // 80  box
         // total = 198
 
-        let BufResult(r, _) =
-            write_all_with_timeout(stream, frame.freeze().to_vec(), timeout)
-                .await
-                .map_err(ZmtpError::from)?;
-        r.map_err(Into::into)
+        write_zmtp_cmd(stream, &frame, timeout).await
     }
 
-    /// Receive and decrypt WELCOME command (168 bytes)
+    /// Receive and decrypt WELCOME command from a ZMTP frame.
     ///
-    /// Body: server_nonce(16) + welcome_box(144)
+    /// Body: \x07WELCOME(8) + server_nonce(16) + welcome_box(144) = 168 bytes
     ///
     /// welcome_box decrypts to: s'.pk(32) + cookie(96)
     async fn recv_welcome<S>(
@@ -409,40 +571,27 @@ impl CurveClient {
     where
         S: AsyncRead + Unpin,
     {
-        use compio::buf::BufResult;
-        use monocoque_core::timeout::read_exact_with_timeout;
-
         debug!("[CURVE CLIENT] Waiting for WELCOME");
 
-        let header = vec![0u8; CURVE_WELCOME.len()];
-        let BufResult(r, header) =
-            read_exact_with_timeout(stream, header, timeout).await.map_err(ZmtpError::from)?;
-        r?;
-        if &header[..] != CURVE_WELCOME {
-            warn!("[CURVE CLIENT] Invalid WELCOME header");
+        let body = read_zmtp_cmd(stream, timeout, MAX_CURVE_BODY).await?;
+        if body.len() != 168 || &body[..8] != CURVE_WELCOME {
+            warn!("[CURVE CLIENT] Invalid WELCOME frame (len={})", body.len());
             return Err(ZmtpError::Protocol);
         }
 
-        // server_nonce: 16 random bytes
-        let BufResult(r, server_nonce_16) =
-            read_exact_with_timeout(stream, vec![0u8; 16], timeout).await.map_err(ZmtpError::from)?;
-        r?;
-
-        // welcome_box: 144 bytes
-        let BufResult(r, welcome_box) =
-            read_exact_with_timeout(stream, vec![0u8; 144], timeout).await.map_err(ZmtpError::from)?;
-        r?;
+        let server_nonce_16 = &body[8..24];
+        let welcome_box = &body[24..168];
 
         // Decrypt: SalsaBox(S→c') using c'_sk + S_pk
         let mut nonce_24 = [0u8; 24];
         nonce_24[..8].copy_from_slice(b"WELCOME-");
-        nonce_24[8..].copy_from_slice(&server_nonce_16);
+        nonce_24[8..].copy_from_slice(server_nonce_16);
 
         let plaintext = salsa_decrypt(
             self.server_public.as_bytes(),
             &self.client_short_keypair.secret.to_raw_bytes(),
             &nonce_24,
-            &welcome_box,
+            welcome_box,
         )
         .map_err(|_| {
             warn!("[CURVE CLIENT] Failed to decrypt WELCOME box");
@@ -464,11 +613,11 @@ impl CurveClient {
         Ok(())
     }
 
-    /// Send INITIATE command (257 bytes with empty metadata)
+    /// Send INITIATE command wrapped in a ZMTP command frame.
     ///
-    /// Body: cookie(96) + C(32) + nonce_suffix(8) + initiate_box(112)
+    /// Body: cookie(96) + C(32) + nonce_suffix(8) + initiate_box(variable)
     ///
-    /// initiate_box = SalsaBox(c'→s').encrypt(vouch, "CurveZMQINITIATE" ‖ nonce_suffix)
+    /// initiate_box = SalsaBox(c'→s').encrypt(vouch ‖ metadata, "CurveZMQINITIATE" ‖ nonce_suffix)
     /// vouch = vouch_nonce_16(16) + SalsaBox(C→S).encrypt(c'.pk ‖ s'.pk, "VOUCH---" ‖ vouch_nonce_16)
     async fn send_initiate<S>(
         &mut self,
@@ -478,9 +627,6 @@ impl CurveClient {
     where
         S: AsyncWrite + Unpin,
     {
-        use compio::buf::BufResult;
-        use monocoque_core::timeout::write_all_with_timeout;
-
         debug!("[CURVE CLIENT] Sending INITIATE");
 
         let server_short_public = self.server_short_public.ok_or(ZmtpError::Protocol)?;
@@ -511,6 +657,15 @@ impl CurveClient {
         vouch.extend_from_slice(&vouch_nonce_16);
         vouch.extend_from_slice(&vouch_ct);
 
+        // Append ZMTP properties (Socket-Type + optional Identity)
+        let local_props = encode_zmtp_props(
+            &self.local_socket_type,
+            self.local_identity.as_deref(),
+        );
+        let mut initiate_pt = Vec::with_capacity(96 + local_props.len());
+        initiate_pt.extend_from_slice(&vouch);
+        initiate_pt.extend_from_slice(&local_props);
+
         // Build initiate_box: Box[vouch ‖ metadata](c'→s')
         let initiate_counter: u64 = 1;
         let mut initiate_nonce_24 = [0u8; 24];
@@ -521,27 +676,21 @@ impl CurveClient {
             server_short_public.as_bytes(),
             &self.client_short_keypair.secret.to_raw_bytes(),
             &initiate_nonce_24,
-            &vouch, // plaintext = vouch (96), no metadata
+            &initiate_pt,
         )
         .map_err(|_| ZmtpError::Protocol)?;
-        // initiate_box = 96 + 16 = 112 bytes
 
-        let mut frame = BytesMut::with_capacity(257);
+        let mut frame = BytesMut::with_capacity(9 + 96 + 32 + 8 + initiate_box.len());
         frame.extend_from_slice(CURVE_INITIATE);                               //   9
         frame.extend_from_slice(cookie);                                        //  96
         frame.extend_from_slice(self.client_keypair.public.as_bytes());        //  32  C
         frame.extend_from_slice(&initiate_counter.to_be_bytes());              //   8
-        frame.extend_from_slice(&initiate_box);                                // 112
-        // total = 257
+        frame.extend_from_slice(&initiate_box);                                // variable
 
-        let BufResult(r, _) =
-            write_all_with_timeout(stream, frame.freeze().to_vec(), timeout)
-                .await
-                .map_err(ZmtpError::from)?;
-        r.map_err(Into::into)
+        write_zmtp_cmd(stream, &frame, timeout).await
     }
 
-    /// Receive READY command and derive the message box key
+    /// Receive READY command from a ZMTP frame, decrypt metadata, derive message key.
     async fn recv_ready<S>(
         &mut self,
         stream: &mut S,
@@ -550,24 +699,43 @@ impl CurveClient {
     where
         S: AsyncRead + Unpin,
     {
-        use compio::buf::BufResult;
-        use monocoque_core::timeout::read_exact_with_timeout;
-
         debug!("[CURVE CLIENT] Waiting for READY");
 
-        let BufResult(r, header) =
-            read_exact_with_timeout(stream, vec![0u8; CURVE_READY.len()], timeout)
-                .await
-                .map_err(ZmtpError::from)?;
-        r?;
-
-        if &header[..] != CURVE_READY {
-            warn!("[CURVE CLIENT] Invalid READY header");
+        let body = read_zmtp_cmd(stream, timeout, MAX_CURVE_BODY).await?;
+        // body = \x05READY (6) + nonce_8 (8) + ready_box (variable)
+        if body.len() < 30 || &body[..6] != CURVE_READY {
+            warn!("[CURVE CLIENT] Invalid CURVE READY frame (len={})", body.len());
             return Err(ZmtpError::Protocol);
         }
 
-        // Derive message key: SHA-256(c'·S ‖ C·s' ‖ c'·s')
+        let nonce_8 = &body[6..14];
+        let ready_box = &body[14..];
+
         let s_prime = self.server_short_public.ok_or(ZmtpError::Protocol)?;
+        let mut ready_nonce_24 = [0u8; 24];
+        ready_nonce_24[..16].copy_from_slice(CURVE_READY_NONCE_PREFIX);
+        ready_nonce_24[16..].copy_from_slice(nonce_8);
+
+        let metadata_bytes = salsa_decrypt(
+            s_prime.as_bytes(),
+            &self.client_short_keypair.secret.to_raw_bytes(),
+            &ready_nonce_24,
+            ready_box,
+        )
+        .map_err(|_| {
+            warn!("[CURVE CLIENT] CURVE READY box decryption failed");
+            ZmtpError::Protocol
+        })?;
+
+        let (peer_st, peer_id) = decode_zmtp_props(&metadata_bytes);
+        if peer_st.is_none() {
+            warn!("[CURVE CLIENT] CURVE READY missing Socket-Type");
+            return Err(ZmtpError::Protocol);
+        }
+        self.peer_socket_type = peer_st;
+        self.peer_identity_recv = peer_id;
+
+        // Derive message key: SHA-256(c'·S ‖ C·s' ‖ c'·s')
         let dh1 = self.client_short_keypair.secret.diffie_hellman(&self.server_public); // c'·S
         let dh2 = self.client_keypair.secret.diffie_hellman(&s_prime);                  // C·s'
         let dh3 = self.client_short_keypair.secret.diffie_hellman(&s_prime);            // c'·s'
@@ -636,6 +804,12 @@ pub struct CurveServer {
     client_public: Option<CurvePublicKey>,
     /// Symmetric key for cookie encryption/decryption (32 bytes, random per-server)
     cookie_key: [u8; 32],
+    /// Local socket type to announce in READY metadata
+    local_socket_type: String,
+    /// Peer socket type received in INITIATE metadata
+    peer_socket_type: Option<Bytes>,
+    /// Peer identity received in INITIATE metadata
+    peer_identity_recv: Option<Bytes>,
     /// Send nonce counter
     send_nonce: u64,
     /// Next expected receive nonce counter (replay protection)
@@ -646,7 +820,7 @@ pub struct CurveServer {
 
 impl CurveServer {
     /// Create new CURVE server
-    pub fn new(server_keypair: CurveKeyPair) -> Self {
+    pub fn new(server_keypair: CurveKeyPair, local_socket_type: impl Into<String>) -> Self {
         let mut cookie_key = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut cookie_key);
         Self {
@@ -655,6 +829,9 @@ impl CurveServer {
             client_short_public: None,
             client_public: None,
             cookie_key,
+            local_socket_type: local_socket_type.into(),
+            peer_socket_type: None,
+            peer_identity_recv: None,
             send_nonce: 1,
             recv_nonce: 1,
             message_box: None,
@@ -662,13 +839,11 @@ impl CurveServer {
     }
 
     /// Perform full server handshake: HELLO → WELCOME → INITIATE → READY
-    ///
-    /// Returns the client's authenticated long-term public key.
     pub async fn handshake<S>(
         &mut self,
         stream: &mut S,
         timeout: Option<Duration>,
-    ) -> Result<CurvePublicKey, ZmtpError>
+    ) -> Result<CurveHandshakeResult, ZmtpError>
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
@@ -676,10 +851,14 @@ impl CurveServer {
         self.send_welcome(stream, timeout).await?;
         self.recv_initiate(stream, timeout).await?;
         self.send_ready(stream, timeout).await?;
-        Ok(self.client_public.unwrap())
+        Ok(CurveHandshakeResult {
+            peer_socket_type: self.peer_socket_type.clone().ok_or(ZmtpError::Protocol)?,
+            peer_identity: self.peer_identity_recv.clone(),
+            peer_public_key: self.client_public,
+        })
     }
 
-    /// Receive and verify HELLO command
+    /// Receive and verify HELLO command from a ZMTP frame.
     async fn recv_hello<S>(
         &mut self,
         stream: &mut S,
@@ -688,74 +867,47 @@ impl CurveServer {
     where
         S: AsyncRead + Unpin,
     {
-        use compio::buf::BufResult;
-        use monocoque_core::timeout::read_exact_with_timeout;
-
         debug!("[CURVE SERVER] Waiting for HELLO");
 
-        let BufResult(r, header) =
-            read_exact_with_timeout(stream, vec![0u8; CURVE_HELLO.len()], timeout)
-                .await
-                .map_err(ZmtpError::from)?;
-        r?;
-        if &header[..] != CURVE_HELLO {
-            warn!("[CURVE SERVER] Invalid HELLO header");
+        let body = read_zmtp_cmd(stream, timeout, MAX_CURVE_BODY).await?;
+        // body = \x05HELLO(6) + version(1) + padding(71) + c'.pk(32) + nonce_8(8) + hello_box(80) = 198
+        if body.len() != 198 || &body[..6] != CURVE_HELLO {
+            warn!("[CURVE SERVER] Invalid HELLO frame (len={})", body.len());
+            return Err(ZmtpError::Protocol);
+        }
+        if body[6] != 1 {
+            warn!("[CURVE SERVER] Unsupported HELLO version: {}", body[6]);
             return Err(ZmtpError::Protocol);
         }
 
-        // version (1 byte)
-        let BufResult(r, ver) =
-            read_exact_with_timeout(stream, vec![0u8; 1], timeout).await.map_err(ZmtpError::from)?;
-        r?;
-        if ver[0] != 1 {
-            warn!("[CURVE SERVER] Unsupported HELLO version: {}", ver[0]);
-            return Err(ZmtpError::Protocol);
-        }
+        // c'.pk at [78..110], nonce_8 at [110..118], hello_box at [118..198]
+        let c_prime_pk_bytes: [u8; 32] = body[78..110].try_into().unwrap();
+        let nonce_suffix = &body[110..118];
+        let hello_box = &body[118..198];
 
-        // padding (71 bytes) — discard
-        let BufResult(r, _) =
-            read_exact_with_timeout(stream, vec![0u8; 71], timeout).await.map_err(ZmtpError::from)?;
-        r?;
-
-        // c'.pk (32 bytes)
-        let BufResult(r, c_prime_pk_buf) =
-            read_exact_with_timeout(stream, vec![0u8; 32], timeout).await.map_err(ZmtpError::from)?;
-        r?;
-        let mut c_prime_pk = [0u8; 32];
-        c_prime_pk.copy_from_slice(&c_prime_pk_buf);
-        self.client_short_public = Some(CurvePublicKey::from_bytes(c_prime_pk));
-
-        // nonce_suffix (8 bytes) — RFC 26 §5.2 requires the counter to be >= 1
-        let BufResult(r, nonce_suffix) =
-            read_exact_with_timeout(stream, vec![0u8; 8], timeout).await.map_err(ZmtpError::from)?;
-        r?;
-        if u64::from_be_bytes(nonce_suffix.as_slice().try_into().unwrap_or([0u8; 8])) == 0 {
+        // Validate nonce >= 1 (RFC 26 §5.2)
+        if u64::from_be_bytes(nonce_suffix.try_into().unwrap_or([0u8; 8])) == 0 {
             warn!("[CURVE SERVER] HELLO nonce counter is 0, must be >= 1");
             return Err(ZmtpError::Protocol);
         }
 
-        // hello_box (80 bytes)
-        let BufResult(r, hello_box) =
-            read_exact_with_timeout(stream, vec![0u8; 80], timeout).await.map_err(ZmtpError::from)?;
-        r?;
+        self.client_short_public = Some(CurvePublicKey::from_bytes(c_prime_pk_bytes));
 
-        // Verify: SalsaBox(S→c') decrypt using S_sk + c'_pk
         let mut nonce_24 = [0u8; 24];
         nonce_24[..16].copy_from_slice(b"CurveZMQHELLO---");
-        nonce_24[16..].copy_from_slice(&nonce_suffix);
+        nonce_24[16..].copy_from_slice(nonce_suffix);
 
         let plaintext = salsa_decrypt(
-            &c_prime_pk,
+            &c_prime_pk_bytes,
             &self.server_keypair.secret.to_raw_bytes(),
             &nonce_24,
-            &hello_box,
+            hello_box,
         )
         .map_err(|_| {
             warn!("[CURVE SERVER] HELLO box authentication failed");
             ZmtpError::AuthenticationFailed
         })?;
 
-        // The box plaintext must be exactly 64 zero bytes
         if plaintext.len() != 64 || plaintext.iter().any(|&b| b != 0) {
             warn!("[CURVE SERVER] HELLO box plaintext is not 64 zeros");
             return Err(ZmtpError::AuthenticationFailed);
@@ -765,9 +917,9 @@ impl CurveServer {
         Ok(())
     }
 
-    /// Build and send WELCOME command (168 bytes)
+    /// Build and send WELCOME command wrapped in a ZMTP command frame.
     ///
-    /// Body: server_nonce_16(16) + welcome_box(144)
+    /// Body: \x07WELCOME(8) + server_nonce_16(16) + welcome_box(144) = 168 bytes
     ///
     /// Cookie = cookie_nonce_16(16) + XChaCha20.encrypt(c'.pk ‖ s'.sk, "COOKIE--" ‖ cookie_nonce_16)
     async fn send_welcome<S>(
@@ -778,9 +930,6 @@ impl CurveServer {
     where
         S: AsyncWrite + Unpin,
     {
-        use compio::buf::BufResult;
-        use monocoque_core::timeout::write_all_with_timeout;
-
         debug!("[CURVE SERVER] Sending WELCOME");
 
         let c_prime_pk = self.client_short_public.ok_or(ZmtpError::Protocol)?;
@@ -828,23 +977,19 @@ impl CurveServer {
         .map_err(|_| ZmtpError::Protocol)?;
         // welcome_box = 128 + 16 = 144 bytes
 
-        let mut frame = BytesMut::with_capacity(168);
-        frame.extend_from_slice(CURVE_WELCOME);    //   8
-        frame.extend_from_slice(&server_nonce_16); //  16
-        frame.extend_from_slice(&welcome_box);     // 144
+        let mut body = BytesMut::with_capacity(168);
+        body.extend_from_slice(CURVE_WELCOME);    //   8
+        body.extend_from_slice(&server_nonce_16); //  16
+        body.extend_from_slice(&welcome_box);     // 144
         // total = 168
 
-        let BufResult(r, _) =
-            write_all_with_timeout(stream, frame.freeze().to_vec(), timeout)
-                .await
-                .map_err(ZmtpError::from)?;
-        r.map_err(Into::into)
+        write_zmtp_cmd(stream, &body, timeout).await
     }
 
-    /// Receive and fully verify INITIATE command
+    /// Receive and fully verify INITIATE command from a ZMTP frame.
     ///
     /// Verifies: cookie integrity, initiate box, vouch box.
-    /// Stores the authenticated client long-term public key C.
+    /// Stores the authenticated client long-term public key C and peer metadata.
     async fn recv_initiate<S>(
         &mut self,
         stream: &mut S,
@@ -853,25 +998,20 @@ impl CurveServer {
     where
         S: AsyncRead + Unpin,
     {
-        use compio::buf::BufResult;
-        use monocoque_core::timeout::read_exact_with_timeout;
-
         debug!("[CURVE SERVER] Waiting for INITIATE");
 
-        let BufResult(r, header) =
-            read_exact_with_timeout(stream, vec![0u8; CURVE_INITIATE.len()], timeout)
-                .await
-                .map_err(ZmtpError::from)?;
-        r?;
-        if &header[..] != CURVE_INITIATE {
-            warn!("[CURVE SERVER] Invalid INITIATE header");
+        let body = read_zmtp_cmd(stream, timeout, MAX_INITIATE_BODY).await?;
+        // body = \x08INITIATE(9) + cookie(96) + C(32) + nonce_8(8) + initiate_box(rest)
+        // 9 + 96 + 32 + 8 = 145 minimum before initiate_box
+        if body.len() < 145 || &body[..9] != CURVE_INITIATE {
+            warn!("[CURVE SERVER] Invalid INITIATE frame (len={})", body.len());
             return Err(ZmtpError::Protocol);
         }
 
-        // cookie (96 bytes)
-        let BufResult(r, cookie_bytes) =
-            read_exact_with_timeout(stream, vec![0u8; 96], timeout).await.map_err(ZmtpError::from)?;
-        r?;
+        let cookie_bytes = &body[9..105]; // 96 bytes
+        let c_pk_buf = &body[105..137];   // 32 bytes C
+        let nonce_suffix = &body[137..145]; // 8 bytes
+        let initiate_box = &body[145..];   // variable
 
         // Decrypt cookie to recover (c'.pk ‖ s'.sk_bytes)
         let cookie_nonce_16 = &cookie_bytes[..16];
@@ -903,33 +1043,19 @@ impl CurveServer {
             return Err(ZmtpError::AuthenticationFailed);
         }
 
-        // C (client long-term pk, 32 bytes, cleartext)
-        let BufResult(r, c_pk_buf) =
-            read_exact_with_timeout(stream, vec![0u8; 32], timeout).await.map_err(ZmtpError::from)?;
-        r?;
         let mut c_pk = [0u8; 32];
-        c_pk.copy_from_slice(&c_pk_buf);
-
-        // nonce_suffix (8 bytes)
-        let BufResult(r, nonce_suffix) =
-            read_exact_with_timeout(stream, vec![0u8; 8], timeout).await.map_err(ZmtpError::from)?;
-        r?;
-
-        // initiate_box (112 bytes for empty metadata)
-        let BufResult(r, initiate_box) =
-            read_exact_with_timeout(stream, vec![0u8; 112], timeout).await.map_err(ZmtpError::from)?;
-        r?;
+        c_pk.copy_from_slice(c_pk_buf);
 
         // Decrypt initiate_box: SalsaBox(c'→s') using s'_sk (from cookie) + c'_pk
         let mut initiate_nonce_24 = [0u8; 24];
         initiate_nonce_24[..16].copy_from_slice(b"CurveZMQINITIATE");
-        initiate_nonce_24[16..].copy_from_slice(&nonce_suffix);
+        initiate_nonce_24[16..].copy_from_slice(nonce_suffix);
 
         let initiate_pt = salsa_decrypt(
             &recovered_c_prime_pk,
             &recovered_s_prime_sk,
             &initiate_nonce_24,
-            &initiate_box,
+            initiate_box,
         )
         .map_err(|_| {
             warn!("[CURVE SERVER] INITIATE box decryption failed");
@@ -975,12 +1101,23 @@ impl CurveServer {
             return Err(ZmtpError::AuthenticationFailed);
         }
 
+        // Parse metadata from initiate_pt[96..]
+        let metadata = &initiate_pt[96..];
+        let (peer_st, peer_id) = decode_zmtp_props(metadata);
+        if peer_st.is_none() {
+            warn!("[CURVE SERVER] INITIATE missing Socket-Type in metadata");
+            return Err(ZmtpError::Protocol);
+        }
+        self.peer_socket_type = peer_st;
+        self.peer_identity_recv = peer_id;
+
         self.client_public = Some(CurvePublicKey::from_bytes(c_pk));
         debug!("[CURVE SERVER] INITIATE verified — client authenticated");
         Ok(())
     }
 
-    /// Send READY command and derive the message box key
+    /// Send READY command wrapped in a ZMTP command frame.
+    /// Encrypts server metadata in a READY box, derives message key.
     async fn send_ready<S>(
         &mut self,
         stream: &mut S,
@@ -989,27 +1126,39 @@ impl CurveServer {
     where
         S: AsyncWrite + Unpin,
     {
-        use compio::buf::BufResult;
-        use monocoque_core::timeout::write_all_with_timeout;
-
         debug!("[CURVE SERVER] Sending READY");
 
-        let BufResult(r, _) =
-            write_all_with_timeout(stream, Bytes::from_static(CURVE_READY).to_vec(), timeout)
-                .await
-                .map_err(ZmtpError::from)?;
-        r?;
-
-        // Derive message key: SHA-256(c'·S ‖ C·s' ‖ c'·s')
         let c_prime = self.client_short_public.ok_or(ZmtpError::Protocol)?;
         let c = self.client_public.ok_or(ZmtpError::Protocol)?;
+
+        // Derive message key: SHA-256(c'·S ‖ C·s' ‖ c'·s')
         let dh1 = self.server_keypair.secret.diffie_hellman(&c_prime);       // S·c' = c'·S
         let dh2 = self.server_short_keypair.secret.diffie_hellman(&c);       // s'·C = C·s'
         let dh3 = self.server_short_keypair.secret.diffie_hellman(&c_prime); // s'·c' = c'·s'
-
         let key = derive_message_key(&dh1, &dh2, &dh3);
         self.message_box = Some(CurveBox::new(&key));
 
+        // Encrypt server metadata in READY box (s'→c')
+        let ready_counter: u64 = 1;
+        let mut ready_nonce_24 = [0u8; 24];
+        ready_nonce_24[..16].copy_from_slice(CURVE_READY_NONCE_PREFIX);
+        ready_nonce_24[16..].copy_from_slice(&ready_counter.to_be_bytes());
+
+        let server_meta = encode_zmtp_props(&self.local_socket_type, None);
+        let ready_box = salsa_encrypt(
+            c_prime.as_bytes(),
+            &self.server_short_keypair.secret.to_raw_bytes(),
+            &ready_nonce_24,
+            &server_meta,
+        )
+        .map_err(|_| ZmtpError::Protocol)?;
+
+        let mut body = Vec::with_capacity(6 + 8 + ready_box.len());
+        body.extend_from_slice(CURVE_READY);
+        body.extend_from_slice(&ready_counter.to_be_bytes());
+        body.extend_from_slice(&ready_box);
+
+        write_zmtp_cmd(stream, &body, timeout).await?;
         debug!("[CURVE SERVER] Handshake complete");
         Ok(())
     }
@@ -1088,7 +1237,8 @@ pub async fn curve_server_handshake_zap<S>(
     domain: String,
     timeout: Option<Duration>,
     peer_addr: &str,
-) -> Result<CurvePublicKey, ZmtpError>
+    local_socket_type: impl Into<String>,
+) -> Result<CurveHandshakeResult, ZmtpError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -1096,8 +1246,10 @@ where
 
     debug!("[CURVE SERVER ZAP] Starting ZAP-authenticated handshake");
 
-    let mut curve_server = CurveServer::new(server_keypair);
-    let client_public_key = curve_server.handshake(stream, timeout).await?;
+    let mut curve_server = CurveServer::new(server_keypair, local_socket_type);
+    let result = curve_server.handshake(stream, timeout).await?;
+
+    let client_public_key = result.peer_public_key.ok_or(ZmtpError::Protocol)?;
 
     debug!("[CURVE SERVER ZAP] Handshake complete, authenticating via ZAP");
 
@@ -1120,7 +1272,7 @@ where
             "[CURVE SERVER ZAP] Authentication successful for client key: {:?}",
             client_public_key
         );
-        Ok(client_public_key)
+        Ok(result)
     } else {
         warn!(
             "[CURVE SERVER ZAP] Authentication failed for {}: {} (status: {:?})",
@@ -1318,7 +1470,7 @@ mod tests {
 
         let client_keypair = CurveKeyPair::generate();
         let server_public = CurveKeyPair::generate().public;
-        let mut client = CurveClient::new(client_keypair, server_public);
+        let mut client = CurveClient::new(client_keypair, server_public, "DEALER", None);
         client.message_box = Some(CurveBox::new(&shared_secret));
 
         let plaintext = client.decrypt_message(&frame).unwrap();
@@ -1341,7 +1493,7 @@ mod tests {
         frame.extend_from_slice(&ciphertext);
 
         let server_keypair = CurveKeyPair::generate();
-        let mut server = CurveServer::new(server_keypair);
+        let mut server = CurveServer::new(server_keypair, "ROUTER");
         server.message_box = Some(CurveBox::new(&shared_secret));
 
         let plaintext = server.decrypt_message(&frame).unwrap();
@@ -1352,7 +1504,7 @@ mod tests {
     fn decrypt_message_rejects_invalid_curve_message_command_header() {
         let client_keypair = CurveKeyPair::generate();
         let server_public = CurveKeyPair::generate().public;
-        let mut client = CurveClient::new(client_keypair, server_public);
+        let mut client = CurveClient::new(client_keypair, server_public, "DEALER", None);
         client.message_box = Some(CurveBox::new(&[42u8; CURVE_KEY_SIZE]));
 
         let mut frame = BytesMut::new();
@@ -1370,7 +1522,7 @@ mod tests {
     fn decrypt_message_rejects_missing_curve_message_nonce() {
         let client_keypair = CurveKeyPair::generate();
         let server_public = CurveKeyPair::generate().public;
-        let mut client = CurveClient::new(client_keypair, server_public);
+        let mut client = CurveClient::new(client_keypair, server_public, "DEALER", None);
         client.message_box = Some(CurveBox::new(&[42u8; CURVE_KEY_SIZE]));
 
         assert!(matches!(
@@ -1403,5 +1555,21 @@ mod tests {
     #[compio::test]
     async fn test_send_zmtp_error_retries_short_body_writes() {
         assert_zmtp_error_survives_partial_writes([9, 2]).await;
+    }
+
+    #[test]
+    fn test_encode_decode_zmtp_props_round_trip() {
+        let encoded = encode_zmtp_props("DEALER", Some(b"my-identity"));
+        let (st, id) = decode_zmtp_props(&encoded);
+        assert_eq!(st.unwrap().as_ref(), b"DEALER");
+        assert_eq!(id.unwrap().as_ref(), b"my-identity");
+    }
+
+    #[test]
+    fn test_encode_decode_zmtp_props_no_identity() {
+        let encoded = encode_zmtp_props("ROUTER", None);
+        let (st, id) = decode_zmtp_props(&encoded);
+        assert_eq!(st.unwrap().as_ref(), b"ROUTER");
+        assert!(id.is_none());
     }
 }
