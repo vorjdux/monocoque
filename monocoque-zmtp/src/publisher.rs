@@ -59,6 +59,8 @@ type SubscriberId = u64;
 /// Shared subscription state (updated by subscription reader, read by broadcast sender)
 type SubscriptionState = Arc<RwLock<Vec<Bytes>>>;
 
+type SubCipher = Arc<parking_lot::Mutex<crate::security::curve::CurveMessageCipher>>;
+
 /// Commands sent from main thread to worker threads
 enum WorkerCommand {
     /// Add a new subscriber to this worker
@@ -66,6 +68,7 @@ enum WorkerCommand {
         id: SubscriberId,
         stream: TcpStream,
         subscriptions: SubscriptionState,
+        cipher: Option<SubCipher>,
     },
     /// Broadcast a message to all subscribers in this worker
     Broadcast { message: Arc<Vec<Bytes>> },
@@ -78,6 +81,7 @@ struct WorkerSubscriber {
     id: SubscriberId,
     stream: OwnedWriteHalf<TcpStream>,
     subscriptions: SubscriptionState,
+    cipher: Option<SubCipher>,
 }
 
 impl WorkerSubscriber {
@@ -114,6 +118,7 @@ async fn subscription_reader(
     id: SubscriberId,
     mut reader: OwnedReadHalf<TcpStream>,
     subscriptions: SubscriptionState,
+    cipher: Option<SubCipher>,
 ) {
     use compio::buf::BufResult;
     use compio::io::AsyncRead;
@@ -141,9 +146,25 @@ async fn subscription_reader(
                 loop {
                     match decoder.decode(&mut recv_buf) {
                         Ok(Some(frame)) => {
-                            if let Some(event) =
-                                SubscriptionEvent::from_message(&frame.payload)
-                            {
+                            // Resolve payload: decrypt CURVE MESSAGE frames, skip other commands.
+                            let payload = if frame.is_command() {
+                                if let Some(ref arc_cipher) = cipher {
+                                    if crate::security::curve::CurveMessageCipher::is_curve_message(&frame.payload) {
+                                        match arc_cipher.lock().decrypt_frame(&frame.payload) {
+                                            Ok((_more, data)) => data,
+                                            Err(_) => continue,
+                                        }
+                                    } else {
+                                        continue;
+                                    }
+                                } else {
+                                    continue;
+                                }
+                            } else {
+                                frame.payload
+                            };
+
+                            if let Some(event) = SubscriptionEvent::from_message(&payload) {
                                 let mut subs = subscriptions.write();
                                 match event {
                                     SubscriptionEvent::Subscribe(prefix) => {
@@ -210,6 +231,7 @@ fn worker_thread(worker_id: usize, rx: Receiver<WorkerCommand>) {
                     id,
                     stream,
                     subscriptions,
+                    cipher,
                 }) => {
                     debug!("[Worker {}] Adding subscriber {}", worker_id, id);
 
@@ -219,7 +241,8 @@ fn worker_thread(worker_id: usize, rx: Receiver<WorkerCommand>) {
                     // Spawn background task to read subscription messages.
                     // Runs concurrently within this worker's compio runtime.
                     let sub_state = Arc::clone(&subscriptions);
-                    compio::runtime::spawn(subscription_reader(id, read_half, sub_state)).detach();
+                    let reader_cipher = cipher.clone();
+                    compio::runtime::spawn(subscription_reader(id, read_half, sub_state, reader_cipher)).detach();
 
                     subscribers.insert(
                         id,
@@ -227,6 +250,7 @@ fn worker_thread(worker_id: usize, rx: Receiver<WorkerCommand>) {
                             id,
                             stream: write_half,
                             subscriptions,
+                            cipher,
                         },
                     );
                 }
@@ -237,10 +261,9 @@ fn worker_thread(worker_id: usize, rx: Receiver<WorkerCommand>) {
                         subscribers.len()
                     );
 
-                    // Encode once, broadcast N times via O(1) Bytes::clone()
-                    let mut wire_buf = bytes::BytesMut::new();
-                    crate::codec::encode_multipart(&message, &mut wire_buf);
-                    let wire = wire_buf.freeze();
+                    // Pre-encode once for plaintext subscribers (shared via O(1) clone).
+                    // Encrypted subscribers get per-subscriber encoding below.
+                    let mut plain_wire: Option<bytes::Bytes> = None;
 
                     let mut dead_subs = Vec::new();
                     for sub in subscribers.values_mut() {
@@ -249,10 +272,36 @@ fn worker_thread(worker_id: usize, rx: Receiver<WorkerCommand>) {
                             continue;
                         }
 
+                        let wire = if let Some(ref arc_cipher) = sub.cipher {
+                            let last = message.len().saturating_sub(1);
+                            let mut buf = bytes::BytesMut::new();
+                            let mut ok = true;
+                            {
+                                let mut cipher = arc_cipher.lock();
+                                for (i, frame) in message.iter().enumerate() {
+                                    match cipher.encrypt_frame(frame, i < last) {
+                                        Ok(body) => crate::base::append_zmtp_cmd_frame(&mut buf, &body),
+                                        Err(_) => { ok = false; break; }
+                                    }
+                                }
+                            }
+                            if !ok {
+                                dead_subs.push(sub.id);
+                                continue;
+                            }
+                            buf.freeze()
+                        } else {
+                            plain_wire.get_or_insert_with(|| {
+                                let mut buf = bytes::BytesMut::new();
+                                crate::codec::encode_multipart(&message, &mut buf);
+                                buf.freeze()
+                            }).clone()
+                        };
+
                         // Send with 5-second timeout for fault isolation
                         let send_result = compio::time::timeout(
                             std::time::Duration::from_secs(5),
-                            send_encoded_to_stream(&mut sub.stream, wire.clone()),
+                            send_encoded_to_stream(&mut sub.stream, wire),
                         )
                         .await;
 
@@ -412,13 +461,18 @@ impl PubSocket {
 
         debug!("[PUB] Assigning subscriber {} to worker {}", id, worker_idx);
 
-        // Send stream + subscriptions to worker. The worker will split the stream
+        let cipher = handshake_result.curve_cipher.map(|c| {
+            Arc::new(parking_lot::Mutex::new(c))
+        });
+
+        // Send stream + subscriptions + cipher to worker. The worker will split the stream
         // into read (subscription reader task) and write (broadcast) halves.
         self.workers[worker_idx]
             .send_async(WorkerCommand::AddSubscriber {
                 id,
                 stream,
                 subscriptions,
+                cipher,
             })
             .await
             .map_err(|e| io::Error::other(format!("Failed to send to worker: {}", e)))?;

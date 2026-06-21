@@ -168,7 +168,7 @@ where
     pub(crate) curve_cipher: Option<crate::security::curve::CurveMessageCipher>,
 }
 
-fn append_zmtp_cmd_frame(buf: &mut BytesMut, body: &[u8]) {
+pub(crate) fn append_zmtp_cmd_frame(buf: &mut BytesMut, body: &[u8]) {
     let len = body.len();
     if len <= 255 {
         buf.extend_from_slice(&[0x04, len as u8]);
@@ -818,7 +818,7 @@ impl SocketBase<TcpStream> {
         };
 
         // Perform handshake  -  preserve routing identity from options
-        perform_handshake_with_options(
+        let hr = perform_handshake_with_options(
             &mut new_stream,
             socket_type,
             self.options.routing_id.as_deref(),
@@ -829,6 +829,7 @@ impl SocketBase<TcpStream> {
         .map_err(|e| io::Error::other(format!("Handshake failed during reconnect: {}", e)))?;
 
         // Success! Update socket state
+        self.curve_cipher = hr.curve_cipher;
         self.stream = Some(new_stream);
         self.is_poisoned = false;
         self.recv = SegmentedBuffer::new();

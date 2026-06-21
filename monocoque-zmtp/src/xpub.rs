@@ -45,6 +45,7 @@ struct XPubSubscriber {
     subscriptions: SubscriptionTrie,
     recv_buf: monocoque_core::buffer::SegmentedBuffer,
     decoder: crate::codec::ZmtpDecoder,
+    curve_cipher: Option<crate::security::curve::CurveMessageCipher>,
 }
 
 impl XPubSubscriber {
@@ -177,15 +178,34 @@ impl XPubSocket {
                 let id = self.next_id;
                 self.next_id += 1;
 
+                let mut curve_cipher = handshake_result.curve_cipher;
+
                 // Send welcome message if configured
-                if let Some(ref welcome_msg) = self.options.xpub_welcome_msg {
+                if let Some(ref welcome_msg) = self.options.xpub_welcome_msg.clone() {
                     use bytes::BytesMut;
                     use compio::buf::BufResult;
                     use compio::io::AsyncWriteExt;
 
-                    let mut buf = BytesMut::with_capacity(welcome_msg.len() + 9);
-                    crate::codec::encode_multipart(std::slice::from_ref(welcome_msg), &mut buf);
-                    let BufResult(result, _) = stream.write_all(buf.freeze()).await;
+                    let wire = if let Some(ref mut cipher) = curve_cipher {
+                        let mut buf = BytesMut::new();
+                        match cipher.encrypt_frame(welcome_msg, false) {
+                            Ok(body) => {
+                                crate::base::append_zmtp_cmd_frame(&mut buf, &body);
+                                buf.freeze()
+                            }
+                            Err(_) => {
+                                let mut buf = BytesMut::with_capacity(welcome_msg.len() + 9);
+                                crate::codec::encode_multipart(std::slice::from_ref(welcome_msg), &mut buf);
+                                buf.freeze()
+                            }
+                        }
+                    } else {
+                        let mut buf = BytesMut::with_capacity(welcome_msg.len() + 9);
+                        crate::codec::encode_multipart(std::slice::from_ref(welcome_msg), &mut buf);
+                        buf.freeze()
+                    };
+
+                    let BufResult(result, _) = stream.write_all(wire).await;
                     if let Err(e) = result {
                         trace!(
                             "[XPUB] Failed to send welcome message to subscriber {}: {}",
@@ -203,6 +223,7 @@ impl XPubSocket {
                         subscriptions: SubscriptionTrie::new(),
                         recv_buf: monocoque_core::buffer::SegmentedBuffer::new(),
                         decoder: crate::codec::ZmtpDecoder::new(),
+                        curve_cipher,
                     },
                 );
 
@@ -277,17 +298,37 @@ impl XPubSocket {
                     loop {
                         match sub.decoder.decode(&mut sub.recv_buf) {
                             Ok(Some(frame)) => {
-                                if frame.is_command() {
-                                    if crate::base::is_ping_payload(&frame.payload) {
-                                        use compio::buf::BufResult;
-                                        use compio::io::AsyncWriteExt;
-                                        let pong = crate::base::build_pong_frame();
-                                        let BufResult(result, _) = sub.stream.write_all(pong).await;
-                                        let _ = result; // best-effort; disconnect handled elsewhere
+                                // Resolve the subscription payload, handling CURVE decryption.
+                                let payload = if frame.is_command() {
+                                    if let Some(ref mut cipher) = sub.curve_cipher {
+                                        if crate::security::curve::CurveMessageCipher::is_curve_message(&frame.payload) {
+                                            match cipher.decrypt_frame(&frame.payload) {
+                                                Ok((_more, data)) => data,
+                                                Err(_) => continue,
+                                            }
+                                        } else {
+                                            // Non-MESSAGE command (e.g. PING): handle and skip.
+                                            if crate::base::is_ping_payload(&frame.payload) {
+                                                use compio::io::AsyncWriteExt;
+                                                let pong = crate::base::build_pong_frame();
+                                                let BufResult(result, _) = sub.stream.write_all(pong).await;
+                                                let _ = result;
+                                            }
+                                            continue;
+                                        }
+                                    } else {
+                                        if crate::base::is_ping_payload(&frame.payload) {
+                                            use compio::io::AsyncWriteExt;
+                                            let pong = crate::base::build_pong_frame();
+                                            let BufResult(result, _) = sub.stream.write_all(pong).await;
+                                            let _ = result;
+                                        }
+                                        continue;
                                     }
-                                    continue;
-                                }
-                                if let Some(event) = SubscriptionEvent::from_message(&frame.payload) {
+                                } else {
+                                    frame.payload
+                                };
+                                if let Some(event) = SubscriptionEvent::from_message(&payload) {
                                     trace!(
                                         "[XPUB] Subscription event from subscriber {}: {:?}",
                                         sub.id,
@@ -407,10 +448,9 @@ impl XPubSocket {
 
         trace!("[XPUB] Broadcasting message with {} frames", msg.len());
 
-        // Encode once, broadcast via O(1) Bytes::clone() per subscriber.
-        let mut wire_buf = BytesMut::new();
-        crate::codec::encode_multipart(&msg, &mut wire_buf);
-        let wire = wire_buf.freeze();
+        // Pre-encode once for plaintext subscribers (shared via O(1) clone).
+        // Encrypted subscribers get per-subscriber encoding below.
+        let mut plain_wire: Option<bytes::Bytes> = None;
 
         let mut dead_subs = Vec::new();
 
@@ -419,7 +459,30 @@ impl XPubSocket {
                 continue;
             }
 
-            let BufResult(result, _) = sub.stream.write_all(wire.clone()).await;
+            let wire = if let Some(ref mut cipher) = sub.curve_cipher {
+                let last = msg.len().saturating_sub(1);
+                let mut buf = BytesMut::new();
+                let mut ok = true;
+                for (i, frame) in msg.iter().enumerate() {
+                    match cipher.encrypt_frame(frame, i < last) {
+                        Ok(body) => crate::base::append_zmtp_cmd_frame(&mut buf, &body),
+                        Err(_) => { ok = false; break; }
+                    }
+                }
+                if !ok {
+                    dead_subs.push(sub.id);
+                    continue;
+                }
+                buf.freeze()
+            } else {
+                plain_wire.get_or_insert_with(|| {
+                    let mut buf = BytesMut::new();
+                    crate::codec::encode_multipart(&msg, &mut buf);
+                    buf.freeze()
+                }).clone()
+            };
+
+            let BufResult(result, _) = sub.stream.write_all(wire).await;
             if let Err(e) = result {
                 debug!("[XPUB] Failed to send to subscriber {}: {}", sub.id, e);
                 dead_subs.push(sub.id);
