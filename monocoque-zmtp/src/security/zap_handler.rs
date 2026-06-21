@@ -31,19 +31,27 @@ pub trait ZapHandler {
 pub struct DefaultZapHandler<H: PlainAuthHandler> {
     plain_handler: Arc<H>,
     accept_curve: bool,
+    /// Optional whitelist of permitted CURVE public keys (32 bytes each).
+    /// When Some, only listed keys are accepted. When None, all valid keys are accepted.
+    curve_key_whitelist: Option<std::collections::HashSet<[u8; 32]>>,
 }
 
 impl<H: PlainAuthHandler> DefaultZapHandler<H> {
-    /// Create a new default ZAP handler
-    ///
-    /// # Arguments
-    /// * `plain_handler` - Handler for PLAIN authentication
-    /// * `accept_curve` - Whether to accept CURVE connections (default: true)
+    /// Create handler. `accept_curve=true` accepts all valid CURVE keys (no whitelist).
+    /// Use `with_curve_whitelist()` to restrict to specific keys.
     pub const fn new(plain_handler: Arc<H>, accept_curve: bool) -> Self {
         Self {
             plain_handler,
             accept_curve,
+            curve_key_whitelist: None,
         }
+    }
+
+    /// Set an explicit whitelist of permitted CURVE public keys.
+    /// Only keys in this set will be accepted.
+    pub fn with_curve_whitelist(mut self, keys: Vec<[u8; 32]>) -> Self {
+        self.curve_key_whitelist = Some(keys.into_iter().collect());
+        self
     }
 }
 
@@ -75,6 +83,10 @@ impl<H: PlainAuthHandler> ZapHandler for DefaultZapHandler<H> {
                 }
             }
             ZapMechanism::Curve => {
+                if !self.accept_curve {
+                    return ZapResponse::failure(request.request_id.clone(), "CURVE not enabled");
+                }
+
                 // CURVE mechanism - verify public key is present
                 if request.credentials.is_empty() {
                     return ZapResponse::failure(
@@ -83,12 +95,6 @@ impl<H: PlainAuthHandler> ZapHandler for DefaultZapHandler<H> {
                     );
                 }
 
-                if !self.accept_curve {
-                    return ZapResponse::failure(request.request_id.clone(), "CURVE not enabled");
-                }
-
-                // In a real implementation, you would check the public key
-                // against a whitelist/blacklist. For now, accept all valid CURVE keys.
                 let public_key = &request.credentials[0];
                 if public_key.len() != 32 {
                     return ZapResponse::failure(
@@ -97,8 +103,21 @@ impl<H: PlainAuthHandler> ZapHandler for DefaultZapHandler<H> {
                     );
                 }
 
+                // Check whitelist if configured
+                if let Some(ref whitelist) = self.curve_key_whitelist {
+                    let mut key_arr = [0u8; 32];
+                    key_arr.copy_from_slice(public_key);
+                    if !whitelist.contains(&key_arr) {
+                        return ZapResponse::failure(
+                            request.request_id.clone(),
+                            "CURVE key not in whitelist",
+                        );
+                    }
+                }
+                // When no whitelist configured: accept all valid keys (accept_curve=true already checked)
+
                 // Use the hex-encoded public key as user_id
-                let user_id = format!("{:x?}", public_key);
+                let user_id = public_key.iter().map(|b| format!("{:02x}", b)).collect::<String>();
                 ZapResponse::success(request.request_id.clone(), user_id)
             }
         }

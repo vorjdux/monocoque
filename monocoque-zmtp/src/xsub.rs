@@ -164,11 +164,11 @@ where
 
         self.subscriptions.unsubscribe(&prefix);
 
-        // Always notify upstream — publisher needs to know to stop sending.
-        // Per ZMQ spec, unsubscription frames must be forwarded upstream so the
-        // publisher can stop delivering unneeded data.
-        let event = SubscriptionEvent::Unsubscribe(prefix);
-        self.send_subscription_event(event).await?;
+        // Send unsubscribe message if verbose mode enabled
+        if self.base.options.xsub_verbose_unsubs {
+            let event = SubscriptionEvent::Unsubscribe(prefix);
+            self.send_subscription_event(event).await?;
+        }
 
         Ok(())
     }
@@ -272,7 +272,7 @@ where
     }
 
     /// Get all subscriptions.
-    pub fn subscriptions(&self) -> &[monocoque_core::subscription::Subscription] {
+    pub fn subscriptions(&self) -> Vec<monocoque_core::subscription::Subscription> {
         self.subscriptions.subscriptions()
     }
 
@@ -401,7 +401,7 @@ impl XSubSocket<TcpStream> {
 
     /// Receive a message with automatic reconnection on EOF or network error.
     ///
-    /// Respects `max_reconnect_attempts`  -  returns `NotConnected` when exhausted.
+    /// Respects `max_reconnect_attempts` — returns `NotConnected` when exhausted.
     pub async fn recv_with_reconnect(&mut self) -> io::Result<Option<Vec<bytes::Bytes>>> {
         let max = self.base.options.max_reconnect_attempts;
         let mut attempts = 0u32;

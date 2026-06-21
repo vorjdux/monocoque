@@ -8,7 +8,7 @@
 ///
 /// When no ZAP handler is registered, attempting to connect to the ZAP
 /// endpoint (inproc://zeromq.zap.01) returns `ErrorKind::NotFound`.  This is
-/// treated as an **authentication failure**  -  the connecting peer is REJECTED
+/// treated as an **authentication failure** — the connecting peer is REJECTED
 /// (equivalent to a 403/400 response).  This implements the correct
 /// "default-deny" security posture: if there is no handler to approve the
 /// connection it must be denied, not silently accepted.
@@ -37,7 +37,7 @@ impl ZapClient {
     ///
     /// If the ZAP endpoint is not bound (no handler registered), connecting
     /// returns `ErrorKind::NotFound`.  Callers MUST treat this as a connection
-    /// rejection  -  see [`ZapClient::authenticate`] and the helper methods.
+    /// rejection — see [`ZapClient::authenticate`] and the helper methods.
     ///
     /// # Arguments
     /// * `timeout` - Timeout for ZAP requests (default: 5 seconds)
@@ -86,10 +86,10 @@ impl ZapClient {
         let frames = request.encode();
         if let Err(e) = self.socket.send(frames).await {
             if e.kind() == io::ErrorKind::NotFound {
-                // No ZAP handler registered  -  deny the connection (default-deny).
+                // No ZAP handler registered — deny the connection (default-deny).
                 return Ok(Self::denial_response(
                     &request.request_id,
-                    "No ZAP handler registered  -  connection denied by default",
+                    "No ZAP handler registered — connection denied by default",
                 ));
             }
             return Err(e);
@@ -107,10 +107,10 @@ impl ZapClient {
                 ))
             }
             Ok(Err(e)) if e.kind() == io::ErrorKind::NotFound => {
-                // Endpoint vanished after send  -  deny (default-deny).
+                // Endpoint vanished after send — deny (default-deny).
                 return Ok(Self::denial_response(
                     &request.request_id,
-                    "ZAP handler unavailable  -  connection denied by default",
+                    "ZAP handler unavailable — connection denied by default",
                 ));
             }
             Ok(Err(e)) => return Err(e),
@@ -123,12 +123,25 @@ impl ZapClient {
         };
 
         // Decode the response
-        ZapResponse::decode(&response_frames).map_err(|e| {
+        let response = ZapResponse::decode(&response_frames).map_err(|e| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("Failed to decode ZAP response: {}", e),
             )
-        })
+        })?;
+
+        // Verify the response is for our request
+        if response.request_id != request.request_id {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "ZAP response request_id mismatch: expected {:?}, got {:?}",
+                    request.request_id, response.request_id
+                ),
+            ));
+        }
+
+        Ok(response)
     }
 
     /// Send a PLAIN authentication request
@@ -218,7 +231,7 @@ mod tests {
         let id2 = next_request_id();
         let id3 = next_request_id();
 
-        // IDs are decimal strings  -  convert for comparison
+        // IDs are decimal strings — convert for comparison
         let n1: u64 = id1.parse().expect("request ID must be a decimal number");
         let n2: u64 = id2.parse().expect("request ID must be a decimal number");
         let n3: u64 = id3.parse().expect("request ID must be a decimal number");
@@ -252,7 +265,7 @@ mod tests {
     /// endpoint is unreachable (no handler registered).
     #[test]
     fn test_denial_response_is_failure() {
-        let resp = ZapClient::denial_response("42", "No ZAP handler registered  -  connection denied by default");
+        let resp = ZapClient::denial_response("42", "No ZAP handler registered — connection denied by default");
         assert_eq!(
             resp.status_code,
             ZapStatus::Failure,

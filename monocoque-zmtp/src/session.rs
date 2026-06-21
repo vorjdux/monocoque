@@ -195,7 +195,13 @@ impl ZmtpSession {
                                 SocketType::Router => "ROUTER",
                                 SocketType::Pub => "PUB",
                                 SocketType::Sub => "SUB",
-                                _ => "DEALER",
+                                SocketType::Xpub => "XPUB",
+                                SocketType::Xsub => "XSUB",
+                                SocketType::Req => "REQ",
+                                SocketType::Rep => "REP",
+                                SocketType::Push => "PUSH",
+                                SocketType::Pull => "PULL",
+                                SocketType::Pair => "PAIR",
                             };
                             let ready_body = build_ready(socket_type_str, None);
                             let ready_frame = encode_frame(FLAG_COMMAND, &ready_body);
