@@ -203,8 +203,15 @@ where
             raw
         );
 
+        // Encrypt if CURVE is active; otherwise plain ZMTP frame.
         let mut wire = BytesMut::new();
-        crate::codec::encode_multipart(&[raw], &mut wire);
+        if let Some(ref mut cipher) = self.base.curve_cipher {
+            let body = cipher.encrypt_frame(&raw, false)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+            crate::base::append_zmtp_cmd_frame(&mut wire, &body);
+        } else {
+            crate::codec::encode_multipart(&[raw], &mut wire);
+        }
         let wire = wire.freeze();
 
         let stream =
