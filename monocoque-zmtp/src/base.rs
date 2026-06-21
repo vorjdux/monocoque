@@ -182,11 +182,16 @@ where
     /// Buffer sizes are taken from `options.read_buffer_size` and `options.write_buffer_size`.
     pub fn new(stream: S, _socket_type: SocketType, options: SocketOptions) -> Self {
         let write_capacity = options.write_buffer_size;
+        let decoder = if let Some(max) = options.max_msg_size {
+            ZmtpDecoder::with_max_frame_size(max)
+        } else {
+            ZmtpDecoder::new()
+        };
         Self {
             stream: Some(stream),
             endpoint: None,
             reconnect: None,
-            decoder: ZmtpDecoder::new(),
+            decoder,
             arena: IoArena::new(),
             recv: SegmentedBuffer::new(),
             write_buf: BytesMut::with_capacity(write_capacity),
@@ -216,11 +221,16 @@ where
     ) -> Self {
         let endpoint_str = endpoint.to_string();
         let write_capacity = options.write_buffer_size;
+        let decoder = if let Some(max) = options.max_msg_size {
+            ZmtpDecoder::with_max_frame_size(max)
+        } else {
+            ZmtpDecoder::new()
+        };
         Self {
             stream: Some(stream),
             endpoint: Some(endpoint),
             reconnect: Some(ReconnectState::new(&options)),
-            decoder: ZmtpDecoder::new(),
+            decoder,
             arena: IoArena::new(),
             recv: SegmentedBuffer::new(),
             write_buf: BytesMut::with_capacity(write_capacity),
@@ -650,6 +660,18 @@ where
         result?;
 
         guard.disarm();
+        Ok(())
+    }
+
+    /// Close the socket gracefully by shutting down the underlying stream.
+    ///
+    /// Sends a TCP FIN (or equivalent) to the peer and drops the connection.
+    /// After this call `is_connected()` returns `false`.
+    pub async fn close(&mut self) -> io::Result<()> {
+        if let Some(ref mut stream) = self.stream {
+            stream.shutdown().await?;
+        }
+        self.stream = None;
         Ok(())
     }
 }

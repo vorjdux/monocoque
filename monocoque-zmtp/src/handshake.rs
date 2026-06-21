@@ -127,10 +127,24 @@ where
     debug!("[HANDSHAKE] Step 2 DONE: Received peer greeting (64 bytes)");
 
     // Validate greeting signature
-    if greeting_buf[0] != 0xFF {
+    if greeting_buf[0] != 0xFF || greeting_buf[9] != 0x7F {
         warn!(
-            "[HANDSHAKE] ZMTP greeting: expected signature byte 0xff at offset 0, got 0x{:02x}",
-            greeting_buf[0]
+            "[HANDSHAKE] ZMTP greeting: invalid signature bytes (expected [0]=0xff [9]=0x7f, got [0]=0x{:02x} [9]=0x{:02x})",
+            greeting_buf[0], greeting_buf[9]
+        );
+        return Err(ZmtpError::Protocol);
+    }
+
+    // Parse peer greeting to check mechanism compatibility
+    use crate::greeting::ZmtpGreeting;
+    let peer_greeting = ZmtpGreeting::parse(&Bytes::copy_from_slice(&greeting_buf[..])).map_err(|_| ZmtpError::Protocol)?;
+    let expected_mech = mechanism.as_greeting_bytes();
+    let peer_mech_str = peer_greeting.mechanism_str();
+    let our_mech_name = std::str::from_utf8(expected_mech).unwrap_or("NULL");
+    if !peer_mech_str.eq_ignore_ascii_case(our_mech_name) {
+        warn!(
+            "[HANDSHAKE] Security mechanism mismatch: we advertise {:?}, peer advertises {:?}",
+            our_mech_name, peer_mech_str
         );
         return Err(ZmtpError::Protocol);
     }

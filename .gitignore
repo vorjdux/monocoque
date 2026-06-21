@@ -113,3 +113,6 @@ __pycache__/
 
 # Fuzzing
 monocoque-fuzz/target/
+
+# Claude Code agent worktrees (runtime artifacts)
+.claude/

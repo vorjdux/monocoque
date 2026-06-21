@@ -150,7 +150,7 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     use compio::buf::BufResult;
-    use monocoque_core::timeout::write_all_with_timeout;
+    use monocoque_core::timeout::{read_exact_with_timeout, write_all_with_timeout};
 
     debug!(
         "[PLAIN CLIENT] Starting PLAIN authentication for user: {}",
@@ -182,20 +182,33 @@ where
     let BufResult(result, _) = buf_result;
     result?;
 
-    // Receive WELCOME or ERROR
-    let response = vec![0u8; 64]; // Max command size
-    let BufResult(result, response) = stream.read(response).await;
-    let n = result?;
+    // Read the first byte to determine response type (command name length)
+    let len_buf = vec![0u8; 1];
+    let BufResult(res, len_buf) = read_exact_with_timeout(stream, len_buf, timeout).await?;
+    res?;
+    let cmd_len = len_buf[0] as usize;
+    if cmd_len == 0 || cmd_len > 32 {
+        warn!("[PLAIN CLIENT] Invalid PLAIN response command length: {}", cmd_len);
+        return Err(ZmtpError::Protocol);
+    }
+    // Read command name
+    let cmd_buf = vec![0u8; cmd_len];
+    let BufResult(res, cmd_buf) = read_exact_with_timeout(stream, cmd_buf, timeout).await?;
+    res?;
 
-    if n >= PLAIN_WELCOME.len() && &response[..PLAIN_WELCOME.len()] == PLAIN_WELCOME {
-        debug!("[PLAIN CLIENT] Authentication successful");
-        Ok(())
-    } else if n >= PLAIN_ERROR.len() && &response[..PLAIN_ERROR.len()] == PLAIN_ERROR {
-        warn!("[PLAIN CLIENT] Authentication failed");
-        Err(ZmtpError::AuthenticationFailed)
-    } else {
-        warn!("[PLAIN CLIENT] Invalid PLAIN response");
-        Err(ZmtpError::Protocol)
+    match cmd_buf.as_slice() {
+        b"WELCOME" => {
+            debug!("[PLAIN CLIENT] Authentication successful");
+            Ok(())
+        }
+        b"ERROR" => {
+            warn!("[PLAIN CLIENT] Authentication failed");
+            Err(ZmtpError::AuthenticationFailed)
+        }
+        other => {
+            warn!("[PLAIN CLIENT] Invalid PLAIN response command: {:?}", String::from_utf8_lossy(other));
+            Err(ZmtpError::Protocol)
+        }
     }
 }
 

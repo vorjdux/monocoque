@@ -888,16 +888,14 @@ impl DealerSocket<InprocStream> {
     /// ```
     pub fn connect_inproc(endpoint: &str, options: SocketOptions) -> io::Result<Self> {
         use crate::inproc_stream::InprocStream;
-        use monocoque_core::inproc::connect_inproc;
 
         debug!("[DEALER] Connecting to inproc endpoint: {}", endpoint);
 
-        // Connect to the inproc endpoint
-        let tx = connect_inproc(endpoint)?;
-
-        // Create receiver for bidirectional communication
-        let (_our_tx, our_rx) = flume::unbounded();
-        let stream = InprocStream::new(tx, our_rx);
+        // connect_inproc_bidi returns (to_server_tx, from_server_rx) so we can
+        // both send to the server and receive replies from it. The server must
+        // have been bound with bind_inproc_bidi.
+        let (tx, rx) = monocoque_core::inproc::connect_inproc_bidi(endpoint)?;
+        let stream = InprocStream::new(tx, rx);
 
         debug!("[DEALER] Connected to inproc endpoint: {}", endpoint);
 

@@ -152,10 +152,10 @@ where
         }
     }
 
-    /// Close the socket gracefully.
-    pub async fn close(self) -> io::Result<()> {
+    /// Close the socket gracefully by shutting down the underlying stream.
+    pub async fn close(mut self) -> io::Result<()> {
         trace!("[PAIR] Closing socket");
-        Ok(())
+        self.base.close().await
     }
 
     /// Get a reference to the socket options.
@@ -508,17 +508,11 @@ impl PairSocket<InprocStream> {
     pub fn connect_inproc_with_options(endpoint: &str, options: SocketOptions) -> io::Result<Self> {
         debug!("[PAIR] Connecting to inproc endpoint: {}", endpoint);
 
-        // Connect to inproc endpoint
-        let tx = monocoque_core::inproc::connect_inproc(endpoint)?;
-
-        // For inproc, we need to create a receiver channel
-        // The sender sends to the bound endpoint, we receive on our own channel
-        let (_our_tx, our_rx) = flume::unbounded();
-
-        // Register our receiver with the sender
-        // This is a bit tricky - we need bidirectional communication
-        // For now, create a stream with the connection sender and a new receiver
-        let stream = InprocStream::new(tx, our_rx);
+        // connect_inproc_bidi returns (to_server_tx, from_server_rx) so we can
+        // both send to the server and receive replies from it. The server must
+        // have been bound with bind_inproc_bidi.
+        let (tx, rx) = monocoque_core::inproc::connect_inproc_bidi(endpoint)?;
+        let stream = InprocStream::new(tx, rx);
 
         // Parse endpoint for storage
         let parsed_endpoint = Endpoint::parse(endpoint)

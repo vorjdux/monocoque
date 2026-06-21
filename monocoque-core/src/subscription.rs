@@ -4,6 +4,7 @@
 //! scanning, especially for large numbers of subscriptions.
 
 use bytes::Bytes;
+use std::collections::BTreeSet;
 
 /// A subscription entry with topic prefix
 #[derive(Debug, Clone)]
@@ -32,73 +33,87 @@ impl Subscription {
     }
 }
 
-/// Efficient subscription storage using a trie structure
+/// Efficient subscription storage using a sorted set for O(log N) operations.
 ///
-/// For high-performance topic matching with many subscriptions.
+/// Backed by a `BTreeSet<Vec<u8>>` which allows O(log N) prefix searching:
+/// find the largest stored prefix ≤ the topic, then check if it is a prefix
+/// of the topic.  Subscribe/unsubscribe are also O(log N).
 #[derive(Debug, Default)]
 pub struct SubscriptionTrie {
-    /// Direct list of subscriptions (simple implementation)
-    /// Can be upgraded to a real trie if needed for performance
-    subscriptions: Vec<Subscription>,
+    prefixes: BTreeSet<Vec<u8>>,
 }
 
 impl SubscriptionTrie {
     /// Create a new empty subscription trie
     #[must_use]
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
-            subscriptions: Vec::new(),
+            prefixes: BTreeSet::new(),
         }
     }
 
     /// Add a subscription
     pub fn subscribe(&mut self, prefix: Bytes) {
-        // Don't add duplicates
-        if !self.subscriptions.iter().any(|s| s.prefix == prefix) {
-            self.subscriptions.push(Subscription::new(prefix));
-        }
+        self.prefixes.insert(prefix.to_vec());
     }
 
     /// Remove a subscription
     pub fn unsubscribe(&mut self, prefix: &Bytes) {
-        self.subscriptions.retain(|s| s.prefix != prefix);
+        self.prefixes.remove(prefix.as_ref());
     }
 
     /// Check if a topic matches any subscription
     ///
     /// Returns true if the topic should be delivered.
+    /// O(log N) using BTreeSet range lookup.
     #[must_use]
     pub fn matches(&self, topic: &[u8]) -> bool {
-        // No subscriptions = don't deliver anything
-        if self.subscriptions.is_empty() {
+        if self.prefixes.is_empty() {
             return false;
         }
 
-        // Check each subscription
-        self.subscriptions.iter().any(|s| s.matches(topic))
+        // Check empty prefix first (matches everything)
+        if self.prefixes.contains(&[][..].to_vec()) {
+            return true;
+        }
+
+        // Find the largest stored prefix <= topic.
+        // Any stored prefix that is a true prefix of `topic` must be <= topic
+        // in lexicographic order, so the best candidate is the largest such key.
+        use std::ops::Bound;
+        if let Some(candidate) = self.prefixes.range::<Vec<u8>, _>((Bound::Unbounded, Bound::Included(&topic.to_vec()))).next_back() {
+            if topic.starts_with(candidate.as_slice()) {
+                return true;
+            }
+        }
+
+        false
     }
 
-    /// Get all subscriptions
+    /// Get all subscriptions as a `Vec<Subscription>`.
     #[must_use]
-    pub fn subscriptions(&self) -> &[Subscription] {
-        &self.subscriptions
+    pub fn subscriptions(&self) -> Vec<Subscription> {
+        self.prefixes
+            .iter()
+            .map(|p| Subscription::new(Bytes::copy_from_slice(p)))
+            .collect()
     }
 
     /// Check if there are no subscriptions
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.subscriptions.is_empty()
+        self.prefixes.is_empty()
     }
 
     /// Get the number of subscriptions
     #[must_use]
     pub fn len(&self) -> usize {
-        self.subscriptions.len()
+        self.prefixes.len()
     }
 
     /// Clear all subscriptions
     pub fn clear(&mut self) {
-        self.subscriptions.clear();
+        self.prefixes.clear();
     }
 }
 
@@ -210,6 +225,26 @@ mod tests {
         assert!(trie.matches(b"topic.foo"));
         assert!(trie.matches(b"events.bar"));
         assert!(!trie.matches(b"other.baz"));
+    }
+
+    #[test]
+    fn test_trie_empty_prefix_matches_all() {
+        let mut trie = SubscriptionTrie::new();
+        trie.subscribe(Bytes::new());
+
+        assert!(trie.matches(b"anything"));
+        assert!(trie.matches(b""));
+    }
+
+    #[test]
+    fn test_trie_no_false_prefix_match() {
+        let mut trie = SubscriptionTrie::new();
+        trie.subscribe(Bytes::from_static(b"topic."));
+
+        // "topic" is a prefix of "topic." but "topic." is NOT a prefix of "topic"
+        assert!(!trie.matches(b"topic"));
+        assert!(trie.matches(b"topic."));
+        assert!(trie.matches(b"topic.sub"));
     }
 
     #[test]

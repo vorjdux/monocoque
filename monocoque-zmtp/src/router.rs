@@ -35,6 +35,9 @@ where
     frames: SmallVec<[Bytes; 4]>,
     /// Peer identity (auto-generated or from handshake)
     peer_identity: Bytes,
+    /// When true, sending to an unknown identity returns an error instead of
+    /// silently dropping the message (ZMQ_ROUTER_MANDATORY).
+    router_mandatory: bool,
 }
 
 impl<S> RouterSocket<S>
@@ -122,10 +125,12 @@ where
 
         debug!("[ROUTER] Socket initialized");
 
+        let router_mandatory = options.router_mandatory;
         Ok(Self {
             base: SocketBase::new(stream, SocketType::Router, options),
             frames: SmallVec::new(),
             peer_identity,
+            router_mandatory,
         })
     }
 
@@ -186,8 +191,10 @@ where
 
     /// Send a message immediately.
     ///
-    /// For ROUTER sockets, the first frame should be the destination identity,
-    /// but since this is a single-peer connection, we skip it and send the rest.
+    /// The first frame of `msg` is the routing identity of the destination peer.
+    /// For this single-peer implementation, the identity must match the connected
+    /// peer's identity or the message is silently dropped (or an error is returned
+    /// if `router_mandatory` mode is enabled).
     ///
     /// Encodes and sends the message in a single I/O operation.
     /// For high-throughput scenarios, consider using `send_buffered()` + `flush()`
@@ -195,8 +202,32 @@ where
     pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
         trace!("[ROUTER] Sending {} frames", msg.len());
 
-        // Skip the first frame (identity) if present and send the rest
-        let frames_to_send = if msg.len() > 1 { &msg[1..] } else { &msg[..] };
+        if msg.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "ROUTER send: empty message",
+            ));
+        }
+
+        // First frame is the routing identity. Validate it against our connected peer.
+        let identity = &msg[0];
+        if *identity != self.peer_identity {
+            if self.router_mandatory {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!(
+                        "ROUTER mandatory: no route for identity {:?}",
+                        identity
+                    ),
+                ));
+            }
+            // Non-mandatory: silently drop messages to unknown peers
+            trace!("[ROUTER] Dropping message to unknown identity {:?}", identity);
+            return Ok(());
+        }
+
+        // Skip the identity frame and send the rest
+        let frames_to_send = &msg[1..];
 
         // Encode message into write_buf
         self.base.write_buf.clear();
@@ -209,15 +240,55 @@ where
         Ok(())
     }
 
+    /// Set ROUTER mandatory mode.
+    ///
+    /// When enabled, sending to an unknown peer identity returns a `NotFound` error
+    /// instead of silently dropping the message.
+    ///
+    /// # ZeroMQ Compatibility
+    ///
+    /// Corresponds to `ZMQ_ROUTER_MANDATORY` (33) option.
+    pub fn set_router_mandatory(&mut self, mandatory: bool) {
+        self.router_mandatory = mandatory;
+        self.base.options.router_mandatory = mandatory;
+    }
+
     /// Send a message to the internal buffer without flushing.
     ///
     /// Use this for batching multiple messages before a single flush.
     /// Call `flush()` to send all buffered messages.
+    ///
+    /// Like `send()`, the first frame must be the routing identity. If the identity
+    /// doesn't match the connected peer, the message is dropped (or an error is
+    /// returned in mandatory mode).
     pub fn send_buffered(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
         trace!("[ROUTER] Buffering {} frames", msg.len());
 
-        // Skip the first frame (identity) and encode the rest
-        let frames_to_send = if msg.len() > 1 { &msg[1..] } else { &msg[..] };
+        if msg.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "ROUTER send_buffered: empty message",
+            ));
+        }
+
+        // Check routing identity
+        let identity = &msg[0];
+        if *identity != self.peer_identity {
+            if self.router_mandatory {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!(
+                        "ROUTER mandatory: no route for identity {:?}",
+                        identity
+                    ),
+                ));
+            }
+            trace!("[ROUTER] Dropping buffered message to unknown identity {:?}", identity);
+            return Ok(());
+        }
+
+        // Skip the identity frame and encode the rest
+        let frames_to_send = &msg[1..];
         encode_multipart(frames_to_send, &mut self.base.send_buffer);
         Ok(())
     }
@@ -231,11 +302,28 @@ where
     }
 
     /// Send multiple messages in a single batch (convenience method).
+    ///
+    /// Each message must have the routing identity as the first frame.
+    /// Messages to unknown identities are silently dropped (or cause an error in mandatory mode).
     pub async fn send_batch(&mut self, messages: &[Vec<Bytes>]) -> io::Result<()> {
         trace!("[ROUTER] Batching {} messages", messages.len());
 
         for msg in messages {
-            let frames_to_send = if msg.len() > 1 { &msg[1..] } else { &msg[..] };
+            if msg.is_empty() {
+                continue;
+            }
+            let identity = &msg[0];
+            if *identity != self.peer_identity {
+                if self.router_mandatory {
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!("ROUTER mandatory: no route for identity {:?}", identity),
+                    ));
+                }
+                trace!("[ROUTER] Skipping batch message to unknown identity {:?}", identity);
+                continue;
+            }
+            let frames_to_send = &msg[1..];
             encode_multipart(frames_to_send, &mut self.base.send_buffer);
         }
 

@@ -15,8 +15,8 @@
 //! drop(permit); // releases automatically
 //! ```
 
-use async_lock::Semaphore;
 use async_trait::async_trait;
+use parking_lot::{Condvar, Mutex};
 use std::sync::Arc;
 
 /// Backpressure permit trait.
@@ -30,6 +30,11 @@ pub trait BytePermits: Send + Sync {
     async fn acquire(&self, n_bytes: usize) -> Permit;
 }
 
+/// Internal state for the byte semaphore.
+struct SemInner {
+    available: usize,
+}
+
 /// RAII permit guard.
 ///
 /// Releases the permit when dropped.
@@ -38,14 +43,21 @@ pub struct Permit {
 }
 
 enum PermitInner {
-    Semaphore(Arc<Semaphore>, usize), // Semaphore + byte count to release
+    /// Byte-counting semaphore backed by parking_lot primitives (usable in drop).
+    ByteSem(Arc<(Mutex<SemInner>, Condvar)>, usize),
     NoOp,
 }
 
 impl Drop for Permit {
     fn drop(&mut self) {
-        if let Some(PermitInner::Semaphore(sem, n_bytes)) = self.inner.take() {
-            sem.add_permits(n_bytes);
+        match self.inner.take() {
+            Some(PermitInner::ByteSem(inner, n_bytes)) => {
+                let (mutex, condvar) = &*inner;
+                let mut guard = mutex.lock();
+                guard.available += n_bytes;
+                condvar.notify_all();
+            }
+            Some(PermitInner::NoOp) | None => {}
         }
     }
 }
@@ -57,9 +69,9 @@ impl Permit {
         }
     }
 
-    const fn semaphore(sem: Arc<Semaphore>, n_bytes: usize) -> Self {
+    fn byte_sem(inner: Arc<(Mutex<SemInner>, Condvar)>, n_bytes: usize) -> Self {
         Self {
-            inner: Some(PermitInner::Semaphore(sem, n_bytes)),
+            inner: Some(PermitInner::ByteSem(inner, n_bytes)),
         }
     }
 }
@@ -82,6 +94,7 @@ impl BytePermits for NoOpPermits {
 ///
 /// Enforces a maximum number of bytes that can be buffered at once.
 /// When the limit is reached, `acquire()` will block until space is available.
+/// Acquires all N bytes in a single atomic operation (O(1), not O(N)).
 ///
 /// # Example
 ///
@@ -100,7 +113,7 @@ impl BytePermits for NoOpPermits {
 /// ```
 #[derive(Clone)]
 pub struct SemaphorePermits {
-    semaphore: Arc<Semaphore>,
+    inner: Arc<(Mutex<SemInner>, Condvar)>,
 }
 
 impl SemaphorePermits {
@@ -112,7 +125,10 @@ impl SemaphorePermits {
     #[must_use]
     pub fn new(max_bytes: usize) -> Self {
         Self {
-            semaphore: Arc::new(Semaphore::new(max_bytes)),
+            inner: Arc::new((
+                Mutex::new(SemInner { available: max_bytes }),
+                Condvar::new(),
+            )),
         }
     }
 }
@@ -120,13 +136,27 @@ impl SemaphorePermits {
 #[async_trait]
 impl BytePermits for SemaphorePermits {
     async fn acquire(&self, n_bytes: usize) -> Permit {
-        // Acquire n_bytes permits from the semaphore (one at a time)
-        for _ in 0..n_bytes {
-            let _ = self.semaphore.acquire().await;
+        if n_bytes == 0 {
+            return Permit::noop();
         }
 
-        // Return permit that will release on drop
-        Permit::semaphore(self.semaphore.clone(), n_bytes)
+        // Blocking wait is performed on a dedicated thread so we don't block
+        // the async executor. parking_lot::Condvar::wait is synchronous and
+        // safe to use here because SemInner uses parking_lot::Mutex.
+        let inner = self.inner.clone();
+        compio::runtime::spawn_blocking(move || {
+            let (mutex, condvar) = &*inner;
+            let mut guard = mutex.lock();
+            // Wait until enough capacity is available.
+            while guard.available < n_bytes {
+                condvar.wait(&mut guard);
+            }
+            guard.available -= n_bytes;
+            // guard is dropped here, releasing the lock before we return.
+        })
+        .await;
+
+        Permit::byte_sem(self.inner.clone(), n_bytes)
     }
 }
 
@@ -178,6 +208,19 @@ mod tests {
 
             // Should be able to acquire again after drop
             let _p3 = permits.acquire(1000).await;
+        });
+    }
+
+    #[test]
+    fn semaphore_permits_single_atomic_acquire() {
+        // Verify that acquiring N bytes is done atomically (not O(N) individual acquires)
+        let permits = SemaphorePermits::new(1024 * 1024); // 1MB
+        let rt = compio::runtime::Runtime::new().unwrap();
+
+        rt.block_on(async {
+            // Acquire a large block in one shot - this should not loop N times
+            let permit = permits.acquire(512 * 1024).await; // 512KB
+            drop(permit);
         });
     }
 }

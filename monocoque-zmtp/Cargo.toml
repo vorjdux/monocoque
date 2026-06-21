@@ -35,6 +35,8 @@ async-trait.workspace = true
 # Security / Cryptography
 x25519-dalek.workspace = true
 chacha20poly1305.workspace = true
+crypto_box.workspace = true
+sha2.workspace = true
 rand.workspace = true
 
 [dev-dependencies]

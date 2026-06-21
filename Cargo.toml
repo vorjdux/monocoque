@@ -39,6 +39,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Cryptography
 x25519-dalek = { version = "2.0", features = ["static_secrets"] }
 chacha20poly1305 = "0.10"
+crypto_box = { version = "0.9", features = ["salsa20"] }
+sha2 = "0.10"
 rand = "0.8"
 
 # System utilities
