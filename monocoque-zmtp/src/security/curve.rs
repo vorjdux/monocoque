@@ -2,45 +2,36 @@
 //!
 //! CurveZMQ provides public-key cryptography with perfect forward secrecy:
 //! - Elliptic curve Diffie-Hellman key exchange (X25519)
-//! - Authenticated encryption (ChaCha20-Poly1305)
+//! - Authenticated encryption (XSalsa20-Poly1305 for handshake, XChaCha20-Poly1305 for messages)
 //! - Resistance to man-in-the-middle attacks
-//! - Zero-knowledge password proofs
+//! - Zero-knowledge proof of long-term key ownership via vouch
 //!
-//! ## Security Properties
-//!
-//! - **Confidentiality**: All messages encrypted with ephemeral keys
-//! - **Authentication**: Server key verified by client
-//! - **Perfect Forward Secrecy**: Compromise of long-term keys doesn't reveal past messages
-//! - **Replay Protection**: Nonces prevent message replay
-//!
-//! ## Protocol Flow (CurveZMQ)
+//! ## Protocol Flow (CurveZMQ RFC 26)
 //!
 //! ```text
 //! Client                                Server
 //!   |                                      |
-//!   |--- HELLO (client ephemeral key) --->|
+//!   |--- HELLO (c'.pk + box proof) ------>|
 //!   |                                      |
-//!   |<-- WELCOME (server ephemeral key) ---|
-//!   |         + encrypted cookie           |
+//!   |<-- WELCOME (s'.pk + cookie) --------|
 //!   |                                      |
-//!   |--- INITIATE (proof of key) -------->|
-//!   |      + encrypted metadata            |
+//!   |--- INITIATE (cookie + vouch) ------>|
 //!   |                                      |
 //!   |<-- READY (confirmation) ------------|
 //!   |                                      |
 //!   |<=== Encrypted MESSAGE frames ======>|
 //! ```
 //!
-//! ## Key Types
+//! ## Wire Sizes
 //!
-//! - **Long-term keys**: Server's permanent identity (32-byte public/secret pair)
-//! - **Short-term keys**: Ephemeral keys per connection
-//! - **Shared secrets**: Computed via X25519 key exchange
+//! - HELLO:    198 bytes = 6 + 1 + 71 + 32 + 8 + 80
+//! - WELCOME:  168 bytes = 8 + 16 + 144
+//! - INITIATE: 257 bytes = 9 + 96 + 32 + 8 + 112  (empty metadata)
+//! - READY:      6 bytes (header only)
 //!
 //! ## References
 //!
 //! - RFC 26: <https://rfc.zeromq.org/spec/26/>
-//! - CurveCP: <https://curvecp.org/>
 
 use bytes::{Bytes, BytesMut};
 use chacha20poly1305::{
@@ -48,7 +39,12 @@ use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
 };
 use compio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use crypto_box::{
+    aead::generic_array::GenericArray,
+    PublicKey as SalsaPublicKey, SalsaBox, SecretKey as SalsaSecretKey,
+};
 use rand::RngCore;
+use sha2::{Digest, Sha256};
 use std::time::Duration;
 use thiserror::Error;
 use tracing::{debug, warn};
@@ -70,7 +66,7 @@ pub const CURVE_KEY_SIZE: usize = 32;
 /// Size of a CURVE nonce in bytes.
 pub const CURVE_NONCE_SIZE: usize = 24;
 /// Overhead added by the Poly1305 authentication tag.
-pub const CURVE_BOX_OVERHEAD: usize = 16; // Poly1305 tag
+pub const CURVE_BOX_OVERHEAD: usize = 16;
 
 /// CURVE public key (32 bytes)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -135,6 +131,11 @@ impl CurveSecretKey {
     pub fn diffie_hellman(&self, peer_public: &CurvePublicKey) -> [u8; CURVE_KEY_SIZE] {
         *self.0.diffie_hellman(&peer_public.to_x25519()).as_bytes()
     }
+
+    /// Return raw scalar bytes for use with crypto_box primitives
+    fn to_raw_bytes(&self) -> [u8; CURVE_KEY_SIZE] {
+        self.0.to_bytes()
+    }
 }
 
 impl std::fmt::Debug for CurveSecretKey {
@@ -166,39 +167,72 @@ impl CurveKeyPair {
     }
 }
 
-/// CURVE encryption box (XChaCha20-Poly1305, 24-byte nonce)
+// ── NaCl box helpers ──────────────────────────────────────────────────────────
+
+/// Encrypt using NaCl crypto_box (X25519 + XSalsa20-Poly1305).
+///
+/// `their_pk` and `my_sk` are raw 32-byte X25519 scalars.
+/// `nonce_24` must be a 24-byte nonce (typically a prefix + counter/random).
+fn salsa_encrypt(
+    their_pk: &[u8; 32],
+    my_sk: &[u8; 32],
+    nonce_24: &[u8; 24],
+    plaintext: &[u8],
+) -> Result<Vec<u8>, CurveError> {
+    let pk = SalsaPublicKey::from(*their_pk);
+    let sk = SalsaSecretKey::from(*my_sk);
+    let box_ = SalsaBox::new(&pk, &sk);
+    let nonce = GenericArray::from(*nonce_24);
+    box_.encrypt(&nonce, plaintext)
+        .map_err(|_| CurveError::EncryptionFailed)
+}
+
+/// Decrypt using NaCl crypto_box (X25519 + XSalsa20-Poly1305).
+fn salsa_decrypt(
+    their_pk: &[u8; 32],
+    my_sk: &[u8; 32],
+    nonce_24: &[u8; 24],
+    ciphertext: &[u8],
+) -> Result<Vec<u8>, CurveError> {
+    let pk = SalsaPublicKey::from(*their_pk);
+    let sk = SalsaSecretKey::from(*my_sk);
+    let box_ = SalsaBox::new(&pk, &sk);
+    let nonce = GenericArray::from(*nonce_24);
+    box_.decrypt(&nonce, ciphertext)
+        .map_err(|_| CurveError::DecryptionFailed)
+}
+
+// ── Message box (XChaCha20-Poly1305) ─────────────────────────────────────────
+
+/// Post-handshake message encryption box (XChaCha20-Poly1305).
+///
+/// Keyed by SHA-256(c'·S ‖ C·s' ‖ c'·s') per the 3-way DH derivation.
 struct CurveBox {
     cipher: XChaCha20Poly1305,
 }
 
 impl CurveBox {
-    fn new(shared_secret: &[u8; CURVE_KEY_SIZE]) -> Self {
-        let cipher = XChaCha20Poly1305::new(shared_secret.into());
+    fn new(key: &[u8; CURVE_KEY_SIZE]) -> Self {
+        let cipher = XChaCha20Poly1305::new(key.into());
         Self { cipher }
     }
 
-    fn encrypt(
-        &self,
-        plaintext: &[u8],
-        nonce: &[u8; CURVE_NONCE_SIZE],
-    ) -> Result<Vec<u8>, CurveError> {
+    fn encrypt(&self, plaintext: &[u8], nonce: &[u8; CURVE_NONCE_SIZE]) -> Result<Vec<u8>, CurveError> {
         let nonce = XNonce::from_slice(nonce);
         self.cipher
             .encrypt(nonce, plaintext)
             .map_err(|_| CurveError::EncryptionFailed)
     }
 
-    fn decrypt(
-        &self,
-        ciphertext: &[u8],
-        nonce: &[u8; CURVE_NONCE_SIZE],
-    ) -> Result<Vec<u8>, CurveError> {
+    fn decrypt(&self, ciphertext: &[u8], nonce: &[u8; CURVE_NONCE_SIZE]) -> Result<Vec<u8>, CurveError> {
         let nonce = XNonce::from_slice(nonce);
         self.cipher
             .decrypt(nonce, ciphertext)
             .map_err(|_| CurveError::DecryptionFailed)
     }
 }
+
+// ── Message parsing ───────────────────────────────────────────────────────────
 
 struct CurveMessageParts<'a> {
     short_nonce: &'a [u8],
@@ -211,16 +245,29 @@ fn parse_curve_message(message: &[u8]) -> Result<CurveMessageParts<'_>, CurveErr
     if message.len() < command_len + CURVE_MESSAGE_NONCE_SIZE {
         return Err(CurveError::ProtocolViolation);
     }
-
     if &message[..command_len] != CURVE_MESSAGE {
         return Err(CurveError::ProtocolViolation);
     }
-
     Ok(CurveMessageParts {
         short_nonce: &message[command_len..command_len + CURVE_MESSAGE_NONCE_SIZE],
         ciphertext: &message[command_len + CURVE_MESSAGE_NONCE_SIZE..],
     })
 }
+
+// ── Key derivation ────────────────────────────────────────────────────────────
+
+/// Derive the post-handshake message key via SHA-256 of the three DH legs.
+///
+/// `dh1` = c'·S, `dh2` = C·s', `dh3` = c'·s'.
+fn derive_message_key(dh1: &[u8; 32], dh2: &[u8; 32], dh3: &[u8; 32]) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(dh1);
+    h.update(dh2);
+    h.update(dh3);
+    h.finalize().into()
+}
+
+// ── Errors ────────────────────────────────────────────────────────────────────
 
 /// CURVE-specific errors
 #[derive(Debug, Error)]
@@ -248,17 +295,20 @@ pub enum CurveError {
     Io(#[from] std::io::Error),
 }
 
+// ── CurveClient ───────────────────────────────────────────────────────────────
+
 /// CURVE client state machine
 pub struct CurveClient {
-    /// Client's long-term key pair
+    /// Client's long-term key pair (C / c)
     client_keypair: CurveKeyPair,
-    /// Server's long-term public key  -  needed to verify the WELCOME message signature
-    /// when full CurveZMQ server authentication is implemented.
-    _server_public: CurvePublicKey,
-    /// Client's short-term (ephemeral) key pair
+    /// Server's long-term public key (S)
+    server_public: CurvePublicKey,
+    /// Client's short-term (ephemeral) key pair (C' / c')
     client_short_keypair: CurveKeyPair,
-    /// Server's short-term public key (received in WELCOME)
+    /// Server's short-term public key received in WELCOME (s')
     server_short_public: Option<CurvePublicKey>,
+    /// Cookie received in WELCOME, echoed back in INITIATE (96 bytes)
+    cookie: Option<Vec<u8>>,
     /// Send nonce counter
     send_nonce: u64,
     /// Next expected receive nonce counter (replay protection)
@@ -272,16 +322,17 @@ impl CurveClient {
     pub fn new(client_keypair: CurveKeyPair, server_public: CurvePublicKey) -> Self {
         Self {
             client_keypair,
-            _server_public: server_public,
+            server_public,
             client_short_keypair: CurveKeyPair::generate(),
             server_short_public: None,
+            cookie: None,
             send_nonce: 0,
             recv_nonce: 0,
             message_box: None,
         }
     }
 
-    /// Perform client handshake
+    /// Perform full client handshake: HELLO → WELCOME → INITIATE → READY
     pub async fn handshake<S>(
         &mut self,
         stream: &mut S,
@@ -297,7 +348,11 @@ impl CurveClient {
         Ok(())
     }
 
-    /// Send HELLO command
+    /// Send HELLO command (198 bytes)
+    ///
+    /// Body: version(1) + padding(71) + c'.pk(32) + nonce_suffix(8) + hello_box(80)
+    ///
+    /// hello_box = SalsaBox(c'→S).encrypt([0u8;64], "CurveZMQHELLO---" ‖ nonce_suffix)
     async fn send_hello<S>(
         &mut self,
         stream: &mut S,
@@ -311,29 +366,41 @@ impl CurveClient {
 
         debug!("[CURVE CLIENT] Sending HELLO");
 
-        let mut hello = BytesMut::new();
-        hello.extend_from_slice(CURVE_HELLO);
+        let nonce_counter: u64 = 1;
+        let mut nonce_24 = [0u8; 24];
+        nonce_24[..16].copy_from_slice(b"CurveZMQHELLO---");
+        nonce_24[16..].copy_from_slice(&nonce_counter.to_be_bytes());
 
-        // Version (1 byte, always 1)
-        hello.extend_from_slice(&[1u8]);
+        let hello_box = salsa_encrypt(
+            self.server_public.as_bytes(),
+            &self.client_short_keypair.secret.to_raw_bytes(),
+            &nonce_24,
+            &[0u8; 64],
+        )
+        .map_err(|_| ZmtpError::Protocol)?;
+        // hello_box = 64 + 16 = 80 bytes
 
-        // Client short-term public key (32 bytes)
-        hello.extend_from_slice(self.client_short_keypair.public.as_bytes());
+        let mut frame = BytesMut::with_capacity(198);
+        frame.extend_from_slice(CURVE_HELLO);                                     //  6
+        frame.extend_from_slice(&[1u8]);                                          //  1  version
+        frame.extend_from_slice(&[0u8; 71]);                                      // 71  padding
+        frame.extend_from_slice(self.client_short_keypair.public.as_bytes());     // 32  c'.pk
+        frame.extend_from_slice(&nonce_counter.to_be_bytes());                    //  8  nonce
+        frame.extend_from_slice(&hello_box);                                      // 80  box
+        // total = 198
 
-        // Nonce (8 bytes of zeros for HELLO)
-        hello.extend_from_slice(&[0u8; 8]);
-
-        // Signature (64 bytes, zeros for now - simplified)
-        hello.extend_from_slice(&[0u8; 64]);
-
-        let buf_result = write_all_with_timeout(stream, hello.freeze().to_vec(), timeout)
-            .await
-            .map_err(ZmtpError::from)?;
-        let BufResult(result, _) = buf_result;
-        result.map_err(Into::into)
+        let BufResult(r, _) =
+            write_all_with_timeout(stream, frame.freeze().to_vec(), timeout)
+                .await
+                .map_err(ZmtpError::from)?;
+        r.map_err(Into::into)
     }
 
-    /// Receive WELCOME command
+    /// Receive and decrypt WELCOME command (168 bytes)
+    ///
+    /// Body: server_nonce(16) + welcome_box(144)
+    ///
+    /// welcome_box decrypts to: s'.pk(32) + cookie(96)
     async fn recv_welcome<S>(
         &mut self,
         stream: &mut S,
@@ -347,44 +414,62 @@ impl CurveClient {
 
         debug!("[CURVE CLIENT] Waiting for WELCOME");
 
-        // Read WELCOME command name including the length prefix.
         let header = vec![0u8; CURVE_WELCOME.len()];
-        let buf_result = read_exact_with_timeout(stream, header, timeout)
-            .await
-            .map_err(ZmtpError::from)?;
-        let BufResult(result, header) = buf_result;
-        result?;
-
+        let BufResult(r, header) =
+            read_exact_with_timeout(stream, header, timeout).await.map_err(ZmtpError::from)?;
+        r?;
         if &header[..] != CURVE_WELCOME {
             warn!("[CURVE CLIENT] Invalid WELCOME header");
             return Err(ZmtpError::Protocol);
         }
 
-        // Read server short-term public key (32 bytes)
-        let server_short_key = vec![0u8; CURVE_KEY_SIZE];
-        let buf_result = read_exact_with_timeout(stream, server_short_key, timeout)
-            .await
-            .map_err(ZmtpError::from)?;
-        let BufResult(result, server_short_key) = buf_result;
-        result?;
+        // server_nonce: 16 random bytes
+        let BufResult(r, server_nonce_16) =
+            read_exact_with_timeout(stream, vec![0u8; 16], timeout).await.map_err(ZmtpError::from)?;
+        r?;
 
-        let mut key_array = [0u8; CURVE_KEY_SIZE];
-        key_array.copy_from_slice(&server_short_key);
-        self.server_short_public = Some(CurvePublicKey::from_bytes(key_array));
+        // welcome_box: 144 bytes
+        let BufResult(r, welcome_box) =
+            read_exact_with_timeout(stream, vec![0u8; 144], timeout).await.map_err(ZmtpError::from)?;
+        r?;
 
-        // Read encrypted cookie (96 bytes)
-        let cookie = vec![0u8; 96];
-        let buf_result = read_exact_with_timeout(stream, cookie, timeout)
-            .await
-            .map_err(ZmtpError::from)?;
-        let BufResult(result, _cookie) = buf_result;
-        result?;
+        // Decrypt: SalsaBox(S→c') using c'_sk + S_pk
+        let mut nonce_24 = [0u8; 24];
+        nonce_24[..8].copy_from_slice(b"WELCOME-");
+        nonce_24[8..].copy_from_slice(&server_nonce_16);
 
-        debug!("[CURVE CLIENT] Received WELCOME");
+        let plaintext = salsa_decrypt(
+            self.server_public.as_bytes(),
+            &self.client_short_keypair.secret.to_raw_bytes(),
+            &nonce_24,
+            &welcome_box,
+        )
+        .map_err(|_| {
+            warn!("[CURVE CLIENT] Failed to decrypt WELCOME box");
+            ZmtpError::Protocol
+        })?;
+
+        // plaintext = s'.pk(32) + cookie(96) = 128 bytes
+        if plaintext.len() != 128 {
+            warn!("[CURVE CLIENT] WELCOME plaintext wrong size: {}", plaintext.len());
+            return Err(ZmtpError::Protocol);
+        }
+
+        let mut s_prime_pk = [0u8; 32];
+        s_prime_pk.copy_from_slice(&plaintext[..32]);
+        self.server_short_public = Some(CurvePublicKey::from_bytes(s_prime_pk));
+        self.cookie = Some(plaintext[32..128].to_vec());
+
+        debug!("[CURVE CLIENT] Received WELCOME, stored s'.pk and cookie");
         Ok(())
     }
 
-    /// Send INITIATE command
+    /// Send INITIATE command (257 bytes with empty metadata)
+    ///
+    /// Body: cookie(96) + C(32) + nonce_suffix(8) + initiate_box(112)
+    ///
+    /// initiate_box = SalsaBox(c'→s').encrypt(vouch, "CurveZMQINITIATE" ‖ nonce_suffix)
+    /// vouch = vouch_nonce_16(16) + SalsaBox(C→S).encrypt(c'.pk ‖ s'.pk, "VOUCH---" ‖ vouch_nonce_16)
     async fn send_initiate<S>(
         &mut self,
         stream: &mut S,
@@ -398,28 +483,65 @@ impl CurveClient {
 
         debug!("[CURVE CLIENT] Sending INITIATE");
 
-        let mut initiate = BytesMut::new();
-        initiate.extend_from_slice(CURVE_INITIATE);
+        let server_short_public = self.server_short_public.ok_or(ZmtpError::Protocol)?;
+        let cookie = self.cookie.as_ref().ok_or(ZmtpError::Protocol)?;
 
-        // Client long-term public key (32 bytes)
-        initiate.extend_from_slice(self.client_keypair.public.as_bytes());
+        // Build vouch: Box[c'.pk ‖ s'.pk](C→S)
+        let mut vouch_nonce_16 = [0u8; 16];
+        rand::thread_rng().fill_bytes(&mut vouch_nonce_16);
+        let mut vouch_nonce_24 = [0u8; 24];
+        vouch_nonce_24[..8].copy_from_slice(b"VOUCH---");
+        vouch_nonce_24[8..].copy_from_slice(&vouch_nonce_16);
 
-        // Nonce (8 bytes)
-        let mut nonce = [0u8; 8];
-        rand::thread_rng().fill_bytes(&mut nonce);
-        initiate.extend_from_slice(&nonce);
+        let mut vouch_pt = [0u8; 64];
+        vouch_pt[..32].copy_from_slice(self.client_short_keypair.public.as_bytes()); // c'.pk
+        vouch_pt[32..].copy_from_slice(server_short_public.as_bytes());              // s'.pk
 
-        // Encrypted vouch (128 bytes)
-        initiate.extend_from_slice(&[0u8; 128]);
+        let vouch_ct = salsa_encrypt(
+            self.server_public.as_bytes(),
+            &self.client_keypair.secret.to_raw_bytes(),
+            &vouch_nonce_24,
+            &vouch_pt,
+        )
+        .map_err(|_| ZmtpError::Protocol)?;
+        // vouch_ct = 64 + 16 = 80 bytes
 
-        let buf_result = write_all_with_timeout(stream, initiate.freeze().to_vec(), timeout)
-            .await
-            .map_err(ZmtpError::from)?;
-        let BufResult(result, _) = buf_result;
-        result.map_err(Into::into)
+        // vouch = vouch_nonce_16(16) + vouch_ct(80) = 96 bytes
+        let mut vouch = Vec::with_capacity(96);
+        vouch.extend_from_slice(&vouch_nonce_16);
+        vouch.extend_from_slice(&vouch_ct);
+
+        // Build initiate_box: Box[vouch ‖ metadata](c'→s')
+        let initiate_counter: u64 = 1;
+        let mut initiate_nonce_24 = [0u8; 24];
+        initiate_nonce_24[..16].copy_from_slice(b"CurveZMQINITIATE");
+        initiate_nonce_24[16..].copy_from_slice(&initiate_counter.to_be_bytes());
+
+        let initiate_box = salsa_encrypt(
+            server_short_public.as_bytes(),
+            &self.client_short_keypair.secret.to_raw_bytes(),
+            &initiate_nonce_24,
+            &vouch, // plaintext = vouch (96), no metadata
+        )
+        .map_err(|_| ZmtpError::Protocol)?;
+        // initiate_box = 96 + 16 = 112 bytes
+
+        let mut frame = BytesMut::with_capacity(257);
+        frame.extend_from_slice(CURVE_INITIATE);                               //   9
+        frame.extend_from_slice(cookie);                                        //  96
+        frame.extend_from_slice(self.client_keypair.public.as_bytes());        //  32  C
+        frame.extend_from_slice(&initiate_counter.to_be_bytes());              //   8
+        frame.extend_from_slice(&initiate_box);                                // 112
+        // total = 257
+
+        let BufResult(r, _) =
+            write_all_with_timeout(stream, frame.freeze().to_vec(), timeout)
+                .await
+                .map_err(ZmtpError::from)?;
+        r.map_err(Into::into)
     }
 
-    /// Receive READY command
+    /// Receive READY command and derive the message box key
     async fn recv_ready<S>(
         &mut self,
         stream: &mut S,
@@ -433,41 +555,35 @@ impl CurveClient {
 
         debug!("[CURVE CLIENT] Waiting for READY");
 
-        // Read READY command name including the length prefix.
-        let header = vec![0u8; CURVE_READY.len()];
-        let buf_result = read_exact_with_timeout(stream, header, timeout)
-            .await
-            .map_err(ZmtpError::from)?;
-        let BufResult(result, header) = buf_result;
-        result?;
+        let BufResult(r, header) =
+            read_exact_with_timeout(stream, vec![0u8; CURVE_READY.len()], timeout)
+                .await
+                .map_err(ZmtpError::from)?;
+        r?;
 
         if &header[..] != CURVE_READY {
             warn!("[CURVE CLIENT] Invalid READY header");
             return Err(ZmtpError::Protocol);
         }
 
-        // Compute shared secret for message encryption
-        let server_short_public = self.server_short_public.ok_or(ZmtpError::Protocol)?;
+        // Derive message key: SHA-256(c'·S ‖ C·s' ‖ c'·s')
+        let s_prime = self.server_short_public.ok_or(ZmtpError::Protocol)?;
+        let dh1 = self.client_short_keypair.secret.diffie_hellman(&self.server_public); // c'·S
+        let dh2 = self.client_keypair.secret.diffie_hellman(&s_prime);                  // C·s'
+        let dh3 = self.client_short_keypair.secret.diffie_hellman(&s_prime);            // c'·s'
 
-        let shared_secret = self
-            .client_short_keypair
-            .secret
-            .diffie_hellman(&server_short_public);
-
-        self.message_box = Some(CurveBox::new(&shared_secret));
+        let key = derive_message_key(&dh1, &dh2, &dh3);
+        self.message_box = Some(CurveBox::new(&key));
 
         debug!("[CURVE CLIENT] Handshake complete");
         Ok(())
     }
 
-    /// Encrypt a message
+    /// Encrypt a message for the server
     pub fn encrypt_message(&mut self, plaintext: &[u8]) -> Result<Bytes, CurveError> {
-        let message_box = self
-            .message_box
-            .as_ref()
-            .ok_or(CurveError::ProtocolViolation)?;
+        let message_box = self.message_box.as_ref().ok_or(CurveError::ProtocolViolation)?;
 
-        // Create nonce (24 bytes: "CurveZMQMESSAGEC" + 8-byte counter)
+        // Nonce = "CurveZMQMESSAGEC" + 8-byte counter (client→server)
         let mut nonce = [0u8; CURVE_NONCE_SIZE];
         nonce[..16].copy_from_slice(b"CurveZMQMESSAGEC");
         nonce[16..].copy_from_slice(&self.send_nonce.to_be_bytes());
@@ -477,19 +593,16 @@ impl CurveClient {
 
         let mut message = BytesMut::new();
         message.extend_from_slice(CURVE_MESSAGE);
-        message.extend_from_slice(&nonce[16..]); // Only send counter part
+        message.extend_from_slice(&nonce[16..]); // 8-byte counter suffix only
         message.extend_from_slice(&ciphertext);
 
         Ok(message.freeze())
     }
 
-    /// Decrypt a message
+    /// Decrypt a message from the server
     pub fn decrypt_message(&mut self, message: &[u8]) -> Result<Bytes, CurveError> {
         let parts = parse_curve_message(message)?;
-        let message_box = self
-            .message_box
-            .as_ref()
-            .ok_or(CurveError::ProtocolViolation)?;
+        let message_box = self.message_box.as_ref().ok_or(CurveError::ProtocolViolation)?;
 
         let counter = u64::from_be_bytes(
             parts.short_nonce.try_into().map_err(|_| CurveError::InvalidNonce)?,
@@ -499,6 +612,7 @@ impl CurveClient {
         }
         self.recv_nonce = counter + 1;
 
+        // Reconstruct full 24-byte nonce (server→client direction)
         let mut nonce = [0u8; CURVE_NONCE_SIZE];
         nonce[..16].copy_from_slice(b"CurveZMQMESSAGES");
         nonce[16..].copy_from_slice(parts.short_nonce);
@@ -508,17 +622,20 @@ impl CurveClient {
     }
 }
 
+// ── CurveServer ───────────────────────────────────────────────────────────────
+
 /// CURVE server state machine
 pub struct CurveServer {
-    /// Server's long-term key pair  -  needed to sign the WELCOME message nonce
-    /// when full CurveZMQ server authentication is implemented.
-    _server_keypair: CurveKeyPair,
-    /// Server's short-term (ephemeral) key pair
+    /// Server's long-term key pair (S / s)
+    server_keypair: CurveKeyPair,
+    /// Server's short-term (ephemeral) key pair (S' / s')
     server_short_keypair: CurveKeyPair,
-    /// Client's short-term public key (received in HELLO)
+    /// Client's short-term public key received in HELLO (c')
     client_short_public: Option<CurvePublicKey>,
-    /// Client's long-term public key (received in INITIATE)
+    /// Client's long-term public key received in INITIATE (C)
     client_public: Option<CurvePublicKey>,
+    /// Symmetric key for cookie encryption/decryption (32 bytes, random per-server)
+    cookie_key: [u8; 32],
     /// Send nonce counter
     send_nonce: u64,
     /// Next expected receive nonce counter (replay protection)
@@ -530,18 +647,23 @@ pub struct CurveServer {
 impl CurveServer {
     /// Create new CURVE server
     pub fn new(server_keypair: CurveKeyPair) -> Self {
+        let mut cookie_key = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut cookie_key);
         Self {
-            _server_keypair: server_keypair,
+            server_keypair,
             server_short_keypair: CurveKeyPair::generate(),
             client_short_public: None,
             client_public: None,
+            cookie_key,
             send_nonce: 0,
             recv_nonce: 0,
             message_box: None,
         }
     }
 
-    /// Perform server handshake
+    /// Perform full server handshake: HELLO → WELCOME → INITIATE → READY
+    ///
+    /// Returns the client's authenticated long-term public key.
     pub async fn handshake<S>(
         &mut self,
         stream: &mut S,
@@ -554,12 +676,10 @@ impl CurveServer {
         self.send_welcome(stream, timeout).await?;
         self.recv_initiate(stream, timeout).await?;
         self.send_ready(stream, timeout).await?;
-
-        // Return client's public key for authentication
         Ok(self.client_public.unwrap())
     }
 
-    /// Receive HELLO command
+    /// Receive and verify HELLO command
     async fn recv_hello<S>(
         &mut self,
         stream: &mut S,
@@ -573,52 +693,79 @@ impl CurveServer {
 
         debug!("[CURVE SERVER] Waiting for HELLO");
 
-        // Read HELLO command name including the length prefix.
-        let header = vec![0u8; CURVE_HELLO.len()];
-        let buf_result = read_exact_with_timeout(stream, header, timeout)
-            .await
-            .map_err(ZmtpError::from)?;
-        let BufResult(result, header) = buf_result;
-        result?;
-
+        let BufResult(r, header) =
+            read_exact_with_timeout(stream, vec![0u8; CURVE_HELLO.len()], timeout)
+                .await
+                .map_err(ZmtpError::from)?;
+        r?;
         if &header[..] != CURVE_HELLO {
             warn!("[CURVE SERVER] Invalid HELLO header");
             return Err(ZmtpError::Protocol);
         }
 
-        // Read version (1 byte)
-        let version = vec![0u8; 1];
-        let buf_result = read_exact_with_timeout(stream, version, timeout)
-            .await
-            .map_err(ZmtpError::from)?;
-        let BufResult(result, _version) = buf_result;
-        result?;
+        // version (1 byte)
+        let BufResult(r, ver) =
+            read_exact_with_timeout(stream, vec![0u8; 1], timeout).await.map_err(ZmtpError::from)?;
+        r?;
+        if ver[0] != 1 {
+            warn!("[CURVE SERVER] Unsupported HELLO version: {}", ver[0]);
+            return Err(ZmtpError::Protocol);
+        }
 
-        // Read client short-term public key (32 bytes)
-        let client_short_key = vec![0u8; CURVE_KEY_SIZE];
-        let buf_result = read_exact_with_timeout(stream, client_short_key, timeout)
-            .await
-            .map_err(ZmtpError::from)?;
-        let BufResult(result, client_short_key) = buf_result;
-        result?;
+        // padding (71 bytes) — discard
+        let BufResult(r, _) =
+            read_exact_with_timeout(stream, vec![0u8; 71], timeout).await.map_err(ZmtpError::from)?;
+        r?;
 
-        let mut key_array = [0u8; CURVE_KEY_SIZE];
-        key_array.copy_from_slice(&client_short_key);
-        self.client_short_public = Some(CurvePublicKey::from_bytes(key_array));
+        // c'.pk (32 bytes)
+        let BufResult(r, c_prime_pk_buf) =
+            read_exact_with_timeout(stream, vec![0u8; 32], timeout).await.map_err(ZmtpError::from)?;
+        r?;
+        let mut c_prime_pk = [0u8; 32];
+        c_prime_pk.copy_from_slice(&c_prime_pk_buf);
+        self.client_short_public = Some(CurvePublicKey::from_bytes(c_prime_pk));
 
-        // Skip nonce and signature (72 bytes)
-        let skip_buf = vec![0u8; 72];
-        let buf_result = read_exact_with_timeout(stream, skip_buf, timeout)
-            .await
-            .map_err(ZmtpError::from)?;
-        let BufResult(result, _) = buf_result;
-        result?;
+        // nonce_suffix (8 bytes)
+        let BufResult(r, nonce_suffix) =
+            read_exact_with_timeout(stream, vec![0u8; 8], timeout).await.map_err(ZmtpError::from)?;
+        r?;
 
-        debug!("[CURVE SERVER] Received HELLO");
+        // hello_box (80 bytes)
+        let BufResult(r, hello_box) =
+            read_exact_with_timeout(stream, vec![0u8; 80], timeout).await.map_err(ZmtpError::from)?;
+        r?;
+
+        // Verify: SalsaBox(S→c') decrypt using S_sk + c'_pk
+        let mut nonce_24 = [0u8; 24];
+        nonce_24[..16].copy_from_slice(b"CurveZMQHELLO---");
+        nonce_24[16..].copy_from_slice(&nonce_suffix);
+
+        let plaintext = salsa_decrypt(
+            &c_prime_pk,
+            &self.server_keypair.secret.to_raw_bytes(),
+            &nonce_24,
+            &hello_box,
+        )
+        .map_err(|_| {
+            warn!("[CURVE SERVER] HELLO box authentication failed");
+            ZmtpError::AuthenticationFailed
+        })?;
+
+        // The box plaintext must be exactly 64 zero bytes
+        if plaintext.len() != 64 || plaintext.iter().any(|&b| b != 0) {
+            warn!("[CURVE SERVER] HELLO box plaintext is not 64 zeros");
+            return Err(ZmtpError::AuthenticationFailed);
+        }
+
+        debug!("[CURVE SERVER] HELLO verified");
         Ok(())
     }
 
-    /// Send WELCOME command
+    /// Build and send WELCOME command (168 bytes)
+    ///
+    /// Body: server_nonce_16(16) + welcome_box(144)
+    ///
+    /// Cookie = cookie_nonce_16(16) + XChaCha20.encrypt(c'.pk ‖ s'.sk, "COOKIE--" ‖ cookie_nonce_16)
     async fn send_welcome<S>(
         &mut self,
         stream: &mut S,
@@ -632,23 +779,68 @@ impl CurveServer {
 
         debug!("[CURVE SERVER] Sending WELCOME");
 
-        let mut welcome = BytesMut::new();
-        welcome.extend_from_slice(CURVE_WELCOME);
+        let c_prime_pk = self.client_short_public.ok_or(ZmtpError::Protocol)?;
 
-        // Server short-term public key (32 bytes)
-        welcome.extend_from_slice(self.server_short_keypair.public.as_bytes());
+        // Build cookie (96 bytes): cookie_nonce_16 + XChaCha20ct(c'.pk ‖ s'.sk_bytes)
+        let mut cookie_nonce_16 = [0u8; 16];
+        rand::thread_rng().fill_bytes(&mut cookie_nonce_16);
+        let mut cookie_nonce_24 = [0u8; 24];
+        cookie_nonce_24[..8].copy_from_slice(b"COOKIE--");
+        cookie_nonce_24[8..].copy_from_slice(&cookie_nonce_16);
 
-        // Encrypted cookie (96 bytes, zeros for now - simplified)
-        welcome.extend_from_slice(&[0u8; 96]);
+        let mut cookie_pt = [0u8; 64];
+        cookie_pt[..32].copy_from_slice(c_prime_pk.as_bytes());
+        cookie_pt[32..].copy_from_slice(&self.server_short_keypair.secret.to_raw_bytes());
 
-        let buf_result = write_all_with_timeout(stream, welcome.freeze().to_vec(), timeout)
-            .await
-            .map_err(ZmtpError::from)?;
-        let BufResult(result, _) = buf_result;
-        result.map_err(Into::into)
+        let cookie_cipher = XChaCha20Poly1305::new(self.cookie_key.as_ref().into());
+        let cookie_ct = cookie_cipher
+            .encrypt(XNonce::from_slice(&cookie_nonce_24), cookie_pt.as_ref())
+            .map_err(|_| ZmtpError::Protocol)?;
+        // cookie_ct = 64 + 16 = 80 bytes
+
+        let mut cookie = Vec::with_capacity(96);
+        cookie.extend_from_slice(&cookie_nonce_16); // 16
+        cookie.extend_from_slice(&cookie_ct);        // 80
+        // cookie = 96 bytes
+
+        // Build welcome_box (144 bytes): SalsaBox(S→c').encrypt(s'.pk ‖ cookie)
+        let mut server_nonce_16 = [0u8; 16];
+        rand::thread_rng().fill_bytes(&mut server_nonce_16);
+        let mut welcome_nonce_24 = [0u8; 24];
+        welcome_nonce_24[..8].copy_from_slice(b"WELCOME-");
+        welcome_nonce_24[8..].copy_from_slice(&server_nonce_16);
+
+        let mut welcome_pt = Vec::with_capacity(128);
+        welcome_pt.extend_from_slice(self.server_short_keypair.public.as_bytes()); // s'.pk (32)
+        welcome_pt.extend_from_slice(&cookie);                                      // cookie (96)
+        // total = 128 bytes
+
+        let welcome_box = salsa_encrypt(
+            c_prime_pk.as_bytes(),
+            &self.server_keypair.secret.to_raw_bytes(),
+            &welcome_nonce_24,
+            &welcome_pt,
+        )
+        .map_err(|_| ZmtpError::Protocol)?;
+        // welcome_box = 128 + 16 = 144 bytes
+
+        let mut frame = BytesMut::with_capacity(168);
+        frame.extend_from_slice(CURVE_WELCOME);    //   8
+        frame.extend_from_slice(&server_nonce_16); //  16
+        frame.extend_from_slice(&welcome_box);     // 144
+        // total = 168
+
+        let BufResult(r, _) =
+            write_all_with_timeout(stream, frame.freeze().to_vec(), timeout)
+                .await
+                .map_err(ZmtpError::from)?;
+        r.map_err(Into::into)
     }
 
-    /// Receive INITIATE command
+    /// Receive and fully verify INITIATE command
+    ///
+    /// Verifies: cookie integrity, initiate box, vouch box.
+    /// Stores the authenticated client long-term public key C.
     async fn recv_initiate<S>(
         &mut self,
         stream: &mut S,
@@ -662,44 +854,129 @@ impl CurveServer {
 
         debug!("[CURVE SERVER] Waiting for INITIATE");
 
-        // Read INITIATE command name including the length prefix.
-        let header = vec![0u8; CURVE_INITIATE.len()];
-        let buf_result = read_exact_with_timeout(stream, header, timeout)
-            .await
-            .map_err(ZmtpError::from)?;
-        let BufResult(result, header) = buf_result;
-        result?;
-
+        let BufResult(r, header) =
+            read_exact_with_timeout(stream, vec![0u8; CURVE_INITIATE.len()], timeout)
+                .await
+                .map_err(ZmtpError::from)?;
+        r?;
         if &header[..] != CURVE_INITIATE {
             warn!("[CURVE SERVER] Invalid INITIATE header");
             return Err(ZmtpError::Protocol);
         }
 
-        // Read client long-term public key (32 bytes)
-        let client_key = vec![0u8; CURVE_KEY_SIZE];
-        let buf_result = read_exact_with_timeout(stream, client_key, timeout)
-            .await
-            .map_err(ZmtpError::from)?;
-        let BufResult(result, client_key) = buf_result;
-        result?;
+        // cookie (96 bytes)
+        let BufResult(r, cookie_bytes) =
+            read_exact_with_timeout(stream, vec![0u8; 96], timeout).await.map_err(ZmtpError::from)?;
+        r?;
 
-        let mut key_array = [0u8; CURVE_KEY_SIZE];
-        key_array.copy_from_slice(&client_key);
-        self.client_public = Some(CurvePublicKey::from_bytes(key_array));
+        // Decrypt cookie to recover (c'.pk ‖ s'.sk_bytes)
+        let cookie_nonce_16 = &cookie_bytes[..16];
+        let cookie_ct = &cookie_bytes[16..]; // 80 bytes
+        let mut cookie_nonce_24 = [0u8; 24];
+        cookie_nonce_24[..8].copy_from_slice(b"COOKIE--");
+        cookie_nonce_24[8..].copy_from_slice(cookie_nonce_16);
 
-        // Skip nonce and vouch (136 bytes)
-        let skip_buf = vec![0u8; 136];
-        let buf_result = read_exact_with_timeout(stream, skip_buf, timeout)
-            .await
-            .map_err(ZmtpError::from)?;
-        let BufResult(result, _) = buf_result;
-        result?;
+        let cookie_cipher = XChaCha20Poly1305::new(self.cookie_key.as_ref().into());
+        let cookie_pt = cookie_cipher
+            .decrypt(XNonce::from_slice(&cookie_nonce_24), cookie_ct)
+            .map_err(|_| {
+                warn!("[CURVE SERVER] Cookie decryption failed (tampered or wrong key)");
+                ZmtpError::AuthenticationFailed
+            })?;
 
-        debug!("[CURVE SERVER] Received INITIATE");
+        if cookie_pt.len() != 64 {
+            return Err(ZmtpError::Protocol);
+        }
+        let mut recovered_c_prime_pk = [0u8; 32];
+        recovered_c_prime_pk.copy_from_slice(&cookie_pt[..32]);
+        let mut recovered_s_prime_sk = [0u8; 32];
+        recovered_s_prime_sk.copy_from_slice(&cookie_pt[32..]);
+
+        // Verify cookie's c'.pk matches the HELLO c'.pk
+        let c_prime_pk = self.client_short_public.ok_or(ZmtpError::Protocol)?;
+        if recovered_c_prime_pk != *c_prime_pk.as_bytes() {
+            warn!("[CURVE SERVER] Cookie c'.pk doesn't match HELLO c'.pk");
+            return Err(ZmtpError::AuthenticationFailed);
+        }
+
+        // C (client long-term pk, 32 bytes, cleartext)
+        let BufResult(r, c_pk_buf) =
+            read_exact_with_timeout(stream, vec![0u8; 32], timeout).await.map_err(ZmtpError::from)?;
+        r?;
+        let mut c_pk = [0u8; 32];
+        c_pk.copy_from_slice(&c_pk_buf);
+
+        // nonce_suffix (8 bytes)
+        let BufResult(r, nonce_suffix) =
+            read_exact_with_timeout(stream, vec![0u8; 8], timeout).await.map_err(ZmtpError::from)?;
+        r?;
+
+        // initiate_box (112 bytes for empty metadata)
+        let BufResult(r, initiate_box) =
+            read_exact_with_timeout(stream, vec![0u8; 112], timeout).await.map_err(ZmtpError::from)?;
+        r?;
+
+        // Decrypt initiate_box: SalsaBox(c'→s') using s'_sk (from cookie) + c'_pk
+        let mut initiate_nonce_24 = [0u8; 24];
+        initiate_nonce_24[..16].copy_from_slice(b"CurveZMQINITIATE");
+        initiate_nonce_24[16..].copy_from_slice(&nonce_suffix);
+
+        let initiate_pt = salsa_decrypt(
+            &recovered_c_prime_pk,
+            &recovered_s_prime_sk,
+            &initiate_nonce_24,
+            &initiate_box,
+        )
+        .map_err(|_| {
+            warn!("[CURVE SERVER] INITIATE box decryption failed");
+            ZmtpError::AuthenticationFailed
+        })?;
+
+        // initiate_pt = vouch(96) + metadata(0+)
+        if initiate_pt.len() < 96 {
+            warn!("[CURVE SERVER] INITIATE plaintext too short: {}", initiate_pt.len());
+            return Err(ZmtpError::Protocol);
+        }
+
+        // Extract and verify vouch: vouch_nonce_16(16) + vouch_ct(80) = 96 bytes
+        let vouch_nonce_16 = &initiate_pt[..16];
+        let vouch_ct = &initiate_pt[16..96];
+        let mut vouch_nonce_24 = [0u8; 24];
+        vouch_nonce_24[..8].copy_from_slice(b"VOUCH---");
+        vouch_nonce_24[8..].copy_from_slice(vouch_nonce_16);
+
+        // Decrypt vouch: SalsaBox(C→S) using S_sk + C_pk
+        let vouch_pt = salsa_decrypt(
+            &c_pk,
+            &self.server_keypair.secret.to_raw_bytes(),
+            &vouch_nonce_24,
+            vouch_ct,
+        )
+        .map_err(|_| {
+            warn!("[CURVE SERVER] Vouch verification failed");
+            ZmtpError::AuthenticationFailed
+        })?;
+
+        // vouch plaintext must be c'.pk(32) + s'.pk(32)
+        if vouch_pt.len() != 64 {
+            warn!("[CURVE SERVER] Vouch plaintext wrong size: {}", vouch_pt.len());
+            return Err(ZmtpError::AuthenticationFailed);
+        }
+        if &vouch_pt[..32] != c_prime_pk.as_bytes() {
+            warn!("[CURVE SERVER] Vouch c'.pk mismatch");
+            return Err(ZmtpError::AuthenticationFailed);
+        }
+        if &vouch_pt[32..] != self.server_short_keypair.public.as_bytes() {
+            warn!("[CURVE SERVER] Vouch s'.pk mismatch");
+            return Err(ZmtpError::AuthenticationFailed);
+        }
+
+        self.client_public = Some(CurvePublicKey::from_bytes(c_pk));
+        debug!("[CURVE SERVER] INITIATE verified — client authenticated");
         Ok(())
     }
 
-    /// Send READY command
+    /// Send READY command and derive the message box key
     async fn send_ready<S>(
         &mut self,
         stream: &mut S,
@@ -713,35 +990,31 @@ impl CurveServer {
 
         debug!("[CURVE SERVER] Sending READY");
 
-        let ready = Bytes::from_static(CURVE_READY).to_vec();
-        let buf_result = write_all_with_timeout(stream, ready, timeout)
-            .await
-            .map_err(ZmtpError::from)?;
-        let BufResult(result, _) = buf_result;
-        result?;
+        let BufResult(r, _) =
+            write_all_with_timeout(stream, Bytes::from_static(CURVE_READY).to_vec(), timeout)
+                .await
+                .map_err(ZmtpError::from)?;
+        r?;
 
-        // Compute shared secret for message encryption
-        let client_short_public = self.client_short_public.ok_or(ZmtpError::Protocol)?;
+        // Derive message key: SHA-256(c'·S ‖ C·s' ‖ c'·s')
+        let c_prime = self.client_short_public.ok_or(ZmtpError::Protocol)?;
+        let c = self.client_public.ok_or(ZmtpError::Protocol)?;
+        let dh1 = self.server_keypair.secret.diffie_hellman(&c_prime);       // S·c' = c'·S
+        let dh2 = self.server_short_keypair.secret.diffie_hellman(&c);       // s'·C = C·s'
+        let dh3 = self.server_short_keypair.secret.diffie_hellman(&c_prime); // s'·c' = c'·s'
 
-        let shared_secret = self
-            .server_short_keypair
-            .secret
-            .diffie_hellman(&client_short_public);
-
-        self.message_box = Some(CurveBox::new(&shared_secret));
+        let key = derive_message_key(&dh1, &dh2, &dh3);
+        self.message_box = Some(CurveBox::new(&key));
 
         debug!("[CURVE SERVER] Handshake complete");
         Ok(())
     }
 
-    /// Encrypt a message
+    /// Encrypt a message for the client
     pub fn encrypt_message(&mut self, plaintext: &[u8]) -> Result<Bytes, CurveError> {
-        let message_box = self
-            .message_box
-            .as_ref()
-            .ok_or(CurveError::ProtocolViolation)?;
+        let message_box = self.message_box.as_ref().ok_or(CurveError::ProtocolViolation)?;
 
-        // Create nonce (24 bytes: "CurveZMQMESSAGES" + 8-byte counter)
+        // Nonce = "CurveZMQMESSAGES" + 8-byte counter (server→client)
         let mut nonce = [0u8; CURVE_NONCE_SIZE];
         nonce[..16].copy_from_slice(b"CurveZMQMESSAGES");
         nonce[16..].copy_from_slice(&self.send_nonce.to_be_bytes());
@@ -751,19 +1024,16 @@ impl CurveServer {
 
         let mut message = BytesMut::new();
         message.extend_from_slice(CURVE_MESSAGE);
-        message.extend_from_slice(&nonce[16..]); // Only send counter part
+        message.extend_from_slice(&nonce[16..]); // 8-byte suffix only
         message.extend_from_slice(&ciphertext);
 
         Ok(message.freeze())
     }
 
-    /// Decrypt a message
+    /// Decrypt a message from the client
     pub fn decrypt_message(&mut self, message: &[u8]) -> Result<Bytes, CurveError> {
         let parts = parse_curve_message(message)?;
-        let message_box = self
-            .message_box
-            .as_ref()
-            .ok_or(CurveError::ProtocolViolation)?;
+        let message_box = self.message_box.as_ref().ok_or(CurveError::ProtocolViolation)?;
 
         let counter = u64::from_be_bytes(
             parts.short_nonce.try_into().map_err(|_| CurveError::InvalidNonce)?,
@@ -773,6 +1043,7 @@ impl CurveServer {
         }
         self.recv_nonce = counter + 1;
 
+        // Reconstruct full 24-byte nonce (client→server direction)
         let mut nonce = [0u8; CURVE_NONCE_SIZE];
         nonce[..16].copy_from_slice(b"CurveZMQMESSAGEC");
         nonce[16..].copy_from_slice(parts.short_nonce);
@@ -781,6 +1052,8 @@ impl CurveServer {
         Ok(Bytes::from(plaintext))
     }
 }
+
+// ── ZAP helpers ───────────────────────────────────────────────────────────────
 
 /// Create a ZAP request for CURVE authentication
 pub fn create_curve_zap_request(
@@ -802,42 +1075,9 @@ pub fn create_curve_zap_request(
 
 /// CURVE server handshake with ZAP authentication
 ///
-/// Performs CURVE handshake and authenticates the client via ZAP protocol.
-/// After receiving the client's public key during INITIATE, sends a ZAP request
-/// to verify the client is authorized. On failure, sends a ZMTP ERROR command
-/// to the client before closing the connection.
-///
-/// # Arguments
-/// * `stream` - Network stream for the connection
-/// * `server_keypair` - Server's long-term CURVE key pair
-/// * `domain` - ZAP authentication domain
-/// * `timeout` - Optional timeout for ZAP request
-/// * `peer_addr` - Remote peer address for ZAP logging (pass peer socket's addr string)
-///
-/// # Returns
-/// * `Ok(CurvePublicKey)` - Authenticated client's public key
-/// * `Err(ZmtpError)` - Authentication failed or protocol error
-///
-/// # Example
-///
-/// ```rust,no_run
-/// use monocoque_zmtp::security::curve::{curve_server_handshake_zap, CurveKeyPair};
-/// use std::time::Duration;
-///
-/// async fn accept_curve_client(mut stream: compio::net::TcpStream) -> Result<(), Box<dyn std::error::Error>> {
-///     let peer = stream.peer_addr()?.to_string();
-///     let server_keypair = CurveKeyPair::generate();
-///     let client_key = curve_server_handshake_zap(
-///         &mut stream,
-///         server_keypair,
-///         "production".to_string(),
-///         Some(Duration::from_secs(5)),
-///         &peer,
-///     ).await?;
-///     println!("Authenticated client: {:?}", client_key);
-///     Ok(())
-/// }
-/// ```
+/// Performs the full CURVE handshake (HELLO/WELCOME/INITIATE/READY) and then
+/// authenticates the client's long-term public key via ZAP.  On ZAP failure a
+/// ZMTP ERROR command is sent before closing.
 pub async fn curve_server_handshake_zap<S>(
     stream: &mut S,
     server_keypair: CurveKeyPair,
@@ -852,13 +1092,11 @@ where
 
     debug!("[CURVE SERVER ZAP] Starting ZAP-authenticated handshake");
 
-    // Perform CURVE handshake
     let mut curve_server = CurveServer::new(server_keypair);
     let client_public_key = curve_server.handshake(stream, timeout).await?;
 
-    debug!("[CURVE SERVER ZAP] CURVE handshake complete, authenticating via ZAP");
+    debug!("[CURVE SERVER ZAP] Handshake complete, authenticating via ZAP");
 
-    // Create ZAP client
     let zap_timeout = timeout.unwrap_or(Duration::from_secs(5));
     let mut zap_client = ZapClient::new(zap_timeout).map_err(|e| {
         warn!("[CURVE SERVER ZAP] Failed to create ZAP client: {}", e);
@@ -873,7 +1111,6 @@ where
             ZmtpError::AuthenticationFailed
         })?;
 
-    // Check ZAP response status
     if matches!(zap_response.status_code, ZapStatus::Success) {
         debug!(
             "[CURVE SERVER ZAP] Authentication successful for client key: {:?}",
@@ -885,35 +1122,26 @@ where
             "[CURVE SERVER ZAP] Authentication failed for {}: {} (status: {:?})",
             peer_addr, zap_response.status_text, zap_response.status_code
         );
-
-        // Send ZMTP ERROR command to the client so it knows why we're closing
         send_zmtp_error(stream, &zap_response.status_text).await;
-
         Err(ZmtpError::AuthenticationFailed)
     }
 }
 
-/// Send a ZMTP ERROR command frame to the peer.
-///
-/// Best-effort: errors are silently ignored since we're already rejecting the connection.
+/// Send a ZMTP ERROR command frame to the peer (best-effort).
 async fn send_zmtp_error<S>(stream: &mut S, reason: &str)
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    use bytes::BytesMut;
     use compio::buf::BufResult;
 
-    // ZMTP ERROR command body: [5]"ERROR" [reason_len][reason...]
-    // Command name is "ERROR" (5 bytes), prefixed with its 1-byte length
     let reason_bytes = reason.as_bytes();
     let reason_len = reason_bytes.len().min(255) as u8;
 
     let mut body = BytesMut::with_capacity(7 + reason_len as usize);
-    body.extend_from_slice(b"\x05ERROR"); // command name with length prefix
+    body.extend_from_slice(b"\x05ERROR");
     body.extend_from_slice(&[reason_len]);
     body.extend_from_slice(&reason_bytes[..reason_len as usize]);
 
-    // Frame: flags=0x04 (COMMAND), body_len, body
     let body_len = body.len();
     let mut frame = BytesMut::with_capacity(2 + body_len);
     frame.extend_from_slice(&[0x04, body_len as u8]);
@@ -921,6 +1149,8 @@ where
 
     let BufResult(_, _) = stream.write_all(frame.freeze()).await;
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -992,9 +1222,7 @@ mod tests {
         write_limits: impl IntoIterator<Item = usize>,
     ) {
         let mut stream = PartialWriteStream::new(write_limits);
-
         send_zmtp_error(&mut stream, ERROR_REASON).await;
-
         assert_eq!(stream.written(), expected_zmtp_error_frame(ERROR_REASON));
     }
 
@@ -1002,8 +1230,6 @@ mod tests {
     fn test_keypair_generation() {
         let keypair = CurveKeyPair::generate();
         assert_eq!(keypair.public.as_bytes().len(), CURVE_KEY_SIZE);
-
-        // Verify public key matches secret key
         let derived_public = keypair.secret.public_key();
         assert_eq!(keypair.public, derived_public);
     }
@@ -1034,6 +1260,42 @@ mod tests {
     }
 
     #[test]
+    fn test_salsa_box_round_trip() {
+        let alice = CurveKeyPair::generate();
+        let bob = CurveKeyPair::generate();
+
+        let nonce = [7u8; 24];
+        let pt = b"test message";
+
+        let ct = salsa_encrypt(bob.public.as_bytes(), &alice.secret.to_raw_bytes(), &nonce, pt).unwrap();
+        let recovered = salsa_decrypt(alice.public.as_bytes(), &bob.secret.to_raw_bytes(), &nonce, &ct).unwrap();
+
+        assert_eq!(recovered, pt);
+    }
+
+    #[test]
+    fn test_3way_dh_message_key_symmetry() {
+        let client_long = CurveKeyPair::generate();
+        let server_long = CurveKeyPair::generate();
+        let client_short = CurveKeyPair::generate();
+        let server_short = CurveKeyPair::generate();
+
+        // Client side
+        let dh1c = client_short.secret.diffie_hellman(&server_long.public);
+        let dh2c = client_long.secret.diffie_hellman(&server_short.public);
+        let dh3c = client_short.secret.diffie_hellman(&server_short.public);
+        let client_key = derive_message_key(&dh1c, &dh2c, &dh3c);
+
+        // Server side
+        let dh1s = server_long.secret.diffie_hellman(&client_short.public);
+        let dh2s = server_short.secret.diffie_hellman(&client_long.public);
+        let dh3s = server_short.secret.diffie_hellman(&client_short.public);
+        let server_key = derive_message_key(&dh1s, &dh2s, &dh3s);
+
+        assert_eq!(client_key, server_key, "both sides must derive the same message key");
+    }
+
+    #[test]
     fn client_decrypt_message_accepts_valid_curve_message_command_header() {
         let shared_secret = [42u8; CURVE_KEY_SIZE];
         let box_ = CurveBox::new(&shared_secret);
@@ -1054,7 +1316,6 @@ mod tests {
         client.message_box = Some(CurveBox::new(&shared_secret));
 
         let plaintext = client.decrypt_message(&frame).unwrap();
-
         assert_eq!(plaintext.as_ref(), b"server message");
     }
 
@@ -1078,7 +1339,6 @@ mod tests {
         server.message_box = Some(CurveBox::new(&shared_secret));
 
         let plaintext = server.decrypt_message(&frame).unwrap();
-
         assert_eq!(plaintext.as_ref(), b"client message");
     }
 
