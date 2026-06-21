@@ -19,6 +19,7 @@
 //! After handshake completes, the main data path uses arena allocator for zero-copy IO.
 
 use crate::codec::ZmtpError;
+use crate::security::curve::CurveHandshakeResult;
 use crate::session::SocketType;
 use crate::utils::{build_ready, encode_frame, FLAG_COMMAND};
 use bytes::{Bytes, BytesMut};
@@ -158,11 +159,24 @@ where
             run_plain_exchange(stream, options, timeout).await?;
         }
         SecurityMechanism::Curve => {
-            run_curve_exchange(stream, options, timeout).await?;
+            // CURVE handshake carries all metadata internally (no separate READY needed).
+            let cr = run_curve_exchange(
+                stream,
+                options,
+                timeout,
+                local_socket_type,
+                identity,
+            )
+            .await?;
+            let peer_socket_type = parse_socket_type(cr.peer_socket_type.as_ref())?;
+            return Ok(HandshakeResult {
+                peer_identity: cr.peer_identity,
+                peer_socket_type,
+            });
         }
     }
 
-    // Step 4: Send READY command
+    // Step 4: Send READY command (NULL and PLAIN only)
     debug!("[HANDSHAKE] Step 4: Sending READY command...");
     let ready_body = build_ready(local_socket_type.as_str(), identity);
     let ready_frame = encode_frame(FLAG_COMMAND, &ready_body);
@@ -314,13 +328,18 @@ where
 
 /// Run the CURVE key-exchange handshake.
 ///
+/// Returns a `CurveHandshakeResult` containing the peer's socket type, identity,
+/// and (server-side only) the authenticated client public key.
+///
 /// - Client mode: `curve_secretkey` + `curve_serverkey` must be set.
 /// - Server mode: `curve_server` flag + `curve_secretkey` must be set.
 async fn run_curve_exchange<S>(
     stream: &mut S,
     options: &SocketOptions,
     timeout: Option<Duration>,
-) -> Result<(), ZmtpError>
+    local_socket_type: SocketType,
+    local_identity: Option<&[u8]>,
+) -> Result<CurveHandshakeResult, ZmtpError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -346,12 +365,12 @@ where
                 options.zap_domain.clone(),
                 timeout,
                 "unknown",
+                local_socket_type.as_str(),
             )
             .await
-            .map(|_| ())
         } else {
-            let mut curve_server = CurveServer::new(server_keypair);
-            curve_server.handshake(stream, timeout).await.map(|_| ())
+            let mut curve_server = CurveServer::new(server_keypair, local_socket_type.as_str());
+            curve_server.handshake(stream, timeout).await
         }
     } else if let (Some(secret_bytes), Some(server_key_bytes)) =
         (options.curve_secretkey, options.curve_serverkey)
@@ -362,7 +381,13 @@ where
         let client_keypair = CurveKeyPair::from_keys(client_public, client_secret);
         let server_public = CurvePublicKey::from_bytes(server_key_bytes);
 
-        let mut curve_client = CurveClient::new(client_keypair, server_public);
+        let local_id = local_identity.map(Bytes::copy_from_slice);
+        let mut curve_client = CurveClient::new(
+            client_keypair,
+            server_public,
+            local_socket_type.as_str(),
+            local_id,
+        );
         curve_client.handshake(stream, timeout).await
     } else if options.curve_secretkey.is_some() {
         // curve_secretkey set for a client but curve_serverkey is absent.
@@ -372,7 +397,7 @@ where
         );
         Err(ZmtpError::Protocol)
     } else {
-        Ok(())
+        Err(ZmtpError::Protocol)
     }
 }
 

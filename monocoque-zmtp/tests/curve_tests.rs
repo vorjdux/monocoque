@@ -124,7 +124,7 @@ fn test_curve_client_encryption() {
     let client_keypair = CurveKeyPair::generate();
     let server_keypair = CurveKeyPair::generate();
 
-    let _client = CurveClient::new(client_keypair, server_keypair.public);
+    let _client = CurveClient::new(client_keypair, server_keypair.public, "DEALER", None);
 
     // Before handshake, message box should be None
     // (We can't test encrypt_message without completing handshake)
@@ -138,7 +138,7 @@ fn test_curve_server_creation() {
     use monocoque_zmtp::security::curve::CurveServer;
 
     let server_keypair = CurveKeyPair::generate();
-    let _server = CurveServer::new(server_keypair);
+    let _server = CurveServer::new(server_keypair, "ROUTER");
 
     // Server creation should succeed
 }
@@ -182,8 +182,8 @@ async fn test_curve_handshake_sequence() {
     let client_keypair = CurveKeyPair::generate();
     let server_keypair = CurveKeyPair::generate();
 
-    let _client = CurveClient::new(client_keypair.clone(), server_keypair.public);
-    let _server = CurveServer::new(server_keypair);
+    let _client = CurveClient::new(client_keypair.clone(), server_keypair.public, "DEALER", None);
+    let _server = CurveServer::new(server_keypair, "ROUTER");
 
     // Full handshake test would require mock streams or real TCP
 }
