@@ -130,8 +130,13 @@ impl PlainAuthHandler for StaticPlainHandler {
         _domain: &str,
         _address: &str,
     ) -> Result<String, String> {
+        use subtle::ConstantTimeEq;
         match self.credentials.get(username) {
-            Some(expected_password) if expected_password == password => Ok(username.to_string()),
+            Some(expected_password)
+                if expected_password.as_bytes().ct_eq(password.as_bytes()).into() =>
+            {
+                Ok(username.to_string())
+            }
             Some(_) => Err("Invalid password".to_string()),
             None => Err("Unknown user".to_string()),
         }

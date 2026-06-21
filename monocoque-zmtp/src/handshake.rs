@@ -242,7 +242,12 @@ where
             warn!("[HANDSHAKE] Step 5: Failed to read ZMTP READY long-frame length bytes: {}", e);
             ZmtpError::Protocol
         })?;
-        u64::from_be_bytes(len_buf) as usize
+        let raw_len = u64::from_be_bytes(len_buf);
+        if raw_len > usize::MAX as u64 {
+            warn!("[HANDSHAKE] ZMTP READY long-frame length overflows usize: {}", raw_len);
+            return Err(ZmtpError::Protocol);
+        }
+        raw_len as usize
     } else {
         header_buf[1] as usize
     };
@@ -467,21 +472,24 @@ fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), Zmtp
 
     while offset < body.len() {
         if offset + 1 > body.len() {
-            break;
+            warn!("[HANDSHAKE] READY property truncated at key-length byte");
+            return Err(ZmtpError::Protocol);
         }
 
         let key_len = body[offset] as usize;
         offset += 1;
 
         if offset + key_len > body.len() {
-            break;
+            warn!("[HANDSHAKE] READY property key truncated (key_len={})", key_len);
+            return Err(ZmtpError::Protocol);
         }
 
         let key = &body[offset..offset + key_len];
         offset += key_len;
 
         if offset + 4 > body.len() {
-            break;
+            warn!("[HANDSHAKE] READY property value-length truncated");
+            return Err(ZmtpError::Protocol);
         }
 
         let value_len = u32::from_be_bytes([
@@ -493,7 +501,8 @@ fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), Zmtp
         offset += 4;
 
         if offset + value_len > body.len() {
-            break;
+            warn!("[HANDSHAKE] READY property value truncated (value_len={})", value_len);
+            return Err(ZmtpError::Protocol);
         }
 
         // Store the range for zero-copy slice
@@ -506,6 +515,11 @@ fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), Zmtp
                 socket_type = Some(parse_socket_type(&body[value_start..value_end])?);
             }
             b"Identity" => {
+                // ZMQ spec limits identities to 255 bytes.
+                if value_len > 255 {
+                    warn!("[HANDSHAKE] READY Identity property too long: {} bytes (max 255)", value_len);
+                    return Err(ZmtpError::Protocol);
+                }
                 // Zero-copy: slice the existing Bytes instead of copying
                 identity = Some(body.slice(value_start..value_end));
             }

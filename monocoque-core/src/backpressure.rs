@@ -33,6 +33,8 @@ pub trait BytePermits: Send + Sync {
 /// Internal state for the byte semaphore.
 struct SemInner {
     available: usize,
+    /// Total capacity; used to clamp oversized acquires so we never deadlock.
+    max_bytes: usize,
 }
 
 /// RAII permit guard.
@@ -126,7 +128,7 @@ impl SemaphorePermits {
     pub fn new(max_bytes: usize) -> Self {
         Self {
             inner: Arc::new((
-                Mutex::new(SemInner { available: max_bytes }),
+                Mutex::new(SemInner { available: max_bytes, max_bytes }),
                 Condvar::new(),
             )),
         }
@@ -144,19 +146,24 @@ impl BytePermits for SemaphorePermits {
         // the async executor. parking_lot::Condvar::wait is synchronous and
         // safe to use here because SemInner uses parking_lot::Mutex.
         let inner = self.inner.clone();
-        compio::runtime::spawn_blocking(move || {
+        let actual = compio::runtime::spawn_blocking(move || {
             let (mutex, condvar) = &*inner;
             let mut guard = mutex.lock();
+            // Clamp to max_bytes so a single oversized message never deadlocks:
+            // the message will consume the entire capacity instead of waiting
+            // forever for capacity that can never exist.
+            let claim = n_bytes.min(guard.max_bytes);
             // Wait until enough capacity is available.
-            while guard.available < n_bytes {
+            while guard.available < claim {
                 condvar.wait(&mut guard);
             }
-            guard.available -= n_bytes;
-            // guard is dropped here, releasing the lock before we return.
+            guard.available -= claim;
+            // Return the actual bytes claimed so the Permit releases the right amount.
+            claim
         })
         .await;
 
-        Permit::byte_sem(self.inner.clone(), n_bytes)
+        Permit::byte_sem(self.inner.clone(), actual)
     }
 }
 
@@ -208,6 +215,21 @@ mod tests {
 
             // Should be able to acquire again after drop
             let _p3 = permits.acquire(1000).await;
+        });
+    }
+
+    #[test]
+    fn semaphore_permits_oversized_acquire_does_not_deadlock() {
+        // A single acquire larger than max_bytes must complete (clamped to max_bytes)
+        // rather than deadlocking forever waiting for capacity that can never exist.
+        let permits = SemaphorePermits::new(1024);
+        let rt = compio::runtime::Runtime::new().unwrap();
+
+        rt.block_on(async {
+            let permit = permits.acquire(2048).await; // 2× max — must not deadlock
+            drop(permit);
+            // After release, we can acquire up to max_bytes again.
+            let _p = permits.acquire(1024).await;
         });
     }
 
