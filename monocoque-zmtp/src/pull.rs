@@ -73,8 +73,10 @@ where
 
         debug!("[PULL] Socket initialized");
 
+        let mut base = SocketBase::new(stream, SocketType::Pull, options);
+        base.curve_cipher = handshake_result.curve_cipher;
         Ok(Self {
-            base: SocketBase::new(stream, SocketType::Pull, options),
+            base,
             frames: SmallVec::new(),
         })
     }
@@ -93,29 +95,22 @@ where
         loop {
             // Try to decode frames from buffer
             loop {
-                match self.base.decoder.decode(&mut self.base.recv)? {
-                    Some(frame) => {
-                        if frame.is_command() {
-                            if crate::base::is_ping_payload(&frame.payload) {
-                                let pong = crate::base::build_pong_frame();
-                                self.base.send_buffer.extend_from_slice(&pong);
-                                self.base.flush_send_buffer().await?;
-                            } else if crate::base::is_pong_payload(&frame.payload) {
-                                self.base.note_pong_received();
-                            }
-                            continue;
+                match self.base.process_frame()? {
+                    crate::base::FrameResult::NeedMore => break,
+                    crate::base::FrameResult::CommandHandled => {
+                        if !self.base.send_buffer.is_empty() {
+                            self.base.flush_send_buffer().await?;
                         }
-                        let more = frame.more();
-                        self.frames.push(frame.payload);
-
+                        continue;
+                    }
+                    crate::base::FrameResult::Data(more, payload) => {
+                        self.frames.push(payload);
                         if !more {
-                            // Complete message received
                             let msg: Vec<Bytes> = self.frames.drain(..).collect();
                             trace!("[PULL] Received {} frames", msg.len());
                             return Ok(Some(msg));
                         }
                     }
-                    None => break, // Need more data
                 }
             }
 
@@ -208,13 +203,15 @@ impl PullSocket<TcpStream> {
         );
 
         let endpoint = monocoque_core::endpoint::Endpoint::Tcp(peer_addr);
+        let mut base = crate::base::SocketBase::with_endpoint(
+            stream,
+            SocketType::Pull,
+            endpoint,
+            options,
+        );
+        base.curve_cipher = handshake_result.curve_cipher;
         Ok(Self {
-            base: crate::base::SocketBase::with_endpoint(
-                stream,
-                SocketType::Pull,
-                endpoint,
-                options,
-            ),
+            base,
             frames: SmallVec::new(),
         })
     }

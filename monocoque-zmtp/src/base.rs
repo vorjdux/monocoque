@@ -162,11 +162,32 @@ where
     ///
     /// Set to `true` when a PING is transmitted; cleared when a matching
     /// PONG command frame is received.
-    ///
-    /// STUB: timeout-based disconnection (if PONG does not arrive within
-    /// `heartbeat_timeout`) is tracked here but the actual error-return is
-    /// left to a future implementation that integrates with the recv loop.
     pub(crate) awaiting_pong: bool,
+
+    /// Post-handshake CURVE cipher, if CURVE security is active.
+    pub(crate) curve_cipher: Option<crate::security::curve::CurveMessageCipher>,
+}
+
+fn append_zmtp_cmd_frame(buf: &mut BytesMut, body: &[u8]) {
+    let len = body.len();
+    if len <= 255 {
+        buf.extend_from_slice(&[0x04, len as u8]);
+    } else {
+        buf.extend_from_slice(&[0x06]);
+        buf.extend_from_slice(&(len as u64).to_be_bytes());
+    }
+    buf.extend_from_slice(body);
+}
+
+/// Result of processing one decoded ZMTP frame.
+pub enum FrameResult {
+    /// A data frame or decrypted CURVE MESSAGE: (more_flag, payload)
+    Data(bool, Bytes),
+    /// A command frame was handled internally (PING replied, PONG noted).
+    /// The send_buffer may have been written; call flush_send_buffer if needed.
+    CommandHandled,
+    /// Need more data from the wire.
+    NeedMore,
 }
 
 impl<S> SocketBase<S>
@@ -204,6 +225,7 @@ where
             last_recv_instant: None,
             ping_sent_at: None,
             awaiting_pong: false,
+            curve_cipher: None,
         }
     }
 
@@ -243,6 +265,7 @@ where
             last_recv_instant: None,
             ping_sent_at: None,
             awaiting_pong: false,
+            curve_cipher: None,
         }
     }
 
@@ -673,6 +696,71 @@ where
         }
         self.stream = None;
         Ok(())
+    }
+
+    /// Encode a multipart message into `write_buf`, encrypting if CURVE is active.
+    pub fn encode_message_to_write_buf(&mut self, msg: &[Bytes]) -> io::Result<()> {
+        use crate::codec::encode_multipart;
+        self.write_buf.clear();
+        if let Some(ref mut cipher) = self.curve_cipher {
+            let last = msg.len().saturating_sub(1);
+            for (i, frame) in msg.iter().enumerate() {
+                let body = cipher.encrypt_frame(frame, i < last)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+                append_zmtp_cmd_frame(&mut self.write_buf, &body);
+            }
+        } else {
+            encode_multipart(msg, &mut self.write_buf);
+        }
+        Ok(())
+    }
+
+    /// Encode a multipart message into `send_buffer`, encrypting if CURVE is active.
+    pub fn encode_message_to_send_buf(&mut self, msg: &[Bytes]) -> io::Result<()> {
+        use crate::codec::encode_multipart;
+        if let Some(ref mut cipher) = self.curve_cipher {
+            let last = msg.len().saturating_sub(1);
+            for (i, frame) in msg.iter().enumerate() {
+                let body = cipher.encrypt_frame(frame, i < last)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+                append_zmtp_cmd_frame(&mut self.send_buffer, &body);
+            }
+        } else {
+            encode_multipart(msg, &mut self.send_buffer);
+        }
+        self.buffered_messages += 1;
+        Ok(())
+    }
+
+    /// Decode the next frame from the receive buffer, handling CURVE decryption and PING/PONG.
+    pub fn process_frame(&mut self) -> io::Result<FrameResult> {
+        use crate::security::curve::CurveMessageCipher;
+        match self.decoder.decode(&mut self.recv).map_err(io::Error::from)? {
+            None => Ok(FrameResult::NeedMore),
+            Some(frame) => {
+                if frame.is_command() {
+                    // CURVE MESSAGE decryption
+                    if let Some(ref mut cipher) = self.curve_cipher {
+                        if CurveMessageCipher::is_curve_message(&frame.payload) {
+                            let (more, payload) = cipher.decrypt_frame(&frame.payload)
+                                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+                            return Ok(FrameResult::Data(more, payload));
+                        }
+                    }
+                    // PING/PONG
+                    if is_ping_payload(&frame.payload) {
+                        let pong = build_pong_frame();
+                        self.send_buffer.extend_from_slice(&pong);
+                    }
+                    if is_pong_payload(&frame.payload) {
+                        self.note_pong_received();
+                    }
+                    Ok(FrameResult::CommandHandled)
+                } else {
+                    Ok(FrameResult::Data(frame.more(), frame.payload))
+                }
+            }
+        }
     }
 }
 

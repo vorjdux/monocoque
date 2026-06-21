@@ -405,6 +405,90 @@ fn decode_zmtp_props(mut data: &[u8]) -> (Option<Bytes>, Option<Bytes>) {
     (socket_type, identity)
 }
 
+// ── Post-handshake message cipher ────────────────────────────────────────────
+
+/// Post-handshake CURVE message cipher. Held by the socket after handshake completes.
+pub struct CurveMessageCipher {
+    cipher: CurveBox,
+    send_nonce: u64,
+    recv_nonce: u64,
+    /// true = this side is the client (sends with MESSAGEC prefix)
+    is_client: bool,
+}
+
+impl CurveMessageCipher {
+    pub(crate) fn new_client(cipher: CurveBox, send_nonce: u64, recv_nonce: u64) -> Self {
+        Self { cipher, send_nonce, recv_nonce, is_client: true }
+    }
+    pub(crate) fn new_server(cipher: CurveBox, send_nonce: u64, recv_nonce: u64) -> Self {
+        Self { cipher, send_nonce, recv_nonce, is_client: false }
+    }
+
+    /// Returns true if `bytes` starts with the CURVE MESSAGE command name.
+    pub fn is_curve_message(bytes: &[u8]) -> bool {
+        bytes.starts_with(CURVE_MESSAGE)
+    }
+
+    /// Encrypt one ZMQ frame. `payload` is the raw frame data; `more` is the MORE flag.
+    /// Returns the CURVE MESSAGE command body (starting with `\x07MESSAGE`), ready to be
+    /// wrapped in a ZMTP command frame.
+    pub fn encrypt_frame(&mut self, payload: &[u8], more: bool) -> Result<Bytes, CurveError> {
+        let prefix: &[u8; 16] = if self.is_client { b"CurveZMQMESSAGEC" } else { b"CurveZMQMESSAGES" };
+        let mut nonce = [0u8; CURVE_NONCE_SIZE];
+        nonce[..16].copy_from_slice(prefix);
+        nonce[16..].copy_from_slice(&self.send_nonce.to_be_bytes());
+        self.send_nonce = self.send_nonce.checked_add(1).ok_or(CurveError::ProtocolViolation)?;
+
+        let mut pt = Vec::with_capacity(1 + payload.len());
+        pt.push(if more { 0x01u8 } else { 0x00u8 });
+        pt.extend_from_slice(payload);
+
+        let ciphertext = self.cipher.encrypt(&pt, &nonce)?;
+
+        let body_len = CURVE_MESSAGE.len() + 8 + ciphertext.len();
+        let mut body = BytesMut::with_capacity(body_len);
+        body.extend_from_slice(CURVE_MESSAGE);
+        body.extend_from_slice(&nonce[16..]);
+        body.extend_from_slice(&ciphertext);
+        Ok(body.freeze())
+    }
+
+    /// Decrypt a CURVE MESSAGE command body. `cmd_body` starts with `\x07MESSAGE`.
+    /// Returns (more_flag, payload).
+    pub fn decrypt_frame(&mut self, cmd_body: &[u8]) -> Result<(bool, Bytes), CurveError> {
+        let parts = parse_curve_message(cmd_body)?;
+        let counter = u64::from_be_bytes(
+            parts.short_nonce.try_into().map_err(|_| CurveError::InvalidNonce)?
+        );
+        if counter < self.recv_nonce {
+            return Err(CurveError::ProtocolViolation);
+        }
+        self.recv_nonce = counter.checked_add(1).ok_or(CurveError::ProtocolViolation)?;
+
+        let prefix: &[u8; 16] = if self.is_client { b"CurveZMQMESSAGES" } else { b"CurveZMQMESSAGEC" };
+        let mut nonce = [0u8; CURVE_NONCE_SIZE];
+        nonce[..16].copy_from_slice(prefix);
+        nonce[16..].copy_from_slice(parts.short_nonce);
+
+        let plaintext = self.cipher.decrypt(parts.ciphertext, &nonce)?;
+        if plaintext.is_empty() {
+            return Err(CurveError::ProtocolViolation);
+        }
+        let more = (plaintext[0] & 0x01) != 0;
+        Ok((more, Bytes::from(plaintext[1..].to_vec())))
+    }
+}
+
+impl std::fmt::Debug for CurveMessageCipher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CurveMessageCipher")
+            .field("send_nonce", &self.send_nonce)
+            .field("recv_nonce", &self.recv_nonce)
+            .field("is_client", &self.is_client)
+            .finish_non_exhaustive()
+    }
+}
+
 // ── Errors ────────────────────────────────────────────────────────────────────
 
 /// CURVE-specific errors
@@ -441,6 +525,8 @@ pub struct CurveHandshakeResult {
     pub peer_identity: Option<Bytes>,
     /// Client's authenticated long-term public key (populated server-side only).
     pub peer_public_key: Option<CurvePublicKey>,
+    /// Post-handshake cipher for encrypting/decrypting application messages.
+    pub cipher: Option<CurveMessageCipher>,
 }
 
 // ── CurveClient ───────────────────────────────────────────────────────────────
@@ -510,10 +596,13 @@ impl CurveClient {
         self.recv_welcome(stream, timeout).await?;
         self.send_initiate(stream, timeout).await?;
         self.recv_ready(stream, timeout).await?;
+        let message_box = self.message_box.take().ok_or(ZmtpError::Protocol)?;
+        let cipher = CurveMessageCipher::new_client(message_box, self.send_nonce, self.recv_nonce);
         Ok(CurveHandshakeResult {
             peer_socket_type: self.peer_socket_type.clone().ok_or(ZmtpError::Protocol)?,
             peer_identity: self.peer_identity_recv.clone(),
             peer_public_key: None,
+            cipher: Some(cipher),
         })
     }
 
@@ -755,11 +844,11 @@ impl CurveClient {
         let mut nonce = [0u8; CURVE_NONCE_SIZE];
         nonce[..16].copy_from_slice(b"CurveZMQMESSAGEC");
         nonce[16..].copy_from_slice(&self.send_nonce.to_be_bytes());
-        self.send_nonce += 1;
+        self.send_nonce = self.send_nonce.checked_add(1).ok_or(CurveError::ProtocolViolation)?;
 
         let ciphertext = message_box.encrypt(plaintext, &nonce)?;
 
-        let mut message = BytesMut::new();
+        let mut message = BytesMut::with_capacity(CURVE_MESSAGE.len() + 8 + ciphertext.len());
         message.extend_from_slice(CURVE_MESSAGE);
         message.extend_from_slice(&nonce[16..]); // 8-byte counter suffix only
         message.extend_from_slice(&ciphertext);
@@ -778,7 +867,7 @@ impl CurveClient {
         if counter < self.recv_nonce {
             return Err(CurveError::ProtocolViolation); // replay
         }
-        self.recv_nonce = counter + 1;
+        self.recv_nonce = counter.checked_add(1).ok_or(CurveError::ProtocolViolation)?;
 
         // Reconstruct full 24-byte nonce (server→client direction)
         let mut nonce = [0u8; CURVE_NONCE_SIZE];
@@ -851,10 +940,13 @@ impl CurveServer {
         self.send_welcome(stream, timeout).await?;
         self.recv_initiate(stream, timeout).await?;
         self.send_ready(stream, timeout).await?;
+        let message_box = self.message_box.take().ok_or(ZmtpError::Protocol)?;
+        let cipher = CurveMessageCipher::new_server(message_box, self.send_nonce, self.recv_nonce);
         Ok(CurveHandshakeResult {
             peer_socket_type: self.peer_socket_type.clone().ok_or(ZmtpError::Protocol)?,
             peer_identity: self.peer_identity_recv.clone(),
             peer_public_key: self.client_public,
+            cipher: Some(cipher),
         })
     }
 
@@ -1171,11 +1263,11 @@ impl CurveServer {
         let mut nonce = [0u8; CURVE_NONCE_SIZE];
         nonce[..16].copy_from_slice(b"CurveZMQMESSAGES");
         nonce[16..].copy_from_slice(&self.send_nonce.to_be_bytes());
-        self.send_nonce += 1;
+        self.send_nonce = self.send_nonce.checked_add(1).ok_or(CurveError::ProtocolViolation)?;
 
         let ciphertext = message_box.encrypt(plaintext, &nonce)?;
 
-        let mut message = BytesMut::new();
+        let mut message = BytesMut::with_capacity(CURVE_MESSAGE.len() + 8 + ciphertext.len());
         message.extend_from_slice(CURVE_MESSAGE);
         message.extend_from_slice(&nonce[16..]); // 8-byte suffix only
         message.extend_from_slice(&ciphertext);
@@ -1194,7 +1286,7 @@ impl CurveServer {
         if counter < self.recv_nonce {
             return Err(CurveError::ProtocolViolation); // replay
         }
-        self.recv_nonce = counter + 1;
+        self.recv_nonce = counter.checked_add(1).ok_or(CurveError::ProtocolViolation)?;
 
         // Reconstruct full 24-byte nonce (client→server direction)
         let mut nonce = [0u8; CURVE_NONCE_SIZE];
@@ -1366,7 +1458,7 @@ mod tests {
 
     fn expected_zmtp_error_frame(reason: &str) -> Vec<u8> {
         let reason = reason.as_bytes();
-        let reason_len = reason.len().min(255);
+        let reason_len = reason.len().min(248);
         let mut frame = Vec::with_capacity(2 + 7 + reason_len);
         frame.push(0x04);
         frame.push((7 + reason_len) as u8);

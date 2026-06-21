@@ -107,8 +107,10 @@ where
             "[XSUB] Handshake complete"
         );
 
+        let mut base = SocketBase::new(stream, SocketType::Xsub, options);
+        base.curve_cipher = handshake_result.curve_cipher;
         Ok(Self {
-            base: SocketBase::new(stream, SocketType::Xsub, options),
+            base,
             subscriptions: SubscriptionTrie::new(),
         })
     }
@@ -240,16 +242,21 @@ where
 
         loop {
             loop {
-                match self.base.decoder.decode(&mut self.base.recv)? {
-                    Some(frame) => {
-                        let more = frame.more();
-                        frames.push(frame.payload);
+                match self.base.process_frame()? {
+                    crate::base::FrameResult::NeedMore => break,
+                    crate::base::FrameResult::CommandHandled => {
+                        if !self.base.send_buffer.is_empty() {
+                            self.base.flush_send_buffer().await?;
+                        }
+                        continue;
+                    }
+                    crate::base::FrameResult::Data(more, payload) => {
+                        frames.push(payload);
                         if !more {
                             trace!("[XSUB] Received {} frames", frames.len());
                             return Ok(Some(frames.into_vec()));
                         }
                     }
-                    None => break,
                 }
             }
 
@@ -257,6 +264,9 @@ where
             if n == 0 {
                 trace!("[XSUB] Connection closed");
                 return Ok(None);
+            }
+            if self.base.check_heartbeat()? {
+                self.base.flush_send_buffer().await?;
             }
         }
     }
@@ -364,13 +374,15 @@ impl XSubSocket<TcpStream> {
         );
 
         let endpoint = monocoque_core::endpoint::Endpoint::Tcp(peer_addr);
+        let mut base = crate::base::SocketBase::with_endpoint(
+            stream,
+            crate::session::SocketType::Xsub,
+            endpoint,
+            options,
+        );
+        base.curve_cipher = handshake_result.curve_cipher;
         Ok(Self {
-            base: crate::base::SocketBase::with_endpoint(
-                stream,
-                crate::session::SocketType::Xsub,
-                endpoint,
-                options,
-            ),
+            base,
             subscriptions: SubscriptionTrie::new(),
         })
     }

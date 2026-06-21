@@ -17,7 +17,6 @@
 //! - Testing and prototyping
 
 use crate::base::SocketBase;
-use crate::codec::encode_multipart;
 use crate::inproc_stream::InprocStream;
 use crate::{handshake::perform_handshake_with_options, session::SocketType};
 use bytes::Bytes;
@@ -76,8 +75,10 @@ where
 
         debug!("[PAIR] Socket initialized");
 
+        let mut base = SocketBase::new(stream, SocketType::Pair, options);
+        base.curve_cipher = handshake_result.curve_cipher;
         Ok(Self {
-            base: SocketBase::new(stream, SocketType::Pair, options),
+            base,
             frames: SmallVec::new(),
         })
     }
@@ -90,9 +91,8 @@ where
     pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
         trace!("[PAIR] Sending {} frames", msg.len());
 
-        // Encode message into write_buf
-        self.base.write_buf.clear();
-        encode_multipart(&msg, &mut self.base.write_buf);
+        // Encode message into write_buf (with CURVE encryption if active)
+        self.base.encode_message_to_write_buf(&msg)?;
 
         // Delegate to base for writing
         self.base.write_from_buf().await?;
@@ -112,29 +112,22 @@ where
         loop {
             // Try to decode frames from buffer
             loop {
-                match self.base.decoder.decode(&mut self.base.recv)? {
-                    Some(frame) => {
-                        if frame.is_command() {
-                            if crate::base::is_ping_payload(&frame.payload) {
-                                let pong = crate::base::build_pong_frame();
-                                self.base.send_buffer.extend_from_slice(&pong);
-                                self.base.flush_send_buffer().await?;
-                            } else if crate::base::is_pong_payload(&frame.payload) {
-                                self.base.note_pong_received();
-                            }
-                            continue;
+                match self.base.process_frame()? {
+                    crate::base::FrameResult::NeedMore => break,
+                    crate::base::FrameResult::CommandHandled => {
+                        if !self.base.send_buffer.is_empty() {
+                            self.base.flush_send_buffer().await?;
                         }
-                        let more = frame.more();
-                        self.frames.push(frame.payload);
-
+                        continue;
+                    }
+                    crate::base::FrameResult::Data(more, payload) => {
+                        self.frames.push(payload);
                         if !more {
-                            // Complete message received
                             let msg: Vec<Bytes> = self.frames.drain(..).collect();
                             trace!("[PAIR] Received {} frames", msg.len());
                             return Ok(Some(msg));
                         }
                     }
-                    None => break, // Need more data
                 }
             }
 
@@ -304,13 +297,15 @@ impl PairSocket<TcpStream> {
         );
 
         let endpoint = monocoque_core::endpoint::Endpoint::Tcp(peer_addr);
+        let mut base = crate::base::SocketBase::with_endpoint(
+            stream,
+            SocketType::Pair,
+            endpoint,
+            options,
+        );
+        base.curve_cipher = handshake_result.curve_cipher;
         Ok(Self {
-            base: crate::base::SocketBase::with_endpoint(
-                stream,
-                SocketType::Pair,
-                endpoint,
-                options,
-            ),
+            base,
             frames: SmallVec::new(),
         })
     }

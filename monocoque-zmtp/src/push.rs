@@ -17,7 +17,6 @@
 //! - Work queue distribution
 
 use crate::base::SocketBase;
-use crate::codec::encode_multipart;
 use crate::{handshake::perform_handshake_with_options, session::SocketType};
 use bytes::Bytes;
 use compio::io::{AsyncRead, AsyncWrite};
@@ -71,8 +70,10 @@ where
 
         debug!("[PUSH] Socket initialized");
 
+        let mut base = SocketBase::new(stream, SocketType::Push, options);
+        base.curve_cipher = handshake_result.curve_cipher;
         Ok(Self {
-            base: SocketBase::new(stream, SocketType::Push, options),
+            base,
         })
     }
 
@@ -87,9 +88,8 @@ where
     pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
         trace!("[PUSH] Sending {} frames", msg.len());
 
-        // Encode message into write_buf
-        self.base.write_buf.clear();
-        encode_multipart(&msg, &mut self.base.write_buf);
+        // Encode message into write_buf (with CURVE encryption if active)
+        self.base.encode_message_to_write_buf(&msg)?;
 
         // Delegate to base for writing
         self.base.write_from_buf().await?;
@@ -178,13 +178,15 @@ impl PushSocket<TcpStream> {
         );
 
         let endpoint = monocoque_core::endpoint::Endpoint::Tcp(peer_addr);
+        let mut base = crate::base::SocketBase::with_endpoint(
+            stream,
+            SocketType::Push,
+            endpoint,
+            options,
+        );
+        base.curve_cipher = handshake_result.curve_cipher;
         Ok(Self {
-            base: crate::base::SocketBase::with_endpoint(
-                stream,
-                SocketType::Push,
-                endpoint,
-                options,
-            ),
+            base,
         })
     }
 

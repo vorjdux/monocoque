@@ -18,7 +18,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, trace};
 
 use crate::base::SocketBase;
-use crate::codec::encode_multipart;
 use crate::{handshake::perform_handshake_with_options, session::SocketType};
 use monocoque_core::endpoint::Endpoint;
 
@@ -126,8 +125,10 @@ where
         debug!("[ROUTER] Socket initialized");
 
         let router_mandatory = options.router_mandatory;
+        let mut base = SocketBase::new(stream, SocketType::Router, options);
+        base.curve_cipher = handshake_result.curve_cipher;
         Ok(Self {
-            base: SocketBase::new(stream, SocketType::Router, options),
+            base,
             frames: SmallVec::new(),
             peer_identity,
             router_mandatory,
@@ -144,34 +145,24 @@ where
         loop {
             // Try to decode frames from buffer
             loop {
-                match self.base.decoder.decode(&mut self.base.recv)? {
-                    Some(frame) => {
-                        if frame.is_command() {
-                            if crate::base::is_ping_payload(&frame.payload) {
-                                let pong = crate::base::build_pong_frame();
-                                self.base.send_buffer.extend_from_slice(&pong);
-                                self.base.flush_send_buffer().await?;
-                            } else if crate::base::is_pong_payload(&frame.payload) {
-                                self.base.note_pong_received();
-                            }
-                            continue;
+                match self.base.process_frame()? {
+                    crate::base::FrameResult::NeedMore => break,
+                    crate::base::FrameResult::CommandHandled => {
+                        if !self.base.send_buffer.is_empty() {
+                            self.base.flush_send_buffer().await?;
                         }
-                        let more = frame.more();
-                        self.frames.push(frame.payload);
-
+                        continue;
+                    }
+                    crate::base::FrameResult::Data(more, payload) => {
+                        self.frames.push(payload);
                         if !more {
-                            // Complete message received
                             let msg: Vec<Bytes> = self.frames.drain(..).collect();
                             trace!("[ROUTER] Received {} frames", msg.len());
-
-                            // Prepend peer identity to the message
                             let mut frames = vec![self.peer_identity.clone()];
                             frames.extend(msg);
-
                             return Ok(Some(frames));
                         }
                     }
-                    None => break, // Need more data
                 }
             }
 
@@ -229,9 +220,8 @@ where
         // Skip the identity frame and send the rest
         let frames_to_send = &msg[1..];
 
-        // Encode message into write_buf
-        self.base.write_buf.clear();
-        encode_multipart(frames_to_send, &mut self.base.write_buf);
+        // Encode message into write_buf (with CURVE encryption if active)
+        self.base.encode_message_to_write_buf(frames_to_send)?;
 
         // Delegate to base for writing
         self.base.write_from_buf().await?;
@@ -289,7 +279,7 @@ where
 
         // Skip the identity frame and encode the rest
         let frames_to_send = &msg[1..];
-        encode_multipart(frames_to_send, &mut self.base.send_buffer);
+        self.base.encode_message_to_send_buf(frames_to_send)?;
         Ok(())
     }
 
@@ -324,7 +314,7 @@ where
                 continue;
             }
             let frames_to_send = &msg[1..];
-            encode_multipart(frames_to_send, &mut self.base.send_buffer);
+            self.base.encode_message_to_send_buf(frames_to_send)?;
         }
 
         self.flush().await
