@@ -162,7 +162,7 @@ where
     /// use monocoque::zmq::RepSocket;
     ///
     /// # async fn example(socket: &mut RepSocket) -> std::io::Result<()> {
-    /// if let Some(request) = socket.recv().await {
+    /// if let Ok(Some(request)) = socket.recv().await {
     ///     for (i, frame) in request.iter().enumerate() {
     ///         println!("Frame {}: {:?}", i, frame);
     ///     }
