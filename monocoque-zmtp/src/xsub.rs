@@ -164,11 +164,11 @@ where
 
         self.subscriptions.unsubscribe(&prefix);
 
-        // Send unsubscribe message if verbose mode enabled
-        if self.base.options.xsub_verbose_unsubs {
-            let event = SubscriptionEvent::Unsubscribe(prefix);
-            self.send_subscription_event(event).await?;
-        }
+        // Always notify upstream — publisher needs to know to stop sending.
+        // Per ZMQ spec, unsubscription frames must be forwarded upstream so the
+        // publisher can stop delivering unneeded data.
+        let event = SubscriptionEvent::Unsubscribe(prefix);
+        self.send_subscription_event(event).await?;
 
         Ok(())
     }

@@ -431,10 +431,46 @@ impl ProxySocket for XSubSocket {
         self.recv().await
     }
 
-    async fn send_multipart(&mut self, _msg: Vec<Bytes>) -> io::Result<()> {
-        // XSUB sends subscriptions, not data messages
-        // In a proxy context, we don't forward data back to XSUB
-        Ok(())
+    async fn send_multipart(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
+        // In a PUB-SUB broker the proxy receives subscription events from XPUB
+        // (backend) and must forward them upstream via XSUB so the publisher stops
+        // or starts sending the relevant topics.
+        //
+        // The message format produced by XPubSocket::recv_multipart is:
+        //   [b"\x01", topic]  — subscribe
+        //   [b"\x00", topic]  — unsubscribe
+        //
+        // We reconstruct the raw ZMTP subscription frame and dispatch it.
+        if msg.len() < 1 {
+            return Ok(());
+        }
+
+        let cmd_frame = &msg[0];
+        if cmd_frame.is_empty() {
+            return Ok(());
+        }
+
+        let cmd_byte = cmd_frame[0];
+        // Topic is either in a second frame or appended after the command byte
+        // in the same frame, depending on how the message was encoded.
+        let topic: Bytes = if msg.len() >= 2 {
+            msg[1].clone()
+        } else if cmd_frame.len() > 1 {
+            cmd_frame.slice(1..)
+        } else {
+            Bytes::new()
+        };
+
+        let event = if cmd_byte == 0x01 {
+            monocoque_core::subscription::SubscriptionEvent::Subscribe(topic)
+        } else if cmd_byte == 0x00 {
+            monocoque_core::subscription::SubscriptionEvent::Unsubscribe(topic)
+        } else {
+            // Unknown command — ignore
+            return Ok(());
+        };
+
+        self.send_subscription_event(event).await
     }
 
     fn socket_desc(&self) -> &'static str {

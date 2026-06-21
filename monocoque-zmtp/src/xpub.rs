@@ -26,7 +26,7 @@ use compio::net::{TcpListener, TcpStream};
 use monocoque_core::options::SocketOptions;
 use monocoque_core::subscription::{SubscriptionEvent, SubscriptionTrie};
 use smallvec::SmallVec;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::io;
 use tracing::{debug, trace};
@@ -103,6 +103,17 @@ pub struct XPubSocket {
     /// When set, `send_subscription()` writes subscription events to this
     /// connection so they propagate to the upstream publisher.
     upstream: Option<XSubSocket<TcpStream>>,
+    /// Tracks which unique topic prefixes currently have at least one subscriber.
+    ///
+    /// Used in non-verbose mode to deliver an event only the FIRST time a topic
+    /// is subscribed (and when it transitions back to zero subscribers).
+    seen_topics: HashSet<Vec<u8>>,
+    /// Reference-count of active subscriptions per topic prefix.
+    ///
+    /// Maps topic prefix → number of active subscribers interested in it.
+    /// When the count drops to zero, the topic is removed from `seen_topics`
+    /// and an Unsubscribe event is delivered.
+    topic_refcount: HashMap<Vec<u8>, usize>,
 }
 
 impl XPubSocket {
@@ -134,6 +145,8 @@ impl XPubSocket {
             options,
             pending_events: SmallVec::new(),
             upstream: None,
+            seen_topics: HashSet::new(),
+            topic_refcount: HashMap::new(),
         })
     }
 
@@ -281,16 +294,65 @@ impl XPubSocket {
                                         event
                                     );
 
-                                    match &event {
-                                        SubscriptionEvent::Subscribe(prefix) => {
-                                            sub.subscriptions.subscribe(prefix.clone());
+                                    let should_deliver = if self.options.xpub_verbose {
+                                        // Verbose mode: always deliver every event
+                                        match &event {
+                                            SubscriptionEvent::Subscribe(prefix) => {
+                                                sub.subscriptions.subscribe(prefix.clone());
+                                                let key = prefix.to_vec();
+                                                *self.topic_refcount.entry(key.clone()).or_insert(0) += 1;
+                                                self.seen_topics.insert(key);
+                                            }
+                                            SubscriptionEvent::Unsubscribe(prefix) => {
+                                                sub.subscriptions.unsubscribe(prefix);
+                                                let key = prefix.to_vec();
+                                                let count = self.topic_refcount.entry(key.clone()).or_insert(0);
+                                                if *count > 0 {
+                                                    *count -= 1;
+                                                }
+                                                if *count == 0 {
+                                                    self.seen_topics.remove(&key);
+                                                    self.topic_refcount.remove(&key);
+                                                }
+                                            }
                                         }
-                                        SubscriptionEvent::Unsubscribe(prefix) => {
-                                            sub.subscriptions.unsubscribe(prefix);
+                                        true
+                                    } else {
+                                        // Non-verbose mode: deliver only on first subscribe / last unsubscribe
+                                        match &event {
+                                            SubscriptionEvent::Subscribe(prefix) => {
+                                                sub.subscriptions.subscribe(prefix.clone());
+                                                let key = prefix.to_vec();
+                                                let count = self.topic_refcount.entry(key.clone()).or_insert(0);
+                                                *count += 1;
+                                                if *count == 1 {
+                                                    // First subscriber for this topic
+                                                    self.seen_topics.insert(key);
+                                                    true
+                                                } else {
+                                                    false
+                                                }
+                                            }
+                                            SubscriptionEvent::Unsubscribe(prefix) => {
+                                                sub.subscriptions.unsubscribe(prefix);
+                                                let key = prefix.to_vec();
+                                                let count = self.topic_refcount.entry(key.clone()).or_insert(0);
+                                                if *count > 0 {
+                                                    *count -= 1;
+                                                }
+                                                if *count == 0 {
+                                                    // Last subscriber gone for this topic
+                                                    self.seen_topics.remove(&key);
+                                                    self.topic_refcount.remove(&key);
+                                                    true
+                                                } else {
+                                                    false
+                                                }
+                                            }
                                         }
-                                    }
+                                    };
 
-                                    if self.options.xpub_verbose {
+                                    if should_deliver {
                                         self.pending_events.push(event);
                                     }
                                 }
