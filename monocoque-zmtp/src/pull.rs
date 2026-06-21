@@ -133,10 +133,10 @@ where
         }
     }
 
-    /// Close the socket gracefully.
-    pub async fn close(self) -> io::Result<()> {
+    /// Close the socket gracefully by shutting down the underlying stream.
+    pub async fn close(mut self) -> io::Result<()> {
         trace!("[PULL] Closing socket");
-        Ok(())
+        self.base.close().await
     }
 
     /// Get a reference to the socket options.

@@ -85,9 +85,14 @@ impl<S: Socket + Unpin> Stream for SocketStream<S> {
     type Item = io::Result<Vec<Bytes>>;
 
     fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // Placeholder Stream implementation - not yet fully integrated with Socket trait
-        // A full implementation would require storing a pinned future in the struct
-        Poll::Pending
+        // Stream::poll_next cannot store the async recv() future across poll calls
+        // without a Pin-boxed future field. Return an explicit error instead of
+        // silently hanging (Poll::Pending) so callers notice the limitation.
+        // Use socket.recv().await directly instead of this Stream adapter.
+        Poll::Ready(Some(Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Use socket.recv().await directly; Stream adapter requires storing an async future",
+        ))))
     }
 }
 
@@ -146,9 +151,13 @@ impl<S: Socket + Unpin> Sink<Vec<Bytes>> for SocketSink<S> {
     }
 
     fn start_send(self: Pin<&mut Self>, _item: Vec<Bytes>) -> Result<(), Self::Error> {
-        // Placeholder Sink implementation - not yet fully integrated with Socket trait
-        // For a complete implementation, this would need a buffer field in the struct
-        Ok(())
+        // Cannot implement send without storing an async future across poll calls.
+        // Return an error instead of silently dropping data.
+        // Use socket.send(msg).await directly instead of this Sink adapter.
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Use socket.send(msg).await directly; Sink adapter requires storing an async future",
+        ))
     }
 
     fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -222,8 +231,14 @@ impl<S: Socket + Unpin> Stream for SocketStreamSink<S> {
     type Item = io::Result<Vec<Bytes>>;
 
     fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // Placeholder - full implementation would poll the recv future
-        Poll::Pending
+        // Stream::poll_next cannot store the async recv() future across poll calls
+        // without a Pin-boxed future field. Return an explicit error instead of
+        // silently hanging (Poll::Pending) so callers notice the limitation.
+        // Use socket.recv().await directly instead of this Stream adapter.
+        Poll::Ready(Some(Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Use socket.recv().await directly; Stream adapter requires storing an async future",
+        ))))
     }
 }
 
@@ -235,12 +250,21 @@ impl<S: Socket + Unpin> Sink<Vec<Bytes>> for SocketStreamSink<S> {
     }
 
     fn start_send(mut self: Pin<&mut Self>, item: Vec<Bytes>) -> Result<(), Self::Error> {
+        // Store the item to make the pending_send field meaningful, but
+        // poll_flush will return an error rather than silently discarding it.
         self.pending_send = Some(item);
         Ok(())
     }
 
     fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        // Placeholder - full implementation would send pending messages
+        // Cannot send without storing an async future across poll calls.
+        // Return an error if there's a pending item instead of silently dropping it.
+        if self.pending_send.is_some() {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "Use socket.send(msg).await directly; Sink adapter requires storing an async future",
+            )));
+        }
         Poll::Ready(Ok(()))
     }
 

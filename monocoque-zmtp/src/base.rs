@@ -662,6 +662,18 @@ where
         guard.disarm();
         Ok(())
     }
+
+    /// Close the socket gracefully by shutting down the underlying stream.
+    ///
+    /// Sends a TCP FIN (or equivalent) to the peer and drops the connection.
+    /// After this call `is_connected()` returns `false`.
+    pub async fn close(&mut self) -> io::Result<()> {
+        if let Some(ref mut stream) = self.stream {
+            stream.shutdown().await?;
+        }
+        self.stream = None;
+        Ok(())
+    }
 }
 
 impl SocketBase<TcpStream> {

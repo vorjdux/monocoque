@@ -51,29 +51,31 @@ impl AsyncRead for InprocStream {
     async fn read<B: IoBufMut>(&mut self, mut buf: B) -> BufResult<usize, B> {
         match self.rx.recv_async().await {
             Ok(msg_frames) => {
-                // Assemble frames and copy to buffer
-                let mut total = 0;
-                let buf_capacity = buf.buf_capacity();
+                let buf_cap = buf.buf_capacity();
+                // as_buf_mut_ptr() is a safe fn that returns a raw pointer to the
+                // buffer's backing allocation (including uninitialized capacity).
+                // Safety: We write at most buf_cap bytes via copy_nonoverlapping
+                // and then call set_buf_init to declare the range initialized.
+                // This is the correct compio IoBufMut pattern.
+                let buf_ptr = buf.as_buf_mut_ptr();
+                let mut total = 0usize;
 
                 for frame in msg_frames {
-                    let to_copy = frame.len().min(buf_capacity - total);
+                    let to_copy = frame.len().min(buf_cap - total);
                     if to_copy == 0 {
                         break;
                     }
-                    // Copy data using safe slice API
-                    let dest_slice = unsafe {
-                        std::slice::from_raw_parts_mut(
-                            buf.as_slice().as_ptr().cast_mut().add(total),
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            frame.as_ptr(),
+                            buf_ptr.add(total),
                             to_copy,
-                        )
-                    };
-                    dest_slice.copy_from_slice(&frame[..to_copy]);
+                        );
+                    }
                     total += to_copy;
                 }
 
-                unsafe {
-                    buf.set_buf_init(total);
-                }
+                unsafe { buf.set_buf_init(total); }
                 BufResult(Ok(total), buf)
             }
             Err(_) => {

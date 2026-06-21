@@ -432,10 +432,13 @@ impl PubSocket {
         Ok(id)
     }
 
-    /// Remove a subscriber (handled automatically by worker drop)
+    /// Remove a subscriber and decrement the subscriber count.
+    ///
+    /// Workers also evict dead subscribers automatically when a send error is
+    /// detected, but callers that track disconnections explicitly should call
+    /// this method so that `subscriber_count()` stays accurate.
     pub fn remove_subscriber(&mut self, _id: SubscriberId) {
-        // No-op: workers manage their own subscribers
-        // When a subscriber disconnects, the worker detects it and removes it
+        self.subscriber_count = self.subscriber_count.saturating_sub(1);
     }
 
     /// Broadcast message to all matching subscribers across all workers.
