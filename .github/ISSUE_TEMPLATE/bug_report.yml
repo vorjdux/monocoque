@@ -1,0 +1,109 @@
+name: Bug report
+description: Report a bug or an interop mismatch with a real ZeroMQ peer
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The more of the fields below you can fill in, the faster this is to track down. For an interop issue, a short snippet of both sides is the most useful thing you can give.
+  - type: input
+    id: version
+    attributes:
+      label: Monocoque version
+      description: The crate version, or the git commit if you are on main.
+      placeholder: "0.1.0, or a commit sha"
+    validations:
+      required: true
+  - type: dropdown
+    id: pattern
+    attributes:
+      label: Socket pattern
+      options:
+        - REQ
+        - REP
+        - DEALER
+        - ROUTER
+        - PUB
+        - SUB
+        - XPUB
+        - XSUB
+        - PUSH
+        - PULL
+        - PAIR
+        - Other or not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: peer
+    attributes:
+      label: Peer on the other side
+      description: What Monocoque was talking to when this happened.
+      options:
+        - Monocoque
+        - libzmq (C)
+        - pyzmq (Python)
+        - Another binding
+        - Not applicable
+    validations:
+      required: true
+  - type: dropdown
+    id: transport
+    attributes:
+      label: Transport
+      options:
+        - tcp
+        - ipc
+        - inproc
+        - Not sure
+    validations:
+      required: false
+  - type: dropdown
+    id: security
+    attributes:
+      label: Security mechanism
+      options:
+        - None
+        - PLAIN
+        - CURVE
+    validations:
+      required: false
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: OS and Rust version (rustc --version).
+      placeholder: "Ubuntu 24.04, rustc 1.85.0"
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what you got instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: The smallest code that triggers it. For an interop issue, include both sides.
+      render: rust
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Any relevant output. Tracing logs help, run with RUST_LOG=monocoque=debug.
+      render: shell
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before filing
+      options:
+        - label: I searched existing issues for a duplicate
+          required: true
+        - label: I checked this against the latest version or main
+          required: false

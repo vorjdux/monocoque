@@ -1,0 +1,71 @@
+name: Feature request
+description: Suggest a capability, a protocol feature, or an API change
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. If this is a larger change, it helps to open this before writing code so we can agree on direction first.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or motivation
+      description: What are you trying to do that is hard or not possible today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What you would like to see. An API sketch is welcome.
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part
+      options:
+        - Public API (monocoque)
+        - Core or transport (monocoque-core)
+        - ZMTP protocol (monocoque-zmtp)
+        - Security (PLAIN or CURVE)
+        - Docs or examples
+        - Build or CI
+        - Not sure
+    validations:
+      required: false
+  - type: dropdown
+    id: wire-impact
+    attributes:
+      label: Wire or compatibility impact
+      description: Would this change the bytes on the wire or affect ZeroMQ compatibility.
+      options:
+        - "No, it does not touch the wire"
+        - "Yes, it changes or extends the wire format"
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you weighed, and why this one.
+    validations:
+      required: false
+  - type: dropdown
+    id: implement
+    attributes:
+      label: Would you be willing to implement it
+      options:
+        - Yes
+        - Yes, with some guidance
+        - "No"
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before filing
+      options:
+        - label: I searched existing issues for a duplicate
+          required: true
