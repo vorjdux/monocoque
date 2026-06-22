@@ -62,7 +62,11 @@ fn main() {
         info!("[Monocoque DEALER] Sent request\n");
 
         // Receive reply
-        let response = dealer.recv().await.expect("IO error").expect("Connection closed");
+        let response = dealer
+            .recv()
+            .await
+            .expect("IO error")
+            .expect("Connection closed");
 
         info!("[Monocoque DEALER] Received response:");
         for (i, frame) in response.iter().enumerate() {

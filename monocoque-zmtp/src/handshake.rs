@@ -105,7 +105,10 @@ where
             ZmtpError::Protocol
         })?;
     write_res.map_err(|e| {
-        warn!("[HANDSHAKE] Step 1: Failed to write ZMTP greeting bytes: {}", e);
+        warn!(
+            "[HANDSHAKE] Step 1: Failed to write ZMTP greeting bytes: {}",
+            e
+        );
         ZmtpError::Protocol
     })?;
     debug!(
@@ -123,7 +126,10 @@ where
             ZmtpError::Protocol
         })?;
     read_res.map_err(|e| {
-        warn!("[HANDSHAKE] Step 2: Failed to read ZMTP greeting bytes: {}", e);
+        warn!(
+            "[HANDSHAKE] Step 2: Failed to read ZMTP greeting bytes: {}",
+            e
+        );
         ZmtpError::Protocol
     })?;
     debug!("[HANDSHAKE] Step 2 DONE: Received peer greeting (64 bytes)");
@@ -139,7 +145,8 @@ where
 
     // Parse peer greeting to check mechanism compatibility
     use crate::greeting::ZmtpGreeting;
-    let peer_greeting = ZmtpGreeting::parse(&Bytes::copy_from_slice(&greeting_buf[..])).map_err(|_| ZmtpError::Protocol)?;
+    let peer_greeting = ZmtpGreeting::parse(&Bytes::copy_from_slice(&greeting_buf[..]))
+        .map_err(|_| ZmtpError::Protocol)?;
     let expected_mech = mechanism.as_greeting_bytes();
     let peer_mech_str = peer_greeting.mechanism_str();
     let our_mech_name = std::str::from_utf8(expected_mech).unwrap_or("NULL");
@@ -152,7 +159,7 @@ where
     }
 
     // Step 3: Run security-mechanism-specific exchange (between greeting and READY)
-    let mut curve_cipher: Option<crate::security::curve::CurveMessageCipher> = None;
+    let curve_cipher: Option<crate::security::curve::CurveMessageCipher> = None;
     match mechanism {
         SecurityMechanism::Null => {
             // No mechanism-level exchange for NULL; proceed directly to READY.
@@ -162,14 +169,8 @@ where
         }
         SecurityMechanism::Curve => {
             // CURVE handshake carries all metadata internally (no separate READY needed).
-            let cr = run_curve_exchange(
-                stream,
-                options,
-                timeout,
-                local_socket_type,
-                identity,
-            )
-            .await?;
+            let cr =
+                run_curve_exchange(stream, options, timeout, local_socket_type, identity).await?;
             let peer_socket_type = parse_socket_type(cr.peer_socket_type.as_ref())?;
             return Ok(HandshakeResult {
                 peer_identity: cr.peer_identity,
@@ -186,11 +187,17 @@ where
     let BufResult(write_res, _) = write_all_with_timeout(stream, ready_frame.clone(), timeout)
         .await
         .map_err(|e| {
-            warn!("[HANDSHAKE] Step 4: Failed to send ZMTP READY command: {}", e);
+            warn!(
+                "[HANDSHAKE] Step 4: Failed to send ZMTP READY command: {}",
+                e
+            );
             ZmtpError::Protocol
         })?;
     write_res.map_err(|e| {
-        warn!("[HANDSHAKE] Step 4: Failed to write ZMTP READY command bytes: {}", e);
+        warn!(
+            "[HANDSHAKE] Step 4: Failed to write ZMTP READY command bytes: {}",
+            e
+        );
         ZmtpError::Protocol
     })?;
     debug!(
@@ -204,11 +211,17 @@ where
     let BufResult(read_res, header_buf) = read_exact_with_timeout(stream, header_buf, timeout)
         .await
         .map_err(|e| {
-            warn!("[HANDSHAKE] Step 5: Failed to receive ZMTP READY frame header: {}", e);
+            warn!(
+                "[HANDSHAKE] Step 5: Failed to receive ZMTP READY frame header: {}",
+                e
+            );
             ZmtpError::Protocol
         })?;
     read_res.map_err(|e| {
-        warn!("[HANDSHAKE] Step 5: Failed to read ZMTP READY frame header bytes: {}", e);
+        warn!(
+            "[HANDSHAKE] Step 5: Failed to read ZMTP READY frame header bytes: {}",
+            e
+        );
         ZmtpError::Protocol
     })?;
     debug!(
@@ -235,16 +248,25 @@ where
         let BufResult(read_res, len_buf) = read_exact_with_timeout(stream, len_buf, timeout)
             .await
             .map_err(|e| {
-                warn!("[HANDSHAKE] Step 5: Failed to receive ZMTP READY long-frame length: {}", e);
+                warn!(
+                    "[HANDSHAKE] Step 5: Failed to receive ZMTP READY long-frame length: {}",
+                    e
+                );
                 ZmtpError::Protocol
             })?;
         read_res.map_err(|e| {
-            warn!("[HANDSHAKE] Step 5: Failed to read ZMTP READY long-frame length bytes: {}", e);
+            warn!(
+                "[HANDSHAKE] Step 5: Failed to read ZMTP READY long-frame length bytes: {}",
+                e
+            );
             ZmtpError::Protocol
         })?;
         let raw_len = u64::from_be_bytes(len_buf);
         if raw_len > usize::MAX as u64 {
-            warn!("[HANDSHAKE] ZMTP READY long-frame length overflows usize: {}", raw_len);
+            warn!(
+                "[HANDSHAKE] ZMTP READY long-frame length overflows usize: {}",
+                raw_len
+            );
             return Err(ZmtpError::Protocol);
         }
         raw_len as usize
@@ -266,11 +288,17 @@ where
     let BufResult(read_res, body_buf) = read_exact_with_timeout(stream, body_buf, timeout)
         .await
         .map_err(|e| {
-            warn!("[HANDSHAKE] Step 5: Failed to receive ZMTP READY body ({} bytes): {}", body_len, e);
+            warn!(
+                "[HANDSHAKE] Step 5: Failed to receive ZMTP READY body ({} bytes): {}",
+                body_len, e
+            );
             ZmtpError::Protocol
         })?;
     read_res.map_err(|e| {
-        warn!("[HANDSHAKE] Step 5: Failed to read ZMTP READY body bytes: {}", e);
+        warn!(
+            "[HANDSHAKE] Step 5: Failed to read ZMTP READY body bytes: {}",
+            e
+        );
         ZmtpError::Protocol
     })?;
     debug!("[HANDSHAKE] Step 5c DONE: Read {} bytes of body", body_len);
@@ -480,7 +508,10 @@ fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), Zmtp
         offset += 1;
 
         if offset + key_len > body.len() {
-            warn!("[HANDSHAKE] READY property key truncated (key_len={})", key_len);
+            warn!(
+                "[HANDSHAKE] READY property key truncated (key_len={})",
+                key_len
+            );
             return Err(ZmtpError::Protocol);
         }
 
@@ -501,7 +532,10 @@ fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), Zmtp
         offset += 4;
 
         if offset + value_len > body.len() {
-            warn!("[HANDSHAKE] READY property value truncated (value_len={})", value_len);
+            warn!(
+                "[HANDSHAKE] READY property value truncated (value_len={})",
+                value_len
+            );
             return Err(ZmtpError::Protocol);
         }
 
@@ -517,7 +551,10 @@ fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), Zmtp
             b"Identity" => {
                 // ZMQ spec limits identities to 255 bytes.
                 if value_len > 255 {
-                    warn!("[HANDSHAKE] READY Identity property too long: {} bytes (max 255)", value_len);
+                    warn!(
+                        "[HANDSHAKE] READY Identity property too long: {} bytes (max 255)",
+                        value_len
+                    );
                     return Err(ZmtpError::Protocol);
                 }
                 // Zero-copy: slice the existing Bytes instead of copying

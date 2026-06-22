@@ -1,0 +1,4 @@
+[advisories]
+# paste v1.0.15 is flagged as unmaintained (RUSTSEC-2024-0436) but has no
+# known vulnerabilities and is only a transitive dev/test dependency.
+ignore = ["RUSTSEC-2024-0436"]

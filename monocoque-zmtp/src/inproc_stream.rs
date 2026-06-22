@@ -66,16 +66,14 @@ impl AsyncRead for InprocStream {
                         break;
                     }
                     unsafe {
-                        std::ptr::copy_nonoverlapping(
-                            frame.as_ptr(),
-                            buf_ptr.add(total),
-                            to_copy,
-                        );
+                        std::ptr::copy_nonoverlapping(frame.as_ptr(), buf_ptr.add(total), to_copy);
                     }
                     total += to_copy;
                 }
 
-                unsafe { buf.set_buf_init(total); }
+                unsafe {
+                    buf.set_buf_init(total);
+                }
                 BufResult(Ok(total), buf)
             }
             Err(_) => {

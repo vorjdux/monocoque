@@ -102,7 +102,7 @@ async fn test_req_strict_recv_recv_fails() -> io::Result<()> {
 /// Test relaxed REQ mode - send→send→recv→send→recv works
 ///
 /// Relaxed mode skips the strict enforcement that prevents send-after-send.
-/// Full request pipelining (N sends then N recvs) is not yet implemented  - 
+/// Full request pipelining (N sends then N recvs) is not yet implemented  -
 /// each recv() still transitions to Idle, so send/recv still need to interleave.
 #[compio::test]
 async fn test_req_relaxed_send_send_succeeds() -> io::Result<()> {

@@ -141,7 +141,8 @@ where
         // Encrypt if CURVE is active; otherwise plain ZMTP frame.
         let mut wire = BytesMut::new();
         if let Some(ref mut cipher) = self.base.curve_cipher {
-            let body = cipher.encrypt_frame(&payload, false)
+            let body = cipher
+                .encrypt_frame(&payload, false)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
             crate::base::append_zmtp_cmd_frame(&mut wire, &body);
         } else {
@@ -149,11 +150,15 @@ where
         }
         let wire = wire.freeze();
 
-        trace!("[SUB] Sending subscription event ({} wire bytes)", wire.len());
+        trace!(
+            "[SUB] Sending subscription event ({} wire bytes)",
+            wire.len()
+        );
 
-        let stream = self.base.stream.as_mut().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
-        })?;
+        let stream =
+            self.base.stream.as_mut().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
+            })?;
         let data = wire.to_vec();
         let BufResult(result, _) = stream.write_all(data).await;
         result?;
@@ -357,12 +362,8 @@ impl SubSocket<TcpStream> {
         );
 
         let endpoint = monocoque_core::endpoint::Endpoint::Tcp(peer_addr);
-        let mut base = crate::base::SocketBase::with_endpoint(
-            stream,
-            SocketType::Sub,
-            endpoint,
-            options,
-        );
+        let mut base =
+            crate::base::SocketBase::with_endpoint(stream, SocketType::Sub, endpoint, options);
         base.curve_cipher = handshake_result.curve_cipher;
         Ok(Self {
             base,

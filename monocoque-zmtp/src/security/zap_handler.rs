@@ -117,7 +117,10 @@ impl<H: PlainAuthHandler> ZapHandler for DefaultZapHandler<H> {
                 // When no whitelist configured: accept all valid keys (accept_curve=true already checked)
 
                 // Use the hex-encoded public key as user_id
-                let user_id = public_key.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+                let user_id = public_key
+                    .iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect::<String>();
                 ZapResponse::success(request.request_id.clone(), user_id)
             }
         }
@@ -400,7 +403,11 @@ mod tests {
     impl ZapHandler for IpDenyListHandler {
         async fn authenticate(&self, request: &ZapRequest) -> ZapResponse {
             // Reject if the peer address starts with any denied IP prefix
-            if self.denied_ips.iter().any(|ip| request.address.starts_with(ip.as_str())) {
+            if self
+                .denied_ips
+                .iter()
+                .any(|ip| request.address.starts_with(ip.as_str()))
+            {
                 return ZapResponse::failure(
                     request.request_id.clone(),
                     format!("Address {} is blocked", request.address),

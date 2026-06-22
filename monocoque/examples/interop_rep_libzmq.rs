@@ -29,7 +29,11 @@ fn main() {
             info!("[Monocoque REP] Client connected\n");
 
             // First request-reply cycle
-            let request = socket.recv().await.expect("Failed to receive").expect("Connection closed");
+            let request = socket
+                .recv()
+                .await
+                .expect("Failed to receive")
+                .expect("Connection closed");
             {
                 let msg = request;
                 info!("[Monocoque REP] Received request:");

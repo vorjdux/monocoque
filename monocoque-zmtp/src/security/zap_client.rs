@@ -159,7 +159,7 @@ impl ZapClient {
     /// Send a PLAIN authentication request
     ///
     /// The request ID is generated using the process-wide monotonic counter
-    /// (see [`next_request_id`]) to guarantee uniqueness within a process.
+    /// (see `next_request_id`) to guarantee uniqueness within a process.
     ///
     /// # Arguments
     /// * `username` - Username credential
@@ -193,7 +193,7 @@ impl ZapClient {
     /// Send a CURVE authentication request
     ///
     /// The request ID is generated using the process-wide monotonic counter
-    /// (see [`next_request_id`]) to guarantee uniqueness within a process.
+    /// (see `next_request_id`) to guarantee uniqueness within a process.
     ///
     /// # Arguments
     /// * `client_key` - Client's public key (32 bytes)
@@ -270,20 +270,29 @@ mod tests {
             ZapMechanism::Null,
             vec![],
         );
-        assert_ne!(r1.request_id, r2.request_id, "each request must have a unique ID");
+        assert_ne!(
+            r1.request_id, r2.request_id,
+            "each request must have a unique ID"
+        );
     }
 
     /// Verify the default-deny sentinel response that is returned when the ZAP
     /// endpoint is unreachable (no handler registered).
     #[test]
     fn test_denial_response_is_failure() {
-        let resp = ZapClient::denial_response("42", "No ZAP handler registered — connection denied by default");
+        let resp = ZapClient::denial_response(
+            "42",
+            "No ZAP handler registered — connection denied by default",
+        );
         assert_eq!(
             resp.status_code,
             ZapStatus::Failure,
             "missing ZAP handler must produce a Failure (400) response"
         );
-        assert!(resp.user_id.is_empty(), "denied response must have empty user_id");
+        assert!(
+            resp.user_id.is_empty(),
+            "denied response must have empty user_id"
+        );
         assert_eq!(resp.request_id, "42");
     }
 }

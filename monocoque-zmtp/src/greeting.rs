@@ -13,6 +13,7 @@ pub struct ZmtpGreeting {
     /// Security mechanism advertised by the peer (e.g., "NULL", "PLAIN", "CURVE")
     pub mechanism: [u8; 20],
     /// Whether the peer is acting as server for the security mechanism
+    #[allow(dead_code)]
     pub as_server: bool,
 }
 
@@ -53,7 +54,10 @@ impl ZmtpGreeting {
         let mut mechanism = [0u8; 20];
         mechanism.copy_from_slice(&src[12..32]);
         let as_server = src[32] != 0;
-        Ok(Self { mechanism, as_server })
+        Ok(Self {
+            mechanism,
+            as_server,
+        })
     }
 
     /// Returns the mechanism name as a trimmed string (strips NUL padding).

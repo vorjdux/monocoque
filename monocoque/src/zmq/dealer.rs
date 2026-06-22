@@ -83,9 +83,18 @@ impl DealerSocket {
     /// ```
     pub async fn connect(endpoint: &str) -> io::Result<Self> {
         let addr = parse_tcp_endpoint(endpoint)?;
-        let inner = InternalDealer::connect_with_options(addr, monocoque_core::options::SocketOptions::default()).await?;
-        let sock = Self { inner, monitor: None };
-        sock.emit_event(SocketEvent::Connected(monocoque_core::endpoint::Endpoint::Tcp(addr)));
+        let inner = InternalDealer::connect_with_options(
+            addr,
+            monocoque_core::options::SocketOptions::default(),
+        )
+        .await?;
+        let sock = Self {
+            inner,
+            monitor: None,
+        };
+        sock.emit_event(SocketEvent::Connected(
+            monocoque_core::endpoint::Endpoint::Tcp(addr),
+        ));
         Ok(sock)
     }
 
@@ -113,8 +122,13 @@ impl DealerSocket {
     ) -> io::Result<Self> {
         let addr = parse_tcp_endpoint(endpoint)?;
         let inner = InternalDealer::connect_with_options(addr, options).await?;
-        let sock = Self { inner, monitor: None };
-        sock.emit_event(SocketEvent::Connected(monocoque_core::endpoint::Endpoint::Tcp(addr)));
+        let sock = Self {
+            inner,
+            monitor: None,
+        };
+        sock.emit_event(SocketEvent::Connected(
+            monocoque_core::endpoint::Endpoint::Tcp(addr),
+        ));
         Ok(sock)
     }
 

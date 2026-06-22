@@ -128,7 +128,10 @@ impl SemaphorePermits {
     pub fn new(max_bytes: usize) -> Self {
         Self {
             inner: Arc::new((
-                Mutex::new(SemInner { available: max_bytes, max_bytes }),
+                Mutex::new(SemInner {
+                    available: max_bytes,
+                    max_bytes,
+                }),
                 Condvar::new(),
             )),
         }

@@ -206,7 +206,8 @@ where
         // Encrypt if CURVE is active; otherwise plain ZMTP frame.
         let mut wire = BytesMut::new();
         if let Some(ref mut cipher) = self.base.curve_cipher {
-            let body = cipher.encrypt_frame(&raw, false)
+            let body = cipher
+                .encrypt_frame(&raw, false)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
             crate::base::append_zmtp_cmd_frame(&mut wire, &body);
         } else {
@@ -402,9 +403,12 @@ impl XSubSocket<TcpStream> {
 
     /// Try to reconnect to the stored endpoint, re-sending all active subscriptions.
     pub async fn try_reconnect(&mut self) -> io::Result<()> {
-        self.base.try_reconnect(crate::session::SocketType::Xsub).await?;
+        self.base
+            .try_reconnect(crate::session::SocketType::Xsub)
+            .await?;
         // Re-send all subscriptions to the fresh connection
-        let prefixes: Vec<bytes::Bytes> = self.subscriptions
+        let prefixes: Vec<bytes::Bytes> = self
+            .subscriptions
             .subscriptions()
             .iter()
             .map(|s| s.prefix.clone())

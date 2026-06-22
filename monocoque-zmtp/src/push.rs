@@ -72,9 +72,7 @@ where
 
         let mut base = SocketBase::new(stream, SocketType::Push, options);
         base.curve_cipher = handshake_result.curve_cipher;
-        Ok(Self {
-            base,
-        })
+        Ok(Self { base })
     }
 
     /// Send a message to a connected PULL socket.
@@ -178,16 +176,10 @@ impl PushSocket<TcpStream> {
         );
 
         let endpoint = monocoque_core::endpoint::Endpoint::Tcp(peer_addr);
-        let mut base = crate::base::SocketBase::with_endpoint(
-            stream,
-            SocketType::Push,
-            endpoint,
-            options,
-        );
+        let mut base =
+            crate::base::SocketBase::with_endpoint(stream, SocketType::Push, endpoint, options);
         base.curve_cipher = handshake_result.curve_cipher;
-        Ok(Self {
-            base,
-        })
+        Ok(Self { base })
     }
 
     /// Check if the socket is currently connected.
