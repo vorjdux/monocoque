@@ -60,7 +60,7 @@ fn monocoque_req_rep_latency(c: &mut Criterion) {
 
                                 // Server echo loop
                                 loop {
-                                    if let Some(msg) = rep.recv().await {
+                                    if let Ok(Some(msg)) = rep.recv().await {
                                         if rep.send(msg).await.is_err() {
                                             break;
                                         }

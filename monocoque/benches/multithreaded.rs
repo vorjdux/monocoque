@@ -32,7 +32,7 @@ const BATCH_SIZE: usize = 100; // Process in batches to avoid deadlock
 ///
 /// This tests horizontal scalability and lock-free architecture.
 fn monocoque_multithreaded_dealers(c: &mut Criterion) {
-    monocoque::dev_tracing::init_tracing();
+    
     let mut group = c.benchmark_group("multithreaded/monocoque/dealers");
     group.measurement_time(Duration::from_secs(20));
     group.sample_size(10); // Minimum required by criterion
@@ -80,7 +80,7 @@ fn monocoque_multithreaded_dealers(c: &mut Criterion) {
                                         while received_count.load(Ordering::Relaxed)
                                             < expected_total
                                         {
-                                            if let Some(msg) = router.recv().await {
+                                            if let Ok(Some(msg)) = router.recv().await {
                                                 received_count.fetch_add(1, Ordering::Relaxed);
                                                 router.send(msg).await.ok();
                                             } else {
@@ -131,7 +131,7 @@ fn monocoque_multithreaded_dealers(c: &mut Criterion) {
                                         }
                                         // Receive batch
                                         for _ in 0..BATCH_SIZE {
-                                            if dealer.recv().await.is_none() {
+                                            if dealer.recv().await.ok().flatten().is_none() {
                                                 break;
                                             }
                                         }
@@ -160,7 +160,7 @@ fn monocoque_multithreaded_dealers(c: &mut Criterion) {
 ///
 /// This tests scalability when each thread has completely isolated communication.
 fn monocoque_multithreaded_independent_pairs(c: &mut Criterion) {
-    monocoque::dev_tracing::init_tracing();
+    
     let mut group = c.benchmark_group("multithreaded/monocoque/independent_pairs");
     group.measurement_time(Duration::from_secs(20));
     group.sample_size(10);
@@ -200,7 +200,7 @@ fn monocoque_multithreaded_independent_pairs(c: &mut Criterion) {
                                     .unwrap();
 
                                     for _ in 0..MESSAGES_PER_THREAD {
-                                        if let Some(msg) = router.recv().await {
+                                        if let Ok(Some(msg)) = router.recv().await {
                                             router.send(msg).await.ok();
                                         }
                                     }
@@ -227,7 +227,7 @@ fn monocoque_multithreaded_independent_pairs(c: &mut Criterion) {
                                     }
                                     // Receive batch
                                     for _ in 0..BATCH_SIZE {
-                                        if dealer.recv().await.is_none() {
+                                        if dealer.recv().await.ok().flatten().is_none() {
                                             break;
                                         }
                                     }
@@ -254,7 +254,7 @@ fn monocoque_multithreaded_independent_pairs(c: &mut Criterion) {
 ///
 /// Measures how efficiently threads utilize CPU cores (msg/sec per core).
 fn monocoque_core_efficiency(c: &mut Criterion) {
-    monocoque::dev_tracing::init_tracing();
+    
     let mut group = c.benchmark_group("multithreaded/monocoque/core_efficiency");
     group.measurement_time(Duration::from_secs(20));
     group.sample_size(10);
@@ -299,7 +299,7 @@ fn monocoque_core_efficiency(c: &mut Criterion) {
                                     .unwrap();
 
                                     for _ in 0..MESSAGES_PER_THREAD {
-                                        if let Some(msg) = router.recv().await {
+                                        if let Ok(Some(msg)) = router.recv().await {
                                             router.send(msg).await.ok();
                                         }
                                     }
@@ -325,7 +325,7 @@ fn monocoque_core_efficiency(c: &mut Criterion) {
                                     }
                                     // Receive batch
                                     for _ in 0..BATCH_SIZE {
-                                        if dealer.recv().await.is_none() {
+                                        if dealer.recv().await.ok().flatten().is_none() {
                                             break;
                                         }
                                     }

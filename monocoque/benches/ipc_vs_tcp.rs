@@ -40,7 +40,7 @@ const WARMUP_ROUNDS: usize = 100;
 #[cfg(unix)]
 /// Benchmark monocoque REQ/REP latency over TCP
 fn monocoque_tcp_latency(c: &mut Criterion) {
-    monocoque::dev_tracing::init_tracing();
+    
     let mut group = c.benchmark_group("ipc_vs_tcp/monocoque/tcp_latency");
     group.measurement_time(Duration::from_secs(10));
     group.sample_size(100);
@@ -70,7 +70,7 @@ fn monocoque_tcp_latency(c: &mut Criterion) {
                                 .unwrap();
 
                                 loop {
-                                    if let Some(msg) = rep.recv().await {
+                                    if let Ok(Some(msg)) = rep.recv().await {
                                         if rep.send(msg).await.is_err() {
                                             break;
                                         }
@@ -117,7 +117,7 @@ fn monocoque_tcp_latency(c: &mut Criterion) {
 #[cfg(unix)]
 /// Benchmark monocoque REQ/REP latency over IPC (Unix domain sockets)
 fn monocoque_ipc_latency(c: &mut Criterion) {
-    monocoque::dev_tracing::init_tracing();
+    
     let mut group = c.benchmark_group("ipc_vs_tcp/monocoque/ipc_latency");
     group.measurement_time(Duration::from_secs(10));
     group.sample_size(100);
@@ -153,7 +153,7 @@ fn monocoque_ipc_latency(c: &mut Criterion) {
                                     .unwrap();
 
                                     loop {
-                                        if let Some(msg) = rep.recv().await {
+                                        if let Ok(Some(msg)) = rep.recv().await {
                                             if rep.send(msg).await.is_err() {
                                                 break;
                                             }
@@ -202,7 +202,7 @@ fn monocoque_ipc_latency(c: &mut Criterion) {
 #[cfg(unix)]
 /// Benchmark monocoque DEALER/ROUTER throughput over TCP
 fn monocoque_tcp_throughput(c: &mut Criterion) {
-    monocoque::dev_tracing::init_tracing();
+    
     let mut group = c.benchmark_group("ipc_vs_tcp/monocoque/tcp_throughput");
     group.measurement_time(Duration::from_secs(15));
     group.sample_size(10);
@@ -228,7 +228,7 @@ fn monocoque_tcp_throughput(c: &mut Criterion) {
                         .unwrap();
 
                         for _ in 0..MESSAGE_COUNT {
-                            if let Some(msg) = router.recv().await {
+                            if let Ok(Some(msg)) = router.recv().await {
                                 router.send(msg).await.ok();
                             }
                         }
@@ -244,7 +244,7 @@ fn monocoque_tcp_throughput(c: &mut Criterion) {
 
                     for _ in 0..MESSAGE_COUNT {
                         dealer.send(vec![black_box(payload.clone())]).await.unwrap();
-                        if dealer.recv().await.is_none() {
+                        if dealer.recv().await.ok().flatten().is_none() {
                             break;
                         }
                     }
@@ -260,7 +260,7 @@ fn monocoque_tcp_throughput(c: &mut Criterion) {
 #[cfg(unix)]
 /// Benchmark monocoque DEALER/ROUTER throughput over IPC (Unix domain sockets)
 fn monocoque_ipc_throughput(c: &mut Criterion) {
-    monocoque::dev_tracing::init_tracing();
+    
     let mut group = c.benchmark_group("ipc_vs_tcp/monocoque/ipc_throughput");
     group.measurement_time(Duration::from_secs(15));
     group.sample_size(10);
@@ -295,7 +295,7 @@ fn monocoque_ipc_throughput(c: &mut Criterion) {
                                 .unwrap();
 
                                 for _ in 0..MESSAGE_COUNT {
-                                    if let Some(msg) = router.recv().await {
+                                    if let Ok(Some(msg)) = router.recv().await {
                                         router.send(msg).await.ok();
                                     }
                                 }
@@ -316,7 +316,7 @@ fn monocoque_ipc_throughput(c: &mut Criterion) {
 
                         for _ in 0..MESSAGE_COUNT {
                             dealer.send(vec![black_box(payload.clone())]).await.unwrap();
-                            if dealer.recv().await.is_none() {
+                            if dealer.recv().await.ok().flatten().is_none() {
                                 break;
                             }
                         }

@@ -7,7 +7,6 @@
 use bytes::Bytes;
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 use monocoque_core::options::SocketOptions;
-use monocoque_zmtp::{DealerSocket, PairSocket, PubSocket, PullSocket, PushSocket, SubSocket};
 use std::time::Duration;
 
 // Helper to run async code in compio runtime
@@ -143,22 +142,21 @@ fn bench_socket_options(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark DEALER socket creation
+/// Benchmark SocketOptions construction
 fn bench_dealer_creation(c: &mut Criterion) {
     let mut group = c.benchmark_group("dealer_creation");
 
-    group.bench_function("new_with_defaults", |b| {
+    group.bench_function("options_default", |b| {
         b.iter(|| {
-            let socket: DealerSocket = DealerSocket::new();
-            black_box(socket);
+            let opts = SocketOptions::default();
+            black_box(opts);
         });
     });
 
-    group.bench_function("new_with_options", |b| {
+    group.bench_function("options_with_timeout", |b| {
         b.iter(|| {
-            let opts = SocketOptions::new().with_recv_timeout(Duration::from_secs(5));
-            let socket = DealerSocket::with_options(opts);
-            black_box(socket);
+            let opts = SocketOptions::default().with_recv_timeout(Duration::from_secs(5));
+            black_box(opts);
         });
     });
 
