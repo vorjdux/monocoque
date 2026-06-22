@@ -62,7 +62,6 @@ body:
     attributes:
       label: Security mechanism
       options:
-        - "None"
         - "PLAIN"
         - "CURVE"
     validations:
