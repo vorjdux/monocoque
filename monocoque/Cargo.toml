@@ -107,6 +107,10 @@ required-features = ["zmq"]
 name = "router_worker_pool"
 required-features = ["zmq"]
 
+[[example]]
+name = "pipeline_worker_pool"
+required-features = ["zmq"]
+
 # Interoperability examples (manual verification)
 [[example]]
 name = "interop_dealer_libzmq"
@@ -265,6 +269,14 @@ name = "zap_server_demo"
 required-features = ["zmq"]
 
 # Integration tests with libzmq
+[[test]]
+name = "zap_integration"
+required-features = ["zmq"]
+
+[[test]]
+name = "req_state_machine"
+required-features = ["zmq"]
+
 [[test]]
 name = "interop_load_balance"
 required-features = ["zmq"]
