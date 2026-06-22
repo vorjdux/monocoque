@@ -17,9 +17,9 @@ Before publishing any crate, verify:
 
 Crates have internal dependencies and must be published in this order:
 
-1. `monocoque-core` - no internal dependencies
-2. `monocoque-zmtp` - depends on monocoque-core
-3. `monocoque` - depends on monocoque-core and monocoque-zmtp
+1. `monocoque-rs-core` - no internal dependencies
+2. `monocoque-rs-zmtp` - depends on monocoque-rs-core
+3. `monocoque-rs` - depends on monocoque-rs-core and monocoque-rs-zmtp
 
 Wait roughly a minute between publishes so crates.io finishes indexing each one before the next is submitted.
 
@@ -27,17 +27,17 @@ Wait roughly a minute between publishes so crates.io finishes indexing each one 
 
 ```bash
 # Dry run - validates packaging without uploading
-cargo publish --dry-run -p monocoque-core
-cargo publish --dry-run -p monocoque-zmtp
-cargo publish --dry-run -p monocoque
+cargo publish --dry-run -p monocoque-rs-core
+cargo publish --dry-run -p monocoque-rs-zmtp
+cargo publish --dry-run -p monocoque-rs
 
 # Authenticate (one-time setup)
 cargo login
 
 # Publish in order
-cargo publish -p monocoque-core
-cargo publish -p monocoque-zmtp
-cargo publish -p monocoque
+cargo publish -p monocoque-rs-core
+cargo publish -p monocoque-rs-zmtp
+cargo publish -p monocoque-rs
 ```
 
 ## After publishing
@@ -49,7 +49,7 @@ git tag -a v0.1.0 -m "Release v0.1.0"
 git push origin v0.1.0
 ```
 
-Create a GitHub release from the tag and paste the relevant CHANGELOG section as the description. Docs.rs will pick up the new version automatically; check https://docs.rs/monocoque once indexing finishes.
+Create a GitHub release from the tag and paste the relevant CHANGELOG section as the description. Docs.rs will pick up the new version automatically; check https://docs.rs/monocoque-rs once indexing finishes.
 
 ## Version bumps
 
@@ -65,9 +65,9 @@ Patch (0.1.x) for bug fixes, minor (0.x.0) for backward-compatible additions, ma
 ## Yanking a broken release
 
 ```bash
-cargo yank --version 0.1.0 monocoque
+cargo yank --version 0.1.0 monocoque-rs
 # Then fix the bug and publish a patch release
-cargo publish -p monocoque
+cargo publish -p monocoque-rs
 ```
 
 ## Common errors

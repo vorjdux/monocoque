@@ -41,10 +41,10 @@ sudo apt install libzmq3-dev   # Ubuntu/Debian
 brew install zeromq            # macOS
 
 # Run interop tests
-cargo test --package monocoque --features zmq --test interop_pair
-cargo test --package monocoque --features zmq --test interop_router
-cargo test --package monocoque --features zmq --test interop_pubsub
-cargo test --package monocoque --features zmq --test interop_load_balance
+cargo test --package monocoque-rs --features zmq --test interop_pair
+cargo test --package monocoque-rs --features zmq --test interop_router
+cargo test --package monocoque-rs --features zmq --test interop_pubsub
+cargo test --package monocoque-rs --features zmq --test interop_load_balance
 ```
 
 ## References

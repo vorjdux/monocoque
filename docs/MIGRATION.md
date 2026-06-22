@@ -10,7 +10,7 @@ Remove `zmq` from your `Cargo.toml` and add:
 
 ```toml
 [dependencies]
-monocoque = "0.1"
+monocoque-rs = "0.1"
 bytes = "1.0"
 compio = "0.12"
 ```

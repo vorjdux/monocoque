@@ -87,9 +87,9 @@ Linear scan with early exit for subscription matching - cache-friendly, no per-m
 
 ### Public API Layer (complete)
 
-Crate: `monocoque` (ergonomic facade)
+Crate: `monocoque-rs` (ergonomic facade)
 
-- Feature-gated protocols: `monocoque = { version = "0.1", features = ["zmq"] }`
+- Feature-gated protocols: `monocoque-rs = { version = "0.1", features = ["zmq"] }`
 - Zero default features (explicit opt-in)
 - Idiomatic async/await API
 - Protocol namespace: `monocoque::zmq::{DealerSocket, RouterSocket, PubSocket, SubSocket}`
@@ -149,10 +149,10 @@ Protocol logic (ZMTP session, frame decoder) is pure - no `async`, no IO traits.
 ```rust
 // Cargo.toml - protocols are opt-in
 [dependencies]
-monocoque = { version = "0.1", features = ["zmq"] }
+monocoque-rs = { version = "0.1", features = ["zmq"] }
 
 // Future: multiple protocols coexist
-monocoque = { features = ["zmq", "mqtt", "amqp"] }
+monocoque-rs = { features = ["zmq", "mqtt", "amqp"] }
 ```
 
 Benefits: zero unused code compiled, clean dependency boundaries, protocol evolution without kernel changes.

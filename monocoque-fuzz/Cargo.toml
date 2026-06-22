@@ -12,8 +12,8 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-monocoque-zmtp = { path = "../monocoque-zmtp" }
-monocoque-core = { path = "../monocoque-core" }
+monocoque-zmtp = { path = "../monocoque-zmtp", package = "monocoque-rs-zmtp" }
+monocoque-core = { path = "../monocoque-core", package = "monocoque-rs-core" }
 bytes = "1.5"
 futures = "0.3"
 compio = "0.13"

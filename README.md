@@ -6,6 +6,9 @@
 
 > _A Rust-native ZeroMQ-compatible messaging runtime built on `io_uring`_
 
+[![CI](https://github.com/vorjdux/monocoque/actions/workflows/ci.yml/badge.svg)](https://github.com/vorjdux/monocoque/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/monocoque-rs.svg)](https://crates.io/crates/monocoque-rs)
+[![docs.rs](https://docs.rs/monocoque-rs/badge.svg)](https://docs.rs/monocoque-rs)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 </div>
@@ -43,7 +46,7 @@ Throughput with the batching API: 2M+ msg/sec. IPC is 7-10% faster than TCP loop
 
 ```toml
 [dependencies]
-monocoque = { version = "0.1", features = ["zmq"] }
+monocoque-rs = { version = "0.1", features = ["zmq"] }
 compio = { version = "0.13", features = ["runtime"] }
 ```
 
