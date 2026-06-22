@@ -30,7 +30,11 @@ fn main() {
             let mut router = RouterSocket::from_tcp(stream).await.unwrap();
 
             // Receive request with identity envelope
-            let msg = router.recv().await.expect("Connection closed").expect("Connection closed");
+            let msg = router
+                .recv()
+                .await
+                .expect("Connection closed")
+                .expect("Connection closed");
             info!("[Monocoque ROUTER] Received message:");
             info!("  Identity (frame 0): {} bytes", msg[0].len());
             if msg.len() > 1 {

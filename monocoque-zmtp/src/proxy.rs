@@ -441,7 +441,7 @@ impl ProxySocket for XSubSocket {
         //   [b"\x00", topic]  — unsubscribe
         //
         // We reconstruct the raw ZMTP subscription frame and dispatch it.
-        if msg.len() < 1 {
+        if msg.is_empty() {
             return Ok(());
         }
 

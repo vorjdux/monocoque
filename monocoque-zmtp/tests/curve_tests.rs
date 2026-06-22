@@ -182,7 +182,12 @@ async fn test_curve_handshake_sequence() {
     let client_keypair = CurveKeyPair::generate();
     let server_keypair = CurveKeyPair::generate();
 
-    let _client = CurveClient::new(client_keypair.clone(), server_keypair.public, "DEALER", None);
+    let _client = CurveClient::new(
+        client_keypair.clone(),
+        server_keypair.public,
+        "DEALER",
+        None,
+    );
     let _server = CurveServer::new(server_keypair, "ROUTER");
 
     // Full handshake test would require mock streams or real TCP

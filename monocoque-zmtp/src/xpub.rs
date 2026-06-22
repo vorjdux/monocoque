@@ -188,8 +188,9 @@ impl XPubSocket {
 
                     let wire = if let Some(ref mut cipher) = curve_cipher {
                         let mut buf = BytesMut::new();
-                        let body = cipher.encrypt_frame(welcome_msg, false)
-                            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+                        let body = cipher.encrypt_frame(welcome_msg, false).map_err(|e| {
+                            io::Error::new(io::ErrorKind::InvalidData, e.to_string())
+                        })?;
                         crate::base::append_zmtp_cmd_frame(&mut buf, &body);
                         buf.freeze()
                     } else {
@@ -313,7 +314,8 @@ impl XPubSocket {
                                         if crate::base::is_ping_payload(&frame.payload) {
                                             use compio::io::AsyncWriteExt;
                                             let pong = crate::base::build_pong_frame();
-                                            let BufResult(result, _) = sub.stream.write_all(pong).await;
+                                            let BufResult(result, _) =
+                                                sub.stream.write_all(pong).await;
                                             let _ = result;
                                         }
                                         continue;
@@ -334,13 +336,19 @@ impl XPubSocket {
                                             SubscriptionEvent::Subscribe(prefix) => {
                                                 sub.subscriptions.subscribe(prefix.clone());
                                                 let key = prefix.to_vec();
-                                                *self.topic_refcount.entry(key.clone()).or_insert(0) += 1;
+                                                *self
+                                                    .topic_refcount
+                                                    .entry(key.clone())
+                                                    .or_insert(0) += 1;
                                                 self.seen_topics.insert(key);
                                             }
                                             SubscriptionEvent::Unsubscribe(prefix) => {
                                                 sub.subscriptions.unsubscribe(prefix);
                                                 let key = prefix.to_vec();
-                                                let count = self.topic_refcount.entry(key.clone()).or_insert(0);
+                                                let count = self
+                                                    .topic_refcount
+                                                    .entry(key.clone())
+                                                    .or_insert(0);
                                                 if *count > 0 {
                                                     *count -= 1;
                                                 }
@@ -357,7 +365,10 @@ impl XPubSocket {
                                             SubscriptionEvent::Subscribe(prefix) => {
                                                 sub.subscriptions.subscribe(prefix.clone());
                                                 let key = prefix.to_vec();
-                                                let count = self.topic_refcount.entry(key.clone()).or_insert(0);
+                                                let count = self
+                                                    .topic_refcount
+                                                    .entry(key.clone())
+                                                    .or_insert(0);
                                                 *count += 1;
                                                 if *count == 1 {
                                                     // First subscriber for this topic
@@ -370,7 +381,10 @@ impl XPubSocket {
                                             SubscriptionEvent::Unsubscribe(prefix) => {
                                                 sub.subscriptions.unsubscribe(prefix);
                                                 let key = prefix.to_vec();
-                                                let count = self.topic_refcount.entry(key.clone()).or_insert(0);
+                                                let count = self
+                                                    .topic_refcount
+                                                    .entry(key.clone())
+                                                    .or_insert(0);
                                                 if *count > 0 {
                                                     *count -= 1;
                                                 }
@@ -459,7 +473,10 @@ impl XPubSocket {
                 for (i, frame) in msg.iter().enumerate() {
                     match cipher.encrypt_frame(frame, i < last) {
                         Ok(body) => crate::base::append_zmtp_cmd_frame(&mut buf, &body),
-                        Err(_) => { ok = false; break; }
+                        Err(_) => {
+                            ok = false;
+                            break;
+                        }
                     }
                 }
                 if !ok {
@@ -468,11 +485,13 @@ impl XPubSocket {
                 }
                 buf.freeze()
             } else {
-                plain_wire.get_or_insert_with(|| {
-                    let mut buf = BytesMut::new();
-                    crate::codec::encode_multipart(&msg, &mut buf);
-                    buf.freeze()
-                }).clone()
+                plain_wire
+                    .get_or_insert_with(|| {
+                        let mut buf = BytesMut::new();
+                        crate::codec::encode_multipart(&msg, &mut buf);
+                        buf.freeze()
+                    })
+                    .clone()
             };
 
             let BufResult(result, _) = sub.stream.write_all(wire).await;

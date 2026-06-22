@@ -206,14 +206,14 @@ where
             if self.router_mandatory {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
-                    format!(
-                        "ROUTER mandatory: no route for identity {:?}",
-                        identity
-                    ),
+                    format!("ROUTER mandatory: no route for identity {:?}", identity),
                 ));
             }
             // Non-mandatory: silently drop messages to unknown peers
-            trace!("[ROUTER] Dropping message to unknown identity {:?}", identity);
+            trace!(
+                "[ROUTER] Dropping message to unknown identity {:?}",
+                identity
+            );
             return Ok(());
         }
 
@@ -267,13 +267,13 @@ where
             if self.router_mandatory {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
-                    format!(
-                        "ROUTER mandatory: no route for identity {:?}",
-                        identity
-                    ),
+                    format!("ROUTER mandatory: no route for identity {:?}", identity),
                 ));
             }
-            trace!("[ROUTER] Dropping buffered message to unknown identity {:?}", identity);
+            trace!(
+                "[ROUTER] Dropping buffered message to unknown identity {:?}",
+                identity
+            );
             return Ok(());
         }
 
@@ -310,7 +310,10 @@ where
                         format!("ROUTER mandatory: no route for identity {:?}", identity),
                     ));
                 }
-                trace!("[ROUTER] Skipping batch message to unknown identity {:?}", identity);
+                trace!(
+                    "[ROUTER] Skipping batch message to unknown identity {:?}",
+                    identity
+                );
                 continue;
             }
             let frames_to_send = &msg[1..];

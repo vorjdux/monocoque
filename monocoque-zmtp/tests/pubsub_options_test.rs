@@ -75,20 +75,16 @@ fn test_sub_options_subscriptions_are_applied() {
                 let stream = compio::net::TcpStream::connect(addr).await.unwrap();
 
                 // Create SUB with subscription declared in options  -  no manual subscribe().
-                let opts = SocketOptions::default()
-                    .with_subscribe(Bytes::from("news."));
+                let opts = SocketOptions::default().with_subscribe(Bytes::from("news."));
                 let mut sub = SubSocket::with_options(stream, opts).await.unwrap();
 
                 // Signal that subscription bytes have been sent.
                 sub_ready_tx.send(()).unwrap();
 
-                let first = compio::time::timeout(
-                    Duration::from_secs(5),
-                    sub.recv(),
-                )
-                .await
-                .expect("recv timed out")
-                .unwrap();
+                let first = compio::time::timeout(Duration::from_secs(5), sub.recv())
+                    .await
+                    .expect("recv timed out")
+                    .unwrap();
 
                 msg_tx.send(first).unwrap();
                 client_done_tx.send(()).unwrap();
@@ -134,11 +130,14 @@ fn test_sub_options_multiple_subscriptions() {
                 sub_ready_rx.recv().unwrap();
                 std::thread::sleep(Duration::from_millis(100));
 
-                for topic in ["alerts.fire", "ignore.me", "metrics.cpu", "ignore.also", "alerts.critical"] {
-                    pub_sock
-                        .send(vec![Bytes::from(topic)])
-                        .await
-                        .unwrap();
+                for topic in [
+                    "alerts.fire",
+                    "ignore.me",
+                    "metrics.cpu",
+                    "ignore.also",
+                    "alerts.critical",
+                ] {
+                    pub_sock.send(vec![Bytes::from(topic)]).await.unwrap();
                 }
 
                 // Keep connection alive until SUB finishes.
@@ -177,7 +176,12 @@ fn test_sub_options_multiple_subscriptions() {
     client.join().expect("client thread panicked");
 
     let msgs = msgs_rx.recv_timeout(Duration::from_secs(10)).unwrap();
-    assert_eq!(msgs.len(), 3, "expected 3 matching messages, got {}", msgs.len());
+    assert_eq!(
+        msgs.len(),
+        3,
+        "expected 3 matching messages, got {}",
+        msgs.len()
+    );
 
     for msg in &msgs {
         let topic = &msg[0];

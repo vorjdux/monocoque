@@ -142,7 +142,7 @@ async fn peer_writer(mut writer: OwnedWriteHalf<TcpStream>, outbound: Receiver<B
 /// routing ID; all subsequent sends and receives for that connection use the
 /// same ID to route messages.
 ///
-/// Unlike other socket types, `StreamSocket` performs **no ZMTP handshake**  - 
+/// Unlike other socket types, `StreamSocket` performs **no ZMTP handshake**  -
 /// it speaks plain TCP bytes, making it suitable for bridging to HTTP servers,
 /// legacy services, and command-line tools such as `nc` and `curl`.
 pub struct StreamSocket {

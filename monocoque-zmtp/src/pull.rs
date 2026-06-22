@@ -203,12 +203,8 @@ impl PullSocket<TcpStream> {
         );
 
         let endpoint = monocoque_core::endpoint::Endpoint::Tcp(peer_addr);
-        let mut base = crate::base::SocketBase::with_endpoint(
-            stream,
-            SocketType::Pull,
-            endpoint,
-            options,
-        );
+        let mut base =
+            crate::base::SocketBase::with_endpoint(stream, SocketType::Pull, endpoint, options);
         base.curve_cipher = handshake_result.curve_cipher;
         Ok(Self {
             base,

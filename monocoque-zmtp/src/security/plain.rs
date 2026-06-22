@@ -133,7 +133,10 @@ impl PlainAuthHandler for StaticPlainHandler {
         use subtle::ConstantTimeEq;
         match self.credentials.get(username) {
             Some(expected_password)
-                if expected_password.as_bytes().ct_eq(password.as_bytes()).into() =>
+                if expected_password
+                    .as_bytes()
+                    .ct_eq(password.as_bytes())
+                    .into() =>
             {
                 Ok(username.to_string())
             }
@@ -193,7 +196,10 @@ where
     res?;
     let cmd_len = len_buf[0] as usize;
     if cmd_len == 0 || cmd_len > 32 {
-        warn!("[PLAIN CLIENT] Invalid PLAIN response command length: {}", cmd_len);
+        warn!(
+            "[PLAIN CLIENT] Invalid PLAIN response command length: {}",
+            cmd_len
+        );
         return Err(ZmtpError::Protocol);
     }
     // Read command name
@@ -211,7 +217,10 @@ where
             Err(ZmtpError::AuthenticationFailed)
         }
         other => {
-            warn!("[PLAIN CLIENT] Invalid PLAIN response command: {:?}", String::from_utf8_lossy(other));
+            warn!(
+                "[PLAIN CLIENT] Invalid PLAIN response command: {:?}",
+                String::from_utf8_lossy(other)
+            );
             Err(ZmtpError::Protocol)
         }
     }

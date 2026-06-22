@@ -17,10 +17,7 @@ use std::io;
 use std::time::Duration;
 use tracing::{debug, trace};
 
-use crate::{
-    base::SocketBase, handshake::perform_handshake_with_options,
-    session::SocketType,
-};
+use crate::{base::SocketBase, handshake::perform_handshake_with_options, session::SocketType};
 use monocoque_core::endpoint::Endpoint;
 
 /// Direct-stream DEALER socket with optional auto-reconnection support.
@@ -606,12 +603,8 @@ impl DealerSocket<TcpStream> {
         );
 
         let endpoint = monocoque_core::endpoint::Endpoint::Tcp(peer_addr);
-        let mut base = crate::base::SocketBase::with_endpoint(
-            stream,
-            SocketType::Dealer,
-            endpoint,
-            options,
-        );
+        let mut base =
+            crate::base::SocketBase::with_endpoint(stream, SocketType::Dealer, endpoint, options);
         base.curve_cipher = handshake_result.curve_cipher;
         Ok(Self {
             base,

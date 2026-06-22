@@ -69,7 +69,11 @@ fn main() {
             .await
             .expect("Failed to send");
 
-        let response = socket.recv().await.expect("Failed to receive").expect("Connection closed");
+        let response = socket
+            .recv()
+            .await
+            .expect("Failed to receive")
+            .expect("Connection closed");
         info!("[Monocoque REQ] Received response:");
         {
             let msg = response;
@@ -85,7 +89,11 @@ fn main() {
             .await
             .expect("Failed to send second request");
 
-        let response = socket.recv().await.expect("Failed to receive second reply").expect("Connection closed");
+        let response = socket
+            .recv()
+            .await
+            .expect("Failed to receive second reply")
+            .expect("Connection closed");
         info!("[Monocoque REQ] Received second response:");
         {
             let msg = response;

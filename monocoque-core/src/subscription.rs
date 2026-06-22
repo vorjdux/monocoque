@@ -73,7 +73,7 @@ impl SubscriptionTrie {
         }
 
         // Check empty prefix first (matches everything)
-        if self.prefixes.contains(&[][..].to_vec()) {
+        if self.prefixes.contains(&[][..]) {
             return true;
         }
 
@@ -81,7 +81,11 @@ impl SubscriptionTrie {
         // Any stored prefix that is a true prefix of `topic` must be <= topic
         // in lexicographic order, so the best candidate is the largest such key.
         use std::ops::Bound;
-        if let Some(candidate) = self.prefixes.range::<Vec<u8>, _>((Bound::Unbounded, Bound::Included(&topic.to_vec()))).next_back() {
+        if let Some(candidate) = self
+            .prefixes
+            .range::<Vec<u8>, _>((Bound::Unbounded, Bound::Included(&topic.to_vec())))
+            .next_back()
+        {
             if topic.starts_with(candidate.as_slice()) {
                 return true;
             }

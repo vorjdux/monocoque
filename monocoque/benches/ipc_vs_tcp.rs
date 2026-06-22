@@ -40,7 +40,6 @@ const WARMUP_ROUNDS: usize = 100;
 #[cfg(unix)]
 /// Benchmark monocoque REQ/REP latency over TCP
 fn monocoque_tcp_latency(c: &mut Criterion) {
-    
     let mut group = c.benchmark_group("ipc_vs_tcp/monocoque/tcp_latency");
     group.measurement_time(Duration::from_secs(10));
     group.sample_size(100);
@@ -117,7 +116,6 @@ fn monocoque_tcp_latency(c: &mut Criterion) {
 #[cfg(unix)]
 /// Benchmark monocoque REQ/REP latency over IPC (Unix domain sockets)
 fn monocoque_ipc_latency(c: &mut Criterion) {
-    
     let mut group = c.benchmark_group("ipc_vs_tcp/monocoque/ipc_latency");
     group.measurement_time(Duration::from_secs(10));
     group.sample_size(100);
@@ -202,7 +200,6 @@ fn monocoque_ipc_latency(c: &mut Criterion) {
 #[cfg(unix)]
 /// Benchmark monocoque DEALER/ROUTER throughput over TCP
 fn monocoque_tcp_throughput(c: &mut Criterion) {
-    
     let mut group = c.benchmark_group("ipc_vs_tcp/monocoque/tcp_throughput");
     group.measurement_time(Duration::from_secs(15));
     group.sample_size(10);
@@ -260,7 +257,6 @@ fn monocoque_tcp_throughput(c: &mut Criterion) {
 #[cfg(unix)]
 /// Benchmark monocoque DEALER/ROUTER throughput over IPC (Unix domain sockets)
 fn monocoque_ipc_throughput(c: &mut Criterion) {
-    
     let mut group = c.benchmark_group("ipc_vs_tcp/monocoque/ipc_throughput");
     group.measurement_time(Duration::from_secs(15));
     group.sample_size(10);

@@ -297,12 +297,8 @@ impl PairSocket<TcpStream> {
         );
 
         let endpoint = monocoque_core::endpoint::Endpoint::Tcp(peer_addr);
-        let mut base = crate::base::SocketBase::with_endpoint(
-            stream,
-            SocketType::Pair,
-            endpoint,
-            options,
-        );
+        let mut base =
+            crate::base::SocketBase::with_endpoint(stream, SocketType::Pair, endpoint, options);
         base.curve_cipher = handshake_result.curve_cipher;
         Ok(Self {
             base,

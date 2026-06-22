@@ -81,7 +81,7 @@ fuzz_target!(|data: &[u8]| {
         let client_kp = CurveKeyPair::generate();
         let server_kp = CurveKeyPair::generate();
 
-        let mut client = CurveClient::new(client_kp, server_kp.public);
+        let mut client = CurveClient::new(client_kp, server_kp.public, "DEALER", None);
         // Err, not panic  -  message_box is None before handshake.
         let _ = client.decrypt_message(data);
     }
@@ -90,7 +90,7 @@ fuzz_target!(|data: &[u8]| {
         let server_kp = CurveKeyPair::generate();
         use monocoque_zmtp::security::curve::CurveServer;
 
-        let mut server = CurveServer::new(server_kp);
+        let mut server = CurveServer::new(server_kp, "ROUTER");
         // Err, not panic  -  message_box is None before handshake.
         let _ = server.decrypt_message(data);
     }
