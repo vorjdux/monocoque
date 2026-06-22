@@ -129,10 +129,12 @@ async fn subscription_reader(
     let mut recv_buf = SegmentedBuffer::new();
     let mut decoder = crate::codec::ZmtpDecoder::new();
 
+    // Allocate the read buffer once and reuse it each iteration.
+    // compio returns ownership via BufResult, so we hand it back in on every read.
+    let mut buf = vec![0u8; 256];
     loop {
-        // Read a chunk from the subscriber.
-        let buf = vec![0u8; 256];
-        let BufResult(result, buf) = reader.read(buf).await;
+        let BufResult(result, returned_buf) = reader.read(buf).await;
+        buf = returned_buf;
 
         match result {
             Ok(0) => {
@@ -140,7 +142,7 @@ async fn subscription_reader(
                 break;
             }
             Ok(n) => {
-                recv_buf.push(Bytes::from(buf[..n].to_vec()));
+                recv_buf.push(Bytes::copy_from_slice(&buf[..n]));
 
                 // Drain all complete ZMTP frames from the accumulated buffer.
                 loop {
