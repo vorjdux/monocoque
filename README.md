@@ -6,6 +6,9 @@
 
 > _A Rust-native ZeroMQ-compatible messaging runtime built on `io_uring`_
 
+[![CI](https://github.com/vorjdux/monocoque/actions/workflows/ci.yml/badge.svg)](https://github.com/vorjdux/monocoque/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/monocoque.svg)](https://crates.io/crates/monocoque)
+[![docs.rs](https://docs.rs/monocoque/badge.svg)](https://docs.rs/monocoque)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 </div>
