@@ -19,18 +19,18 @@ body:
     attributes:
       label: Socket pattern
       options:
-        - REQ
-        - REP
-        - DEALER
-        - ROUTER
-        - PUB
-        - SUB
-        - XPUB
-        - XSUB
-        - PUSH
-        - PULL
-        - PAIR
-        - Other or not sure
+        - "REQ"
+        - "REP"
+        - "DEALER"
+        - "ROUTER"
+        - "PUB"
+        - "SUB"
+        - "XPUB"
+        - "XSUB"
+        - "PUSH"
+        - "PULL"
+        - "PAIR"
+        - "Other or not sure"
     validations:
       required: true
   - type: dropdown
