@@ -1,18 +1,20 @@
 [package]
-name = "monocoque-zmtp"
+name = "monocoque-rs-zmtp"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-publish = false  # Internal crate - not published to crates.io
-description = "Internal ZMTP 3.1 protocol implementation for Monocoque (use 'monocoque' crate for public API)"
+description = "Internal ZMTP 3.1 protocol implementation for Monocoque (use 'monocoque-rs' crate for public API)"
 keywords = ["zmq", "zeromq", "zmtp", "messaging", "protocol"]
 categories = ["network-programming"]
 homepage = "https://github.com/vorjdux/monocoque"
-documentation = "https://docs.rs/monocoque"
+documentation = "https://docs.rs/monocoque-rs"
 readme = "../README.md"
+
+[lib]
+name = "monocoque_zmtp"
 
 [lints]
 workspace = true
@@ -23,7 +25,7 @@ thiserror.workspace = true
 flume.workspace = true
 futures.workspace = true
 compio.workspace = true
-monocoque-core = { version = "0.1.0", path = "../monocoque-core" }
+monocoque-core = { version = "0.1.0", path = "../monocoque-core", package = "monocoque-rs-core" }
 smallvec.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

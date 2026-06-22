@@ -15,7 +15,7 @@ A five-minute guide to sending your first message with Monocoque.
 
 ```toml
 [dependencies]
-monocoque = { version = "0.1", features = ["zmq"] }
+monocoque-rs = { version = "0.1", features = ["zmq"] }
 bytes    = "1"
 compio   = { version = "0.10", features = ["runtime", "macros"] }
 ```

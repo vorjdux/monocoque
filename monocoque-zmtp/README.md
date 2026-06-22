@@ -10,7 +10,7 @@ This crate is an internal implementation detail of the Monocoque project. It pro
 
 ```toml
 [dependencies]
-monocoque = { version = "0.1", features = ["zmq"] }
+monocoque-rs = { version = "0.1", features = ["zmq"] }
 ```
 
 ```rust

@@ -21,7 +21,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Run Rust interop tests
         run: |
-          cargo test -p monocoque \
+          cargo test -p monocoque-rs\
             --features zmq \
             --test interop_pair \
             --test interop_pubsub \
@@ -41,7 +41,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build monocoque release binary
-        run: cargo build --release -p monocoque --features zmq
+        run: cargo build --release -p monocoque-rs --features zmq
       - name: Run Python interop tests
         working-directory: interop_tests
         run: |

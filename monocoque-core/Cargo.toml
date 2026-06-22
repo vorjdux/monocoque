@@ -1,18 +1,20 @@
 [package]
-name = "monocoque-core"
+name = "monocoque-rs-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-publish = false  # Internal crate - not published to crates.io
 description = "Protocol-agnostic messaging kernel with io_uring-based I/O"
 keywords = ["messaging", "io_uring", "async", "zeromq", "kernel"]
 categories = ["network-programming", "asynchronous"]
 homepage = "https://github.com/vorjdux/monocoque"
-documentation = "https://docs.rs/monocoque-core"
+documentation = "https://docs.rs/monocoque-rs-core"
 readme = "../README.md"
+
+[lib]
+name = "monocoque_core"
 
 [lints]
 workspace = true

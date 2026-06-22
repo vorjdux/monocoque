@@ -1,5 +1,5 @@
 [package]
-name = "monocoque"
+name = "monocoque-rs"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,10 +8,13 @@ repository.workspace = true
 rust-version.workspace = true
 description = "High-performance ZeroMQ-compatible messaging runtime built on io_uring"
 homepage = "https://github.com/vorjdux/monocoque"
-documentation = "https://docs.rs/monocoque"
+documentation = "https://docs.rs/monocoque-rs"
 readme = "../README.md"
 keywords = ["zeromq", "zmq", "messaging", "io_uring", "async"]
 categories = ["network-programming", "asynchronous"]
+
+[lib]
+name = "monocoque"
 
 # Examples
 [[example]]
@@ -302,8 +305,8 @@ workspace = true
 
 [dependencies]
 # Internal implementation crates (not exposed)
-monocoque-core = { version = "0.1.0", path = "../monocoque-core" }
-monocoque-zmtp = { version = "0.1.0", path = "../monocoque-zmtp", optional = true }
+monocoque-core = { version = "0.1.0", path = "../monocoque-core", package = "monocoque-rs-core" }
+monocoque-zmtp = { version = "0.1.0", path = "../monocoque-zmtp", package = "monocoque-rs-zmtp", optional = true }
 
 # Re-export dependencies for user convenience
 bytes.workspace = true
