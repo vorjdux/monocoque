@@ -25,13 +25,13 @@ body:
     attributes:
       label: Which part
       options:
-        - Public API (monocoque)
-        - Core or transport (monocoque-core)
-        - ZMTP protocol (monocoque-zmtp)
-        - Security (PLAIN or CURVE)
-        - Docs or examples
-        - Build or CI
-        - Not sure
+        - "Public API (monocoque)"
+        - "Core or transport (monocoque-core)"
+        - "ZMTP protocol (monocoque-zmtp)"
+        - "Security (PLAIN or CURVE)"
+        - "Docs or examples"
+        - "Build or CI"
+        - "Not sure"
     validations:
       required: false
   - type: dropdown
@@ -42,7 +42,7 @@ body:
       options:
         - "No, it does not touch the wire"
         - "Yes, it changes or extends the wire format"
-        - Not sure
+        - "Not sure"
     validations:
       required: true
   - type: textarea
@@ -57,8 +57,8 @@ body:
     attributes:
       label: Would you be willing to implement it
       options:
-        - Yes
-        - Yes, with some guidance
+        - "Yes"
+        - "Yes, with some guidance"
         - "No"
     validations:
       required: false

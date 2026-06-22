@@ -39,11 +39,11 @@ body:
       label: Peer on the other side
       description: What Monocoque was talking to when this happened.
       options:
-        - Monocoque
-        - libzmq (C/C++)
-        - pyzmq (Python)
-        - Another binding
-        - Not applicable
+        - "Monocoque"
+        - "libzmq (C/C++)"
+        - "pyzmq (Python)"
+        - "Another binding"
+        - "Not applicable"
     validations:
       required: true
   - type: dropdown
@@ -51,10 +51,10 @@ body:
     attributes:
       label: Transport
       options:
-        - tcp
-        - ipc
-        - inproc
-        - Not sure
+        - "tcp"
+        - "ipc"
+        - "inproc"
+        - "Not sure"
     validations:
       required: false
   - type: dropdown
@@ -62,9 +62,9 @@ body:
     attributes:
       label: Security mechanism
       options:
-        - None
-        - PLAIN
-        - CURVE
+        - "None"
+        - "PLAIN"
+        - "CURVE"
     validations:
       required: false
   - type: input
@@ -103,7 +103,7 @@ body:
     attributes:
       label: Before filing
       options:
-        - label: I searched existing issues for a duplicate
+        - label: "I searched existing issues for a duplicate"
           required: true
-        - label: I checked this against the latest version or main
+        - label: "I checked this against the latest version or main"
           required: false
