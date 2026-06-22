@@ -40,7 +40,7 @@ body:
       description: What Monocoque was talking to when this happened.
       options:
         - Monocoque
-        - libzmq (C)
+        - libzmq (C/C++)
         - pyzmq (Python)
         - Another binding
         - Not applicable
