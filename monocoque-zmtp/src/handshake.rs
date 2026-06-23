@@ -467,7 +467,7 @@ fn build_greeting_with_mechanism(mechanism: SecurityMechanism, options: &SocketO
 }
 
 /// Parse READY command to extract socket type and identity
-fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), ZmtpError> {
+pub(crate) fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), ZmtpError> {
     // READY format:
     // - 1 byte: command name length
     // - N bytes: "READY"
@@ -547,9 +547,15 @@ fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), Zmtp
 
         match key {
             b"Socket-Type" => {
+                if socket_type.is_some() {
+                    return Err(ZmtpError::Protocol);
+                }
                 socket_type = Some(parse_socket_type(&body[value_start..value_end])?);
             }
             b"Identity" => {
+                if identity.is_some() {
+                    return Err(ZmtpError::Protocol);
+                }
                 // ZMQ spec limits identities to 255 bytes.
                 if value_len > 255 {
                     warn!(
@@ -595,5 +601,48 @@ fn parse_socket_type(value: &[u8]) -> Result<SocketType, ZmtpError> {
             );
             Err(ZmtpError::Protocol)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ready_body(properties: &[(&[u8], &[u8])]) -> Bytes {
+        let mut body = Vec::new();
+        body.extend_from_slice(b"\x05READY");
+
+        for (key, value) in properties {
+            body.push(key.len() as u8);
+            body.extend_from_slice(key);
+            body.extend_from_slice(&(value.len() as u32).to_be_bytes());
+            body.extend_from_slice(value);
+        }
+
+        Bytes::from(body)
+    }
+
+    #[test]
+    fn parse_ready_rejects_duplicate_socket_type_property() {
+        let body = ready_body(&[(b"Socket-Type", b"DEALER"), (b"Socket-Type", b"ROUTER")]);
+
+        assert!(matches!(
+            parse_ready_command(&body),
+            Err(ZmtpError::Protocol)
+        ));
+    }
+
+    #[test]
+    fn parse_ready_rejects_duplicate_identity_property() {
+        let body = ready_body(&[
+            (b"Socket-Type", b"DEALER"),
+            (b"Identity", b"trusted"),
+            (b"Identity", b"shadow"),
+        ]);
+
+        assert!(matches!(
+            parse_ready_command(&body),
+            Err(ZmtpError::Protocol)
+        ));
     }
 }
