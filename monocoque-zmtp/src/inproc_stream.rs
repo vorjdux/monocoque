@@ -49,26 +49,42 @@ impl InprocStream {
 
 impl AsyncRead for InprocStream {
     async fn read<B: IoBufMut>(&mut self, mut buf: B) -> BufResult<usize, B> {
+        let buf_cap = buf.buf_capacity();
+        let buf_ptr = buf.as_buf_mut_ptr();
+        let mut total = 0usize;
+
+        if self.read_pos < self.read_buf.len() {
+            let available = &self.read_buf[self.read_pos..];
+            let to_copy = available.len().min(buf_cap);
+            unsafe {
+                std::ptr::copy_nonoverlapping(available.as_ptr(), buf_ptr, to_copy);
+                buf.set_buf_init(to_copy);
+            }
+            self.read_pos += to_copy;
+            if self.read_pos == self.read_buf.len() {
+                self.read_buf.clear();
+                self.read_pos = 0;
+            }
+            return BufResult(Ok(to_copy), buf);
+        }
+
         match self.rx.recv_async().await {
             Ok(msg_frames) => {
-                let buf_cap = buf.buf_capacity();
-                // as_buf_mut_ptr() is a safe fn that returns a raw pointer to the
-                // buffer's backing allocation (including uninitialized capacity).
-                // Safety: We write at most buf_cap bytes via copy_nonoverlapping
-                // and then call set_buf_init to declare the range initialized.
-                // This is the correct compio IoBufMut pattern.
-                let buf_ptr = buf.as_buf_mut_ptr();
-                let mut total = 0usize;
-
                 for frame in msg_frames {
-                    let to_copy = frame.len().min(buf_cap - total);
+                    let remaining = buf_cap - total;
+                    let to_copy = frame.len().min(remaining);
                     if to_copy == 0 {
+                        self.read_buf.extend_from_slice(&frame);
                         break;
                     }
                     unsafe {
                         std::ptr::copy_nonoverlapping(frame.as_ptr(), buf_ptr.add(total), to_copy);
                     }
                     total += to_copy;
+                    if to_copy < frame.len() {
+                        self.read_buf.extend_from_slice(&frame[to_copy..]);
+                        break;
+                    }
                 }
 
                 unsafe {
@@ -152,6 +168,40 @@ mod tests {
         assert_eq!(&buf[..n], b"hello");
 
         // Cleanup global registry
+        monocoque_core::inproc::unbind_inproc(endpoint)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_inproc_stream_preserves_partial_read_remainder() -> io::Result<()> {
+        use compio::buf::BufResult;
+        use compio::io::AsyncRead;
+
+        let endpoint = "inproc://test-stream-partial-read";
+        let (tx1, rx1) = bind_inproc(endpoint)?;
+        let tx2 = connect_inproc(endpoint)?;
+
+        let mut stream1 = InprocStream::new(tx1, rx1);
+        tx2.send(vec![Bytes::from_static(b"hello")]).unwrap();
+        tx2.send(vec![Bytes::from_static(b"next")]).unwrap();
+
+        let rt = compio::runtime::Runtime::new()?;
+        let ((first_n, first_buf), (second_n, second_buf)) = rt.block_on(async {
+            let first_buf = vec![0u8; 2];
+            let BufResult(first_result, first_buf) = AsyncRead::read(&mut stream1, first_buf).await;
+            let first = first_result.map(|n| (n, first_buf))?;
+
+            let second_buf = vec![0u8; 3];
+            let BufResult(second_result, second_buf) =
+                AsyncRead::read(&mut stream1, second_buf).await;
+            let second = second_result.map(|n| (n, second_buf))?;
+
+            io::Result::Ok((first, second))
+        })?;
+
+        assert_eq!(&first_buf[..first_n], b"he");
+        assert_eq!(&second_buf[..second_n], b"llo");
+
         monocoque_core::inproc::unbind_inproc(endpoint)?;
         Ok(())
     }
