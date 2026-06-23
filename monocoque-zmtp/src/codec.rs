@@ -369,6 +369,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn decode_rejects_command_frame_with_more_flag() {
+        let mut decoder = ZmtpDecoder::new();
+        let mut src = SegmentedBuffer::new();
+        src.push(Bytes::from_static(b"\x05\x06\x05READY"));
+
+        assert!(matches!(decoder.decode(&mut src), Err(ZmtpError::Protocol)));
+    }
+
+    #[test]
     fn encode_sets_long_flag_for_public_large_frame_payload() {
         let frame = ZmtpFrame {
             flags: 0,

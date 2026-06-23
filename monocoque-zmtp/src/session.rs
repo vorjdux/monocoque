@@ -1,5 +1,6 @@
 use crate::codec::{ZmtpDecoder, ZmtpError, ZmtpFrame};
 use crate::greeting::ZmtpGreeting;
+use crate::handshake::parse_ready_command;
 use bytes::{Bytes, BytesMut};
 use monocoque_core::buffer::SegmentedBuffer;
 
@@ -266,6 +267,17 @@ impl ZmtpSession {
                                 break;
                             }
 
+                            let (parsed_socket_type, parsed_identity) =
+                                match parse_ready_command(&frame.payload) {
+                                    Ok(parsed) => parsed,
+                                    Err(e) => {
+                                        events.push(SessionEvent::Error(e));
+                                        break;
+                                    }
+                                };
+                            *peer_socket_type = Some(parsed_socket_type);
+                            *peer_identity = parsed_identity;
+
                             // Extract values before transitioning state
                             let peer_id = peer_identity.take();
                             let peer_st = peer_socket_type.unwrap_or(self.local_socket_type);
@@ -316,6 +328,7 @@ impl ZmtpSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::{FLAG_COMMAND, build_ready, encode_frame};
 
     /// An active session created with a `max_msg_size` rejects a frame whose
     /// declared body length exceeds the limit, before reading the body.
@@ -350,5 +363,71 @@ mod tests {
             "frame within the limit should decode, got {} events",
             events.len()
         );
+    }
+
+    fn valid_null_greeting() -> Bytes {
+        let mut greeting = [0u8; 64];
+        greeting[0] = 0xFF;
+        greeting[9] = 0x7F;
+        greeting[10] = 0x03;
+        greeting[11] = 0x01;
+        greeting[12..16].copy_from_slice(b"NULL");
+        Bytes::copy_from_slice(&greeting)
+    }
+
+    fn input_with_handshake_command(command_body: Bytes) -> Bytes {
+        let command_frame = encode_frame(FLAG_COMMAND, &command_body);
+        let mut input = BytesMut::with_capacity(64 + command_frame.len());
+        input.extend_from_slice(&valid_null_greeting());
+        input.extend_from_slice(&command_frame);
+        input.freeze()
+    }
+
+    fn has_protocol_error(events: &[SessionEvent]) -> bool {
+        events
+            .iter()
+            .any(|event| matches!(event, SessionEvent::Error(ZmtpError::Protocol)))
+    }
+
+    fn handshake_complete(events: &[SessionEvent]) -> Option<(SocketType, Option<Bytes>)> {
+        events.iter().find_map(|event| match event {
+            SessionEvent::HandshakeComplete {
+                peer_socket_type,
+                peer_identity,
+            } => Some((*peer_socket_type, peer_identity.clone())),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn session_rejects_non_ready_command_during_handshake() {
+        let mut session = ZmtpSession::new(SocketType::Router);
+        let input = input_with_handshake_command(Bytes::from_static(b"\x04PING"));
+        let events = session.on_bytes(input);
+
+        assert!(has_protocol_error(&events));
+        assert!(handshake_complete(&events).is_none());
+    }
+
+    #[test]
+    fn session_rejects_ready_without_socket_type() {
+        let mut session = ZmtpSession::new(SocketType::Router);
+        let input = input_with_handshake_command(Bytes::from_static(b"\x05READY"));
+        let events = session.on_bytes(input);
+
+        assert!(has_protocol_error(&events));
+        assert!(handshake_complete(&events).is_none());
+    }
+
+    #[test]
+    fn session_uses_socket_type_and_identity_from_ready_metadata() {
+        let mut session = ZmtpSession::new(SocketType::Router);
+        let input = input_with_handshake_command(build_ready("DEALER", Some(b"client-1")));
+        let events = session.on_bytes(input);
+
+        let (peer_socket_type, peer_identity) =
+            handshake_complete(&events).expect("valid READY metadata should complete handshake");
+        assert_eq!(peer_socket_type, SocketType::Dealer);
+        assert_eq!(peer_identity.as_deref(), Some(&b"client-1"[..]));
     }
 }
