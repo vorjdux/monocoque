@@ -161,6 +161,10 @@ impl ZmtpDecoder {
 
         let flags = hdr[0];
 
+        if (flags & 0x05) == 0x05 {
+            return Err(ZmtpError::Protocol);
+        }
+
         // Reserved bits must be zero (bits 3-7)
         if (flags & 0xF8) != 0 {
             return Err(ZmtpError::ReservedBits);
@@ -249,12 +253,17 @@ impl ZmtpFrame {
 
     /// Encode this frame to bytes
     pub fn encode(&self) -> Bytes {
-        let is_long = (self.flags & 0x02) != 0;
         let body_len = self.payload.len();
+        let is_long = body_len >= 256;
+        let flags = if is_long {
+            self.flags | 0x02
+        } else {
+            self.flags & !0x02
+        };
 
         let mut out = BytesMut::with_capacity(if is_long { 9 } else { 2 } + body_len);
 
-        out.extend_from_slice(&[self.flags]);
+        out.extend_from_slice(&[flags]);
 
         if is_long {
             out.extend_from_slice(&(body_len as u64).to_be_bytes());
@@ -352,5 +361,22 @@ pub fn encode_multipart(msg: &[Bytes], buf: &mut BytesMut) {
         }
 
         buf.extend_from_slice(part);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encode_sets_long_flag_for_public_large_frame_payload() {
+        let frame = ZmtpFrame {
+            flags: 0,
+            payload: Bytes::from(vec![0x42; 256]),
+        };
+
+        let encoded = frame.encode();
+
+        assert_eq!(encoded[0] & 0x02, 0x02);
     }
 }
