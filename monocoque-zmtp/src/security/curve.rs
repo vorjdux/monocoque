@@ -431,8 +431,14 @@ fn decode_zmtp_props(mut data: &[u8]) -> Result<(Option<Bytes>, Option<Bytes>), 
         data = &data[vlen..];
 
         if key.eq_ignore_ascii_case(b"Socket-Type") {
+            if socket_type.is_some() {
+                return Err(ZmtpError::Protocol);
+            }
             socket_type = Some(value);
         } else if key.eq_ignore_ascii_case(b"Identity") {
+            if identity.is_some() {
+                return Err(ZmtpError::Protocol);
+            }
             if vlen > 255 {
                 warn!("[CURVE] Identity property exceeds 255 bytes ({})", vlen);
                 return Err(ZmtpError::Protocol);
@@ -1800,5 +1806,30 @@ mod tests {
         let (st, id) = decode_zmtp_props(&encoded).unwrap();
         assert_eq!(st.unwrap().as_ref(), b"ROUTER");
         assert!(id.is_none());
+    }
+
+    #[test]
+    fn decode_zmtp_props_rejects_duplicate_socket_type_property() {
+        let mut encoded = Vec::new();
+        push_prop(&mut encoded, b"Socket-Type", b"DEALER");
+        push_prop(&mut encoded, b"Socket-Type", b"ROUTER");
+
+        assert!(matches!(
+            decode_zmtp_props(&encoded),
+            Err(ZmtpError::Protocol)
+        ));
+    }
+
+    #[test]
+    fn decode_zmtp_props_rejects_duplicate_identity_property() {
+        let mut encoded = Vec::new();
+        push_prop(&mut encoded, b"Socket-Type", b"DEALER");
+        push_prop(&mut encoded, b"Identity", b"trusted");
+        push_prop(&mut encoded, b"Identity", b"shadow");
+
+        assert!(matches!(
+            decode_zmtp_props(&encoded),
+            Err(ZmtpError::Protocol)
+        ));
     }
 }
