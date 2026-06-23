@@ -246,15 +246,32 @@ impl ZapRequest {
         }
         let request_id = String::from_utf8(frames[1].to_vec()).map_err(|_| "Invalid request ID")?;
         let domain = String::from_utf8(frames[2].to_vec()).map_err(|_| "Invalid domain string")?;
+        if domain.is_empty() {
+            return Err("ZAP domain cannot be empty".to_string());
+        }
         let address =
             String::from_utf8(frames[3].to_vec()).map_err(|_| "Invalid address string")?;
+        if address.is_empty() {
+            return Err("ZAP address cannot be empty".to_string());
+        }
         let identity = frames[4].clone();
+        if identity.len() > 255 {
+            return Err("ZAP identity cannot exceed 255 bytes".to_string());
+        }
 
         let mechanism_str =
             String::from_utf8(frames[5].to_vec()).map_err(|_| "Invalid mechanism string")?;
         let mechanism = ZapMechanism::from_str(&mechanism_str).ok_or("Unknown mechanism")?;
 
         let credentials = frames[6..].to_vec();
+        let expected_credentials = match mechanism {
+            ZapMechanism::Null => 0,
+            ZapMechanism::Plain => 2,
+            ZapMechanism::Curve => 1,
+        };
+        if credentials.len() != expected_credentials {
+            return Err("ZAP credential count does not match mechanism".to_string());
+        }
 
         Ok(Self {
             version,
@@ -487,6 +504,96 @@ mod tests {
             ZapRequest::decode(&frames).is_err(),
             "ZAP accepted an authentication request with an unsupported protocol version"
         );
+    }
+
+    #[test]
+    fn zap_request_decode_rejects_null_credentials() {
+        let frames = vec![
+            Bytes::from(ZAP_VERSION),
+            Bytes::from("123"),
+            Bytes::from("test"),
+            Bytes::from("127.0.0.1"),
+            Bytes::new(),
+            Bytes::from("NULL"),
+            Bytes::from("unexpected"),
+        ];
+
+        assert!(ZapRequest::decode(&frames).is_err());
+    }
+
+    #[test]
+    fn zap_request_decode_rejects_empty_domain() {
+        let frames = vec![
+            Bytes::from(ZAP_VERSION),
+            Bytes::from("123"),
+            Bytes::new(),
+            Bytes::from("127.0.0.1"),
+            Bytes::new(),
+            Bytes::from("NULL"),
+        ];
+
+        assert!(ZapRequest::decode(&frames).is_err());
+    }
+
+    #[test]
+    fn zap_request_decode_rejects_empty_address() {
+        let frames = vec![
+            Bytes::from(ZAP_VERSION),
+            Bytes::from("123"),
+            Bytes::from("test"),
+            Bytes::new(),
+            Bytes::new(),
+            Bytes::from("NULL"),
+        ];
+
+        assert!(ZapRequest::decode(&frames).is_err());
+    }
+
+    #[test]
+    fn zap_request_decode_rejects_overlong_identity() {
+        let frames = vec![
+            Bytes::from(ZAP_VERSION),
+            Bytes::from("123"),
+            Bytes::from("test"),
+            Bytes::from("127.0.0.1"),
+            Bytes::from(vec![0u8; 256]),
+            Bytes::from("NULL"),
+        ];
+
+        assert!(ZapRequest::decode(&frames).is_err());
+    }
+
+    #[test]
+    fn zap_request_decode_rejects_plain_extra_credentials() {
+        let frames = vec![
+            Bytes::from(ZAP_VERSION),
+            Bytes::from("123"),
+            Bytes::from("test"),
+            Bytes::from("127.0.0.1"),
+            Bytes::new(),
+            Bytes::from("PLAIN"),
+            Bytes::from("admin"),
+            Bytes::from("secret"),
+            Bytes::from("shadow"),
+        ];
+
+        assert!(ZapRequest::decode(&frames).is_err());
+    }
+
+    #[test]
+    fn zap_request_decode_rejects_curve_extra_credentials() {
+        let frames = vec![
+            Bytes::from(ZAP_VERSION),
+            Bytes::from("123"),
+            Bytes::from("test"),
+            Bytes::from("127.0.0.1"),
+            Bytes::new(),
+            Bytes::from("CURVE"),
+            Bytes::from(vec![0u8; 32]),
+            Bytes::from("shadow"),
+        ];
+
+        assert!(ZapRequest::decode(&frames).is_err());
     }
 
     #[test]
