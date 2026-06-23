@@ -344,6 +344,12 @@ fn validate_and_extract_name(endpoint: &str) -> io::Result<&str> {
             "inproc endpoint name cannot be empty",
         ));
     }
+    if name.chars().any(char::is_control) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "inproc endpoint name cannot contain control characters",
+        ));
+    }
 
     Ok(name)
 }
@@ -360,6 +366,12 @@ mod tests {
         assert!(validate_and_extract_name("tcp://test").is_err());
         assert!(validate_and_extract_name("inproc://").is_err());
         assert!(validate_and_extract_name("").is_err());
+    }
+
+    #[test]
+    fn test_validate_endpoint_rejects_control_characters() {
+        assert!(validate_and_extract_name("inproc://tenant\0shadow").is_err());
+        assert!(validate_and_extract_name("inproc://tenant\nshadow").is_err());
     }
 
     #[test]
