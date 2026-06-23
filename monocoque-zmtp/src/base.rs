@@ -68,12 +68,12 @@ pub fn build_pong_frame() -> Bytes {
 
 /// Return `true` if the decoded command payload begins with the PING name.
 pub fn is_ping_payload(payload: &[u8]) -> bool {
-    payload.starts_with(PING_CMD)
+    payload.starts_with(PING_CMD) && payload.len().saturating_sub(PING_CMD.len()) <= 18
 }
 
 /// Return `true` if the decoded command payload begins with the PONG name.
 pub fn is_pong_payload(payload: &[u8]) -> bool {
-    payload.starts_with(PONG_CMD)
+    payload.starts_with(PONG_CMD) && payload.len().saturating_sub(PONG_CMD.len()) <= 16
 }
 
 /// Base socket infrastructure shared by all ZMQ socket types.
@@ -1507,11 +1507,21 @@ mod tests {
     }
 
     #[test]
+    fn test_is_ping_payload_rejects_context_over_16_octets() {
+        assert!(!is_ping_payload(b"\x04PING\x00\x0A12345678901234567"));
+    }
+
+    #[test]
     fn test_is_pong_payload() {
         assert!(is_pong_payload(b"\x04PONG"));
         assert!(!is_pong_payload(b"\x04PING\x00\x0A"));
         assert!(!is_pong_payload(b"\x05READY"));
         assert!(!is_pong_payload(b""));
+    }
+
+    #[test]
+    fn test_is_pong_payload_rejects_context_over_16_octets() {
+        assert!(!is_pong_payload(b"\x04PONG12345678901234567"));
     }
 
     // ── Heartbeat state helpers ───────────────────────────────────────────────
