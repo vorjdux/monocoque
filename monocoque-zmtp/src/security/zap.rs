@@ -374,6 +374,12 @@ impl ZapResponse {
 
         let status_text =
             String::from_utf8(frames[3].to_vec()).map_err(|_| "Invalid status text")?;
+        if status_text.len() > 255 {
+            return Err("ZAP status text cannot exceed 255 bytes".to_string());
+        }
+        if !frames[4].is_ascii() {
+            return Err("Invalid user ID".to_string());
+        }
         let user_id = String::from_utf8(frames[4].to_vec()).map_err(|_| "Invalid user ID")?;
 
         // Parse metadata (RFC 35 format)
@@ -520,6 +526,34 @@ mod tests {
             ZapResponse::decode(&frames).is_err(),
             "ZAP accepted an authentication success response with an unsupported protocol version"
         );
+    }
+
+    #[test]
+    fn zap_response_decode_rejects_non_ascii_user_id() {
+        let frames = vec![
+            Bytes::from(ZAP_VERSION),
+            Bytes::from("123"),
+            Bytes::from("200"),
+            Bytes::from("OK"),
+            Bytes::from_static(b"jos\xc3\xa9"),
+            Bytes::new(),
+        ];
+
+        assert!(ZapResponse::decode(&frames).is_err());
+    }
+
+    #[test]
+    fn zap_response_decode_rejects_overlong_status_text() {
+        let frames = vec![
+            Bytes::from(ZAP_VERSION),
+            Bytes::from("123"),
+            Bytes::from("200"),
+            Bytes::from("a".repeat(256)),
+            Bytes::from("testuser"),
+            Bytes::new(),
+        ];
+
+        assert!(ZapResponse::decode(&frames).is_err());
     }
 
     #[test]
