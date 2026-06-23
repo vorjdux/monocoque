@@ -5,6 +5,8 @@
 
 use bytes::Bytes;
 
+const MAX_PREALLOCATED_FRAMES: usize = 1024;
+
 /// Builder for constructing `ZeroMQ` multipart messages.
 ///
 /// Provides a fluent API for adding frames to a message with automatic
@@ -82,7 +84,7 @@ impl Message {
     #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            frames: Vec::with_capacity(capacity),
+            frames: Vec::with_capacity(capacity.min(MAX_PREALLOCATED_FRAMES)),
         }
     }
 
@@ -366,6 +368,12 @@ mod tests {
         let msg = Message::with_capacity(10);
         assert_eq!(msg.len(), 0);
         assert!(msg.frames.capacity() >= 10);
+    }
+
+    #[test]
+    fn test_with_capacity_rejects_unbounded_capacity_without_panicking() {
+        let result = std::panic::catch_unwind(|| Message::with_capacity(usize::MAX));
+        assert!(result.is_ok());
     }
 
     #[test]
