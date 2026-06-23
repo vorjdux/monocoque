@@ -77,16 +77,8 @@ impl SubscriptionTrie {
             return true;
         }
 
-        // Find the largest stored prefix <= topic.
-        // Any stored prefix that is a true prefix of `topic` must be <= topic
-        // in lexicographic order, so the best candidate is the largest such key.
-        use std::ops::Bound;
-        if let Some(candidate) = self
-            .prefixes
-            .range::<Vec<u8>, _>((Bound::Unbounded, Bound::Included(&topic.to_vec())))
-            .next_back()
-        {
-            if topic.starts_with(candidate.as_slice()) {
+        for end in (1..=topic.len()).rev() {
+            if self.prefixes.contains(&topic[..end]) {
                 return true;
             }
         }
@@ -259,6 +251,15 @@ mod tests {
         assert!(!trie.matches(b"topic"));
         assert!(trie.matches(b"topic."));
         assert!(trie.matches(b"topic.sub"));
+    }
+
+    #[test]
+    fn test_trie_checks_broader_prefix_after_non_matching_candidate() {
+        let mut trie = SubscriptionTrie::new();
+        trie.subscribe(Bytes::from_static(b"a"));
+        trie.subscribe(Bytes::from_static(b"aa~"));
+
+        assert!(trie.matches(b"ab"));
     }
 
     #[test]
