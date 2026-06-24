@@ -2,25 +2,33 @@
 
 ## Benchmark results
 
-Measured on loopback TCP against rust-zmq (FFI bindings to libzmq):
+Measured on loopback TCP against rust-zmq (FFI bindings to libzmq).
+Hardware: Intel Core i7-1355U (12 threads), Linux 6.17, rustc 1.91, release build.
+Latency is the steady-state round-trip over a persistent connection (connection
+setup excluded), reported as the median of 100 samples.
 
 **Latency (REQ/REP round-trip)**
 
 | Message size | Monocoque | rust-zmq | Improvement |
 |---|---|---|---|
-| 64B | 23μs | 34μs | 31% faster |
-| 256B | 22μs | 35μs | 36% faster |
-| 1KB | 23μs | 36μs | 35% faster |
+| 64B | 7.3μs | 25.9μs | 72% faster |
+| 256B | 7.3μs | 27.8μs | 74% faster |
+| 1KB | 7.5μs | 25.6μs | 71% faster |
 
 **Throughput (DEALER/ROUTER, batching API, 10k messages)**
 
 | Message size | Throughput |
 |---|---|
-| 64B | 3.24M msg/s |
-| 256B | 2.49M msg/s |
-| 1KB | 1.08M msg/s |
+| 64B | 2.97M msg/s |
+| 256B | 2.52M msg/s |
+| 1KB | 1.23M msg/s |
 
-IPC (Unix domain sockets) runs 7-17% faster than TCP loopback for local communication.
+Synchronous (non-pipelined) DEALER/ROUTER throughput is about 120k to 133k msg/s
+for monocoque versus about 34k msg/s for rust-zmq, roughly 4x faster.
+
+IPC (Unix domain sockets) runs about 35% faster than TCP loopback for local
+communication. Latency is 4.8 to 5.1μs versus 7.4 to 8.0μs, and throughput is
+26% to 39% higher.
 
 Run the benchmarks: `cargo bench --features zmq` from the `monocoque/` directory.
 

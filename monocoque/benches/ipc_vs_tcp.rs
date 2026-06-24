@@ -53,64 +53,66 @@ fn monocoque_tcp_latency(c: &mut Criterion) {
             BenchmarkId::new("round_trip", format!("{}B", size)),
             &size,
             |b, _| {
-                b.iter_batched(
-                    || {
-                        rt.block_on(async {
-                            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-                            let server_addr = listener.local_addr().unwrap();
+                // Set up a single connection per measurement batch and reuse it for
+                // all `iters` round-trips. Reconnecting per iteration churned through
+                // ephemeral ports (each closed socket lingers in TIME_WAIT), which
+                // eventually exhausted them and panicked with AddrNotAvailable.
+                b.iter_custom(|iters| {
+                    let payload = payload.clone();
+                    rt.block_on(async move {
+                        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                        let server_addr = listener.local_addr().unwrap();
 
-                            // Server echoes exactly WARMUP_ROUNDS+1 messages, then exits
-                            // cleanly without waiting for EOF.
-                            let server_task = compio::runtime::spawn(async move {
-                                let (stream, _) = listener.accept().await.unwrap();
-                                let mut rep = RepSocket::from_tcp_with_options(
-                                    stream,
-                                    SocketOptions::default().with_buffer_sizes(4096, 4096),
-                                )
-                                .await
-                                .unwrap();
-
-                                for _ in 0..(WARMUP_ROUNDS + 1) {
-                                    if let Ok(Some(msg)) = rep.recv().await {
-                                        if rep.send(msg).await.is_err() {
-                                            break;
-                                        }
-                                    } else {
-                                        break;
-                                    }
-                                }
-                            });
-
-                            let stream =
-                                compio::net::TcpStream::connect(server_addr).await.unwrap();
-                            let mut req = ReqSocket::from_tcp_with_options(
+                        // Server echoes warmup + measured messages, then exits cleanly.
+                        let total_msgs = WARMUP_ROUNDS as u64 + iters;
+                        let server_task = compio::runtime::spawn(async move {
+                            let (stream, _) = listener.accept().await.unwrap();
+                            let mut rep = RepSocket::from_tcp_with_options(
                                 stream,
                                 SocketOptions::default().with_buffer_sizes(4096, 4096),
                             )
                             .await
                             .unwrap();
 
-                            // Warmup
-                            for _ in 0..WARMUP_ROUNDS {
-                                req.send(vec![payload.clone()]).await.unwrap();
-                                let _ = req.recv().await.unwrap();
+                            for _ in 0..total_msgs {
+                                if let Ok(Some(msg)) = rep.recv().await {
+                                    if rep.send(msg).await.is_err() {
+                                        break;
+                                    }
+                                } else {
+                                    break;
+                                }
                             }
-
-                            (req, server_task)
-                        })
-                    },
-                    |(mut req, server_task)| {
-                        // Measured: round-trip + fast teardown (server already done)
-                        let payload = payload.clone();
-                        rt.block_on(async move {
-                            req.send(vec![black_box(payload)]).await.unwrap();
-                            let _ = req.recv().await.unwrap();
-                            drop(req);
-                            server_task.await;
                         });
-                    },
-                    criterion::BatchSize::PerIteration,
-                );
+
+                        let stream = compio::net::TcpStream::connect(server_addr).await.unwrap();
+                        let mut req = ReqSocket::from_tcp_with_options(
+                            stream,
+                            SocketOptions::default().with_buffer_sizes(4096, 4096),
+                        )
+                        .await
+                        .unwrap();
+
+                        // Warmup (not timed)
+                        for _ in 0..WARMUP_ROUNDS {
+                            req.send(vec![payload.clone()]).await.unwrap();
+                            let _ = req.recv().await.unwrap();
+                        }
+
+                        // MEASURE: round-trips over the persistent connection
+                        let t0 = std::time::Instant::now();
+                        for _ in 0..iters {
+                            req.send(vec![black_box(payload.clone())]).await.unwrap();
+                            let _ = req.recv().await.unwrap();
+                        }
+                        let total = t0.elapsed();
+
+                        // Teardown
+                        drop(req);
+                        server_task.await;
+                        total
+                    })
+                });
             },
         );
     }
@@ -136,68 +138,70 @@ fn monocoque_ipc_latency(c: &mut Criterion) {
             |b, _| {
                 // Fresh runtime per size avoids accumulated io_uring state between sizes.
                 let rt = compio::runtime::Runtime::new().unwrap();
-                // Self-contained iter: setup + warmup + measure + teardown in one block_on.
-                // Uses iter_custom for precise timing that excludes setup/teardown overhead.
+                // Set up one connection per measurement batch and reuse it for all
+                // `iters` round-trips, timing only the round-trips. This mirrors the
+                // tcp_latency methodology above so IPC and TCP latency are directly
+                // comparable; the previous per-iter fresh-socket+warmup approach
+                // measured connection setup overhead, not steady-state latency.
                 b.iter_custom(|iters| {
                     let socket_path = socket_path.clone();
                     let payload = payload.clone();
                     rt.block_on(async move {
-                        let mut total = std::time::Duration::ZERO;
-                        for iter in 0..iters {
-                            // Use iter index in socket path to avoid any reuse conflicts
-                            let iter_path = format!("{}.{}", socket_path, iter);
-                            let _ = std::fs::remove_file(&iter_path);
-                            let listener = UnixListener::bind(&iter_path).await.unwrap();
+                        let _ = std::fs::remove_file(&socket_path);
+                        let listener = UnixListener::bind(&socket_path).await.unwrap();
 
-                            let server_task = compio::runtime::spawn({
-                                let iter_path = iter_path.clone();
-                                async move {
-                                    let (stream, _) = listener.accept().await.unwrap();
-                                    let mut rep = RepSocket::<compio::net::UnixStream>::from_unix_stream_with_options(
-                                        stream,
-                                        SocketOptions::default().with_buffer_sizes(4096, 4096),
-                                    )
-                                    .await
-                                    .unwrap();
-                                    for _ in 0..(WARMUP_ROUNDS + 1) {
-                                        if let Ok(Some(msg)) = rep.recv().await {
-                                            if rep.send(msg).await.is_err() {
-                                                break;
-                                            }
-                                        } else {
+                        // Server echoes warmup + measured messages, then exits cleanly.
+                        let total_msgs = WARMUP_ROUNDS as u64 + iters;
+                        let server_task = compio::runtime::spawn({
+                            let socket_path = socket_path.clone();
+                            async move {
+                                let (stream, _) = listener.accept().await.unwrap();
+                                let mut rep = RepSocket::<compio::net::UnixStream>::from_unix_stream_with_options(
+                                    stream,
+                                    SocketOptions::default().with_buffer_sizes(4096, 4096),
+                                )
+                                .await
+                                .unwrap();
+                                for _ in 0..total_msgs {
+                                    if let Ok(Some(msg)) = rep.recv().await {
+                                        if rep.send(msg).await.is_err() {
                                             break;
                                         }
+                                    } else {
+                                        break;
                                     }
-                                    let _ = std::fs::remove_file(&iter_path);
                                 }
-                            });
-
-                            compio::time::sleep(Duration::from_millis(5)).await;
-
-                            let stream = compio::net::UnixStream::connect(&iter_path).await.unwrap();
-                            let mut req = ReqSocket::<compio::net::UnixStream>::from_unix_stream_with_options(
-                                stream,
-                                SocketOptions::default().with_buffer_sizes(4096, 4096),
-                            )
-                            .await
-                            .unwrap();
-
-                            // Warmup (not timed)
-                            for _ in 0..WARMUP_ROUNDS {
-                                req.send(vec![payload.clone()]).await.unwrap();
-                                let _ = req.recv().await.unwrap();
+                                let _ = std::fs::remove_file(&socket_path);
                             }
+                        });
 
-                            // MEASURE: single round-trip
-                            let t0 = std::time::Instant::now();
+                        compio::time::sleep(Duration::from_millis(5)).await;
+
+                        let stream = compio::net::UnixStream::connect(&socket_path).await.unwrap();
+                        let mut req = ReqSocket::<compio::net::UnixStream>::from_unix_stream_with_options(
+                            stream,
+                            SocketOptions::default().with_buffer_sizes(4096, 4096),
+                        )
+                        .await
+                        .unwrap();
+
+                        // Warmup (not timed)
+                        for _ in 0..WARMUP_ROUNDS {
+                            req.send(vec![payload.clone()]).await.unwrap();
+                            let _ = req.recv().await.unwrap();
+                        }
+
+                        // MEASURE: round-trips over the persistent connection
+                        let t0 = std::time::Instant::now();
+                        for _ in 0..iters {
                             req.send(vec![black_box(payload.clone())]).await.unwrap();
                             let _ = req.recv().await.unwrap();
-                            total += t0.elapsed();
-
-                            // Teardown
-                            drop(req);
-                            server_task.await;
                         }
+                        let total = t0.elapsed();
+
+                        // Teardown
+                        drop(req);
+                        server_task.await;
                         total
                     })
                 });

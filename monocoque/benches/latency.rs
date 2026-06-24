@@ -40,68 +40,68 @@ fn monocoque_req_rep_latency(c: &mut Criterion) {
             BenchmarkId::new("round_trip", format!("{}B", size)),
             &size,
             |b, _| {
-                // MEASURED: Single round-trip per iteration
-                // Note: We can't separate setup completely in criterion, so we
-                // create a persistent connection and only measure send/recv
-                b.iter_batched(
-                    || {
-                        // SETUP: Create connection + warmup (not measured)
-                        rt.block_on(async {
-                            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-                            let server_addr = listener.local_addr().unwrap();
+                // Set up a single connection per measurement batch and reuse it for
+                // all `iters` round-trips, timing only the round-trips. Reconnecting
+                // per iteration churned through ephemeral ports (each closed socket
+                // lingers in TIME_WAIT), which exhausted them and panicked with
+                // AddrNotAvailable. This also matches the rust-zmq side, which keeps
+                // one persistent connection and measures pure send/recv.
+                b.iter_custom(|iters| {
+                    let payload = payload.clone();
+                    rt.block_on(async move {
+                        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                        let server_addr = listener.local_addr().unwrap();
 
-                            // Server echoes exactly WARMUP_ROUNDS+1 messages so it exits
-                            // cleanly after the one measured round-trip without waiting for EOF.
-                            let server_task = compio::runtime::spawn(async move {
-                                let (stream, _) = listener.accept().await.unwrap();
-                                let mut rep = RepSocket::from_tcp_with_options(
-                                    stream,
-                                    SocketOptions::default().with_buffer_sizes(4096, 4096),
-                                )
-                                .await
-                                .unwrap();
-
-                                for _ in 0..(WARMUP_ROUNDS + 1) {
-                                    if let Ok(Some(msg)) = rep.recv().await {
-                                        if rep.send(msg).await.is_err() {
-                                            break;
-                                        }
-                                    } else {
-                                        break;
-                                    }
-                                }
-                            });
-
-                            let stream =
-                                compio::net::TcpStream::connect(server_addr).await.unwrap();
-                            let mut req = ReqSocket::from_tcp_with_options(
+                        // Server echoes warmup + measured messages, then exits cleanly.
+                        let total_msgs = WARMUP_ROUNDS as u64 + iters;
+                        let server_task = compio::runtime::spawn(async move {
+                            let (stream, _) = listener.accept().await.unwrap();
+                            let mut rep = RepSocket::from_tcp_with_options(
                                 stream,
                                 SocketOptions::default().with_buffer_sizes(4096, 4096),
                             )
                             .await
                             .unwrap();
 
-                            // WARMUP: Do warmup rounds
-                            for _ in 0..WARMUP_ROUNDS {
-                                req.send(vec![payload.clone()]).await.unwrap();
-                                let _ = req.recv().await.unwrap();
+                            for _ in 0..total_msgs {
+                                if let Ok(Some(msg)) = rep.recv().await {
+                                    if rep.send(msg).await.is_err() {
+                                        break;
+                                    }
+                                } else {
+                                    break;
+                                }
                             }
-
-                            (req, server_task)
-                        })
-                    },
-                    |(mut req, server_task)| {
-                        // MEASURED: round-trip + fast teardown (server already done after +1 msg)
-                        let payload = payload.clone();
-                        rt.block_on(async move {
-                            req.send(vec![black_box(payload)]).await.unwrap();
-                            let _ = req.recv().await.unwrap();
-                            drop(req);
-                            server_task.await;
                         });
-                    },
-                    criterion::BatchSize::PerIteration,
-                );
+
+                        let stream = compio::net::TcpStream::connect(server_addr).await.unwrap();
+                        let mut req = ReqSocket::from_tcp_with_options(
+                            stream,
+                            SocketOptions::default().with_buffer_sizes(4096, 4096),
+                        )
+                        .await
+                        .unwrap();
+
+                        // WARMUP: not timed
+                        for _ in 0..WARMUP_ROUNDS {
+                            req.send(vec![payload.clone()]).await.unwrap();
+                            let _ = req.recv().await.unwrap();
+                        }
+
+                        // MEASURE: round-trips over the persistent connection
+                        let t0 = std::time::Instant::now();
+                        for _ in 0..iters {
+                            req.send(vec![black_box(payload.clone())]).await.unwrap();
+                            let _ = req.recv().await.unwrap();
+                        }
+                        let total = t0.elapsed();
+
+                        // Teardown
+                        drop(req);
+                        server_task.await;
+                        total
+                    })
+                });
             },
         );
     }
