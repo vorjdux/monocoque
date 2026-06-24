@@ -30,7 +30,7 @@ use bytes::Bytes;
 use compio::net::TcpListener;
 use monocoque::zmq::{RepSocket, ReqSocket, SocketOptions};
 use monocoque_zmtp::security::curve::{
-    CurveKeyPair, CurvePublicKey, CurveSecretKey, CURVE_KEY_SIZE,
+    CurveKeyPair, CurveSecretKey, CURVE_KEY_SIZE,
 };
 use std::env;
 use std::time::Duration;
@@ -89,7 +89,7 @@ fn generate_keys() {
     // Generate server keypair
     let server_keypair = CurveKeyPair::generate();
     let server_public_hex = hex::encode(server_keypair.public.as_bytes());
-    let server_secret_hex = hex::encode_upper(b"[REDACTED - Use actual key generation]");
+    let _server_secret_hex = hex::encode_upper(b"[REDACTED - Use actual key generation]");
 
     info!("📋 Server Keys:");
     info!("   Public:  {}", server_public_hex);

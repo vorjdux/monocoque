@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 1. Bind to an inproc endpoint
     println!("1. Binding to 'inproc://demo-endpoint'...");
-    let (server_tx, mut server_rx) = bind_inproc("inproc://demo-endpoint")?;
+    let (server_tx, server_rx) = bind_inproc("inproc://demo-endpoint")?;
     println!("   ✓ Bound successfully\n");
 
     // 2. List endpoints

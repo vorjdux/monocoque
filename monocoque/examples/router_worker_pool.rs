@@ -34,7 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 info!("Worker connected from {addr}");
 
                 let counter = task_counter.clone();
-                compio::runtime::spawn(async move {
+                let _ = compio::runtime::spawn(async move {
                     handle_worker(stream, counter).await;
                 });
             }

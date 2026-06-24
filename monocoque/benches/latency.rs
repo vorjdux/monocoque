@@ -13,6 +13,7 @@ use std::time::Duration;
 
 const MESSAGE_SIZES: &[usize] = &[64, 256, 1024]; // Various message sizes
 const WARMUP_ROUNDS: usize = 100; // Warmup iterations
+#[allow(dead_code)]
 const CONNECTIONS: usize = 100; // Multiple connections per iteration for connection benchmark
 
 /// Benchmark monocoque REQ/REP latency (single round-trip)
@@ -44,11 +45,13 @@ fn monocoque_req_rep_latency(c: &mut Criterion) {
                 // create a persistent connection and only measure send/recv
                 b.iter_batched(
                     || {
-                        // SETUP: Create connection (batched, not measured)
+                        // SETUP: Create connection + warmup (not measured)
                         rt.block_on(async {
                             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
                             let server_addr = listener.local_addr().unwrap();
 
+                            // Server echoes exactly WARMUP_ROUNDS+1 messages so it exits
+                            // cleanly after the one measured round-trip without waiting for EOF.
                             let server_task = compio::runtime::spawn(async move {
                                 let (stream, _) = listener.accept().await.unwrap();
                                 let mut rep = RepSocket::from_tcp_with_options(
@@ -58,8 +61,7 @@ fn monocoque_req_rep_latency(c: &mut Criterion) {
                                 .await
                                 .unwrap();
 
-                                // Server echo loop
-                                loop {
+                                for _ in 0..(WARMUP_ROUNDS + 1) {
                                     if let Ok(Some(msg)) = rep.recv().await {
                                         if rep.send(msg).await.is_err() {
                                             break;
@@ -89,14 +91,14 @@ fn monocoque_req_rep_latency(c: &mut Criterion) {
                         })
                     },
                     |(mut req, server_task)| {
-                        // MEASURED: Only the actual message round-trip
-                        rt.block_on(async {
-                            req.send(vec![black_box(payload.clone())]).await.unwrap();
+                        // MEASURED: round-trip + fast teardown (server already done after +1 msg)
+                        let payload = payload.clone();
+                        rt.block_on(async move {
+                            req.send(vec![black_box(payload)]).await.unwrap();
                             let _ = req.recv().await.unwrap();
+                            drop(req);
+                            server_task.await;
                         });
-                        // Cleanup
-                        drop(req);
-                        rt.block_on(server_task);
                     },
                     criterion::BatchSize::PerIteration,
                 );
@@ -165,6 +167,7 @@ fn zmq_req_rep_latency(c: &mut Criterion) {
 }
 
 /// Benchmark monocoque connection establishment latency
+#[allow(dead_code)]
 fn monocoque_connection_latency(c: &mut Criterion) {
     let mut group = c.benchmark_group("latency/monocoque/connection");
     group.sample_size(10); // Low sample count like throughput benchmark
@@ -211,6 +214,7 @@ fn monocoque_connection_latency(c: &mut Criterion) {
 }
 
 /// Benchmark rust-zmq connection establishment latency
+#[allow(dead_code)]
 fn zmq_connection_latency(c: &mut Criterion) {
     let mut group = c.benchmark_group("latency/rust_zmq/connection");
     group.sample_size(10); // Low sample count to avoid "too many open files"

@@ -8,11 +8,13 @@
 //! Simplified for single-threaded compio runtime.
 
 use bytes::Bytes;
-use monocoque::zmq::{DealerSocket, RepSocket, ReqSocket};
+use monocoque::zmq::{DealerSocket, ReqSocket};
 use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
+#[allow(dead_code)]
 const READY: &[u8] = b"\x01";
+#[allow(dead_code)]
 const HEARTBEAT: &[u8] = b"\x02";
 const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(1000);
 

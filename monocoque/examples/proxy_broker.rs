@@ -24,7 +24,7 @@
 //! - REQ clients connect to 5555 and send requests
 //! - REP workers connect to 5556 and process requests
 
-use monocoque::zmq::proxy::{proxy, ProxySocket};
+use monocoque::zmq::proxy::proxy;
 use monocoque::zmq::{DealerSocket, RouterSocket};
 
 #[compio::main]

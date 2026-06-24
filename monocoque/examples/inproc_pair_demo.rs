@@ -13,7 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create bidirectional channels for PAIR pattern
     // Server binds and gets (tx_server, rx_server)
-    let (tx_server, rx_server) = bind_inproc("inproc://pair-endpoint")?;
+    let (_tx_server, rx_server) = bind_inproc("inproc://pair-endpoint")?;
     println!("1. Server bound to 'inproc://pair-endpoint'");
 
     // Client connects and creates its own bidirectional channel

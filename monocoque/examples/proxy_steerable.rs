@@ -16,7 +16,7 @@
 //! Run this example and use another terminal to send control commands.
 
 use bytes::Bytes;
-use monocoque::zmq::proxy::{proxy_steerable, ProxyCommand};
+use monocoque::zmq::proxy::proxy_steerable;
 use monocoque::zmq::{DealerSocket, ReqSocket, RouterSocket};
 use monocoque_zmtp::pair::PairSocket;
 use std::time::Duration;

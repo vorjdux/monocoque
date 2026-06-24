@@ -22,7 +22,8 @@ use std::time::Duration;
 
 const MESSAGE_SIZES: &[usize] = &[64, 256, 1024, 4096, 16384];
 const TOTAL_MESSAGES: usize = 10_000;
-const BATCH_SIZE: usize = 100; // Process in batches to avoid deadlock
+#[allow(dead_code)]
+const BATCH_SIZE: usize = 100; // Process in batches to avoid deadlock (shadowed by inner constants)
 
 /// Benchmark monocoque DEALER/ROUTER pipelined throughput
 ///
@@ -118,6 +119,7 @@ fn monocoque_dealer_router_pipelined(c: &mut Criterion) {
 /// Benchmark rust-zmq (zmq crate) pipelined throughput for comparison
 ///
 /// NOTE: Uses fewer messages (1000) to avoid deadlock with blocking I/O
+#[allow(dead_code)]
 fn zmq_dealer_router_pipelined(c: &mut Criterion) {
     let mut group = c.benchmark_group("pipelined/rust_zmq/dealer_router");
     group.measurement_time(Duration::from_secs(20));
@@ -185,6 +187,7 @@ fn zmq_dealer_router_pipelined(c: &mut Criterion) {
 /// Benchmark asymmetric pipelined throughput (large batches)
 ///
 /// Tests extremely large pipeline depths to see maximum capacity.
+#[allow(dead_code)]
 fn monocoque_extreme_pipeline(c: &mut Criterion) {
     monocoque::dev_tracing::init_tracing();
     let mut group = c.benchmark_group("pipelined/monocoque/extreme");
@@ -254,6 +257,6 @@ criterion_group!(
     benches,
     monocoque_dealer_router_pipelined,
     // zmq_dealer_router_pipelined,  // Disabled: blocking I/O causes deadlock
-    monocoque_extreme_pipeline,
+    // monocoque_extreme_pipeline,  // Disabled: send-all-then-recv-all deadlocks TCP buffers
 );
 criterion_main!(benches);

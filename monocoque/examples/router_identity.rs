@@ -15,7 +15,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== ROUTER Identity Management Demo ===\n");
 
     // Start server in background
-    let server_task = compio::runtime::spawn(async {
+    let _server_task = compio::runtime::spawn(async {
         run_server().await.expect("Server failed");
     });
 

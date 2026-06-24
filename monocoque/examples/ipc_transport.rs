@@ -43,7 +43,7 @@ async fn main() -> std::io::Result<()> {
                 println!("   [Server] ✓ Client connected");
 
                 // Receive message
-                let mut buffer = vec![0u8; 1024];
+                let buffer = vec![0u8; 1024];
                 match stream.read(buffer).await {
                     BufResult(Ok(n), buffer) if n > 0 => {
                         let message = String::from_utf8_lossy(&buffer[..n]);
@@ -91,7 +91,7 @@ async fn main() -> std::io::Result<()> {
 
     // Receive response
     println!("\n4. Waiting for server response...");
-    let mut buffer = vec![0u8; 1024];
+    let buffer = vec![0u8; 1024];
     let BufResult(result, buffer) = client.read(buffer).await;
     let n = result?;
     let response = String::from_utf8_lossy(&buffer[..n]);
