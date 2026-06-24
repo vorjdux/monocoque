@@ -89,18 +89,42 @@ pub struct ZmtpSession {
     state: State,
     local_socket_type: SocketType,
     recv: SegmentedBuffer,
+    /// Resolved `max_msg_size` applied to every decoder this session creates.
+    /// `None` keeps the decoder's built-in default cap.
+    max_frame_size: Option<usize>,
+}
+
+/// Build a decoder honoring an optional `max_msg_size` limit.
+fn make_decoder(max_frame_size: Option<usize>) -> ZmtpDecoder {
+    max_frame_size.map_or_else(ZmtpDecoder::new, ZmtpDecoder::with_max_frame_size)
 }
 
 impl ZmtpSession {
     /// Create a new ZMTP session starting in the greeting phase.
+    ///
+    /// Uses the decoder's built-in default frame-size cap. Use
+    /// [`Self::with_max_frame_size`] to enforce a custom `max_msg_size`.
     #[must_use]
     pub fn new(local_socket_type: SocketType) -> Self {
+        Self::with_max_frame_size(local_socket_type, None)
+    }
+
+    /// Create a session in the greeting phase that rejects frames whose declared
+    /// body length exceeds `max_frame_size` (the socket's `max_msg_size`).
+    ///
+    /// `None` keeps the decoder's built-in default cap.
+    #[must_use]
+    pub fn with_max_frame_size(
+        local_socket_type: SocketType,
+        max_frame_size: Option<usize>,
+    ) -> Self {
         Self {
             state: State::Greeting {
                 buffer: BytesMut::with_capacity(64),
             },
             local_socket_type,
             recv: SegmentedBuffer::new(),
+            max_frame_size,
         }
     }
 
@@ -110,12 +134,25 @@ impl ZmtpSession {
     /// spawning the session actor.
     #[must_use]
     pub fn new_active(local_socket_type: SocketType) -> Self {
+        Self::new_active_with_max_frame_size(local_socket_type, None)
+    }
+
+    /// Create an already-active session that enforces `max_frame_size`
+    /// (the socket's `max_msg_size`) on its decoder.
+    ///
+    /// `None` keeps the decoder's built-in default cap.
+    #[must_use]
+    pub fn new_active_with_max_frame_size(
+        local_socket_type: SocketType,
+        max_frame_size: Option<usize>,
+    ) -> Self {
         Self {
             state: State::Active {
-                decoder: ZmtpDecoder::new(),
+                decoder: make_decoder(max_frame_size),
             },
             local_socket_type,
             recv: SegmentedBuffer::new(),
+            max_frame_size,
         }
     }
 
@@ -178,7 +215,7 @@ impl ZmtpSession {
                         Ok(_g) => {
                             // Transition to handshake
                             self.state = State::Handshake {
-                                decoder: ZmtpDecoder::new(),
+                                decoder: make_decoder(self.max_frame_size),
                                 peer_socket_type: None,
                                 peer_identity: None,
                             };
@@ -233,8 +270,9 @@ impl ZmtpSession {
                             let peer_id = peer_identity.take();
                             let peer_st = peer_socket_type.unwrap_or(self.local_socket_type);
 
-                            // Create new decoder for Active state
-                            let new_decoder = ZmtpDecoder::new();
+                            // Reuse the handshake decoder for the Active state; the
+                            // replacement is a throwaway needed only for mem::replace.
+                            let new_decoder = make_decoder(self.max_frame_size);
                             let old_decoder = std::mem::replace(decoder, new_decoder);
 
                             // Now transition state
@@ -272,5 +310,45 @@ impl ZmtpSession {
         }
 
         events
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An active session created with a `max_msg_size` rejects a frame whose
+    /// declared body length exceeds the limit, before reading the body.
+    #[test]
+    fn active_session_enforces_max_frame_size() {
+        let mut session = ZmtpSession::new_active_with_max_frame_size(SocketType::Rep, Some(10));
+
+        // Short data frame header declaring a 20-byte body (flags=0x00, len=20),
+        // which is over the 10-byte limit. Only the 2-byte header is needed: the
+        // size check runs as soon as body_len is known.
+        let events = session.on_bytes(Bytes::from_static(&[0x00, 20]));
+
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, SessionEvent::Error(ZmtpError::SizeTooLarge))),
+            "oversized frame should produce a SizeTooLarge error, got {} events",
+            events.len()
+        );
+    }
+
+    /// The same frame decodes cleanly when it is within the configured limit.
+    #[test]
+    fn active_session_accepts_frame_within_limit() {
+        let mut session = ZmtpSession::new_active_with_max_frame_size(SocketType::Rep, Some(64));
+
+        // flags=0x00, len=2, body="hi"
+        let events = session.on_bytes(Bytes::from_static(&[0x00, 2, b'h', b'i']));
+
+        assert!(
+            events.iter().any(|e| matches!(e, SessionEvent::Frame(_))),
+            "frame within the limit should decode, got {} events",
+            events.len()
+        );
     }
 }

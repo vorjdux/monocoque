@@ -216,7 +216,10 @@ impl XPubSocket {
                         stream,
                         subscriptions: SubscriptionTrie::new(),
                         recv_buf: monocoque_core::buffer::SegmentedBuffer::new(),
-                        decoder: crate::codec::ZmtpDecoder::new(),
+                        decoder: self.options.max_msg_size.map_or_else(
+                            crate::codec::ZmtpDecoder::new,
+                            crate::codec::ZmtpDecoder::with_max_frame_size,
+                        ),
                         curve_cipher,
                     },
                 );

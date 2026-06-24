@@ -69,6 +69,8 @@ enum WorkerCommand {
         stream: TcpStream,
         subscriptions: SubscriptionState,
         cipher: Option<SubCipher>,
+        /// Resolved `max_msg_size` for the subscription reader's decoder.
+        max_frame_size: Option<usize>,
     },
     /// Broadcast a message to all subscribers in this worker
     Broadcast { message: Arc<Vec<Bytes>> },
@@ -119,6 +121,7 @@ async fn subscription_reader(
     mut reader: OwnedReadHalf<TcpStream>,
     subscriptions: SubscriptionState,
     cipher: Option<SubCipher>,
+    max_frame_size: Option<usize>,
 ) {
     use compio::buf::BufResult;
     use compio::io::AsyncRead;
@@ -127,7 +130,10 @@ async fn subscription_reader(
     trace!("[PUB] Subscription reader started for subscriber {}", id);
 
     let mut recv_buf = SegmentedBuffer::new();
-    let mut decoder = crate::codec::ZmtpDecoder::new();
+    let mut decoder = max_frame_size.map_or_else(
+        crate::codec::ZmtpDecoder::new,
+        crate::codec::ZmtpDecoder::with_max_frame_size,
+    );
 
     // Allocate the read buffer once and reuse it each iteration.
     // compio returns ownership via BufResult, so we hand it back in on every read.
@@ -241,6 +247,7 @@ fn worker_thread(worker_id: usize, rx: Receiver<WorkerCommand>) {
                     stream,
                     subscriptions,
                     cipher,
+                    max_frame_size,
                 }) => {
                     debug!("[Worker {}] Adding subscriber {}", worker_id, id);
 
@@ -256,6 +263,7 @@ fn worker_thread(worker_id: usize, rx: Receiver<WorkerCommand>) {
                         read_half,
                         sub_state,
                         reader_cipher,
+                        max_frame_size,
                     ))
                     .detach();
 
@@ -495,6 +503,7 @@ impl PubSocket {
                 stream,
                 subscriptions,
                 cipher,
+                max_frame_size: self.options.max_msg_size,
             })
             .await
             .map_err(|e| io::Error::other(format!("Failed to send to worker: {}", e)))?;
