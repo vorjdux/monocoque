@@ -26,9 +26,9 @@ setup excluded), reported as the median of 100 samples.
 Synchronous (non-pipelined) DEALER/ROUTER throughput is about 120k to 133k msg/s
 for monocoque versus about 34k msg/s for rust-zmq, roughly 4x faster.
 
-IPC (Unix domain sockets) runs about 35% faster than TCP loopback for local
-communication. Latency is 4.8 to 5.1μs versus 7.4 to 8.0μs, and throughput is
-26% to 39% higher.
+IPC (Unix domain sockets) runs faster than TCP loopback for local
+communication. Latency is 4.8 to 5.1μs versus 7.4 to 8.0μs (about 35% lower),
+and throughput is roughly 25% to 35% higher.
 
 Run the benchmarks: `cargo bench --features zmq` from the `monocoque/` directory.
 

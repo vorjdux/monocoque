@@ -1093,9 +1093,10 @@ mod tests {
     }
 
     fn nonblocking_options() -> SocketOptions {
-        let mut options = SocketOptions::default();
-        options.send_timeout = Some(std::time::Duration::ZERO);
-        options
+        SocketOptions {
+            send_timeout: Some(std::time::Duration::ZERO),
+            ..SocketOptions::default()
+        }
     }
 
     fn socket_with_payload(
