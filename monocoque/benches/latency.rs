@@ -134,14 +134,11 @@ fn zmq_req_rep_latency(c: &mut Criterion) {
                 rep.bind("tcp://127.0.0.1:*").unwrap();
                 let endpoint = rep.get_last_endpoint().unwrap().unwrap();
 
-                std::thread::spawn(move || loop {
-                    match rep.recv_bytes(0) {
-                        Ok(msg) => {
-                            if rep.send(&msg, 0).is_err() {
-                                break;
-                            }
+                std::thread::spawn(move || {
+                    while let Ok(msg) = rep.recv_bytes(0) {
+                        if rep.send(&msg, 0).is_err() {
+                            break;
                         }
-                        Err(_) => break,
                     }
                 });
 

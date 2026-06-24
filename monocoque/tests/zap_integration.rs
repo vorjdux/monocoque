@@ -39,7 +39,7 @@ async fn test_plain_zap_success() -> io::Result<()> {
             Some(Duration::from_secs(2)),
         )
         .await
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| io::Error::other(e.to_string()))?;
 
         Ok::<(), io::Error>(())
     });
@@ -54,7 +54,7 @@ async fn test_plain_zap_success() -> io::Result<()> {
         Some(Duration::from_secs(2)),
     )
     .await
-    .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+    .map_err(|e| io::Error::other(e.to_string()))?;
 
     server_task.await?;
 

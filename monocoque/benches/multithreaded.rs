@@ -104,7 +104,6 @@ fn monocoque_multithreaded_dealers(c: &mut Criterion) {
                         // Spawn N dealer threads, each with its own runtime
                         let mut dealer_handles = Vec::new();
                         for _i in 0..num_threads {
-                            let server_addr = server_addr;
                             let payload = payload.clone();
 
                             let handle = std::thread::spawn(move || {

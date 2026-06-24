@@ -61,7 +61,6 @@ fn monocoque_pubsub_fanout(c: &mut Criterion) {
                         // Start N subscribers
                         let mut sub_tasks = Vec::new();
                         for _i in 0..num_subs {
-                            let server_addr = server_addr;
                             let task = compio::runtime::spawn(async move {
                                 let stream =
                                     compio::net::TcpStream::connect(server_addr).await.unwrap();

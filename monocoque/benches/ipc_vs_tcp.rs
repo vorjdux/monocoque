@@ -274,7 +274,11 @@ fn monocoque_ipc_throughput(c: &mut Criterion) {
     for &size in MESSAGE_SIZES {
         let payload = Bytes::from(vec![0u8; size]);
         // Use a size-specific socket path to avoid conflicts between benchmark sizes.
-        let socket_path = format!("/tmp/monocoque_bench_tp_{}_{}.sock", std::process::id(), size);
+        let socket_path = format!(
+            "/tmp/monocoque_bench_tp_{}_{}.sock",
+            std::process::id(),
+            size
+        );
 
         group.bench_with_input(
             BenchmarkId::from_parameter(size),

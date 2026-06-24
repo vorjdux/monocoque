@@ -3,7 +3,6 @@
 //! Shows how to use monocoque sockets with futures ecosystem tools
 //! like StreamExt and SinkExt.
 
-
 // Note: This example requires implementing RecvSocket and SendSocket traits
 // for the socket types. This is a demonstration of the API design.
 

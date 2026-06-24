@@ -29,9 +29,7 @@
 use bytes::Bytes;
 use compio::net::TcpListener;
 use monocoque::zmq::{RepSocket, ReqSocket, SocketOptions};
-use monocoque_zmtp::security::curve::{
-    CurveKeyPair, CurveSecretKey, CURVE_KEY_SIZE,
-};
+use monocoque_zmtp::security::curve::{CurveKeyPair, CurveSecretKey, CURVE_KEY_SIZE};
 use std::env;
 use std::time::Duration;
 use tracing::{error, info};

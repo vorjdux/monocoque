@@ -31,15 +31,10 @@ async fn main() -> std::io::Result<()> {
             let mut work_rx = PullSocket::connect("127.0.0.1:5557").await.unwrap();
             let mut result_tx = PushSocket::connect("127.0.0.1:5558").await.unwrap();
             println!("Worker {} ready", i);
-            loop {
-                match work_rx.recv().await {
-                    Ok(Some(msg)) => {
-                        let task = String::from_utf8_lossy(&msg[0]);
-                        let result = format!("worker-{} done: {}", i, task);
-                        result_tx.send(vec![Bytes::from(result)]).await.unwrap();
-                    }
-                    _ => break,
-                }
+            while let Ok(Some(msg)) = work_rx.recv().await {
+                let task = String::from_utf8_lossy(&msg[0]);
+                let result = format!("worker-{} done: {}", i, task);
+                result_tx.send(vec![Bytes::from(result)]).await.unwrap();
             }
         })
         .detach();

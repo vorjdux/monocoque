@@ -4,7 +4,6 @@
 //!
 //! This demonstrates how feature-gated protocols keep dependencies minimal.
 
-
 // ============================================================================
 // Style 1: Explicit protocol namespace (recommended)
 // ============================================================================

@@ -31,8 +31,10 @@ async fn test_req_strict_send_send_fails() -> io::Result<()> {
 
     // Create REQ socket with STRICT mode (req_relaxed = false, which is default)
     let stream = compio::net::TcpStream::connect(server_addr).await?;
-    let mut options = SocketOptions::default();
-    options.req_relaxed = false; // Explicit strict mode
+    let options = SocketOptions {
+        req_relaxed: false,
+        ..Default::default()
+    };
     let mut req_socket = ReqSocket::with_options(stream, options).await?;
 
     // First send should work
@@ -126,8 +128,10 @@ async fn test_req_relaxed_send_send_succeeds() -> io::Result<()> {
     compio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     let stream = compio::net::TcpStream::connect(server_addr).await?;
-    let mut options = SocketOptions::default();
-    options.req_relaxed = true;
+    let options = SocketOptions {
+        req_relaxed: true,
+        ..Default::default()
+    };
     let mut req_socket = ReqSocket::with_options(stream, options).await?;
 
     // In relaxed mode, the strict state check is skipped.
@@ -212,8 +216,10 @@ async fn test_req_correlation_mode() -> io::Result<()> {
 
     // Create REQ socket with correlation enabled
     let stream = compio::net::TcpStream::connect(server_addr).await?;
-    let mut options = SocketOptions::default();
-    options.req_correlate = true; // Enable correlation
+    let options = SocketOptions {
+        req_correlate: true,
+        ..Default::default()
+    };
     let mut req_socket = ReqSocket::with_options(stream, options).await?;
 
     // Send request - correlation ID will be prepended automatically

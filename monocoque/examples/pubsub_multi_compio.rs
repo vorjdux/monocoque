@@ -161,15 +161,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::thread::sleep(Duration::from_millis(50));
 
     // Now spawn subscriber tasks (they will connect quickly)
-    let sub1_handle = compio::runtime::spawn({
-        let port = port;
-        async move { subscriber_task("SUB1", port, "news.tech", 5).await }
-    });
+    let sub1_handle =
+        compio::runtime::spawn(async move { subscriber_task("SUB1", port, "news.tech", 5).await });
 
-    let sub2_handle = compio::runtime::spawn({
-        let port = port;
-        async move { subscriber_task("SUB2", port, "news.finance", 5).await }
-    });
+    let sub2_handle =
+        compio::runtime::spawn(
+            async move { subscriber_task("SUB2", port, "news.finance", 5).await },
+        );
 
     // Wait for publisher to complete
     let pub_result = pub_handle.await;
