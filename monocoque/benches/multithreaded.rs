@@ -31,6 +31,7 @@ const BATCH_SIZE: usize = 100; // Process in batches to avoid deadlock
 /// Benchmark multi-threaded DEALER clients against single ROUTER server
 ///
 /// This tests horizontal scalability and lock-free architecture.
+#[allow(dead_code)]
 fn monocoque_multithreaded_dealers(c: &mut Criterion) {
     let mut group = c.benchmark_group("multithreaded/monocoque/dealers");
     group.measurement_time(Duration::from_secs(20));
@@ -103,7 +104,6 @@ fn monocoque_multithreaded_dealers(c: &mut Criterion) {
                         // Spawn N dealer threads, each with its own runtime
                         let mut dealer_handles = Vec::new();
                         for _i in 0..num_threads {
-                            let server_addr = server_addr;
                             let payload = payload.clone();
 
                             let handle = std::thread::spawn(move || {
@@ -251,6 +251,7 @@ fn monocoque_multithreaded_independent_pairs(c: &mut Criterion) {
 /// Benchmark CPU core utilization efficiency
 ///
 /// Measures how efficiently threads utilize CPU cores (msg/sec per core).
+#[allow(dead_code)]
 fn monocoque_core_efficiency(c: &mut Criterion) {
     let mut group = c.benchmark_group("multithreaded/monocoque/core_efficiency");
     group.measurement_time(Duration::from_secs(20));

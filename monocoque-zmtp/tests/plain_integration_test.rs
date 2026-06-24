@@ -16,13 +16,13 @@ fn test_plain_auth_options_configuration() {
         .with_plain_server(true)
         .with_recv_timeout(Duration::from_secs(5));
 
-    assert_eq!(server_options.plain_server, true);
+    assert!(server_options.plain_server);
     assert!(server_options.plain_username.is_none());
     assert!(server_options.plain_password.is_none());
 
     let client_options = SocketOptions::new().with_plain_credentials("testuser", "testpass");
 
-    assert_eq!(client_options.plain_server, false);
+    assert!(!client_options.plain_server);
     assert_eq!(client_options.plain_username, Some("testuser".to_string()));
     assert_eq!(client_options.plain_password, Some("testpass".to_string()));
 }

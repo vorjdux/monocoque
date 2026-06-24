@@ -33,7 +33,6 @@ use bytes::Bytes;
 use monocoque::zmq::prelude::*;
 use std::io;
 use tracing::{info, Level};
-use tracing_subscriber;
 
 #[compio::main]
 async fn main() -> io::Result<()> {
@@ -50,7 +49,7 @@ async fn main() -> io::Result<()> {
     info!("");
 
     // Dynamically subscribe to different topics over time
-    let subscription_plan = vec![
+    let subscription_plan = [
         (2, "events.", "Subscribing to all events"),
         (4, "alerts.", "Adding alerts subscription"),
         (6, "events.", "Unsubscribing from events"),

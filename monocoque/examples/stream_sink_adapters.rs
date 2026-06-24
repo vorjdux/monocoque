@@ -3,12 +3,6 @@
 //! Shows how to use monocoque sockets with futures ecosystem tools
 //! like StreamExt and SinkExt.
 
-use bytes::Bytes;
-use futures::{SinkExt, StreamExt};
-use monocoque_zmtp::adapters::{SocketSink, SocketStream};
-use monocoque_zmtp::{DealerSocket, RouterSocket};
-use std::time::Duration;
-
 // Note: This example requires implementing RecvSocket and SendSocket traits
 // for the socket types. This is a demonstration of the API design.
 

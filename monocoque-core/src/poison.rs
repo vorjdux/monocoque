@@ -165,10 +165,9 @@ mod tests {
     fn test_early_drop() {
         let mut poisoned = false;
         {
-            let guard = PoisonGuard::new(&mut poisoned);
-            // Simulate cancelled operation - drop without disarm
-            drop(guard);
-            // Can only check after guard is dropped
+            let _guard = PoisonGuard::new(&mut poisoned);
+            // Simulate a cancelled operation: the guard drops at the end of this
+            // scope without disarm, so the flag stays poisoned.
         }
         assert!(poisoned, "Should remain poisoned on early drop");
     }

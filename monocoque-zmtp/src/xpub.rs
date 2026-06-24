@@ -216,7 +216,10 @@ impl XPubSocket {
                         stream,
                         subscriptions: SubscriptionTrie::new(),
                         recv_buf: monocoque_core::buffer::SegmentedBuffer::new(),
-                        decoder: crate::codec::ZmtpDecoder::new(),
+                        decoder: self.options.max_msg_size.map_or_else(
+                            crate::codec::ZmtpDecoder::new,
+                            crate::codec::ZmtpDecoder::with_max_frame_size,
+                        ),
                         curve_cipher,
                     },
                 );
@@ -646,6 +649,25 @@ impl fmt::Debug for XPubSocket {
     }
 }
 
+// Implement Socket trait for XPubSocket (non-generic)
+#[async_trait::async_trait(?Send)]
+impl crate::Socket for XPubSocket {
+    async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
+        self.send(msg).await
+    }
+
+    async fn recv(&mut self) -> io::Result<Option<Vec<Bytes>>> {
+        // XPUB receives subscription events
+        self.recv_subscription()
+            .await
+            .map(|opt| opt.map(|event| vec![event.to_message()]))
+    }
+
+    fn socket_type(&self) -> SocketType {
+        SocketType::Xpub
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -750,24 +772,5 @@ mod tests {
 
         assert_eq!(msg[0], Bytes::from("weather"));
         assert_eq!(msg[1], Bytes::from("sunny"));
-    }
-}
-
-// Implement Socket trait for XPubSocket (non-generic)
-#[async_trait::async_trait(?Send)]
-impl crate::Socket for XPubSocket {
-    async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
-        self.send(msg).await
-    }
-
-    async fn recv(&mut self) -> io::Result<Option<Vec<Bytes>>> {
-        // XPUB receives subscription events
-        self.recv_subscription()
-            .await
-            .map(|opt| opt.map(|event| vec![event.to_message()]))
-    }
-
-    fn socket_type(&self) -> SocketType {
-        SocketType::Xpub
     }
 }

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.1.1 - 2026-06-24
+
+### 🔒 Security
+
+- Raised the `bytes` dependency floor to 1.11.1 to stay off the versions affected by RUSTSEC-2026-0007 (`BytesMut::reserve` integer overflow)
+- `max_msg_size` is now enforced on the PUB subscription reader, the XPUB subscriber decoder, and `ZmtpSession`, which previously fell back to the 64 MB default and ignored a custom limit. Added `ZmtpSession::with_max_frame_size` and `ZmtpSession::new_active_with_max_frame_size`
+
 ### ✨ New Features
 
 #### STREAM Socket (raw TCP bridging)
@@ -24,6 +31,7 @@
 
 ### 🐛 Bug Fixes
 
+- Fixed ephemeral-port exhaustion in the latency benchmarks that panicked with `AddrNotAvailable`; the REQ/REP and IPC benches now reuse one connection per measurement batch and time only the round-trips
 - Fixed `compio::time::sleep` hanging after ZMTP handshake timeouts — replaced with `std::thread::sleep` in reconnect backoff to avoid residual io_uring timer state
 - Fixed escaped-quote syntax errors (`\"`) in doc-comment code blocks in `req.rs` and `router.rs`
 - Fixed bare URL rustdoc warnings in `security/zap.rs` and `security/curve.rs`

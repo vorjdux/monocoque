@@ -1,6 +1,6 @@
 [package]
 name = "monocoque-fuzz"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT"
 authors = ["Matheus Santos <vorj.dux@gmail.com>"]
@@ -14,7 +14,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 monocoque-zmtp = { path = "../monocoque-zmtp", package = "monocoque-rs-zmtp" }
 monocoque-core = { path = "../monocoque-core", package = "monocoque-rs-core" }
-bytes = "1.5"
+bytes = "1.11.1"
 futures = "0.3"
 compio = "0.13"
 

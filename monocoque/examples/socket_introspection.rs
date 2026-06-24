@@ -12,7 +12,7 @@
 //! ```
 
 use bytes::Bytes;
-use monocoque::zmq::{DealerSocket, RouterSocket, SocketOptions};
+use monocoque::zmq::{DealerSocket, SocketOptions};
 use std::time::Duration;
 
 #[compio::main]
@@ -52,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 4. Create socket with options
     println!("\n## Socket with Custom Options");
-    let mut router_opts = SocketOptions::default()
+    let router_opts = SocketOptions::default()
         .with_routing_id(Bytes::from_static(b"my-router"))
         .with_router_mandatory(true)
         .with_conflate(false);

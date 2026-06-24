@@ -36,7 +36,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let counter = task_counter.clone();
                 compio::runtime::spawn(async move {
                     handle_worker(stream, counter).await;
-                });
+                })
+                .detach();
             }
             Err(e) => {
                 error!("Accept error: {e}");

@@ -5,7 +5,7 @@ exclude = ["monocoque-fuzz"]
 default-members = ["monocoque"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT"
 authors = ["Matheus Santos <vorj.dux@gmail.com>"]
@@ -14,7 +14,8 @@ rust-version = "1.85"
 
 [workspace.dependencies]
 # Core dependencies
-bytes = "1.5"
+# 1.11.1 is the security floor for RUSTSEC-2026-0007 (BytesMut::reserve overflow).
+bytes = "1.11.1"
 compio = { version = "0.10", features = ["runtime", "macros", "time", "bytes"] }
 flume = "0.11"
 futures = "0.3"

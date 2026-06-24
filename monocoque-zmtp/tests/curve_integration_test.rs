@@ -34,7 +34,7 @@ fn test_curve_socket_options() {
         .with_curve_server(true)
         .with_curve_keypair(*keypair.public.as_bytes(), *keypair.public.as_bytes());
 
-    assert_eq!(server_options.curve_server, true);
+    assert!(server_options.curve_server);
     assert!(server_options.curve_publickey.is_some());
 
     // Client configuration
@@ -46,7 +46,7 @@ fn test_curve_socket_options() {
             *client_keypair.public.as_bytes(),
         );
 
-    assert_eq!(client_options.curve_server, false);
+    assert!(!client_options.curve_server);
     assert_eq!(
         client_options.curve_serverkey,
         Some(*keypair.public.as_bytes())

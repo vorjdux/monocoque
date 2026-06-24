@@ -16,7 +16,7 @@
 //! Run this example and use another terminal to send control commands.
 
 use bytes::Bytes;
-use monocoque::zmq::proxy::{proxy_steerable, ProxyCommand};
+use monocoque::zmq::proxy::proxy_steerable;
 use monocoque::zmq::{DealerSocket, ReqSocket, RouterSocket};
 use monocoque_zmtp::pair::PairSocket;
 use std::time::Duration;
@@ -200,9 +200,10 @@ async fn main() -> std::io::Result<()> {
     compio::runtime::time::sleep(Duration::from_millis(500)).await;
 
     // Start client (sends 10 requests)
-    let _ = compio::runtime::spawn(async {
+    compio::runtime::spawn(async {
         let _ = client(1, 10).await;
-    });
+    })
+    .detach();
 
     // Start controller (sends commands to proxy)
     let controller_task = compio::runtime::spawn(async { controller().await });

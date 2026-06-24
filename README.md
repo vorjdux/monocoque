@@ -32,15 +32,19 @@ The name comes from Formula 1 engineering, where the monocoque chassis achieves 
 
 ## Performance
 
-Benchmarked against rust-zmq (FFI bindings to libzmq):
+Benchmarked against rust-zmq (FFI bindings to libzmq). REQ/REP round-trip
+latency on loopback TCP (Intel Core i7-1355U, Linux 6.17, release build):
 
 | Message size | Monocoque | rust-zmq | Improvement |
 |---|---|---|---|
-| 64B | 21μs | 31μs | 32% faster |
-| 256B | 22μs | 31μs | 29% faster |
-| 1024B | 22μs | 33μs | 31% faster |
+| 64B | 7.3μs | 25.9μs | 72% faster |
+| 256B | 7.3μs | 27.8μs | 74% faster |
+| 1024B | 7.5μs | 25.6μs | 71% faster |
 
-Throughput with the batching API: 2M+ msg/sec. IPC is 7-10% faster than TCP loopback for local communication.
+Throughput with the batching API reaches 2.5M+ msg/sec for small messages
+(2.97M at 64B, 1.23M at 1KB). IPC is about 35% faster than TCP loopback for
+local communication. See [docs/performance.md](docs/performance.md) for the
+full breakdown.
 
 ## Quick Start
 

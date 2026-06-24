@@ -182,12 +182,7 @@ fn test_dealer_hwm_stress_no_deadlock() {
                         let mut router = monocoque_zmtp::router::RouterSocket::from_tcp(stream)
                             .await
                             .unwrap();
-                        loop {
-                            match router.recv().await {
-                                Ok(Some(_)) => {}
-                                _ => break,
-                            }
-                        }
+                        while let Ok(Some(_)) = router.recv().await {}
                     });
                     tasks.push(task);
                 }

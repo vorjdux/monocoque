@@ -53,60 +53,66 @@ fn monocoque_tcp_latency(c: &mut Criterion) {
             BenchmarkId::new("round_trip", format!("{}B", size)),
             &size,
             |b, _| {
-                b.iter_batched(
-                    || {
-                        rt.block_on(async {
-                            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-                            let server_addr = listener.local_addr().unwrap();
+                // Set up a single connection per measurement batch and reuse it for
+                // all `iters` round-trips. Reconnecting per iteration churned through
+                // ephemeral ports (each closed socket lingers in TIME_WAIT), which
+                // eventually exhausted them and panicked with AddrNotAvailable.
+                b.iter_custom(|iters| {
+                    let payload = payload.clone();
+                    rt.block_on(async move {
+                        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                        let server_addr = listener.local_addr().unwrap();
 
-                            let server_task = compio::runtime::spawn(async move {
-                                let (stream, _) = listener.accept().await.unwrap();
-                                let mut rep = RepSocket::from_tcp_with_options(
-                                    stream,
-                                    SocketOptions::default().with_buffer_sizes(4096, 4096),
-                                )
-                                .await
-                                .unwrap();
-
-                                loop {
-                                    if let Ok(Some(msg)) = rep.recv().await {
-                                        if rep.send(msg).await.is_err() {
-                                            break;
-                                        }
-                                    } else {
-                                        break;
-                                    }
-                                }
-                            });
-
-                            let stream =
-                                compio::net::TcpStream::connect(server_addr).await.unwrap();
-                            let mut req = ReqSocket::from_tcp_with_options(
+                        // Server echoes warmup + measured messages, then exits cleanly.
+                        let total_msgs = WARMUP_ROUNDS as u64 + iters;
+                        let server_task = compio::runtime::spawn(async move {
+                            let (stream, _) = listener.accept().await.unwrap();
+                            let mut rep = RepSocket::from_tcp_with_options(
                                 stream,
                                 SocketOptions::default().with_buffer_sizes(4096, 4096),
                             )
                             .await
                             .unwrap();
 
-                            // Warmup
-                            for _ in 0..WARMUP_ROUNDS {
-                                req.send(vec![payload.clone()]).await.unwrap();
-                                let _ = req.recv().await.unwrap();
+                            for _ in 0..total_msgs {
+                                if let Ok(Some(msg)) = rep.recv().await {
+                                    if rep.send(msg).await.is_err() {
+                                        break;
+                                    }
+                                } else {
+                                    break;
+                                }
                             }
+                        });
 
-                            (req, server_task)
-                        })
-                    },
-                    |(mut req, server_task)| {
-                        rt.block_on(async {
+                        let stream = compio::net::TcpStream::connect(server_addr).await.unwrap();
+                        let mut req = ReqSocket::from_tcp_with_options(
+                            stream,
+                            SocketOptions::default().with_buffer_sizes(4096, 4096),
+                        )
+                        .await
+                        .unwrap();
+
+                        // Warmup (not timed)
+                        for _ in 0..WARMUP_ROUNDS {
+                            req.send(vec![payload.clone()]).await.unwrap();
+                            let _ = req.recv().await.unwrap();
+                        }
+
+                        // MEASURE: round-trips over the persistent connection
+                        let t0 = std::time::Instant::now();
+                        for _ in 0..iters {
                             req.send(vec![black_box(payload.clone())]).await.unwrap();
                             let _ = req.recv().await.unwrap();
-                        });
+                        }
+                        let total = t0.elapsed();
+
+                        // Teardown
                         drop(req);
-                        rt.block_on(server_task);
-                    },
-                    criterion::BatchSize::PerIteration,
-                );
+                        server_task.await;
+                        total
+                    })
+                });
             },
         );
     }
@@ -120,77 +126,85 @@ fn monocoque_ipc_latency(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(10));
     group.sample_size(100);
 
-    let rt = compio::runtime::Runtime::new().unwrap();
-
     for &size in MESSAGE_SIZES {
         let payload = Bytes::from(vec![0u8; size]);
+
+        // Use a size-specific socket path to avoid conflicts between benchmark sizes.
+        let socket_path = format!("/tmp/monocoque_bench_{}_{}.sock", std::process::id(), size);
 
         group.bench_with_input(
             BenchmarkId::new("round_trip", format!("{}B", size)),
             &size,
             |b, _| {
-                b.iter_batched(
-                    || {
-                        rt.block_on(async {
-                            let socket_path = format!("/tmp/monocoque_bench_{}.sock", std::process::id());
+                // Fresh runtime per size avoids accumulated io_uring state between sizes.
+                let rt = compio::runtime::Runtime::new().unwrap();
+                // Set up one connection per measurement batch and reuse it for all
+                // `iters` round-trips, timing only the round-trips. This mirrors the
+                // tcp_latency methodology above so IPC and TCP latency are directly
+                // comparable; the previous per-iter fresh-socket+warmup approach
+                // measured connection setup overhead, not steady-state latency.
+                b.iter_custom(|iters| {
+                    let socket_path = socket_path.clone();
+                    let payload = payload.clone();
+                    rt.block_on(async move {
+                        let _ = std::fs::remove_file(&socket_path);
+                        let listener = UnixListener::bind(&socket_path).await.unwrap();
 
-                            // Clean up any existing socket
-                            let _ = std::fs::remove_file(&socket_path);
-
-                            let listener = UnixListener::bind(&socket_path).await.unwrap();
-
-                            let server_task = compio::runtime::spawn({
-                                let socket_path = socket_path.clone();
-                                async move {
-                                    let (stream, _) = listener.accept().await.unwrap();
-                                    let mut rep = RepSocket::<compio::net::UnixStream>::from_unix_stream_with_options(
-                                        stream,
-                                        SocketOptions::default().with_buffer_sizes(4096, 4096),
-                                    )
-                                    .await
-                                    .unwrap();
-
-                                    loop {
-                                        if let Ok(Some(msg)) = rep.recv().await {
-                                            if rep.send(msg).await.is_err() {
-                                                break;
-                                            }
-                                        } else {
+                        // Server echoes warmup + measured messages, then exits cleanly.
+                        let total_msgs = WARMUP_ROUNDS as u64 + iters;
+                        let server_task = compio::runtime::spawn({
+                            let socket_path = socket_path.clone();
+                            async move {
+                                let (stream, _) = listener.accept().await.unwrap();
+                                let mut rep = RepSocket::<compio::net::UnixStream>::from_unix_stream_with_options(
+                                    stream,
+                                    SocketOptions::default().with_buffer_sizes(4096, 4096),
+                                )
+                                .await
+                                .unwrap();
+                                for _ in 0..total_msgs {
+                                    if let Ok(Some(msg)) = rep.recv().await {
+                                        if rep.send(msg).await.is_err() {
                                             break;
                                         }
+                                    } else {
+                                        break;
                                     }
-                                    let _ = std::fs::remove_file(&socket_path);
                                 }
-                            });
-
-                            // Wait for socket to be ready
-                            compio::time::sleep(Duration::from_millis(10)).await;
-
-                            let stream = compio::net::UnixStream::connect(&socket_path).await.unwrap();
-                            let mut req =
-                                ReqSocket::<compio::net::UnixStream>::from_unix_stream_with_options(stream, SocketOptions::default().with_buffer_sizes(4096, 4096))
-                                    .await
-                                    .unwrap();
-
-                            // Warmup
-                            for _ in 0..WARMUP_ROUNDS {
-                                req.send(vec![payload.clone()]).await.unwrap();
-                                let _ = req.recv().await.unwrap();
+                                let _ = std::fs::remove_file(&socket_path);
                             }
+                        });
 
-                            (req, server_task, socket_path)
-                        })
-                    },
-                    |(mut req, server_task, _socket_path)| {
-                        rt.block_on(async {
+                        compio::time::sleep(Duration::from_millis(5)).await;
+
+                        let stream = compio::net::UnixStream::connect(&socket_path).await.unwrap();
+                        let mut req = ReqSocket::<compio::net::UnixStream>::from_unix_stream_with_options(
+                            stream,
+                            SocketOptions::default().with_buffer_sizes(4096, 4096),
+                        )
+                        .await
+                        .unwrap();
+
+                        // Warmup (not timed)
+                        for _ in 0..WARMUP_ROUNDS {
+                            req.send(vec![payload.clone()]).await.unwrap();
+                            let _ = req.recv().await.unwrap();
+                        }
+
+                        // MEASURE: round-trips over the persistent connection
+                        let t0 = std::time::Instant::now();
+                        for _ in 0..iters {
                             req.send(vec![black_box(payload.clone())]).await.unwrap();
                             let _ = req.recv().await.unwrap();
-                        });
+                        }
+                        let total = t0.elapsed();
+
+                        // Teardown
                         drop(req);
-                        rt.block_on(server_task);
-                    },
-                    criterion::BatchSize::PerIteration,
-                );
+                        server_task.await;
+                        total
+                    })
+                });
             },
         );
     }
@@ -261,18 +275,26 @@ fn monocoque_ipc_throughput(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(15));
     group.sample_size(10);
 
-    let rt = compio::runtime::Runtime::new().unwrap();
-
     for &size in MESSAGE_SIZES {
         let payload = Bytes::from(vec![0u8; size]);
+        // Use a size-specific socket path to avoid conflicts between benchmark sizes.
+        let socket_path = format!(
+            "/tmp/monocoque_bench_tp_{}_{}.sock",
+            std::process::id(),
+            size
+        );
 
         group.bench_with_input(
             BenchmarkId::from_parameter(size),
             &size,
             |b, _| {
+                // Fresh runtime per size avoids accumulated io_uring state between sizes.
+                let rt = compio::runtime::Runtime::new().unwrap();
                 b.iter(|| {
-                    rt.block_on(async {
-                        let socket_path = format!("/tmp/monocoque_bench_{}.sock", std::process::id());
+                    let socket_path = socket_path.clone();
+                    let payload = payload.clone();
+                    rt.block_on(async move {
+                        let socket_path = socket_path;
 
                         // Clean up any existing socket
                         let _ = std::fs::remove_file(&socket_path);
