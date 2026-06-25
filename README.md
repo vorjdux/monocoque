@@ -32,19 +32,23 @@ The name comes from Formula 1 engineering, where the monocoque chassis achieves 
 
 ## Performance
 
-Benchmarked against rust-zmq (FFI bindings to libzmq). REQ/REP round-trip
-latency on loopback TCP (Intel Core i7-1355U, Linux 6.17, release build):
+Benchmarked against rust-zmq (FFI bindings to libzmq). Separate OS threads for
+sender and receiver, real loopback TCP, Linux 6.18, release build.
 
-| Message size | Monocoque | rust-zmq | Improvement |
+**PUSH/PULL throughput with write coalescing** (`with_write_coalescing(true)`):
+
+| Message size | monocoque | rust-zmq | Ratio |
 |---|---|---|---|
-| 64B | 7.3μs | 25.9μs | 72% faster |
-| 256B | 7.3μs | 27.8μs | 74% faster |
-| 1024B | 7.5μs | 25.6μs | 71% faster |
+| 64 B | **6.1 M msg/s** | 971 K msg/s | 6.3× faster |
+| 256 B | **3.5 M msg/s** | 699 K msg/s | 5.0× faster |
+| 1 KB | **1.4 M msg/s** | 455 K msg/s | 3.1× faster |
+| 4 KB | **391 K msg/s** | 168 K msg/s | 2.3× faster |
+| 16 KB | **113 K msg/s** | 71 K msg/s | 1.6× faster |
 
-Throughput with the batching API reaches 2.5M+ msg/sec for small messages
-(2.97M at 64B, 1.23M at 1KB). IPC is about 35% faster than TCP loopback for
-local communication. See [docs/performance.md](docs/performance.md) for the
-full breakdown.
+Default (eager) mode sends each message immediately and is suitable when latency
+matters more than throughput. IPC (Unix domain sockets) is ~2.4× faster than
+TCP loopback for same-host communication. See [docs/performance.md](docs/performance.md)
+for the full breakdown including latency numbers and tuning guidance.
 
 ## Quick Start
 
@@ -77,9 +81,27 @@ subscriber.subscribe(b"events").await?;
 let msg = subscriber.recv().await?;
 ```
 
-For high throughput, buffer messages and flush once:
+For high throughput, enable write coalescing or use the explicit batch API.
+
+By default each `send()` issues one kernel write per message. Write coalescing batches
+those writes into a 64 KB buffer and flushes them in a single syscall, which is where
+the large throughput gains in the table above come from. Because messages may sit in
+userspace until `flush()` is called, coalescing is opt-in: you decide exactly when the
+data goes out. See [docs/performance.md](docs/performance.md) for the full explanation
+and tuning guide.
 
 ```rust
+// Write coalescing: opt-in, requires flush() after each burst (PUSH/PULL)
+let mut push = PushSocket::connect_with_options(
+    "127.0.0.1:5555",
+    SocketOptions::default().with_write_coalescing(true),
+).await?;
+for msg in &batch {
+    push.send(vec![msg.clone()]).await?;
+}
+push.flush().await?;  // flush bytes that did not fill the 64 KB threshold
+
+// Explicit batch API: encode N messages then one write (DEALER/ROUTER)
 for msg in &batch {
     dealer.send_buffered(msg.clone())?;
 }

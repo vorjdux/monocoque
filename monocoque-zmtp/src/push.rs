@@ -80,17 +80,25 @@ where
     /// Messages are distributed in a round-robin fashion when multiple
     /// PULL sockets are connected (in a multi-connection scenario).
     ///
+    /// By default each call writes to the kernel immediately (eager mode, one
+    /// io_uring operation per message). For throughput-bound pipelines, enable write
+    /// coalescing via [`SocketOptions::with_write_coalescing`] and call
+    /// [`flush`](Self::flush) after the last send in each burst. In coalesced mode,
+    /// bytes may remain in userspace until the 64 KB threshold fills or `flush()` is
+    /// called explicitly.
+    ///
     /// # Errors
     ///
     /// Returns an error if the socket is poisoned, disconnected, or if the write fails.
     pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
         trace!("[PUSH] Sending {} frames", msg.len());
 
-        // Encode message into write_buf (with CURVE encryption if active)
-        self.base.encode_message_to_write_buf(&msg)?;
-
-        // Delegate to base for writing
-        self.base.write_from_buf().await?;
+        if self.base.options.write_coalescing {
+            self.base.send_coalesced(&msg).await?;
+        } else {
+            self.base.encode_message_to_write_buf(&msg)?;
+            self.base.write_from_buf().await?;
+        }
 
         // Check heartbeat: send PING if the connection has been idle too long
         if self.base.check_heartbeat()? {
@@ -99,6 +107,14 @@ where
 
         trace!("[PUSH] Message sent successfully");
         Ok(())
+    }
+
+    /// Flush any messages still buffered by write coalescing.
+    ///
+    /// Call this after the last `send()` in a burst when `write_coalescing` is
+    /// enabled to ensure all pending data is written to the kernel.
+    pub async fn flush(&mut self) -> io::Result<()> {
+        self.base.flush_send_buffer().await
     }
 
     /// Close the socket gracefully by shutting down the underlying stream.

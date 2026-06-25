@@ -406,6 +406,28 @@ pub struct SocketOptions {
     /// - `false` (default): Deliver messages matching subscriptions
     /// - `true`: Deliver messages NOT matching any subscription
     pub invert_matching: bool,
+
+    /// Write coalescing: batch multiple `send()` calls before writing to the kernel.
+    ///
+    /// When enabled, `send()` accumulates encoded messages in an internal buffer
+    /// and only flushes to the kernel when `write_coalesce_threshold` bytes have
+    /// accumulated or when `flush()` is called explicitly.
+    ///
+    /// - `false` (default): each `send()` writes immediately (lowest latency)
+    /// - `true`: messages are batched (higher throughput for small messages)
+    ///
+    /// Always call `flush()` after the last `send()` in a burst to ensure
+    /// all buffered data reaches the peer.
+    pub write_coalescing: bool,
+
+    /// Byte threshold at which the coalesce buffer is flushed automatically.
+    ///
+    /// Only relevant when `write_coalescing` is enabled. The internal send
+    /// buffer is written to the kernel as a single syscall once it reaches
+    /// this many bytes.
+    ///
+    /// - Default: 65536 (64 KB) — one typical TCP segment on loopback
+    pub write_coalesce_threshold: usize,
 }
 
 impl Default for SocketOptions {
@@ -468,6 +490,8 @@ impl Default for SocketOptions {
             stream_notify: true,
             xpub_nodrop: false,
             invert_matching: false,
+            write_coalescing: false,
+            write_coalesce_threshold: 65536,
         }
     }
 }
@@ -621,6 +645,22 @@ impl SocketOptions {
     /// Enable inverted topic matching (`ZMQ_INVERT_MATCHING`).
     pub const fn with_invert_matching(mut self, invert: bool) -> Self {
         self.invert_matching = invert;
+        self
+    }
+
+    /// Enable or disable write coalescing.
+    ///
+    /// When enabled, consecutive `send()` calls accumulate in an internal buffer
+    /// and are written to the kernel in one syscall, reducing per-message overhead
+    /// for small-message workloads.  Call `flush()` after the last send in a burst.
+    pub const fn with_write_coalescing(mut self, enabled: bool) -> Self {
+        self.write_coalescing = enabled;
+        self
+    }
+
+    /// Set the byte threshold at which the coalesce buffer flushes automatically.
+    pub const fn with_write_coalesce_threshold(mut self, threshold: usize) -> Self {
+        self.write_coalesce_threshold = threshold;
         self
     }
 

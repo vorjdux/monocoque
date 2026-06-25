@@ -1,265 +1,159 @@
-# Monocoque Performance Benchmarks
+# Monocoque Benchmark Suite
 
-Comprehensive performance benchmarks comparing Monocoque against rust-zmq (zmq crate, Rust FFI bindings to libzmq) and other Rust ZMQ implementations.
+Benchmarks comparing monocoque against rust-zmq (Rust FFI bindings to libzmq).
 
-## Objective
+All benchmarks run **sender and receiver on separate OS threads** with separate
+`compio` runtimes, so results reflect real kernel TCP/IPC round-trips. The timer
+lives on the receiver side for throughput tests. Both sides are given identical
+methodology — same number of operations per message, same warmup structure.
 
-**Outperform existing Rust ZMQ libraries** through:
+Hardware: Linux 6.18, release build.
 
--   Zero-copy message passing with `Bytes`
--   io_uring-based I/O (Linux only, requires kernel 5.6+)
--   Arena allocation for read buffers
--   Optimized subscription indexing (sorted Vec, cache-friendly)
--   Minimal overhead socket types
+---
 
-## Benchmark Suites
+## Measured Results
 
-### 1. Throughput (`cargo bench --bench throughput`)
+### Throughput — `cargo bench --bench throughput`
 
-**Measures**: Messages per second
+PUSH/PULL one-way pipeline, 10 000 messages per iteration.
 
-**Tests**:
+**monocoque (eager)** — default, one kernel write per `send()`:
 
--   REQ/REP throughput (64B to 16KB messages)
--   DEALER/ROUTER throughput (64B to 16KB messages)
--   Compares monocoque vs rust-zmq
+| Message size | msg/s |
+|---|---|
+| 64 B | 149 K |
+| 256 B | 146 K |
+| 1 KB | 131 K |
+| 4 KB | 122 K |
+| 16 KB | 109 K |
 
-**Target**: > 1M msg/sec for small messages
+**monocoque (coalesced)** — `with_write_coalescing(true)`, 64 KB flush threshold:
 
-### 2. Latency (`cargo bench --bench latency`)
+| Message size | msg/s | vs zmq |
+|---|---|---|
+| 64 B | 6.1 M | **6.3× faster** |
+| 256 B | 3.5 M | **5.0× faster** |
+| 1 KB | 1.4 M | **3.1× faster** |
+| 4 KB | 391 K | **2.3× faster** |
+| 16 KB | 113 K | **1.6× faster** |
 
-**Measures**: Round-trip time in microseconds
+**rust-zmq (libzmq)**:
 
-**Tests**:
+| Message size | msg/s |
+|---|---|
+| 64 B | 971 K |
+| 256 B | 699 K |
+| 1 KB | 455 K |
+| 4 KB | 168 K |
+| 16 KB | 71 K |
 
--   REQ/REP latency (8B to 4KB messages)
--   Connection establishment latency
--   Single message round-trip time
+---
 
-**Target**: < 10μs latency for local connections
+### Latency — `cargo bench --bench latency`
 
-### 3. Patterns (`cargo bench --bench patterns`)
+REQ/REP round-trip on TCP loopback. Includes socket teardown (TCP FIN + thread
+join). 1 000 warmup rounds per iteration (not measured).
 
-**Measures**: Pattern-specific performance
+| Message size | monocoque | rust-zmq | Improvement |
+|---|---|---|---|
+| 64 B | 322 µs | 507 µs | 37% lower |
+| 256 B | 262 µs | 500 µs | 48% lower |
+| 1 KB | 266 µs | 591 µs | 55% lower |
 
-**Tests**:
+Note: the per-iteration cost includes one TCP connection teardown. Steady-state
+latency on a persistent connection would be lower for both.
 
--   PUB/SUB fanout (1 → N subscribers)
--   Topic filtering efficiency
--   Subscription matching overhead
+---
 
-**Target**: Linear scaling with subscriber count
+### IPC vs TCP — `cargo bench --bench ipc_vs_tcp`
 
-## Running Benchmarks
+**Latency (REQ/REP, including teardown):**
 
-### Quick Start
+| Transport | 64 B | 256 B | 1 KB |
+|---|---|---|---|
+| TCP loopback | 322 µs | 249 µs | 260 µs |
+| IPC (Unix socket) | 248 µs | 248 µs | 241 µs |
+
+**Throughput (PUSH/PULL eager, 10 000 messages):**
+
+| Transport | 64 B | 256 B | 1 KB |
+|---|---|---|---|
+| TCP loopback | 150 K msg/s | 148 K msg/s | 132 K msg/s |
+| IPC | 357 K msg/s | 347 K msg/s | 329 K msg/s |
+
+IPC is ~2.4× faster than TCP loopback for throughput; latency advantage is
+smaller (7–23%) because teardown dominates the per-iteration measurement.
+
+---
+
+### Pipelined batch API — `cargo bench --bench pipelined_throughput`
+
+DEALER/ROUTER with `send_buffered() + flush()`, batches of 100, 10 000 total
+messages. This is a monocoque-only benchmark demonstrating the explicit batch API.
+
+| Message size | msg/s | Bandwidth |
+|---|---|---|
+| 64 B | 1.05 M | 64 MiB/s |
+| 256 B | 893 K | 218 MiB/s |
+| 1 KB | 535 K | 521 MiB/s |
+| 4 KB | 170 K | 664 MiB/s |
+
+---
+
+## Benchmark Methodology
+
+### Why these designs are fair
+
+**Separate OS threads**: both sides run on different threads with different
+`compio` runtimes. There is genuine TCP between them — messages pass through
+the kernel network stack and loopback device.
+
+**Same work per message**: zmq PUSH/PULL does one `send` / one `recv_bytes`
+per message. monocoque does one `send` / one `recv` per message. No artificial
+asymmetry.
+
+**No artificial sleeps**: the only pause in the zmq benchmark is a 5 ms sleep
+before connecting the PUSH socket to give the PULL socket time to register with
+the kernel. This is outside the timed loop.
+
+**Timer on receiver**: the elapsed time is measured by the PULL thread from
+first recv to last recv. This avoids counting sender overhead.
+
+**Warmup outside measurement**: connection setup and handshake happen before the
+timed loop.
+
+### What is not (yet) benchmarked
+
+- Steady-state latency on a **persistent connection** (no teardown) — would
+  show much lower numbers than the current per-connection latency benchmark
+- Multi-connection fanout (PUB → N SUB)
+- Concurrent senders (N PUSH → 1 PULL)
+
+---
+
+## Running the Benchmarks
 
 ```bash
-# Run all benchmarks
-cargo bench
+# Run all suites (takes ~15 minutes)
+cargo bench --features zmq
 
-# Run specific benchmark suite
-cargo bench --bench throughput
-cargo bench --bench latency
-cargo bench --bench patterns
+# Individual suites
+cargo bench --bench throughput --features zmq
+cargo bench --bench latency --features zmq
+cargo bench --bench ipc_vs_tcp --features zmq
+cargo bench --bench pipelined_throughput --features zmq
 
-# Run with filtering
-cargo bench throughput/monocoque  # Only monocoque tests
-cargo bench latency/rust_zmq      # Only rust-zmq tests
+# Filter to a specific case
+cargo bench --bench throughput --features zmq -- "throughput/monocoque/push_pull_coalesced"
+
+# Quick smoke-test (no timing, just checks nothing panics)
+cargo bench --bench throughput --features zmq --release -- --test
 ```
 
-### Optimal Configuration
-
-For accurate results:
-
-```bash
-# Build with full optimizations
-export RUSTFLAGS="-C target-cpu=native"
-
-# Run benchmarks in release mode (default)
-cargo bench --bench throughput
-
-# Save baseline for comparison
-cargo bench --bench throughput -- --save-baseline monocoque-v0.1
-
-# Compare against baseline
-cargo bench --bench throughput -- --baseline monocoque-v0.1
-```
-
-### System Configuration
-
-For stable, high-performance measurements:
+For stable numbers, avoid running other benchmarks in parallel and disable
+CPU frequency scaling if available:
 
 ```bash
-# Disable CPU frequency scaling (Linux)
 sudo cpupower frequency-set --governor performance
-
-# Set high priority for benchmarks
-sudo nice -n -20 cargo bench
-
-# Pin to specific CPU cores
-taskset -c 0,1 cargo bench --bench latency
+cargo bench --features zmq
 ```
-
-## Understanding Results
-
-### Output Format
-
-Criterion generates:
-
--   **HTML reports**: `target/criterion/report/index.html`
--   **CSV data**: `target/criterion/<benchmark>/*/estimates.json`
--   **Console output**: Summary statistics
-
-### Key Metrics
-
-**Throughput**:
-
--   Higher is better
--   Look for: msgs/sec, MB/sec
--   Compare: monocoque vs rust-zmq ratio
-
-**Latency**:
-
--   Lower is better
--   Look for: mean, median, p95, p99
--   Target: Sub-10μs for local connections
-
-**Patterns**:
-
--   Scaling characteristics
--   Look for: Linear vs sub-linear scaling
--   Verify: Optimization effectiveness
-
-### Interpreting Results
-
-```
-throughput/monocoque/req_rep/256B
-                        time:   [450.23 μs 452.67 μs 455.34 μs]
-                        thrpt:  [2.21 M msg/s]
-
-throughput/rust_zmq/req_rep/256B
-                        time:   [850.45 μs 853.12 μs 856.03 μs]
-                        thrpt:  [1.17 M msg/s]
-```
-
-**Analysis**: Monocoque is ~1.9x faster (2.21M vs 1.17M msg/s)
-
-## Benchmark Details
-
-### Message Sizes
-
--   **Small**: 8-64 bytes (typical control messages)
--   **Medium**: 256-1024 bytes (typical data messages)
--   **Large**: 4-16KB (bulk transfers)
-
-### Test Configurations
-
-**REQ/REP**:
-
--   Synchronous request/response
--   Measures round-trip latency
--   Single client ↔ server
-
-**DEALER/ROUTER**:
-
--   Asynchronous messaging
--   Load balancing potential
--   Identity-based routing
-
-**PUB/SUB**:
-
--   One-to-many broadcast
--   Topic-based filtering
--   Fanout scaling (1, 5, 10, 20, 50 subscribers)
-
-## Performance Targets
-
-Based on blueprint specifications:
-
-| Metric             | Target     | Measured | Status |
-| ------------------ | ---------- | -------- | ------ |
-| Throughput (small) | > 1M msg/s | TBD      | ⏳     |
-| Throughput (large) | > 500 MB/s | TBD      | ⏳     |
-| Latency (local)    | < 10μs     | TBD      | ⏳     |
-| PUB/SUB fanout     | Linear     | TBD      | ⏳     |
-
-## Optimizations Benchmarked
-
-### Zero-Copy
-
--   **Implementation**: All payloads use `Bytes` (refcounted)
--   **Benefit**: No memcpy for message routing
--   **Measure**: Compare same-size message throughput
-
-### io_uring
-
--   **Implementation**: Compio runtime with io_uring backend
--   **Benefit**: Reduced syscalls, batched I/O
--   **Measure**: Latency reduction vs blocking I/O
-
-### Arena Allocation
-
--   **Implementation**: 8KB slabs for read buffers
--   **Benefit**: Reduced allocator pressure
--   **Measure**: Throughput stability under load
-
-### Sorted Subscription Index
-
--   **Implementation**: Sorted `Vec<Bytes>` with early exit
--   **Benefit**: Cache-friendly, predictable branches
--   **Measure**: Topic filtering overhead
-
-### SmallVec Multipart
-
--   **Implementation**: Inline storage for 1-4 frames
--   **Benefit**: Zero heap allocations for typical messages
--   **Measure**: Multipart message throughput
-
-## Comparison Matrix
-
-| Feature      | Monocoque         | rust-zmq | Advantage |
-| ------------ | ----------------- | -------- | --------- |
-| I/O Model    | io_uring          | epoll    | Monocoque |
-| Memory       | Zero-copy (Bytes) | Memcpy   | Monocoque |
-| Allocation   | Arena             | General  | Monocoque |
-| Runtime      | Async (compio)    | Blocking | Monocoque |
-| Subscription | Sorted Vec        | HashMap  | Monocoque |
-| API          | Rust-native       | C FFI    | Monocoque |
-
-## Contributing Benchmarks
-
-### Adding New Benchmarks
-
-1. Create benchmark in `benches/`
-2. Add to `Cargo.toml` `[[bench]]` section
-3. Use criterion for statistical rigor
-4. Document expected performance characteristics
-
-### Benchmark Guidelines
-
--   **Warmup**: Run 100+ iterations before measuring
--   **Duration**: 10-15 seconds for stable results
--   **Samples**: 30-200 samples per benchmark
--   **Isolation**: Avoid cross-benchmark interference
--   **Repeatability**: Use fixed seeds, controlled environment
-
-## CI/CD Integration
-
-Benchmarks run automatically on:
-
--   Major commits to `main`
--   Pull requests (performance regression check)
--   Release tags (publish results)
-
-Results stored in: `bench_results/<commit>/`
-
-## References
-
--   [Criterion.rs Documentation](https://bheisler.github.io/criterion.rs/book/)
--   [ZeroMQ Benchmark Methodology](http://zeromq.org/results:perf)
--   [io_uring Performance Analysis](https://kernel.dk/io_uring.pdf)
-
-## License
-
-MIT - Same as Monocoque project

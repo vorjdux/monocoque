@@ -733,6 +733,31 @@ where
         Ok(())
     }
 
+    /// Encode `msg` into `send_buffer` and flush when the coalesce threshold is reached.
+    ///
+    /// This is the hot path used when `SocketOptions::write_coalescing` is enabled.
+    /// It does **not** touch `buffered_messages` (which is reserved for the explicit
+    /// `send_buffered` / `flush` batch API).  Callers must call `flush_send_buffer`
+    /// after the last message in a burst.
+    pub(crate) async fn send_coalesced(&mut self, msg: &[Bytes]) -> io::Result<()> {
+        use crate::codec::encode_multipart;
+        if let Some(ref mut cipher) = self.curve_cipher {
+            let last = msg.len().saturating_sub(1);
+            for (i, frame) in msg.iter().enumerate() {
+                let body = cipher
+                    .encrypt_frame(frame, i < last)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+                append_zmtp_cmd_frame(&mut self.send_buffer, &body);
+            }
+        } else {
+            encode_multipart(msg, &mut self.send_buffer);
+        }
+        if self.send_buffer.len() >= self.options.write_coalesce_threshold {
+            self.flush_send_buffer().await?;
+        }
+        Ok(())
+    }
+
     /// Decode the next frame from the receive buffer, handling CURVE decryption and PING/PONG.
     pub fn process_frame(&mut self) -> io::Result<FrameResult> {
         use crate::security::curve::CurveMessageCipher;
