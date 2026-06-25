@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+## 0.1.2 - 2026-06-25
+
+### ✨ New Features
+
+#### Write Coalescing for PUSH Sockets
+- Added `SocketOptions::with_write_coalescing(bool)`: when enabled, `send()` accumulates
+  encoded messages in a 64 KB userspace buffer instead of issuing one io_uring write per
+  message. A single `flush()` call drains the buffer in one syscall.
+- Added `SocketOptions::with_write_coalesce_threshold(usize)` to tune the flush threshold
+  (default 64 KB).
+- Added `PushSocket::flush()` to drain any remaining buffered bytes after the last send.
+- Coalesced mode is up to 6.3x faster than libzmq at 64 B messages and 5x faster at 256 B.
+  See `docs/performance.md` for the full comparison and design rationale.
+
+### 🔬 Benchmarks
+
+- Rewrote all benchmark suites so sender and receiver run on **separate OS threads** with
+  independent `compio` runtimes, ensuring real kernel TCP/IPC round-trips instead of
+  cooperative task switching within a single runtime.
+- Timer now lives on the receiver side (starts before first recv, stops after last) to
+  avoid including sender overhead in throughput measurements.
+- Switched throughput benchmarks from DEALER/ROUTER to PUSH/PULL one-way pipeline to
+  avoid measuring reply overhead.
+- Added `pipelined_throughput` benchmark for the explicit `send_buffered() / flush()` API.
+- All benchmark methodology and results documented in `monocoque/BENCHMARKS.md`.
+
+### 📚 Documentation
+
+- Rewrote `docs/performance.md` with real measured numbers from the honest benchmark suite,
+  a full write coalescing tuning guide, IPC vs TCP comparison, and a section explaining why
+  coalescing is opt-in rather than automatic.
+- Updated `README.md` performance table to show PUSH/PULL coalesced throughput numbers and
+  added an explanation of the eager vs coalesced tradeoff.
+- Updated `send()` and `flush()` docstrings in both the internal and public PUSH socket
+  implementations to explain delivery guarantees and when each mode is appropriate.
+
 ## 0.1.1 - 2026-06-24
 
 ### 🔒 Security
@@ -12,37 +48,37 @@
 ### ✨ New Features
 
 #### STREAM Socket (raw TCP bridging)
-- Added `StreamSocket` — accepts plain TCP connections without ZMTP handshake
+- Added `StreamSocket`: accepts plain TCP connections without ZMTP handshake
 - 3-frame message format: `[routing_id, empty, data]`
 - Connection/disconnect notifications with empty data frame
 - Per-peer routing via 8-byte unique IDs
 - Exported from `monocoque::zmq::StreamSocket` and `monocoque::zmq::prelude`
 
 #### DEALER Automatic Reconnection
-- `DealerSocket::recv_with_reconnect()` — receive with automatic reconnect on disconnect
-- `DealerSocket::send_with_reconnect()` — send with automatic reconnect on disconnect
+- `DealerSocket::recv_with_reconnect()`: receive with automatic reconnect on disconnect
+- `DealerSocket::send_with_reconnect()`: send with automatic reconnect on disconnect
 - Exponential backoff with configurable `max_reconnect_attempts`
 - `SocketOptions::with_max_reconnect_attempts(Option<u32>)` builder method
 
 #### PUB High Water Mark (HWM) Enforcement
-- Worker channels are now bounded by `send_hwm` — full channels drop messages instead of blocking
-- `PubSocket::drop_count()` — returns count of messages dropped due to HWM
+- Worker channels are now bounded by `send_hwm`; full channels drop messages instead of blocking
+- `PubSocket::drop_count()`: returns count of messages dropped due to HWM
 - Prevents unbounded memory growth under slow subscribers
 
 ### 🐛 Bug Fixes
 
 - Fixed ephemeral-port exhaustion in the latency benchmarks that panicked with `AddrNotAvailable`; the REQ/REP and IPC benches now reuse one connection per measurement batch and time only the round-trips
-- Fixed `compio::time::sleep` hanging after ZMTP handshake timeouts — replaced with `std::thread::sleep` in reconnect backoff to avoid residual io_uring timer state
+- Fixed `compio::time::sleep` hanging after ZMTP handshake timeouts, replaced with `std::thread::sleep` in reconnect backoff to avoid residual io_uring timer state
 - Fixed escaped-quote syntax errors (`\"`) in doc-comment code blocks in `req.rs` and `router.rs`
 - Fixed bare URL rustdoc warnings in `security/zap.rs` and `security/curve.rs`
 
 ### 📚 Documentation
 
-- New `docs/GETTING_STARTED.md` — install, REQ/REP hello world, PUB/SUB example
-- New `docs/ADR.md` — architecture decision records (io_uring, PUB worker pool, Bytes refcounting)
-- New `docs/PERFORMANCE_TUNING.md` — buffer sizing, worker count, TCP options, inproc guidance
-- Updated `docs/SECURITY_GUIDE.md` — end-to-end CURVE keygen and handshake example
-- Updated `docs/MIGRATION.md` — feature parity table and `zmq::Socket` method mapping
+- New `docs/GETTING_STARTED.md`: install, REQ/REP hello world, PUB/SUB example
+- New `docs/ADR.md`: architecture decision records (io_uring, PUB worker pool, Bytes refcounting)
+- New `docs/PERFORMANCE_TUNING.md`: buffer sizing, worker count, TCP options, inproc guidance
+- Updated `docs/SECURITY_GUIDE.md`: end-to-end CURVE keygen and handshake example
+- Updated `docs/MIGRATION.md`: feature parity table and `zmq::Socket` method mapping
 - Full rustdoc pass: zero warnings across all crates, all public items documented
 
 ---

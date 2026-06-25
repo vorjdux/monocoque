@@ -134,8 +134,24 @@ where
     }
 
     /// Send a message.
+    ///
+    /// By default each call writes to the kernel immediately (eager mode). For
+    /// throughput-bound pipelines, enable write coalescing via
+    /// [`SocketOptions::with_write_coalescing`] and call [`flush`](Self::flush) after
+    /// the last send in each burst. See `docs/performance.md` for measured numbers and
+    /// an explanation of when each mode is appropriate.
     pub async fn send(&mut self, msg: Vec<bytes::Bytes>) -> io::Result<()> {
         self.inner.send(msg).await
+    }
+
+    /// Flush any messages still buffered by write coalescing.
+    ///
+    /// Required after the last `send()` in a burst when `write_coalescing` is enabled.
+    /// In coalesced mode, bytes accumulate in a userspace buffer and are not guaranteed
+    /// to reach the peer until this is called (or the 64 KB threshold fills naturally).
+    /// Has no effect in eager mode (the default).
+    pub async fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush().await
     }
 
     /// Enable monitoring for this socket.
