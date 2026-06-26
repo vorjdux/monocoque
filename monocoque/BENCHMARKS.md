@@ -21,21 +21,21 @@ PUSH/PULL one-way pipeline, 10 000 messages per iteration.
 
 | Message size | msg/s |
 |---|---|
-| 64 B | 149 K |
-| 256 B | 146 K |
-| 1 KB | 131 K |
-| 4 KB | 122 K |
-| 16 KB | 109 K |
+| 64 B | 153 K |
+| 256 B | 150 K |
+| 1 KB | 133 K |
+| 4 KB | 126 K |
+| 16 KB | 111 K |
 
 **monocoque (coalesced)** — `with_write_coalescing(true)`, 64 KB flush threshold:
 
 | Message size | msg/s | vs zmq |
 |---|---|---|
-| 64 B | 6.1 M | **6.3× faster** |
-| 256 B | 3.5 M | **5.0× faster** |
-| 1 KB | 1.4 M | **3.1× faster** |
-| 4 KB | 391 K | **2.3× faster** |
-| 16 KB | 113 K | **1.6× faster** |
+| 64 B | 6.3 M | **6.5× faster** |
+| 256 B | 3.6 M | **5.2× faster** |
+| 1 KB | 1.5 M | **3.3× faster** |
+| 4 KB | 466 K | **2.8× faster** |
+| 16 KB | 120 K | **1.7× faster** |
 
 **rust-zmq (libzmq)**:
 
@@ -99,9 +99,9 @@ join). 1 000 warmup rounds per iteration (not measured).
 
 | Message size | monocoque | rust-zmq | Improvement |
 |---|---|---|---|
-| 64 B | 322 µs | 507 µs | 37% lower |
-| 256 B | 262 µs | 500 µs | 48% lower |
-| 1 KB | 266 µs | 591 µs | 55% lower |
+| 64 B | 214 µs | 379 µs | 44% lower |
+| 256 B | 210 µs | 379 µs | 45% lower |
+| 1 KB | 214 µs | 408 µs | 47% lower |
 
 Note: the per-iteration cost includes one TCP connection teardown. Steady-state
 latency on a persistent connection is ~75 µs for monocoque vs ~200 µs for libzmq.
@@ -136,10 +136,10 @@ messages. This is a monocoque-only benchmark demonstrating the explicit batch AP
 
 | Message size | msg/s | Bandwidth |
 |---|---|---|
-| 64 B | 1.05 M | 64 MiB/s |
-| 256 B | 893 K | 218 MiB/s |
-| 1 KB | 535 K | 521 MiB/s |
-| 4 KB | 170 K | 664 MiB/s |
+| 64 B | 1.24 M | 76 MiB/s |
+| 256 B | 1.04 M | 254 MiB/s |
+| 1 KB | 597 K | 583 MiB/s |
+| 4 KB | 210 K | 820 MiB/s |
 
 ---
 
