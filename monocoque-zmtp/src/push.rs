@@ -117,6 +117,36 @@ where
         self.base.flush_send_buffer().await
     }
 
+    /// Encode and send a batch of messages in a single kernel write.
+    ///
+    /// Encodes every message in `msgs` into the send buffer, then flushes once.
+    /// This gives the same kernel-call efficiency as write coalescing but with
+    /// explicit batch boundaries — no threshold check and no `flush()` required.
+    ///
+    /// Works independently of the `write_coalescing` option and can be mixed
+    /// with `send()` calls freely.
+    ///
+    /// Returns the number of messages sent.
+    pub async fn send_batch<I>(&mut self, msgs: I) -> io::Result<usize>
+    where
+        I: IntoIterator<Item = Vec<Bytes>>,
+    {
+        let mut count = 0;
+        for msg in msgs {
+            trace!("[PUSH] Buffering batch message {}", count);
+            self.base.encode_message_to_send_buf(&msg)?;
+            count += 1;
+        }
+        if count > 0 {
+            self.base.flush_send_buffer().await?;
+        }
+        if self.base.check_heartbeat()? {
+            self.base.flush_send_buffer().await?;
+        }
+        trace!("[PUSH] Batch of {} messages sent", count);
+        Ok(count)
+    }
+
     /// Close the socket gracefully by shutting down the underlying stream.
     pub async fn close(mut self) -> io::Result<()> {
         trace!("[PUSH] Closing socket");

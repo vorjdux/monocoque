@@ -81,6 +81,53 @@ where
         })
     }
 
+    /// Try to receive a message from the already-buffered input without doing a
+    /// kernel read.
+    ///
+    /// Decodes from bytes already present in the receive buffer. Returns
+    /// `Ok(None)` immediately when the buffer is empty rather than suspending.
+    /// Use this after `recv()` to drain all messages from a single read batch
+    /// before returning to the io_uring submission loop:
+    ///
+    /// ```rust,no_run
+    /// # async fn example(pull: &mut monocoque_zmtp::PullSocket) -> std::io::Result<()> {
+    /// // One kernel read may deliver many messages — drain them all before
+    /// // going back to the event loop.
+    /// if let Some(first) = pull.recv().await? {
+    ///     process(first);
+    ///     while let Some(msg) = pull.try_recv()? {
+    ///         process(msg);
+    ///     }
+    /// }
+    /// # fn process(_: Vec<bytes::Bytes>) {}
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// When a PING heartbeat command is decoded the corresponding PONG is
+    /// queued in the send buffer; the next `recv()` call flushes it. For
+    /// pure pipeline throughput benchmarks (where heartbeats are inactive) this
+    /// is never triggered.
+    pub fn try_recv(&mut self) -> io::Result<Option<Vec<Bytes>>> {
+        loop {
+            match self.base.process_frame()? {
+                crate::base::FrameResult::NeedMore => return Ok(None),
+                crate::base::FrameResult::CommandHandled => {
+                    // PONG or other response is already in send_buffer;
+                    // the next recv() call will flush it.
+                    continue;
+                }
+                crate::base::FrameResult::Data(more, payload) => {
+                    self.frames.push(payload);
+                    if !more {
+                        let msg: Vec<Bytes> = self.frames.drain(..).collect();
+                        return Ok(Some(msg));
+                    }
+                }
+            }
+        }
+    }
+
     /// Receive a message from a connected PUSH socket.
     ///
     /// When multiple PUSH sockets are connected, messages are received
