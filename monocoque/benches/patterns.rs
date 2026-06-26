@@ -38,7 +38,6 @@ fn monocoque_pubsub_fanout(c: &mut Criterion) {
                     // loop to stall for ~30 s after accept_subscriber() completes
                     // because a pending io_uring handshake timer blocks all timer
                     // processing until the 30 s handshake_timeout fires.
-                    let payload_pub = payload.clone();
                     let pub_handle = thread::spawn(move || {
                         let rt = compio::runtime::Runtime::new().unwrap();
                         rt.block_on(async move {
@@ -54,7 +53,7 @@ fn monocoque_pubsub_fanout(c: &mut Criterion) {
                             compio::time::sleep(Duration::from_millis(50)).await;
 
                             for _ in 0..MESSAGE_COUNT {
-                                pub_socket.send(vec![payload_pub.clone()]).await.ok();
+                                pub_socket.send(vec![payload.clone()]).await.ok();
                             }
 
                             // Keep socket alive while worker threads flush to TCP.
@@ -172,7 +171,6 @@ fn monocoque_topic_filtering(c: &mut Criterion) {
 
             // Same rationale as monocoque_pubsub_fanout: separate OS threads to
             // avoid the shared-runtime io_uring timer stall after accept_subscriber.
-            let payload_pub = payload.clone();
             let pub_handle = thread::spawn(move || {
                 let rt = compio::runtime::Runtime::new().unwrap();
                 rt.block_on(async move {
@@ -190,7 +188,7 @@ fn monocoque_topic_filtering(c: &mut Criterion) {
                         } else {
                             Bytes::from_static(b"other.topic")
                         };
-                        pub_socket.send(vec![topic, payload_pub.clone()]).await.ok();
+                        pub_socket.send(vec![topic, payload.clone()]).await.ok();
                     }
 
                     compio::time::sleep(Duration::from_millis(200)).await;

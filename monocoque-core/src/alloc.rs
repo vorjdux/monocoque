@@ -25,8 +25,8 @@ pub const PAGE_ALIGN: usize = 128;
 /// - Freed only when the last Arc<Page> is dropped.
 struct Page {
     ptr: NonNull<u8>,
-    /// Actual allocation size in bytes. Equal to PAGE_SIZE for normal pages;
-    /// larger when a single request exceeds PAGE_SIZE (dedicated oversized page).
+    /// Actual allocation size in bytes. Equal to `PAGE_SIZE` for normal pages;
+    /// larger when a single request exceeds `PAGE_SIZE` (dedicated oversized page).
     size: usize,
 }
 
