@@ -210,21 +210,33 @@ cargo build --release
 
 ## Running the Benchmarks
 
-```bash
-# Run all suites (takes ~15 minutes)
-cargo bench --features zmq
+All commands below work from either the workspace root or the `monocoque/`
+subdirectory. Use `-p monocoque` when running from the workspace root to
+avoid also running the allocator micro-benchmarks (`allocation` bench has no
+`required-features`, so `cargo bench` without `-p` picks it up separately).
 
-# Individual suites
-cargo bench --bench throughput --features zmq
-cargo bench --bench latency --features zmq
-cargo bench --bench ipc_vs_tcp --features zmq
-cargo bench --bench pipelined_throughput --features zmq
+```bash
+# Run the comparison suites (throughput, latency, IPC, pipelined, patterns)
+# Takes ~20 minutes; add -p monocoque if running from the workspace root.
+cargo bench -p monocoque --features zmq \
+    --bench throughput --bench latency --bench ipc_vs_tcp \
+    --bench pipelined_throughput --bench patterns
+
+# Run the allocator micro-benchmarks (no zmq dependency)
+cargo bench -p monocoque --bench allocation
+
+# Individual comparison suite
+cargo bench -p monocoque --bench throughput --features zmq
+cargo bench -p monocoque --bench latency --features zmq
+cargo bench -p monocoque --bench ipc_vs_tcp --features zmq
+cargo bench -p monocoque --bench pipelined_throughput --features zmq
+cargo bench -p monocoque --bench patterns --features zmq
 
 # Filter to a specific case
-cargo bench --bench throughput --features zmq -- "throughput/monocoque/push_pull_coalesced"
+cargo bench -p monocoque --bench throughput --features zmq -- "throughput/monocoque/push_pull_coalesced"
 
 # Quick smoke-test (no timing, just checks nothing panics)
-cargo bench --bench throughput --features zmq --release -- --test
+cargo bench -p monocoque --bench throughput --features zmq -- --test
 
 # Cross-implementation comparison bench peer
 cd scripts/monocoque_bench_peer && cargo build --release
@@ -235,5 +247,7 @@ CPU frequency scaling if available:
 
 ```bash
 sudo cpupower frequency-set --governor performance
-cargo bench --features zmq
+cargo bench -p monocoque --features zmq \
+    --bench throughput --bench latency --bench ipc_vs_tcp \
+    --bench pipelined_throughput --bench patterns
 ```
