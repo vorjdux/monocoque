@@ -1,14 +1,14 @@
-//! Demonstration of PoisonGuard protecting against timeout-induced stream corruption.
+//! Demonstration of `PoisonGuard` protecting against timeout-induced stream corruption.
 //!
-//! This example demonstrates how PoisonGuard automatically protects against TCP
+//! This example demonstrates how `PoisonGuard` automatically protects against TCP
 //! stream corruption when send operations timeout and are cancelled mid-write.
 //!
-//! ## What PoisonGuard Prevents
+//! ## What `PoisonGuard` Prevents
 //!
 //! When `compio::time::timeout()` expires during a send operation:
 //! 1. The Future is DROPPED immediately
 //! 2. TCP stream left with partial data (e.g., 500KB of 1MB message)
-//! 3. Without protection: Next send() writes new header in middle of old payload
+//! 3. Without protection: Next `send()` writes new header in middle of old payload
 //! 4. Result: Peer receives corrupted protocol data → protocol error
 //!
 //! ## How to Run This Demo
@@ -50,7 +50,7 @@ async fn main() -> io::Result<()> {
             // Try to send - this will likely timeout and poison the socket
             println!("2. Attempting first send with 1ns timeout...");
             match socket.send(msg.clone()).await {
-                Ok(_) => {
+                Ok(()) => {
                     println!("   ✓ Send succeeded (timeout was long enough - unlikely!)");
                 }
                 Err(e) if e.kind() == io::ErrorKind::TimedOut => {
@@ -58,20 +58,20 @@ async fn main() -> io::Result<()> {
                     println!("   → Socket is now POISONED by PoisonGuard");
                 }
                 Err(e) => {
-                    println!("   ✗ Send failed: {}", e);
+                    println!("   ✗ Send failed: {e}");
                 }
             }
 
             // Try to send again - should get BrokenPipe error from poison check
             println!("\n3. Attempting second send (poison check should trigger)...");
             match socket.send(msg).await {
-                Ok(_) => {
+                Ok(()) => {
                     println!("   ✓ Send succeeded (socket was not poisoned)");
                     println!("   This means the first send completed before timeout!");
                 }
                 Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {
                     println!("   ✗ Got BrokenPipe error (expected!)");
-                    println!("   → Error message: {}", e);
+                    println!("   → Error message: {e}");
                     println!("\n✅ SUCCESS! PoisonGuard prevented reuse of corrupted socket!");
                     println!("\nWhat happened:");
                     println!("• First send timed out → Future was DROPPED mid-write");
@@ -103,7 +103,7 @@ async fn main() -> io::Result<()> {
             println!("• This prevents silent TCP stream corruption");
         }
         Err(e) => {
-            println!("   ✗ Connection failed: {}\n", e);
+            println!("   ✗ Connection failed: {e}\n");
         }
     }
 

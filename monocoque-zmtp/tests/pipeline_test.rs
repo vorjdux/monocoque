@@ -89,7 +89,7 @@ fn test_push_pull_multi_message() {
                 let mut push = PushSocket::from_tcp(stream).await.unwrap();
 
                 for i in 0..N {
-                    push.send(vec![Bytes::from(format!("msg-{}", i))])
+                    push.send(vec![Bytes::from(format!("msg-{i}"))])
                         .await
                         .unwrap();
                 }
@@ -122,13 +122,12 @@ fn test_push_pull_multi_message() {
     client.join().expect("client thread panicked");
 
     let received = msgs_rx.recv_timeout(Duration::from_secs(10)).unwrap();
-    assert_eq!(received.len(), N, "expected {} messages", N);
+    assert_eq!(received.len(), N, "expected {N} messages");
     for (i, msg) in received.iter().enumerate() {
         assert_eq!(
             msg,
-            &vec![Bytes::from(format!("msg-{}", i))],
-            "message {} mismatch",
-            i
+            &vec![Bytes::from(format!("msg-{i}"))],
+            "message {i} mismatch"
         );
     }
 }

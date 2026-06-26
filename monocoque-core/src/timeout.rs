@@ -90,9 +90,11 @@ mod tests {
 
     #[test]
     fn test_timeout_types() {
-        // Verify Duration handling
-        let _infinite: Option<Duration> = None;
-        let _nonblocking = Some(Duration::ZERO);
-        let _timed = Some(Duration::from_secs(5));
+        let infinite: Option<Duration> = None;
+        assert!(infinite.is_none());
+        let nonblocking = Some(Duration::ZERO);
+        assert_eq!(nonblocking, Some(Duration::ZERO));
+        let timed = Some(Duration::from_secs(5));
+        assert_eq!(timed, Some(Duration::from_secs(5)));
     }
 }

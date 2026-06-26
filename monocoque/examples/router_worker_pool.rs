@@ -46,6 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
+#[allow(clippy::future_not_send)]
 async fn handle_worker(stream: compio::net::TcpStream, task_counter: Arc<AtomicU64>) {
     let mut socket = RouterSocket::from_tcp(stream).await.unwrap();
 

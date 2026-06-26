@@ -187,7 +187,6 @@ where
                             if !self.base.send_buffer.is_empty() {
                                 self.base.flush_send_buffer().await?;
                             }
-                            continue;
                         }
                         crate::base::FrameResult::Data(more, payload) => {
                             self.frames.push(payload);

@@ -17,8 +17,8 @@ use std::time::Duration;
 // Test: connection notification on accept
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// When a raw TCP client connects, StreamSocket should receive a notification
-/// message: [routing_id, empty, empty].
+/// When a raw TCP client connects, `StreamSocket` should receive a notification
+/// message: [`routing_id`, empty, empty].
 #[test]
 fn test_stream_connection_notification() {
     let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
@@ -59,7 +59,7 @@ fn test_stream_connection_notification() {
 // Test: raw data from plain TCP client → StreamSocket recv
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Data sent by a plain TCP client arrives as [routing_id, empty, data].
+/// Data sent by a plain TCP client arrives as [`routing_id`, empty, data].
 #[test]
 fn test_stream_recv_raw_data() {
     let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
@@ -227,7 +227,7 @@ fn test_stream_multi_peer_unique_routing_ids() {
         .collect();
 
     let ids = ids_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert_eq!(ids.len(), N, "expected {} routing IDs", N);
+    assert_eq!(ids.len(), N, "expected {N} routing IDs");
 
     // All routing IDs must be unique.
     let unique: std::collections::HashSet<_> = ids.iter().collect();

@@ -8,6 +8,7 @@
 // Style 1: Explicit protocol namespace (recommended)
 // ============================================================================
 
+#[allow(clippy::future_not_send)]
 async fn _explicit_style() -> Result<(), Box<dyn std::error::Error>> {
     use monocoque::zmq::{DealerSocket, RouterSocket};
 
@@ -25,6 +26,7 @@ async fn _explicit_style() -> Result<(), Box<dyn std::error::Error>> {
 // Style 2: Protocol prelude (for convenience)
 // ============================================================================
 
+#[allow(clippy::future_not_send)]
 async fn _prelude_style() -> Result<(), Box<dyn std::error::Error>> {
     use monocoque::zmq::prelude::*;
 
@@ -41,6 +43,7 @@ async fn _prelude_style() -> Result<(), Box<dyn std::error::Error>> {
 // Future: Multi-protocol mixing (when other protocols are added)
 // ============================================================================
 
+#[allow(clippy::future_not_send)]
 async fn _future_multi_protocol() -> Result<(), Box<dyn std::error::Error>> {
     // Explicit namespaces prevent conflicts
     use monocoque::zmq::DealerSocket as ZmqDealer;

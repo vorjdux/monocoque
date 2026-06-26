@@ -18,6 +18,7 @@ const TASKS: usize = 100;
 const WORKERS: usize = 4;
 
 #[compio::main]
+#[allow(clippy::cast_precision_loss)]
 async fn main() -> std::io::Result<()> {
     // ── Ventilator: distributes tasks to workers ──────────────────────────
     let (_vent_listener, mut ventilator) = PushSocket::bind("127.0.0.1:5557").await?;
@@ -30,10 +31,10 @@ async fn main() -> std::io::Result<()> {
         compio::runtime::spawn(async move {
             let mut work_rx = PullSocket::connect("127.0.0.1:5557").await.unwrap();
             let mut result_tx = PushSocket::connect("127.0.0.1:5558").await.unwrap();
-            println!("Worker {} ready", i);
+            println!("Worker {i} ready");
             while let Ok(Some(msg)) = work_rx.recv().await {
                 let task = String::from_utf8_lossy(&msg[0]);
-                let result = format!("worker-{} done: {}", i, task);
+                let result = format!("worker-{i} done: {task}");
                 result_tx.send(vec![Bytes::from(result)]).await.unwrap();
             }
         })
@@ -44,11 +45,11 @@ async fn main() -> std::io::Result<()> {
     compio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // ── Distribute tasks ──────────────────────────────────────────────────
-    println!("Distributing {} tasks to {} workers…", TASKS, WORKERS);
+    println!("Distributing {TASKS} tasks to {WORKERS} workers…");
     let start = Instant::now();
     for i in 0..TASKS {
         ventilator
-            .send(vec![Bytes::from(format!("task-{}", i))])
+            .send(vec![Bytes::from(format!("task-{i}"))])
             .await?;
     }
 

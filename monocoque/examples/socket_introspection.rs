@@ -1,9 +1,9 @@
 //! Socket Introspection Example
 //!
 //! Demonstrates the new socket introspection API:
-//! - socket_type() - Get the socket type
-//! - last_endpoint() - Get connected/bound endpoint
-//! - has_more() - Check for multipart message continuation
+//! - `socket_type()` - Get the socket type
+//! - `last_endpoint()` - Get connected/bound endpoint
+//! - `has_more()` - Check for multipart message continuation
 //! - TCP keepalive options
 //!
 //! Run this example:
@@ -31,7 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 2. Endpoint Introspection
     println!("\n## Endpoint Introspection");
     if let Some(endpoint) = dealer.last_endpoint() {
-        println!("[Dealer] Connected to: {}", endpoint);
+        println!("[Dealer] Connected to: {endpoint}");
     } else {
         println!("[Dealer] No endpoint information available");
     }
@@ -75,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 6. Runtime options modification
     println!("\n## Runtime Options Modification");
     let current_hwm = dealer.options().send_hwm;
-    println!("[Dealer] Current send HWM: {}", current_hwm);
+    println!("[Dealer] Current send HWM: {current_hwm}");
 
     dealer.options_mut().send_hwm = 500;
     println!("[Dealer] New send HWM: {}", dealer.options().send_hwm);

@@ -60,55 +60,52 @@ async fn main() -> io::Result<()> {
         // Accept new subscribers (non-blocking)
         if let Err(e) = xpub.accept().await {
             if e.kind() != io::ErrorKind::WouldBlock {
-                eprintln!("Error accepting connection: {}", e);
+                eprintln!("Error accepting connection: {e}");
             }
         }
 
         // Check for subscription events
-        match xpub.recv_subscription().await? {
-            Some(event) => {
-                use monocoque_core::subscription::SubscriptionEvent;
+        if let Some(event) = xpub.recv_subscription().await? {
+            use monocoque_core::subscription::SubscriptionEvent;
 
-                match event {
-                    SubscriptionEvent::Subscribe(topic) => {
-                        total_subscribes += 1;
-                        info!(
-                            "📥 SUBSCRIBE: {:?} (total subscribes: {})",
-                            String::from_utf8_lossy(&topic),
-                            total_subscribes
-                        );
-                    }
-                    SubscriptionEvent::Unsubscribe(topic) => {
-                        total_unsubscribes += 1;
-                        info!(
-                            "📤 UNSUBSCRIBE: {:?} (total unsubscribes: {})",
-                            String::from_utf8_lossy(&topic),
-                            total_unsubscribes
-                        );
+            match event {
+                SubscriptionEvent::Subscribe(topic) => {
+                    total_subscribes += 1;
+                    info!(
+                        "📥 SUBSCRIBE: {:?} (total subscribes: {})",
+                        String::from_utf8_lossy(&topic),
+                        total_subscribes
+                    );
+                }
+                SubscriptionEvent::Unsubscribe(topic) => {
+                    total_unsubscribes += 1;
+                    info!(
+                        "📤 UNSUBSCRIBE: {:?} (total unsubscribes: {})",
+                        String::from_utf8_lossy(&topic),
+                        total_unsubscribes
+                    );
+                }
+            }
+        } else {
+            // No subscription events, publish some test data
+            if xpub.subscriber_count() > 0 {
+                // Send test messages to all subscribers
+                let topics = vec!["events.login", "events.logout", "alerts.error"];
+
+                for topic in topics {
+                    let msg = vec![
+                        Bytes::from(topic),
+                        Bytes::from(format!("Test message for {topic}")),
+                    ];
+
+                    if let Err(e) = xpub.send(msg).await {
+                        eprintln!("Error sending message: {e}");
                     }
                 }
             }
-            None => {
-                // No subscription events, publish some test data
-                if xpub.subscriber_count() > 0 {
-                    // Send test messages to all subscribers
-                    let topics = vec!["events.login", "events.logout", "alerts.error"];
 
-                    for topic in topics {
-                        let msg = vec![
-                            Bytes::from(topic),
-                            Bytes::from(format!("Test message for {}", topic)),
-                        ];
-
-                        if let Err(e) = xpub.send(msg).await {
-                            eprintln!("Error sending message: {}", e);
-                        }
-                    }
-                }
-
-                // Small delay to avoid busy-waiting
-                compio::time::sleep(std::time::Duration::from_millis(100)).await;
-            }
+            // Small delay to avoid busy-waiting
+            compio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
     }
 }

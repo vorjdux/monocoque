@@ -29,7 +29,7 @@ fn test_pub_drop_count_starts_at_zero() {
 // PUB HWM: slow subscriber causes worker channel to fill → drops counted
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// A subscriber connects but never calls recv().  The publisher floods messages.
+/// A subscriber connects but never calls `recv()`.  The publisher floods messages.
 /// Eventually the worker's TCP write buffer fills, blocking it inside
 /// `send_message_to_stream`, which prevents it from draining its own channel.
 /// With a small channel HWM, `try_send` starts failing and `drop_count` rises.
@@ -59,7 +59,7 @@ fn test_pub_hwm_drops_with_slow_subscriber() {
                 for i in 0..MSGS {
                     // Ignore errors  -  the point is to flood the worker channel.
                     let _ = pub_sock
-                        .send(vec![Bytes::new(), Bytes::from(format!("{}", i))])
+                        .send(vec![Bytes::new(), Bytes::from(format!("{i}"))])
                         .await;
                 }
 
@@ -88,8 +88,7 @@ fn test_pub_hwm_drops_with_slow_subscriber() {
 
     assert!(
         drops > 0,
-        "Expected some dropped messages with HWM={} and a slow subscriber, got 0",
-        HWM
+        "Expected some dropped messages with HWM={HWM} and a slow subscriber, got 0"
     );
 }
 
@@ -209,11 +208,11 @@ fn test_dealer_hwm_stress_no_deadlock() {
                             // Use direct send() (unbuffered) to avoid HWM on the
                             // buffered path; the point is network-layer throughput.
                             dealer
-                                .send(vec![Bytes::new(), Bytes::from(format!("{}", i))])
+                                .send(vec![Bytes::new(), Bytes::from(format!("{i}"))])
                                 .await
                                 .unwrap();
                         }
-                    })
+                    });
             })
         })
         .collect();

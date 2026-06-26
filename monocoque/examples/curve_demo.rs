@@ -1,6 +1,6 @@
 //! CURVE Encryption Example
 //!
-//! Demonstrates public-key encryption using the CURVE mechanism (CurveZMQ).
+//! Demonstrates public-key encryption using the CURVE mechanism (`CurveZMQ`).
 //!
 //! ## Security Features
 //!
@@ -64,7 +64,7 @@ async fn main() {
                 eprintln!("Usage: {} server <server_secret_key_hex>", args[0]);
                 std::process::exit(1);
             }
-            run_server(&args[2]).await
+            run_server(&args[2]).await;
         }
         "client" => {
             if args.len() != 3 {
@@ -72,7 +72,7 @@ async fn main() {
                 eprintln!("Usage: {} client <server_public_key_hex>", args[0]);
                 std::process::exit(1);
             }
-            run_client(&args[2]).await
+            run_client(&args[2]).await;
         }
         _ => {
             eprintln!("Unknown command. Use 'keygen', 'server', or 'client'");
@@ -108,6 +108,7 @@ fn generate_keys() {
     info!("   4. Run client: cargo run --example curve_demo client <server_public>");
 }
 
+#[allow(clippy::future_not_send)]
 async fn run_server(secret_key_hex: &str) {
     info!("🔐 Starting CURVE-encrypted server on {}", SERVER_ADDR);
 
@@ -161,26 +162,24 @@ async fn run_server(secret_key_hex: &str) {
 
     // Handle encrypted requests
     for i in 1..=10 {
-        match socket.recv().await {
-            Ok(Some(msg)) => {
-                let request = String::from_utf8_lossy(&msg[0]);
-                info!("📨 Encrypted request #{}: {}", i, request);
+        if let Ok(Some(msg)) = socket.recv().await {
+            let request = String::from_utf8_lossy(&msg[0]);
+            info!("📨 Encrypted request #{}: {}", i, request);
 
-                let response = format!("Encrypted reply: {}", request);
-                socket.send(vec![Bytes::from(response)]).await.ok();
+            let response = format!("Encrypted reply: {request}");
+            socket.send(vec![Bytes::from(response)]).await.ok();
 
-                info!("📤 Sent encrypted response #{}", i);
-            }
-            _ => {
-                info!("ℹ️  Connection closed");
-                break;
-            }
+            info!("📤 Sent encrypted response #{}", i);
+        } else {
+            info!("ℹ️  Connection closed");
+            break;
         }
     }
 
     info!("👋 Server shutting down");
 }
 
+#[allow(clippy::future_not_send)]
 async fn run_client(server_public_key_hex: &str) {
     info!("🔐 Connecting with CURVE encryption");
 
@@ -227,7 +226,7 @@ async fn run_client(server_public_key_hex: &str) {
 
     // Send encrypted requests
     for i in 1..=3 {
-        let message = format!("Secure message #{}", i);
+        let message = format!("Secure message #{i}");
         info!("📤 Sending encrypted: {}", message);
 
         if let Err(e) = socket.send(vec![Bytes::from(message)]).await {
@@ -235,15 +234,12 @@ async fn run_client(server_public_key_hex: &str) {
             return;
         }
 
-        match socket.recv().await {
-            Ok(Some(msg)) => {
-                let response = String::from_utf8_lossy(&msg[0]);
-                info!("📨 Decrypted response: {}", response);
-            }
-            _ => {
-                error!("❌ Empty response");
-                return;
-            }
+        if let Ok(Some(msg)) = socket.recv().await {
+            let response = String::from_utf8_lossy(&msg[0]);
+            info!("📨 Decrypted response: {}", response);
+        } else {
+            error!("❌ Empty response");
+            return;
         }
 
         compio::time::sleep(Duration::from_millis(500)).await;

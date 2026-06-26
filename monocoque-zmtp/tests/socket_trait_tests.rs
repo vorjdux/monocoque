@@ -4,6 +4,7 @@ use bytes::Bytes;
 use monocoque_zmtp::Socket;
 
 #[compio::test]
+#[allow(clippy::future_not_send)]
 async fn test_socket_trait_send_recv_signature() {
     // Verify the Socket trait's send/recv method signatures compile correctly.
     // This test is primarily a compile-time check.

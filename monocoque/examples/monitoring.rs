@@ -37,25 +37,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         while let Ok(event) = monitor.recv_async().await {
             match event {
                 SocketEvent::Connected(ep) => {
-                    println!("✓ Connected to {}", ep);
+                    println!("✓ Connected to {ep}");
                 }
                 SocketEvent::Disconnected(ep) => {
-                    println!("✗ Disconnected from {}", ep);
+                    println!("✗ Disconnected from {ep}");
                 }
                 SocketEvent::ConnectFailed { endpoint, reason } => {
-                    println!("✗ Connection failed for {}: {}", endpoint, reason);
+                    println!("✗ Connection failed for {endpoint}: {reason}");
                 }
                 SocketEvent::Bound(ep) => {
-                    println!("✓ Bound to {}", ep);
+                    println!("✓ Bound to {ep}");
                 }
                 SocketEvent::BindFailed { endpoint, reason } => {
-                    println!("✗ Bind failed for {}: {}", endpoint, reason);
+                    println!("✗ Bind failed for {endpoint}: {reason}");
                 }
                 SocketEvent::Listening(ep) => {
-                    println!("✓ Listening on {}", ep);
+                    println!("✓ Listening on {ep}");
                 }
                 SocketEvent::Accepted(ep) => {
-                    println!("✓ Accepted connection from {}", ep);
+                    println!("✓ Accepted connection from {ep}");
                 }
             }
         }
@@ -69,8 +69,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .send(vec![Bytes::from("Hello"), Bytes::from("World")])
         .await
     {
-        Ok(_) => println!("✓ Message sent successfully\n"),
-        Err(e) => println!("✗ Failed to send message: {}\n", e),
+        Ok(()) => println!("✓ Message sent successfully\n"),
+        Err(e) => println!("✗ Failed to send message: {e}\n"),
     }
 
     // Wait a bit to see events

@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+## 0.1.3 - 2026-06-26
+
+### 🧹 Code Quality
+
+#### Strict Clippy Pass (pedantic + nursery + cargo, deny warnings)
+
+- Achieved zero warnings under `cargo clippy --workspace --all-targets --all-features -- -W clippy::pedantic -W clippy::nursery -W clippy::cargo -D warnings`.
+- Replaced `once_cell::sync::Lazy` with `std::sync::LazyLock` in `inproc.rs` (`non_std_lazy_statics`).
+- Fixed `pub(crate)` items inside `pub(crate)` modules to plain `pub` (`redundant_pub_crate`).
+- Changed `elapsed.as_micros() as f64` to `elapsed.as_secs_f64() * 1_000_000.0` in bench files (`cast_precision_loss`).
+- Replaced `if more { 0x01u8 } else { 0x00u8 }` with `u8::from(more)` (`manual_unwrap_or_default`).
+- Changed `u16::MAX as u128` to `u128::from(u16::MAX)` (`infallible_cast`).
+- Fixed hex-encoding loop in `zap_handler.rs`: replaced `.map(|b| format!(...)).collect()` with an explicit `write!` loop (`format_collect_into_string`).
+- Fixed `#[inline(always)]` to `#[inline]` where the optimizer is better positioned to decide (`inline_always`).
+- Moved misplaced `use` statements to function tops to fix `items_after_statements` in several examples.
+- Added `#[allow(clippy::future_not_send)]` to 25+ async example functions whose futures are intentionally single-threaded (compio io_uring runtime is not `Send`).
+- Resolved `too_many_lines` on long functions with targeted `#[allow]` or by extracting local `use` items.
+- Fixed `while let Err(mpsc::TryRecvError::Empty) = ...` to an equality comparison where the variant has no payload (`redundant_pattern_matching`).
+- Fixed `needless_collect` in `test_pubsub_fanout_distinct_topics`: the collect is required to spawn all threads before joining any, annotated accordingly.
+- Fixed `unnecessary_wraps` in `api_demo.rs`: changed `demonstrate_api_usage` return type from `Result<()>` to `()`.
+- Applied `let-else` pattern for early returns in `base.rs` (`check_heartbeat`).
+- Added `#[allow(clippy::similar_names)]` to crypto functions where abbreviated names (`vouch_pt`/`vouch_ct`) are the accepted convention.
+
+#### Formatting
+
+- `cargo fmt --all` applied; all files pass `--check`.
+
+#### Tests
+
+- `cargo test --workspace --all-features`: all tests pass (no failures).
+
+#### Security Audit
+
+- `cargo audit` attempted; the advisory-db fetch was blocked by the network proxy in this environment (HTTP 403). No known vulnerabilities are introduced by the changes in this release; the dependency set is unchanged from 0.1.2.
+
 ## 0.1.2 - 2026-06-25
 
 ### ✨ New Features

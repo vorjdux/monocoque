@@ -20,10 +20,11 @@ use std::time::Duration;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
+#[allow(clippy::future_not_send)]
 async fn publisher_task(port: u16) -> Result<(), Box<dyn std::error::Error>> {
     info!("[PUB] Starting publisher on port {}", port);
 
-    let mut pub_socket = PubSocket::bind(format!("127.0.0.1:{}", port)).await?;
+    let mut pub_socket = PubSocket::bind(format!("127.0.0.1:{port}")).await?;
 
     // Wait for all 3 subscribers to connect
     info!("[PUB] Waiting for subscribers...");
@@ -49,7 +50,7 @@ async fn publisher_task(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         pub_socket
             .send(vec![
                 Bytes::from("news.tech"),
-                Bytes::from(format!("Tech update #{}", i)),
+                Bytes::from(format!("Tech update #{i}")),
             ])
             .await?;
         info!("[PUB] Sent tech news #{}", i);
@@ -58,7 +59,7 @@ async fn publisher_task(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         pub_socket
             .send(vec![
                 Bytes::from("news.finance"),
-                Bytes::from(format!("Finance update #{}", i)),
+                Bytes::from(format!("Finance update #{i}")),
             ])
             .await?;
         info!("[PUB] Sent finance news #{}", i);
@@ -72,6 +73,7 @@ async fn publisher_task(port: u16) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[allow(clippy::future_not_send)]
 async fn subscriber_task(
     name: &str,
     port: u16,
@@ -81,7 +83,7 @@ async fn subscriber_task(
     let start = std::time::Instant::now();
     info!("[{}] Connecting to publisher on port {}", name, port);
 
-    let mut sub_socket = SubSocket::connect(&format!("127.0.0.1:{}", port)).await?;
+    let mut sub_socket = SubSocket::connect(&format!("127.0.0.1:{port}")).await?;
     info!(
         "[{}] Connected in {:?}, subscribing to '{}'",
         name,
@@ -179,15 +181,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Report results
     info!("=== Results ===");
     match pub_result {
-        Ok(_) => info!("Publisher: ✓ Success"),
+        Ok(()) => info!("Publisher: ✓ Success"),
         Err(e) => error!("Publisher: ✗ Error: {:?}", e),
     }
     match sub1_result {
-        Ok(_) => info!("SUB1 (tech): ✓ Success"),
+        Ok(()) => info!("SUB1 (tech): ✓ Success"),
         Err(e) => error!("SUB1 (tech): ✗ Error: {:?}", e),
     }
     match sub2_result {
-        Ok(_) => info!("SUB2 (finance): ✓ Success"),
+        Ok(()) => info!("SUB2 (finance): ✓ Success"),
         Err(e) => error!("SUB2 (finance): ✗ Error: {:?}", e),
     }
 

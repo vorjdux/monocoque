@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 const WARMUP: usize = 10;
 const ITERATIONS: usize = 1000;
 
+#[allow(clippy::future_not_send)]
 async fn measure_latency() -> Duration {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -50,10 +51,11 @@ async fn measure_latency() -> Duration {
 
 fn main() {
     compio::runtime::Runtime::new().unwrap().block_on(async {
-        println!("Measuring {} iterations (64B payload)...\n", ITERATIONS);
+        println!("Measuring {ITERATIONS} iterations (64B payload)...\n");
 
         let total = measure_latency().await;
-        let per_msg = total.as_micros() as f64 / ITERATIONS as f64;
+        #[allow(clippy::cast_precision_loss)]
+        let per_msg = total.as_secs_f64() * 1_000_000.0 / ITERATIONS as f64;
         println!(
             "Total time: {:?}\nPer message: {:.2} µs\nThroughput: {:.0} msg/s",
             total,

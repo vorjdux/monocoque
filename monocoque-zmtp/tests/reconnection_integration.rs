@@ -2,12 +2,12 @@
 //!
 //! Design principles:
 //! - Each OS thread has its own compio Runtime  -  avoids residual-timer crosstalk.
-//! - The server holds the TcpListener open across connections so the client
+//! - The server holds the `TcpListener` open across connections so the client
 //!   can reconnect without racing a new bind.
 //! - The server sends messages *proactively* (no client request needed) so that
-//!   recv_with_reconnect can collect a message on the freshly-reconnected stream.
-//! - std::thread::sleep is used in base.rs for reconnect backoff to avoid the
-//!   compio residual-timer issue; tests set reconnect_ivl=10ms for speed.
+//!   `recv_with_reconnect` can collect a message on the freshly-reconnected stream.
+//! - `std::thread::sleep` is used in base.rs for reconnect backoff to avoid the
+//!   compio residual-timer issue; tests set `reconnect_ivl=10ms` for speed.
 
 use bytes::Bytes;
 use monocoque_core::options::SocketOptions;
@@ -139,7 +139,7 @@ fn test_recv_with_reconnect_after_server_restart() {
                         .expect("connection closed without second message");
 
                 assert_eq!(msg2, vec![Bytes::from("second")], "wrong second message");
-            })
+            });
     });
 
     client.join().expect("client thread panicked");
@@ -227,7 +227,7 @@ fn test_send_with_reconnect_after_server_restart() {
                     &Bytes::from("hello-reconnect"),
                     "wrong reply payload"
                 );
-            })
+            });
     });
 
     client.join().expect("client thread panicked");
@@ -291,8 +291,7 @@ fn test_reconnect_max_attempts_exceeded() {
                 | std::io::ErrorKind::ConnectionRefused
                 | std::io::ErrorKind::ConnectionReset
         ),
-        "unexpected error kind: {:?}",
-        kind
+        "unexpected error kind: {kind:?}"
     );
 }
 
@@ -343,7 +342,6 @@ fn test_no_reconnect_without_stored_endpoint() {
             kind,
             std::io::ErrorKind::Unsupported | std::io::ErrorKind::NotConnected
         ),
-        "unexpected error kind: {:?}",
-        kind
+        "unexpected error kind: {kind:?}"
     );
 }

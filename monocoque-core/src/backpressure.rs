@@ -45,7 +45,7 @@ pub struct Permit {
 }
 
 enum PermitInner {
-    /// Byte-counting semaphore backed by parking_lot primitives (usable in drop).
+    /// Byte-counting semaphore backed by `parking_lot` primitives (usable in `Drop`).
     ByteSem(Arc<(Mutex<SemInner>, Condvar)>, usize),
     NoOp,
 }
@@ -57,6 +57,7 @@ impl Drop for Permit {
                 let (mutex, condvar) = &*inner;
                 let mut guard = mutex.lock();
                 guard.available += n_bytes;
+                drop(guard);
                 condvar.notify_all();
             }
             Some(PermitInner::NoOp) | None => {}

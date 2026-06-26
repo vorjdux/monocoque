@@ -261,7 +261,7 @@ struct CurveMessageParts<'a> {
     ciphertext: &'a [u8],
 }
 
-#[inline(always)]
+#[inline]
 fn parse_curve_message(message: &[u8]) -> Result<CurveMessageParts<'_>, CurveError> {
     let command_len = CURVE_MESSAGE.len();
     if message.len() < command_len + CURVE_MESSAGE_NONCE_SIZE {
@@ -496,7 +496,7 @@ impl CurveMessageCipher {
             .ok_or(CurveError::ProtocolViolation)?;
 
         let mut pt = Vec::with_capacity(1 + payload.len());
-        pt.push(if more { 0x01u8 } else { 0x00u8 });
+        pt.push(u8::from(more));
         pt.extend_from_slice(payload);
 
         let ciphertext = self.cipher.encrypt(&pt, &nonce)?;
@@ -776,6 +776,7 @@ impl CurveClient {
     ///
     /// initiate_box = SalsaBox(c'→s').encrypt(vouch ‖ metadata, "CurveZMQINITIATE" ‖ nonce_suffix)
     /// vouch = vouch_nonce_16(16) + SalsaBox(C→S).encrypt(c'.pk ‖ s'.pk, "VOUCH---" ‖ vouch_nonce_16)
+    #[allow(clippy::similar_names)]
     async fn send_initiate<S>(
         &mut self,
         stream: &mut S,
@@ -1100,6 +1101,7 @@ impl CurveServer {
     /// Body: \x07WELCOME(8) + server_nonce_16(16) + welcome_box(144) = 168 bytes
     ///
     /// Cookie = cookie_nonce_16(16) + XChaCha20.encrypt(c'.pk ‖ s'.sk, "COOKIE--" ‖ cookie_nonce_16)
+    #[allow(clippy::similar_names)]
     async fn send_welcome<S>(
         &mut self,
         stream: &mut S,
@@ -1168,6 +1170,7 @@ impl CurveServer {
     ///
     /// Verifies: cookie integrity, initiate box, vouch box.
     /// Stores the authenticated client long-term public key C and peer metadata.
+    #[allow(clippy::similar_names)]
     async fn recv_initiate<S>(
         &mut self,
         stream: &mut S,
@@ -1642,6 +1645,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::similar_names)]
     fn test_3way_dh_message_key_symmetry() {
         let client_long = CurveKeyPair::generate();
         let server_long = CurveKeyPair::generate();

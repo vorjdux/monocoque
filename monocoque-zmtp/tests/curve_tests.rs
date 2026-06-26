@@ -145,11 +145,11 @@ fn test_curve_server_creation() {
 
 #[test]
 fn test_curve_key_size_constant() {
+    use monocoque_zmtp::security::curve::CURVE_NONCE_SIZE;
     // Verify the constant matches X25519 key size
     assert_eq!(CURVE_KEY_SIZE, 32);
 
     // Verify ChaCha20-Poly1305 requirements
-    use monocoque_zmtp::security::curve::CURVE_NONCE_SIZE;
     assert_eq!(CURVE_NONCE_SIZE, 24); // ChaCha20-Poly1305 XNonce
 }
 
@@ -165,7 +165,7 @@ fn test_curve_as_ref_trait() {
 #[test]
 fn test_curve_debug_impl_hides_secret() {
     let secret = CurveSecretKey::generate();
-    let debug_str = format!("{:?}", secret);
+    let debug_str = format!("{secret:?}");
 
     // Debug impl should not reveal the actual key
     assert!(debug_str.contains("REDACTED") || debug_str.contains("CurveSecretKey"));
@@ -182,12 +182,7 @@ async fn test_curve_handshake_sequence() {
     let client_keypair = CurveKeyPair::generate();
     let server_keypair = CurveKeyPair::generate();
 
-    let _client = CurveClient::new(
-        client_keypair.clone(),
-        server_keypair.public,
-        "DEALER",
-        None,
-    );
+    let _client = CurveClient::new(client_keypair, server_keypair.public, "DEALER", None);
     let _server = CurveServer::new(server_keypair, "ROUTER");
 
     // Full handshake test would require mock streams or real TCP

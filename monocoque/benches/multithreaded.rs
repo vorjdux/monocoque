@@ -5,7 +5,7 @@
 //!
 //! ## Architecture
 //!
-//! - Lock-free design: Each socket has its own io_uring context
+//! - Lock-free design: Each socket has its own `io_uring` context
 //! - No shared mutable state in hot paths
 //! - Independent TCP connections per thread
 //!
@@ -261,7 +261,7 @@ fn monocoque_core_efficiency(c: &mut Criterion) {
     let num_cores = num_cpus::get();
 
     // Test at 50%, 100%, and 150% of available cores
-    let test_counts = vec![num_cores / 2, num_cores, (num_cores as f64 * 1.5) as usize];
+    let test_counts = vec![num_cores / 2, num_cores, num_cores + num_cores / 2];
 
     for num_threads in test_counts {
         if num_threads == 0 {
@@ -272,7 +272,7 @@ fn monocoque_core_efficiency(c: &mut Criterion) {
         group.throughput(Throughput::Elements(total_messages as u64));
 
         group.bench_with_input(
-            BenchmarkId::new("cores", format!("{}/{}", num_threads, num_cores)),
+            BenchmarkId::new("cores", format!("{num_threads}/{num_cores}")),
             &num_threads,
             |b, &num_threads| {
                 b.iter(|| {

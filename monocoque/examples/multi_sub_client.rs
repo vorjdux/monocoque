@@ -21,24 +21,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Receive messages
     let mut count = 0;
     loop {
-        match sub_socket.recv().await? {
-            Some(frames) => {
-                count += 1;
-                let topic = String::from_utf8_lossy(&frames[0]);
-                let data = if frames.len() > 1 {
-                    String::from_utf8_lossy(&frames[1])
-                } else {
-                    "".into()
-                };
-                info!(
-                    "[SUB-{}] Received #{}: topic='{}' data='{}'",
-                    subscriber_id, count, topic, data
-                );
-            }
-            None => {
-                info!("[SUB-{}] Connection closed", subscriber_id);
-                break;
-            }
+        if let Some(frames) = sub_socket.recv().await? {
+            count += 1;
+            let topic = String::from_utf8_lossy(&frames[0]);
+            let data = if frames.len() > 1 {
+                String::from_utf8_lossy(&frames[1])
+            } else {
+                "".into()
+            };
+            info!(
+                "[SUB-{}] Received #{}: topic='{}' data='{}'",
+                subscriber_id, count, topic, data
+            );
+        } else {
+            info!("[SUB-{}] Connection closed", subscriber_id);
+            break;
         }
     }
 

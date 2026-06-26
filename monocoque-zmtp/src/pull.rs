@@ -115,7 +115,6 @@ where
                 crate::base::FrameResult::CommandHandled => {
                     // PONG or other response is already in send_buffer;
                     // the next recv() call will flush it.
-                    continue;
                 }
                 crate::base::FrameResult::Data(more, payload) => {
                     self.frames.push(payload);
@@ -148,7 +147,6 @@ where
                         if !self.base.send_buffer.is_empty() {
                             self.base.flush_send_buffer().await?;
                         }
-                        continue;
                     }
                     crate::base::FrameResult::Data(more, payload) => {
                         self.frames.push(payload);

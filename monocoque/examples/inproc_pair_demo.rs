@@ -47,7 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             // Send response to client
-            let response = format!("Server response #{}", i);
+            let response = format!("Server response #{i}");
             tx_server_to_client.send(vec![Bytes::from(response)]).ok();
         }
 
@@ -58,8 +58,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     thread::sleep(Duration::from_millis(100));
 
     for i in 1..=3 {
-        let msg = format!("Client message #{}", i);
-        println!("[Client] Sending: {}", msg);
+        let msg = format!("Client message #{i}");
+        println!("[Client] Sending: {msg}");
         tx_client_to_server.send(vec![Bytes::from(msg)])?;
 
         // Receive response

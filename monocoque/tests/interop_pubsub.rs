@@ -40,7 +40,7 @@ fn test_pubsub_basic() {
 
     let ctx = zmq::Context::new();
     let sub = ctx.socket(zmq::SUB).unwrap();
-    sub.connect(&format!("tcp://{}", local_addr)).unwrap();
+    sub.connect(&format!("tcp://{local_addr}")).unwrap();
     sub.set_subscribe(b"topic").unwrap();
     sub.set_rcvtimeo(5000).unwrap();
 

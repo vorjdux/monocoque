@@ -23,7 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("   (Would connect if server was running)\n");
         }
         Err(e) => {
-            println!("   ✗ Expected connection error (no server): {}\n", e);
+            println!("   ✗ Expected connection error (no server): {e}\n");
         }
     }
 
@@ -43,7 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("   (Would connect if server was running)\n");
             }
             Err(e) => {
-                println!("   ✗ Expected connection error (no server): {}\n", e);
+                println!("   ✗ Expected connection error (no server): {e}\n");
             }
         }
     }

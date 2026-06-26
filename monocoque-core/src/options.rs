@@ -377,7 +377,7 @@ pub struct SocketOptions {
     ///
     /// How long to wait for a PONG reply before considering the connection dead.
     /// - `None`: Use `heartbeat_ivl` (default)
-    /// - `Some(dur)`: Custom timeout (recommended: 2–5× heartbeat_ivl)
+    /// - `Some(dur)`: Custom timeout (recommended: 2-5x `heartbeat_ivl`)
     pub heartbeat_timeout: Option<Duration>,
 
     /// ROUTER raw mode (`ZMQ_ROUTER_RAW` = 41)

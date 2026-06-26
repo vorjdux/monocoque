@@ -5,8 +5,8 @@
 //! ## Methodology
 //!
 //! - Server always runs on a separate OS thread with its own compio runtime.
-//! - Latency: iter_batched, server exits after warmup+1, one round-trip measured.
-//! - Throughput: iter_custom, PULL side owns the timer (PUSH/PULL one-way).
+//! - Latency: `iter_batched`, server exits after warmup+1, one round-trip measured.
+//! - Throughput: `iter_custom`, PULL side owns the timer (PUSH/PULL one-way).
 //! - IPC socket paths include pid + atomic counter to avoid conflicts across iterations.
 
 #[cfg(unix)]
@@ -64,7 +64,7 @@ fn monocoque_tcp_latency(c: &mut Criterion) {
         let payload = Bytes::from(vec![0u8; size]);
 
         group.bench_with_input(
-            BenchmarkId::new("round_trip", format!("{}B", size)),
+            BenchmarkId::new("round_trip", format!("{size}B")),
             &size,
             |b, _| {
                 b.iter_batched(
@@ -86,7 +86,7 @@ fn monocoque_tcp_latency(c: &mut Criterion) {
                                 .await
                                 .unwrap();
 
-                                for _ in 0..(WARMUP_ROUNDS + 1) {
+                                for _ in 0..=WARMUP_ROUNDS {
                                     if let Ok(Some(msg)) = rep.recv().await {
                                         if rep.send(msg).await.is_err() {
                                             break;
@@ -154,7 +154,7 @@ fn monocoque_ipc_latency(c: &mut Criterion) {
         let payload = Bytes::from(vec![0u8; size]);
 
         group.bench_with_input(
-            BenchmarkId::new("round_trip", format!("{}B", size)),
+            BenchmarkId::new("round_trip", format!("{size}B")),
             &size,
             |b, _| {
                 b.iter_batched(
@@ -178,7 +178,7 @@ fn monocoque_ipc_latency(c: &mut Criterion) {
                                     .await
                                     .unwrap();
 
-                                for _ in 0..(WARMUP_ROUNDS + 1) {
+                                for _ in 0..=WARMUP_ROUNDS {
                                     if let Ok(Some(msg)) = rep.recv().await {
                                         if rep.send(msg).await.is_err() {
                                             break;

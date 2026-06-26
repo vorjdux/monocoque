@@ -13,7 +13,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         5555
     };
 
-    let addr = format!("127.0.0.1:{}", port);
+    let addr = format!("127.0.0.1:{port}");
     let stream = compio::net::TcpStream::connect(&addr).await?;
     let mut socket = ReqSocket::new(stream).await?;
 

@@ -19,6 +19,7 @@ const HEARTBEAT: &[u8] = b"\x02";
 const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(1000);
 
 /// Worker with heartbeat and crash simulation
+#[allow(clippy::future_not_send)]
 async fn worker(id: u32, crash_after: Option<u32>) -> std::io::Result<()> {
     info!("[Worker-{}] 🔧 Starting", id);
 
@@ -59,7 +60,7 @@ async fn worker(id: u32, crash_after: Option<u32>) -> std::io::Result<()> {
 
             compio::runtime::time::sleep(Duration::from_millis(100)).await;
 
-            let reply = format!("Worker-{} processed request #{}", id, count);
+            let reply = format!("Worker-{id} processed request #{count}");
             socket.send(vec![Bytes::from(reply)]).await?;
             info!("[Worker-{}] 📤 Reply #{}", id, count);
         }
@@ -69,6 +70,7 @@ async fn worker(id: u32, crash_after: Option<u32>) -> std::io::Result<()> {
 }
 
 /// Simple client
+#[allow(clippy::future_not_send)]
 async fn client(id: u32, requests: u32) -> std::io::Result<()> {
     info!("[Client-{}] 🔌 Starting", id);
 
@@ -77,7 +79,7 @@ async fn client(id: u32, requests: u32) -> std::io::Result<()> {
     let mut socket = ReqSocket::connect("127.0.0.1:5555").await?;
 
     for i in 1..=requests {
-        let req = format!("Request-{} from Client-{}", i, id);
+        let req = format!("Request-{i} from Client-{id}");
         info!("[Client-{}] 📨 Sending: {}", id, req);
 
         socket.send(vec![Bytes::from(req)]).await?;
@@ -102,10 +104,11 @@ async fn client(id: u32, requests: u32) -> std::io::Result<()> {
 }
 
 /// Simple broker (just forwards, doesn't track heartbeats)
+#[allow(clippy::future_not_send)]
 async fn broker() -> std::io::Result<()> {
-    info!("🚀 Starting Simple Broker");
-
     use futures::{select, FutureExt};
+
+    info!("🚀 Starting Simple Broker");
 
     let (_, mut frontend) = monocoque::zmq::RouterSocket::bind("127.0.0.1:5555").await?;
     let (_, mut backend) = DealerSocket::bind("127.0.0.1:5556").await?;

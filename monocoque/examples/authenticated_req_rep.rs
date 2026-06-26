@@ -31,7 +31,7 @@ async fn main() -> std::io::Result<()> {
 
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let local_addr = listener.local_addr()?;
-    println!("Server listening on {}", local_addr);
+    println!("Server listening on {local_addr}");
 
     let server_options = SocketOptions::new()
         .with_plain_server(true)
@@ -48,8 +48,8 @@ async fn main() -> std::io::Result<()> {
         for i in 1..=2 {
             if let Ok(Some(request)) = server.recv().await {
                 let msg = String::from_utf8_lossy(&request[0]);
-                println!("[SERVER] Request {}: {}", i, msg);
-                let reply = vec![Bytes::from(format!("Reply {}: OK", i))];
+                println!("[SERVER] Request {i}: {msg}");
+                let reply = vec![Bytes::from(format!("Reply {i}: OK"))];
                 server.send(reply).await.unwrap();
             }
         }

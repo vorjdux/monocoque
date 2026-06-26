@@ -1,10 +1,10 @@
 //! ZAP Server Demo - Custom Authentication Handler
 //!
 //! Demonstrates how to create and run a custom ZAP authentication handler
-//! on the inproc://zeromq.zap.01 endpoint.
+//! on the <inproc://zeromq.zap.01> endpoint.
 //!
 //! This example shows:
-//! - Custom ZapHandler implementation
+//! - Custom `ZapHandler` implementation
 //! - Spawning a ZAP server on inproc transport
 //! - Authentication with custom logic (e.g., database lookup)
 
@@ -24,6 +24,7 @@ struct CustomZapHandler {
 
 #[async_trait::async_trait(?Send)]
 impl ZapHandler for CustomZapHandler {
+    #[allow(clippy::too_many_lines)]
     async fn authenticate(&self, request: &ZapRequest) -> ZapResponse {
         println!("🔐 ZAP Authentication Request:");
         println!("  Mechanism: {:?}", request.mechanism);
@@ -86,7 +87,7 @@ impl ZapHandler for CustomZapHandler {
                 let username = String::from_utf8_lossy(&request.credentials[0]);
                 let password = String::from_utf8_lossy(&request.credentials[1]);
 
-                println!("  🔑 PLAIN: username={}", username);
+                println!("  🔑 PLAIN: username={username}");
 
                 // Use PLAIN handler for actual authentication
                 match self
@@ -106,7 +107,7 @@ impl ZapHandler for CustomZapHandler {
                         }
                     }
                     Err(err) => {
-                        println!("  ❌ PLAIN: Authentication failed - {}", err);
+                        println!("  ❌ PLAIN: Authentication failed - {err}");
                         ZapResponse {
                             version: "1.0".to_string(),
                             request_id: request.request_id.clone(),

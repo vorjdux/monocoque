@@ -51,7 +51,7 @@ async fn main() -> std::io::Result<()> {
     // Monitor events in background task
     let _monitor_task = compio::runtime::spawn(async move {
         while let Ok(event) = monitor.recv_async().await {
-            println!("📡 Socket Event: {}", event);
+            println!("📡 Socket Event: {event}");
         }
     });
 
@@ -72,6 +72,7 @@ fn create_example_monitor() -> SocketMonitor {
     receiver
 }
 
+#[allow(clippy::future_not_send)]
 async fn simulate_socket_lifecycle() {
     println!("Simulating socket lifecycle:");
     println!("  1. Socket created");

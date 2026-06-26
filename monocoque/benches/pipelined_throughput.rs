@@ -7,8 +7,8 @@
 //! ## Pattern
 //!
 //! Process messages in batches to avoid TCP backpressure:
-//! 1. DEALER: send_buffered batch -> flush
-//! 2. ROUTER: receive batch -> send_buffered batch -> flush
+//! 1. DEALER: `send_buffered` batch -> flush
+//! 2. ROUTER: receive batch -> `send_buffered` batch -> flush
 //! 3. DEALER: receive batch
 //! 4. Repeat
 //!

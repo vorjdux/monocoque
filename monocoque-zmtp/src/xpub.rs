@@ -261,6 +261,7 @@ impl XPubSocket {
     /// # Ok(())
     /// # }
     /// ```
+    #[allow(clippy::too_many_lines)]
     pub async fn recv_subscription(&mut self) -> io::Result<Option<SubscriptionEvent>> {
         use compio::buf::BufResult;
         use compio::io::AsyncRead;
@@ -474,12 +475,11 @@ impl XPubSocket {
                 let mut buf = BytesMut::new();
                 let mut ok = true;
                 for (i, frame) in msg.iter().enumerate() {
-                    match cipher.encrypt_frame(frame, i < last) {
-                        Ok(body) => crate::base::append_zmtp_cmd_frame(&mut buf, &body),
-                        Err(_) => {
-                            ok = false;
-                            break;
-                        }
+                    if let Ok(body) = cipher.encrypt_frame(frame, i < last) {
+                        crate::base::append_zmtp_cmd_frame(&mut buf, &body);
+                    } else {
+                        ok = false;
+                        break;
                     }
                 }
                 if !ok {

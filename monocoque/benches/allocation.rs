@@ -9,7 +9,7 @@ use bytes::{Bytes, BytesMut};
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion, Throughput};
 use monocoque_core::buffer::SegmentedBuffer;
 
-/// Bytes::copy_from_slice vs Bytes::from (moves ownership)
+/// `Bytes::copy_from_slice` vs `Bytes::from` (moves ownership)
 fn bench_bytes_construction(c: &mut Criterion) {
     let mut group = c.benchmark_group("bytes_construction");
 
@@ -53,7 +53,7 @@ fn bench_bytes_construction(c: &mut Criterion) {
     group.finish();
 }
 
-/// BytesMut reuse vs fresh allocation
+/// `BytesMut` reuse vs fresh allocation
 fn bench_bytesmut_reuse(c: &mut Criterion) {
     let mut group = c.benchmark_group("bytesmut_reuse");
 
@@ -76,7 +76,7 @@ fn bench_bytesmut_reuse(c: &mut Criterion) {
     group.finish();
 }
 
-/// SegmentedBuffer push/drain cycle (mimics the codec read path)
+/// `SegmentedBuffer` push/drain cycle (mimics the codec read path)
 fn bench_segmented_buffer(c: &mut Criterion) {
     let mut group = c.benchmark_group("segmented_buffer");
 

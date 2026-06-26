@@ -35,7 +35,7 @@ fn test_interop_pair() {
 
     let ctx = zmq::Context::new();
     let sock = ctx.socket(zmq::PAIR).unwrap();
-    sock.connect(&format!("tcp://{}", local_addr)).unwrap();
+    sock.connect(&format!("tcp://{local_addr}")).unwrap();
 
     sock.send("Ping", 0).unwrap();
     sock.set_rcvtimeo(5000).unwrap();

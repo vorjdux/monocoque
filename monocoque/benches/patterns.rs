@@ -76,8 +76,7 @@ fn monocoque_pubsub_fanout(c: &mut Criterion) {
                                 while count < MESSAGE_COUNT {
                                     match sub.recv().await {
                                         Ok(Some(_)) => count += 1,
-                                        Ok(None) => break, // Connection closed
-                                        Err(_) => break,   // Error occurred
+                                        Ok(None) | Err(_) => break,
                                     }
                                 }
                                 count
@@ -195,13 +194,17 @@ fn monocoque_topic_filtering(c: &mut Criterion) {
                     let mut sub = SubSocket::from_tcp(stream).await.unwrap();
                     sub.subscribe(b"match.").await.unwrap();
 
+                    #[allow(
+                        clippy::cast_precision_loss,
+                        clippy::cast_possible_truncation,
+                        clippy::cast_sign_loss
+                    )]
                     let expected = (MESSAGE_COUNT as f64 * matched_ratio) as usize;
                     let mut count = 0;
                     while count < expected {
                         match sub.recv().await {
                             Ok(Some(_)) => count += 1,
-                            Ok(None) => break, // Connection closed
-                            Err(_) => break,   // Error occurred
+                            Ok(None) | Err(_) => break,
                         }
                     }
                 });
@@ -237,6 +240,11 @@ fn zmq_topic_filtering(c: &mut Criterion) {
                 sub.connect(&endpoint).unwrap();
                 sub.set_subscribe(b"match.").unwrap();
 
+                #[allow(
+                    clippy::cast_precision_loss,
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss
+                )]
                 let expected = (MESSAGE_COUNT as f64 * matched_ratio) as usize;
                 let mut count = 0;
                 while count < expected {

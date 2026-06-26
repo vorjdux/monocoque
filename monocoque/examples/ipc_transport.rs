@@ -24,7 +24,7 @@ async fn main() -> std::io::Result<()> {
 
     println!("IPC Transport Example");
     println!("=====================\n");
-    println!("Socket path: {}", socket_path);
+    println!("Socket path: {socket_path}");
 
     // Clean up any existing socket
     let _ = std::fs::remove_file(socket_path);
@@ -32,7 +32,7 @@ async fn main() -> std::io::Result<()> {
     // Create listener
     println!("\n1. Creating IPC listener...");
     let listener = ipc::bind(socket_path).await?;
-    println!("   ✓ Listening on {}", socket_path);
+    println!("   ✓ Listening on {socket_path}");
 
     // Spawn server task
     let server_task = compio::runtime::spawn(async move {
@@ -47,16 +47,16 @@ async fn main() -> std::io::Result<()> {
                 match stream.read(buffer).await {
                     BufResult(Ok(n), buffer) if n > 0 => {
                         let message = String::from_utf8_lossy(&buffer[..n]);
-                        println!("   [Server] 📩 Received: {}", message);
+                        println!("   [Server] 📩 Received: {message}");
 
                         // Send response
                         let response = "Hello from server!";
                         match stream.write_all(response.as_bytes()).await {
-                            BufResult(Ok(_), _) => {
+                            BufResult(Ok(()), _) => {
                                 println!("   [Server] 📤 Sent response");
                             }
                             BufResult(Err(e), _) => {
-                                eprintln!("   [Server] ❌ Write error: {}", e);
+                                eprintln!("   [Server] ❌ Write error: {e}");
                             }
                         }
                     }
@@ -64,12 +64,12 @@ async fn main() -> std::io::Result<()> {
                         println!("   [Server] ⚠ Empty message received");
                     }
                     BufResult(Err(e), _) => {
-                        eprintln!("   [Server] ❌ Read error: {}", e);
+                        eprintln!("   [Server] ❌ Read error: {e}");
                     }
                 }
             }
             Err(e) => {
-                eprintln!("   [Server] ❌ Accept error: {}", e);
+                eprintln!("   [Server] ❌ Accept error: {e}");
             }
         }
     });
@@ -80,7 +80,7 @@ async fn main() -> std::io::Result<()> {
     // Connect client
     println!("\n2. Connecting IPC client...");
     let mut client = ipc::connect(socket_path).await?;
-    println!("   ✓ Connected to {}", socket_path);
+    println!("   ✓ Connected to {socket_path}");
 
     // Send message
     println!("\n3. Sending message from client...");
@@ -95,7 +95,7 @@ async fn main() -> std::io::Result<()> {
     let BufResult(result, buffer) = client.read(buffer).await;
     let n = result?;
     let response = String::from_utf8_lossy(&buffer[..n]);
-    println!("   📩 Received: {}", response);
+    println!("   📩 Received: {response}");
 
     // Wait for server to finish
     server_task.await;
