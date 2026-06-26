@@ -142,7 +142,7 @@ fn bench_socket_options(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark SocketOptions construction
+/// Benchmark `SocketOptions` construction
 fn bench_dealer_creation(c: &mut Criterion) {
     let mut group = c.benchmark_group("dealer_creation");
 

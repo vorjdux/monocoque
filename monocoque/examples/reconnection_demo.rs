@@ -20,6 +20,7 @@ use tracing::{error, info, warn};
 const MAX_RECONNECT_ATTEMPTS: u32 = 10;
 
 /// Connect to server with automatic reconnection
+#[allow(clippy::future_not_send)]
 async fn connect_with_retry(addr: &str, reconnect: &mut ReconnectState) -> io::Result<ReqSocket> {
     loop {
         info!(
@@ -41,10 +42,7 @@ async fn connect_with_retry(addr: &str, reconnect: &mut ReconnectState) -> io::R
                     error!("Maximum reconnection attempts reached");
                     return Err(io::Error::new(
                         io::ErrorKind::TimedOut,
-                        format!(
-                            "Failed to connect after {} attempts",
-                            MAX_RECONNECT_ATTEMPTS
-                        ),
+                        format!("Failed to connect after {MAX_RECONNECT_ATTEMPTS} attempts"),
                     ));
                 }
 
@@ -62,6 +60,7 @@ async fn connect_with_retry(addr: &str, reconnect: &mut ReconnectState) -> io::R
 }
 
 /// Main communication loop with automatic reconnection on errors
+#[allow(clippy::future_not_send)]
 async fn communication_loop(addr: &str) -> io::Result<()> {
     // Configure reconnection with exponential backoff
     let options = SocketOptions::default()
@@ -84,7 +83,7 @@ async fn communication_loop(addr: &str) -> io::Result<()> {
         let mut request_num = 0;
         loop {
             request_num += 1;
-            let message = format!("Request #{}", request_num);
+            let message = format!("Request #{request_num}");
 
             info!("Sending: {}", message);
             let request = vec![Bytes::from(message)];
@@ -103,20 +102,17 @@ async fn communication_loop(addr: &str) -> io::Result<()> {
             }
 
             // Wait for response
-            match socket.recv().await {
-                Ok(Some(response)) => {
-                    if let Some(data) = response.first() {
-                        info!("Received: {}", String::from_utf8_lossy(data));
-                        reconnect_state.reset(); // Reset on successful communication
-                    }
+            if let Ok(Some(response)) = socket.recv().await {
+                if let Some(data) = response.first() {
+                    info!("Received: {}", String::from_utf8_lossy(data));
+                    reconnect_state.reset(); // Reset on successful communication
                 }
-                Ok(None) | Err(_) => {
-                    warn!("Connection closed by server");
-                    let delay = reconnect_state.next_delay();
-                    warn!("Reconnecting in {:?}", delay);
-                    compio::time::sleep(delay).await;
-                    break; // Break inner loop to reconnect
-                }
+            } else {
+                warn!("Connection closed by server");
+                let delay = reconnect_state.next_delay();
+                warn!("Reconnecting in {:?}", delay);
+                compio::time::sleep(delay).await;
+                break; // Break inner loop to reconnect
             }
 
             // Wait a bit between requests

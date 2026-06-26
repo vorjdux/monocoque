@@ -160,7 +160,8 @@ async fn subscription_reader(
                                     if crate::security::curve::CurveMessageCipher::is_curve_message(
                                         &frame.payload,
                                     ) {
-                                        match arc_cipher.lock().decrypt_frame(&frame.payload) {
+                                        let mut cipher_guard = arc_cipher.lock();
+                                        match cipher_guard.decrypt_frame(&frame.payload) {
                                             Ok((_more, data)) => data,
                                             Err(_) => continue,
                                         }
@@ -226,6 +227,7 @@ async fn subscription_reader(
 }
 
 /// Worker thread that handles multiple subscribers
+#[allow(clippy::too_many_lines)]
 fn worker_thread(worker_id: usize, rx: Receiver<WorkerCommand>) {
     debug!("[Worker {}] Starting", worker_id);
 
@@ -302,14 +304,11 @@ fn worker_thread(worker_id: usize, rx: Receiver<WorkerCommand>) {
                             {
                                 let mut cipher = arc_cipher.lock();
                                 for (i, frame) in message.iter().enumerate() {
-                                    match cipher.encrypt_frame(frame, i < last) {
-                                        Ok(body) => {
-                                            crate::base::append_zmtp_cmd_frame(&mut buf, &body)
-                                        }
-                                        Err(_) => {
-                                            ok = false;
-                                            break;
-                                        }
+                                    if let Ok(body) = cipher.encrypt_frame(frame, i < last) {
+                                        crate::base::append_zmtp_cmd_frame(&mut buf, &body);
+                                    } else {
+                                        ok = false;
+                                        break;
                                     }
                                 }
                             }

@@ -65,7 +65,7 @@ impl SubscriptionTrie {
     /// Check if a topic matches any subscription
     ///
     /// Returns true if the topic should be delivered.
-    /// O(log N) using BTreeSet range lookup.
+    /// O(log N) using `BTreeSet` range lookup.
     #[must_use]
     pub fn matches(&self, topic: &[u8]) -> bool {
         if self.prefixes.is_empty() {

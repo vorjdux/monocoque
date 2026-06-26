@@ -47,6 +47,7 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(1000);
 /// - READY message on startup
 /// - HEARTBEAT messages every second
 /// - REPLY messages when processing requests
+#[allow(clippy::future_not_send)]
 async fn run_worker(worker_id: u32, crash_after: Option<u32>) -> std::io::Result<()> {
     info!("[Worker-{}] 🔧 Starting paranoid worker", worker_id);
 
@@ -102,7 +103,7 @@ async fn run_worker(worker_id: u32, crash_after: Option<u32>) -> std::io::Result
                 compio::runtime::time::sleep(Duration::from_millis(100)).await;
 
                 // Send reply (echo back with worker ID)
-                let reply_text = format!("Processed by worker-{}: {}", worker_id, request_data);
+                let reply_text = format!("Processed by worker-{worker_id}: {request_data}");
 
                 let mut reply = vec![Bytes::new()];
                 // Keep routing info frames
@@ -123,6 +124,7 @@ async fn run_worker(worker_id: u32, crash_after: Option<u32>) -> std::io::Result
 /// Simple client making requests
 ///
 /// Sends N requests and waits for replies
+#[allow(clippy::future_not_send)]
 async fn run_client(client_id: u32, num_requests: u32) -> std::io::Result<()> {
     info!("[Client-{}] 🔌 Starting", client_id);
 
@@ -132,7 +134,7 @@ async fn run_client(client_id: u32, num_requests: u32) -> std::io::Result<()> {
     let mut socket = ReqSocket::connect("127.0.0.1:5555").await?;
 
     for i in 1..=num_requests {
-        let request = format!("Request {} from client-{}", i, client_id);
+        let request = format!("Request {i} from client-{client_id}");
         info!("[Client-{}] 📨 Sending: {}", client_id, request);
 
         socket.send(vec![Bytes::from(request)]).await?;
@@ -158,11 +160,12 @@ async fn run_client(client_id: u32, num_requests: u32) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Simple broker using ZeroMQ proxy pattern
+/// Simple broker using `ZeroMQ` proxy pattern
 ///
-/// The proxy automatically forwards messages bidirectionally using futures::select!
+/// The proxy automatically forwards messages bidirectionally using `futures::select`!
 /// In production, you would intercept READY/HEARTBEAT messages
 /// to track worker liveness and maintain an LRU queue.
+#[allow(clippy::future_not_send)]
 async fn run_broker() -> std::io::Result<()> {
     info!("🚀 Starting Paranoid Pirate Broker");
 
@@ -261,7 +264,7 @@ fn main() -> std::io::Result<()> {
         .detach();
 
         // Wait for client to finish all requests
-        let _ = client1.await;
+        let () = client1.await;
 
         // Give time to see final heartbeats
         compio::runtime::time::sleep(Duration::from_secs(3)).await;

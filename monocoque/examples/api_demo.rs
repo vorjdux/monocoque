@@ -28,12 +28,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("No need to import from internal modules.\n");
 
     // Demonstrate that imports work
-    demonstrate_api_usage().await?;
+    demonstrate_api_usage();
 
     Ok(())
 }
 
-async fn demonstrate_api_usage() -> Result<(), Box<dyn std::error::Error>> {
+fn demonstrate_api_usage() {
     info!("=== API Organization ===");
     info!("✓ DealerSocket available");
     info!("✓ RouterSocket available");
@@ -42,6 +42,4 @@ async fn demonstrate_api_usage() -> Result<(), Box<dyn std::error::Error>> {
     info!("✓ SocketType enum available");
     info!("✓ Prelude module available");
     info!("\nClean, ergonomic API ready to use!");
-
-    Ok(())
 }

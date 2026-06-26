@@ -10,6 +10,7 @@ use monocoque_zmtp::pair::PairSocket;
 use monocoque_zmtp::proxy::{proxy_steerable, ProxyCommand};
 
 /// Bind a TCP listener and return a connected server+client PAIR socket pair.
+#[allow(clippy::future_not_send)]
 async fn pair_connected() -> (PairSocket, PairSocket) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -21,7 +22,7 @@ async fn pair_connected() -> (PairSocket, PairSocket) {
     (server, client)
 }
 
-/// ProxyCommand byte parsing is a pure function  -  no runtime needed.
+/// `ProxyCommand` byte parsing is a pure function  -  no runtime needed.
 #[test]
 fn test_proxy_command_parsing() {
     assert_eq!(

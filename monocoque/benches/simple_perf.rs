@@ -23,22 +23,22 @@ fn main() {
                 match rep.recv().await {
                     Ok(Some(msg)) => {
                         if rep.send(msg).await.is_err() {
-                            eprintln!("Server send failed at {}", i);
+                            eprintln!("Server send failed at {i}");
                             break;
                         }
                         count += 1;
                     }
                     Ok(None) => {
-                        eprintln!("Server got None at {}", i);
+                        eprintln!("Server got None at {i}");
                         break;
                     }
                     Err(e) => {
-                        eprintln!("Server recv error at {}: {}", i, e);
+                        eprintln!("Server recv error at {i}: {e}");
                         break;
                     }
                 }
             }
-            println!("Server processed {} messages", count);
+            println!("Server processed {count} messages");
         });
 
         // Give server time to start
@@ -49,13 +49,13 @@ fn main() {
         let mut socket = ReqSocket::new(stream).await.unwrap();
         let payload = Bytes::from(vec![0u8; 64]);
 
-        println!("Starting {} round-trips (64B payload)...", ITERATIONS);
+        println!("Starting {ITERATIONS} round-trips (64B payload)...");
 
         let start = Instant::now();
         let mut success_count = 0;
         for i in 0..ITERATIONS {
             if socket.send(vec![payload.clone()]).await.is_err() {
-                println!("Send failed at iteration {}", i);
+                println!("Send failed at iteration {i}");
                 break;
             }
             match socket.recv().await {
@@ -63,11 +63,11 @@ fn main() {
                     success_count += 1;
                 }
                 Ok(None) => {
-                    println!("Connection closed at iteration {}", i);
+                    println!("Connection closed at iteration {i}");
                     break;
                 }
                 Err(e) => {
-                    println!("Recv error at iteration {}: {}", i, e);
+                    println!("Recv error at iteration {i}: {e}");
                     break;
                 }
             }
@@ -76,11 +76,11 @@ fn main() {
 
         server.await;
 
-        println!("Client completed {} messages", success_count);
-        let per_msg = elapsed.as_micros() as f64 / success_count as f64;
+        println!("Client completed {success_count} messages");
+        let per_msg = elapsed.as_secs_f64() * 1_000_000.0 / f64::from(success_count);
         println!("\nResults:");
-        println!("  Total time: {:?}", elapsed);
-        println!("  Per message: {:.2} µs", per_msg);
+        println!("  Total time: {elapsed:?}");
+        println!("  Per message: {per_msg:.2} µs");
         println!("  Throughput: {:.0} msgs/sec", 1_000_000.0 / per_msg);
     });
 }

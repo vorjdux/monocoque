@@ -46,15 +46,15 @@ pub type InprocSender = Sender<InprocMessage>;
 pub type InprocReceiver = Receiver<InprocMessage>;
 
 /// Global registry of inproc endpoints (server receives from clients)
-static INPROC_REGISTRY: once_cell::sync::Lazy<DashMap<String, InprocSender>> =
-    once_cell::sync::Lazy::new(DashMap::new);
+static INPROC_REGISTRY: std::sync::LazyLock<DashMap<String, InprocSender>> =
+    std::sync::LazyLock::new(DashMap::new);
 
 /// Registry of server→client senders for bidirectional inproc connections.
 ///
 /// When `bind_inproc_bidi` is called, the server→client sender is registered
 /// here so that `connect_inproc_bidi` can retrieve it to receive server replies.
-static INPROC_REPLY_REGISTRY: once_cell::sync::Lazy<DashMap<String, InprocSender>> =
-    once_cell::sync::Lazy::new(DashMap::new);
+static INPROC_REPLY_REGISTRY: std::sync::LazyLock<DashMap<String, InprocSender>> =
+    std::sync::LazyLock::new(DashMap::new);
 
 /// Bind to an inproc endpoint and return sender/receiver pair.
 ///
@@ -367,8 +367,8 @@ mod tests {
         let endpoint = "inproc://test-duplicate";
 
         // First bind should succeed
-        let _result1 = bind_inproc(endpoint);
-        assert!(_result1.is_ok());
+        let result1 = bind_inproc(endpoint);
+        assert!(result1.is_ok());
 
         // Second bind should fail
         let result2 = bind_inproc(endpoint);

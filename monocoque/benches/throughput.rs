@@ -9,7 +9,7 @@
 //! - Timer starts on the PULL side just before the first recv.
 //! - Both monocoque and zmq use the same protocol: one send per message, no reply.
 //! - Warmup happens outside measurement (connection setup + handshake).
-//! - monocoque_push_pull_coalesced uses write coalescing (64 KB flush threshold) to
+//! - `monocoque_push_pull_coalesced` uses write coalescing (64 KB flush threshold) to
 //!   batch multiple sends into a single kernel write, closing the gap with libzmq's
 //!   internal IO-thread batching.
 
@@ -29,7 +29,7 @@ const BATCH_SIZE: usize = 10_000;
 /// PULL binds on a separate OS thread (own compio runtime). PUSH connects and
 /// sends in the bench thread. The timer lives on the PULL side: it starts just
 /// before the first recv and stops after the last one. That elapsed duration is
-/// returned to criterion via iter_custom.
+/// returned to criterion via `iter_custom`.
 fn monocoque_push_pull(c: &mut Criterion) {
     monocoque::dev_tracing::init_tracing();
     let mut group = c.benchmark_group("throughput/monocoque/push_pull");
@@ -97,9 +97,9 @@ fn monocoque_push_pull(c: &mut Criterion) {
 
 /// Benchmark monocoque PUSH/PULL throughput — with write coalescing enabled.
 ///
-/// Same structure as monocoque_push_pull but the PUSH socket batches encoded
+/// Same structure as `monocoque_push_pull` but the PUSH socket batches encoded
 /// messages into a 64 KB internal buffer before writing to the kernel.  A
-/// manual flush() after the loop drains any remainder.  This mirrors the
+/// manual `flush()` after the loop drains any remainder.  This mirrors the
 /// batching that libzmq performs internally via its IO-thread queue.
 fn monocoque_push_pull_coalesced(c: &mut Criterion) {
     monocoque::dev_tracing::init_tracing();
@@ -177,7 +177,7 @@ fn monocoque_push_pull_coalesced(c: &mut Criterion) {
 
 /// Benchmark rust-zmq (libzmq) PUSH/PULL throughput.
 ///
-/// Same structure as monocoque_push_pull: PULL binds in a separate thread,
+/// Same structure as `monocoque_push_pull`: PULL binds in a separate thread,
 /// PUSH connects in the bench thread. Timer on the PULL side.
 fn zmq_push_pull(c: &mut Criterion) {
     let mut group = c.benchmark_group("throughput/zmq/push_pull");

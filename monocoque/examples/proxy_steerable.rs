@@ -23,6 +23,7 @@ use std::time::Duration;
 use tracing::{error, info};
 
 /// Simple worker that processes requests
+#[allow(clippy::future_not_send)]
 async fn worker(id: u32) -> std::io::Result<()> {
     info!("[Worker-{}] Starting", id);
 
@@ -50,7 +51,7 @@ async fn worker(id: u32) -> std::io::Result<()> {
             compio::runtime::time::sleep(Duration::from_millis(100)).await;
 
             // Send reply
-            let reply = format!("Processed by worker-{}", id);
+            let reply = format!("Processed by worker-{id}");
             let mut response = vec![Bytes::new()];
             response.extend(msg[..msg.len().saturating_sub(1)].to_vec());
             response.push(Bytes::from(reply));
@@ -63,6 +64,7 @@ async fn worker(id: u32) -> std::io::Result<()> {
 }
 
 /// Client that sends requests
+#[allow(clippy::future_not_send)]
 async fn client(id: u32, requests: u32) -> std::io::Result<()> {
     info!("[Client-{}] Starting", id);
 
@@ -72,7 +74,7 @@ async fn client(id: u32, requests: u32) -> std::io::Result<()> {
     let mut socket = ReqSocket::connect("127.0.0.1:5555").await?;
 
     for i in 1..=requests {
-        let request = format!("Request {} from client-{}", i, id);
+        let request = format!("Request {i} from client-{id}");
         info!("[Client-{}] Sending: {}", id, request);
 
         socket.send(vec![Bytes::from(request)]).await?;
@@ -95,6 +97,7 @@ async fn client(id: u32, requests: u32) -> std::io::Result<()> {
 }
 
 /// Broker with steerable proxy
+#[allow(clippy::future_not_send)]
 async fn broker() -> std::io::Result<()> {
     info!("🚀 Starting Steerable Broker");
 
@@ -124,6 +127,7 @@ async fn broker() -> std::io::Result<()> {
 }
 
 /// Controller that sends commands to proxy
+#[allow(clippy::future_not_send)]
 async fn controller() -> std::io::Result<()> {
     info!("[Controller] Starting");
 

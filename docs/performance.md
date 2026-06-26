@@ -24,11 +24,11 @@ a 64 KB buffer flushed in one syscall; call `flush()` after the last send.
 
 | Message size | monocoque eager | monocoque coalesced | rust-zmq | coalesced vs zmq |
 |---|---|---|---|---|
-| 64 B | 149 K msg/s | **6.1 M msg/s** | 971 K msg/s | **6.3x faster** |
-| 256 B | 146 K msg/s | **3.5 M msg/s** | 699 K msg/s | **5.0x faster** |
-| 1 KB | 131 K msg/s | **1.4 M msg/s** | 455 K msg/s | **3.1x faster** |
-| 4 KB | 122 K msg/s | **391 K msg/s** | 168 K msg/s | **2.3x faster** |
-| 16 KB | 109 K msg/s | 113 K msg/s | 71 K msg/s | **1.6x faster** |
+| 64 B | 153 K msg/s | **6.3 M msg/s** | 971 K msg/s | **6.5x faster** |
+| 256 B | 150 K msg/s | **3.6 M msg/s** | 699 K msg/s | **5.2x faster** |
+| 1 KB | 133 K msg/s | **1.5 M msg/s** | 455 K msg/s | **3.3x faster** |
+| 4 KB | 126 K msg/s | **466 K msg/s** | 168 K msg/s | **2.8x faster** |
+| 16 KB | 111 K msg/s | 120 K msg/s | 71 K msg/s | **1.7x faster** |
 
 The eager mode's lower numbers vs zmq come from one io_uring SQ entry per
 message. Write coalescing batches ~970 x 64 B messages (or ~240 x 256 B) into
@@ -46,10 +46,10 @@ control over batch boundaries:
 
 | Message size | Throughput | Bandwidth |
 |---|---|---|
-| 64 B | 1.05 M msg/s | 64 MiB/s |
-| 256 B | 893 K msg/s | 218 MiB/s |
-| 1 KB | 535 K msg/s | 521 MiB/s |
-| 4 KB | 170 K msg/s | 664 MiB/s |
+| 64 B | 1.24 M msg/s | 76 MiB/s |
+| 256 B | 1.04 M msg/s | 254 MiB/s |
+| 1 KB | 597 K msg/s | 583 MiB/s |
+| 4 KB | 210 K msg/s | 820 MiB/s |
 
 ---
 
@@ -62,9 +62,9 @@ Both monocoque and zmq are measured identically.
 
 | Message size | monocoque | rust-zmq | Improvement |
 |---|---|---|---|
-| 64 B | 322 µs | 507 µs | 37% lower |
-| 256 B | 262 µs | 500 µs | 48% lower |
-| 1 KB | 266 µs | 591 µs | 55% lower |
+| 64 B | 214 µs | 379 µs | 44% lower |
+| 256 B | 210 µs | 379 µs | 45% lower |
+| 1 KB | 214 µs | 408 µs | 47% lower |
 
 The monocoque advantage here is mainly that `drop(socket)` is faster: the
 async socket cleanup completes synchronously within `block_on`, while zmq's

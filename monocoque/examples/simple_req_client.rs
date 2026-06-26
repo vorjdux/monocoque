@@ -17,9 +17,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Connect to server
-    let addr = format!("127.0.0.1:{}", port);
+    let addr = format!("127.0.0.1:{port}");
     let stream = TcpStream::connect(&addr).await?;
-    println!("Connected to {}", addr);
+    println!("Connected to {addr}");
 
     let mut socket = monocoque_zmtp::ReqSocket::new(stream).await?;
 

@@ -52,6 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[allow(clippy::future_not_send)]
 async fn router_server(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
     info!("[ROUTER] Binding to {addr}");
     let listener = TcpListener::bind(addr).await?;
@@ -95,6 +96,7 @@ async fn router_server(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[allow(clippy::future_not_send)]
 async fn dealer_client(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
     info!("[DEALER] Connecting to {addr}");
     let stream = TcpStream::connect(addr).await?;

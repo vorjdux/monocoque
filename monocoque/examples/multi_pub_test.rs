@@ -60,8 +60,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Sending 5 messages...");
     for i in 0..5 {
         let msg = vec![
-            Bytes::from(format!("test.msg.{}", i)),
-            Bytes::from(format!("data-{}", i)),
+            Bytes::from(format!("test.msg.{i}")),
+            Bytes::from(format!("data-{i}")),
         ];
         pub_socket.send(msg).await?;
         info!("Sent message {}", i);

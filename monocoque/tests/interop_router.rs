@@ -46,7 +46,7 @@ fn test_router_explicit_routing() {
     let ctx = zmq::Context::new();
     let dealer = ctx.socket(zmq::DEALER).unwrap();
     dealer.set_identity(b"CLIENT_A").unwrap();
-    dealer.connect(&format!("tcp://{}", local_addr)).unwrap();
+    dealer.connect(&format!("tcp://{local_addr}")).unwrap();
 
     dealer.send("Hello", 0).unwrap();
 

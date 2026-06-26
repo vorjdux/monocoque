@@ -81,7 +81,7 @@
 #![allow(clippy::never_loop)] // State machines use loop with early returns
 
 // Internal modules (not part of public API)
-mod base;
+pub(crate) mod base;
 pub mod codec;
 mod greeting;
 mod handshake;

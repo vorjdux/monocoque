@@ -25,6 +25,9 @@ pub const PAGE_ALIGN: usize = 128;
 /// - Freed only when the last Arc<Page> is dropped.
 struct Page {
     ptr: NonNull<u8>,
+    /// Actual allocation size in bytes. Equal to `PAGE_SIZE` for normal pages;
+    /// larger when a single request exceeds `PAGE_SIZE` (dedicated oversized page).
+    size: usize,
 }
 
 unsafe impl Send for Page {}
@@ -33,7 +36,7 @@ unsafe impl Sync for Page {}
 impl Drop for Page {
     fn drop(&mut self) {
         unsafe {
-            let layout = Layout::from_size_align_unchecked(PAGE_SIZE, PAGE_ALIGN);
+            let layout = Layout::from_size_align_unchecked(self.size, PAGE_ALIGN);
             dealloc(self.ptr.as_ptr(), layout);
         }
     }
@@ -50,7 +53,7 @@ struct PageOwner {
 
 impl AsRef<[u8]> for PageOwner {
     fn as_ref(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.page.ptr.as_ptr(), PAGE_SIZE) }
+        unsafe { std::slice::from_raw_parts(self.page.ptr.as_ptr(), self.page.size) }
     }
 }
 
@@ -123,7 +126,7 @@ impl SlabMut {
         let base = self.page.ptr.as_ptr();
         let offset = unsafe { self.ptr.as_ptr().offset_from(base) } as usize;
 
-        debug_assert!(offset + self.len <= PAGE_SIZE);
+        debug_assert!(offset + self.len <= self.page.size);
 
         let owner = PageOwner { page: self.page };
 
@@ -139,6 +142,8 @@ impl SlabMut {
 /// One arena per socket actor.
 pub struct IoArena {
     current: Option<Arc<Page>>,
+    /// Usable size of `current` in bytes.
+    current_page_size: usize,
     offset: usize,
 }
 
@@ -153,25 +158,31 @@ impl IoArena {
     pub const fn new() -> Self {
         Self {
             current: None,
+            current_page_size: PAGE_SIZE,
             offset: PAGE_SIZE, // force alloc on first use
         }
     }
 
     /// Allocate a mutable buffer suitable for a single IO read.
     ///
+    /// For `size <= PAGE_SIZE` multiple allocations share the same slab page
+    /// (bump-pointer, zero-overhead). For `size > PAGE_SIZE` a dedicated page
+    /// of exactly `size` bytes is allocated; subsequent small allocations start
+    /// a fresh normal page. No artificial ceiling on `size`.
+    ///
     /// This guarantees:
     /// - Stable memory address
     /// - No reallocation
     /// - No aliasing with other `SlabMut`
-    ///
-    /// # Panics
-    ///
-    /// Panics in debug builds if `size > PAGE_SIZE`.
     pub fn alloc_mut(&mut self, size: usize) -> SlabMut {
-        debug_assert!(size <= PAGE_SIZE);
+        // For requests that exceed a normal page, allocate a dedicated page of
+        // the exact required size. This never applies in the common case
+        // (read_buffer_size <= PAGE_SIZE), so the branch is always-not-taken
+        // on the hot path and costs nothing in practice.
+        let page_size = size.max(PAGE_SIZE);
 
-        if self.current.is_none() || self.offset + size > PAGE_SIZE {
-            self.alloc_page();
+        if self.current.is_none() || self.offset + size > self.current_page_size {
+            self.alloc_page(page_size);
         }
 
         let page = self.current.as_ref().unwrap().clone();
@@ -189,9 +200,9 @@ impl IoArena {
     }
 
     #[inline(never)]
-    fn alloc_page(&mut self) {
+    fn alloc_page(&mut self, page_size: usize) {
         unsafe {
-            let layout = Layout::from_size_align_unchecked(PAGE_SIZE, PAGE_ALIGN);
+            let layout = Layout::from_size_align_unchecked(page_size, PAGE_ALIGN);
             let ptr = alloc(layout);
             if ptr.is_null() {
                 std::alloc::handle_alloc_error(layout);
@@ -199,8 +210,57 @@ impl IoArena {
 
             self.current = Some(Arc::new(Page {
                 ptr: NonNull::new_unchecked(ptr),
+                size: page_size,
             }));
+            self.current_page_size = page_size;
             self.offset = 0;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use compio::buf::IoBuf;
+
+    #[test]
+    fn oversized_alloc_does_not_panic_or_corrupt() {
+        // Regression test: read_buffer_size > PAGE_SIZE used to cause a
+        // buffer overflow (io_uring writes past the page) and a panic in
+        // freeze() with "range end out of bounds".
+        let mut arena = IoArena::new();
+        let size = PAGE_SIZE + 1024;
+        let mut slab = arena.alloc_mut(size);
+        assert_eq!(slab.buf_capacity(), size);
+        // Simulate io_uring reporting `size` bytes written.
+        unsafe { slab.set_buf_init(size) };
+        let bytes = slab.freeze();
+        assert_eq!(bytes.len(), size);
+    }
+
+    #[test]
+    fn normal_allocs_still_share_a_page() {
+        // Two small allocations must come from the same backing page
+        // (bump-pointer, no extra syscall).
+        let mut arena = IoArena::new();
+        let slab1 = arena.alloc_mut(4096);
+        let slab2 = arena.alloc_mut(4096);
+        assert!(std::ptr::eq(
+            Arc::as_ptr(&slab1.page),
+            Arc::as_ptr(&slab2.page),
+        ));
+    }
+
+    #[test]
+    fn oversized_alloc_followed_by_normal_gets_fresh_page() {
+        // After a dedicated oversized page, the next normal allocation must
+        // not share that oversized page (offset would overflow it).
+        let mut arena = IoArena::new();
+        let large = arena.alloc_mut(PAGE_SIZE + 512);
+        let small = arena.alloc_mut(512);
+        assert!(!std::ptr::eq(
+            Arc::as_ptr(&large.page),
+            Arc::as_ptr(&small.page),
+        ));
     }
 }

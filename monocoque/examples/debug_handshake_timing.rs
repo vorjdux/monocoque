@@ -14,7 +14,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Start publisher
     let start = Instant::now();
-    let mut pub_socket = PubSocket::bind(format!("127.0.0.1:{}", port)).await?;
+    let mut pub_socket = PubSocket::bind(format!("127.0.0.1:{port}")).await?;
     info!("Publisher bound in {:?}", start.elapsed());
 
     // Start subscriber in background
@@ -23,7 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("[SUB] Starting connect...");
 
         let before_connect = Instant::now();
-        let socket = SubSocket::connect(&format!("127.0.0.1:{}", port)).await;
+        let socket = SubSocket::connect(&format!("127.0.0.1:{port}")).await;
         info!(
             "[SUB] connect() completed in {:?}",
             before_connect.elapsed()

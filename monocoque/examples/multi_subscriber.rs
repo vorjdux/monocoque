@@ -13,6 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Runtime::new()?.block_on(async_main())
 }
 
+#[allow(clippy::future_not_send)]
 async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     // Set up logging
     let subscriber = FmtSubscriber::builder()
@@ -101,11 +102,12 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[allow(clippy::future_not_send)]
 async fn run_subscriber(port: u16, topic: &str, id: u8) -> std::io::Result<()> {
     info!("[SUB{}] Starting subscriber for topic: '{}'", id, topic);
 
     // Connect to publisher
-    let endpoint = format!("127.0.0.1:{}", port);
+    let endpoint = format!("127.0.0.1:{port}");
     let mut sub_socket = SubSocket::connect(&endpoint).await?;
     info!("[SUB{}] Connected to {}", id, endpoint);
 

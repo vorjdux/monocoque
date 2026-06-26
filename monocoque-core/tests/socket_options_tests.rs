@@ -66,12 +66,12 @@ fn test_combined_options() {
         .with_tcp_keepalive(1)
         .with_ipv6(true)
         .with_rate(500)
-        .with_sndbuf(131072);
+        .with_sndbuf(131_072);
 
     assert_eq!(opts.recv_timeout, Some(Duration::from_secs(5)));
     assert_eq!(opts.send_timeout, Some(Duration::from_secs(5)));
     assert_eq!(opts.tcp_keepalive, 1);
     assert!(opts.ipv6);
     assert_eq!(opts.rate, 500);
-    assert_eq!(opts.sndbuf, 131072);
+    assert_eq!(opts.sndbuf, 131_072);
 }

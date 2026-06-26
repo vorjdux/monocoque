@@ -1,4 +1,4 @@
-/// PubSub Events Example
+/// `PubSub` Events Example
 ///
 /// This example demonstrates PUB/SUB pattern for event distribution:
 /// - Publisher broadcasts events on different topics using worker pool
@@ -69,6 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[allow(clippy::future_not_send)]
 async fn run_subscriber() -> Result<(), Box<dyn std::error::Error>> {
     info!("[Subscriber] Task started");
     info!("[Subscriber] Connecting to publisher on port 5558...");

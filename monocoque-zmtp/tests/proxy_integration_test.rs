@@ -21,13 +21,15 @@ use std::time::Duration;
 ///
 /// The caller is responsible for the accept and connect calls in the
 /// appropriate runtime context.
+#[allow(clippy::future_not_send)]
 async fn bind_listener() -> (TcpListener, std::net::SocketAddr) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     (listener, addr)
 }
 
-/// Connect two PairSockets over TCP and return (server_side, client_side).
+/// Connect two `PairSockets` over TCP and return (`server_side`, `client_side`).
+#[allow(clippy::future_not_send)]
 async fn pair_connected() -> (PairSocket, PairSocket) {
     let (listener, addr) = bind_listener().await;
     let client_task = compio::runtime::spawn(PairSocket::connect(addr));
@@ -96,7 +98,7 @@ fn test_proxy_steerable_terminate() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Send a few messages through the proxy, then send "STATISTICS" on the control
-/// socket and verify the reply starts with "messages_forwarded=".
+/// socket and verify the reply starts with "`messages_forwarded`=".
 #[test]
 fn test_proxy_steerable_statistics() {
     let (stats_tx, stats_rx) = mpsc::channel::<String>();
@@ -120,7 +122,7 @@ fn test_proxy_steerable_statistics() {
                 // Forward a couple of messages so the counter is non-zero.
                 for i in 0..2u32 {
                     client_a
-                        .send(vec![Bytes::from(format!("msg-{}", i))])
+                        .send(vec![Bytes::from(format!("msg-{i}"))])
                         .await
                         .unwrap();
                     let _msg = compio::time::timeout(Duration::from_secs(5), client_b.recv())
@@ -160,8 +162,7 @@ fn test_proxy_steerable_statistics() {
     let reply = stats_rx.recv_timeout(Duration::from_secs(10)).unwrap();
     assert!(
         reply.starts_with("messages_forwarded="),
-        "expected reply starting with 'messages_forwarded=', got: {:?}",
-        reply
+        "expected reply starting with 'messages_forwarded=', got: {reply:?}"
     );
 }
 

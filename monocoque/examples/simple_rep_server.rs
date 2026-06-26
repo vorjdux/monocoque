@@ -20,43 +20,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Bind TCP listener
-    let addr = format!("127.0.0.1:{}", port);
+    let addr = format!("127.0.0.1:{port}");
     let listener = TcpListener::bind(&addr).await?;
-    println!("REP server listening on {}", addr);
+    println!("REP server listening on {addr}");
 
     // Accept connection
     let (stream, peer) = listener.accept().await?;
-    println!("Accepted connection from {}", peer);
+    println!("Accepted connection from {peer}");
 
     let mut socket = monocoque_zmtp::RepSocket::new(stream).await?;
 
     // Echo loop
     loop {
-        match socket.recv().await? {
-            Some(msg) => {
-                println!("Received {} frames", msg.len());
+        if let Some(msg) = socket.recv().await? {
+            println!("Received {} frames", msg.len());
 
-                // Echo back with "Echo: " prefix on first frame
-                let mut reply = Vec::with_capacity(msg.len());
+            // Echo back with "Echo: " prefix on first frame
+            let mut reply = Vec::with_capacity(msg.len());
 
-                if !msg.is_empty() {
-                    let first_frame = format!("Echo: {}", String::from_utf8_lossy(&msg[0]));
-                    reply.push(Bytes::from(first_frame));
+            if msg.is_empty() {
+                reply.push(Bytes::from("Echo: <empty>"));
+            } else {
+                let first_frame = format!("Echo: {}", String::from_utf8_lossy(&msg[0]));
+                reply.push(Bytes::from(first_frame));
 
-                    // Copy remaining frames as-is
-                    for frame in &msg[1..] {
-                        reply.push(frame.clone());
-                    }
-                } else {
-                    reply.push(Bytes::from("Echo: <empty>"));
+                // Copy remaining frames as-is
+                for frame in &msg[1..] {
+                    reply.push(frame.clone());
                 }
+            }
 
-                socket.send(reply).await?;
-            }
-            None => {
-                println!("Connection closed");
-                break;
-            }
+            socket.send(reply).await?;
+        } else {
+            println!("Connection closed");
+            break;
         }
     }
 

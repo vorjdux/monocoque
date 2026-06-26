@@ -23,7 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Send test messages
     for i in 0..10 {
-        let msg = vec![Bytes::from(format!("test.{}", i)), Bytes::from("data")];
+        let msg = vec![Bytes::from(format!("test.{i}")), Bytes::from("data")];
         pub_socket.send(msg).await?;
         info!("Sent message {}", i);
         thread::sleep(Duration::from_millis(100));

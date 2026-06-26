@@ -18,7 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Waiting for connection...");
     let (stream, peer) = listener.accept().await?;
-    println!("✓ Accepted connection from {}", peer);
+    println!("✓ Accepted connection from {peer}");
 
     println!("Creating RepSocket (will perform handshake)...");
     let mut socket = monocoque_zmtp::RepSocket::new(stream).await?;

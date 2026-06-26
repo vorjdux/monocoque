@@ -1,0 +1,22 @@
+[workspace]
+
+[package]
+name = "monocoque_bench_peer"
+version = "0.1.0"
+edition = "2021"
+description = "Two-process benchmark peer for the monocoque comparison suite"
+
+[[bin]]
+name = "monocoque_bench_peer"
+path = "src/main.rs"
+
+[dependencies]
+bytes = "1.11"
+compio = { version = "0.10", features = ["runtime", "macros", "time", "bytes"] }
+libc = "0.2"
+monocoque-rs = { path = "../../monocoque", features = ["zmq"] }
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = "fat"

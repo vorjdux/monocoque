@@ -1,9 +1,9 @@
 //! Example demonstrating ROUTER identity assignment and management.
 //!
 //! Shows how to:
-//! - Assign explicit identities to peers using connect_routing_id
+//! - Assign explicit identities to peers using `connect_routing_id`
 //! - Route messages to specific workers by identity
-//! - Use router_mandatory mode for error handling
+//! - Use `router_mandatory` mode for error handling
 
 use bytes::Bytes;
 use monocoque::zmq::{DealerSocket, RouterSocket};
@@ -74,6 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[allow(clippy::future_not_send)]
 async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
     // Bind ROUTER socket
     let (listener, mut router) = RouterSocket::bind("tcp://0.0.0.0:5556").await?;
@@ -85,7 +86,7 @@ async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
 
     // Get peer identity
     let peer_identity = router.peer_identity();
-    println!("[Server] First peer identity: {:?}\n", peer_identity);
+    println!("[Server] First peer identity: {peer_identity:?}\n");
 
     // Receive registration from first worker
     if let Ok(Some(msg)) = router.recv().await {

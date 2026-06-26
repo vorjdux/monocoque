@@ -24,6 +24,7 @@ use std::time::Duration;
 /// N subscribers, each on a distinct topic prefix, receive exactly the messages
 /// published on their prefix and nothing else.
 #[test]
+#[allow(clippy::needless_collect)]
 fn test_pubsub_fanout_distinct_topics() {
     const N: usize = 4;
     const MSGS: usize = 20;
@@ -57,8 +58,8 @@ fn test_pubsub_fanout_distinct_topics() {
                 for j in 0..MSGS {
                     pub_sock
                         .send(vec![
-                            Bytes::from(format!("t{}", i)),
-                            Bytes::from(format!("{}", j)),
+                            Bytes::from(format!("t{i}")),
+                            Bytes::from(format!("{j}")),
                         ])
                         .await
                         .unwrap();
@@ -80,7 +81,7 @@ fn test_pubsub_fanout_distinct_topics() {
                     .block_on(async move {
                         let stream = compio::net::TcpStream::connect(addr).await.unwrap();
                         let mut sub = SubSocket::from_tcp(stream).await.unwrap();
-                        sub.subscribe(Bytes::from(format!("t{}", i))).await.unwrap();
+                        sub.subscribe(Bytes::from(format!("t{i}"))).await.unwrap();
 
                         // Signal that subscription bytes have been sent.
                         ready_tx.send(()).unwrap();
@@ -95,9 +96,8 @@ fn test_pubsub_fanout_distinct_topics() {
 
                             assert_eq!(
                                 msg[0],
-                                Bytes::from(format!("t{}", i)),
-                                "subscriber {} got wrong topic",
-                                i
+                                Bytes::from(format!("t{i}")),
+                                "subscriber {i} got wrong topic"
                             );
                             received += 1;
                         }
@@ -110,11 +110,10 @@ fn test_pubsub_fanout_distinct_topics() {
     for (i, handle) in handles.into_iter().enumerate() {
         let count = handle
             .join()
-            .unwrap_or_else(|_| panic!("subscriber {} thread panicked", i));
+            .unwrap_or_else(|_| panic!("subscriber {i} thread panicked"));
         assert_eq!(
             count, MSGS,
-            "subscriber {} received {}/{} messages",
-            i, count, MSGS
+            "subscriber {i} received {count}/{MSGS} messages"
         );
     }
 }
@@ -238,7 +237,7 @@ fn test_pubsub_fanout_overlapping_topics() {
 // ────────────────────────────────────────────────────────────────────────────
 
 /// Multiple DEALER clients each exchange several request-reply round-trips with
-/// independent RouterSocket instances (one RouterSocket per accepted connection).
+/// independent `RouterSocket` instances (one `RouterSocket` per accepted connection).
 /// Verifies routing IDs are unique and no messages are mixed between clients.
 #[test]
 fn test_router_dealer_multi_peer() {
@@ -285,8 +284,7 @@ fn test_router_dealer_multi_peer() {
                         let mut dealer = DealerSocket::connect(addr).await.unwrap();
 
                         for round in 0..ROUNDS {
-                            let payload =
-                                Bytes::from(format!("client{}-round{}", client_id, round));
+                            let payload = Bytes::from(format!("client{client_id}-round{round}"));
                             dealer
                                 .send(vec![Bytes::new(), payload.clone()])
                                 .await
@@ -302,12 +300,10 @@ fn test_router_dealer_multi_peer() {
                             assert_eq!(
                                 reply.last().unwrap(),
                                 &payload,
-                                "client {} round {} got wrong payload",
-                                client_id,
-                                round
+                                "client {client_id} round {round} got wrong payload"
                             );
                         }
-                    })
+                    });
             })
         })
         .collect();

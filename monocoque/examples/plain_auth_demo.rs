@@ -53,7 +53,7 @@ async fn main() {
                 eprintln!("Usage: {} client <username> <password>", args[0]);
                 std::process::exit(1);
             }
-            run_client(&args[2], &args[3]).await
+            run_client(&args[2], &args[3]).await;
         }
         _ => {
             eprintln!("Unknown command. Use 'server' or 'client'");
@@ -62,8 +62,9 @@ async fn main() {
     }
 }
 
+#[allow(clippy::future_not_send)]
 async fn run_server() {
-    println!("Starting PLAIN authentication server on {}", SERVER_ADDR);
+    println!("Starting PLAIN authentication server on {SERVER_ADDR}");
 
     let mut auth_handler = StaticPlainHandler::new();
     auth_handler.add_user("admin", "secret123");
@@ -81,33 +82,31 @@ async fn run_server() {
         .with_zap_domain("example");
 
     let (stream, addr) = listener.accept().await.expect("Failed to accept");
-    println!("Connection from {}", addr);
+    println!("Connection from {addr}");
 
     let mut socket = RepSocket::from_tcp_with_options(stream, options)
         .await
         .expect("Failed to create socket");
 
     for i in 1..=3 {
-        match socket.recv().await {
-            Ok(Some(msg)) => {
-                let request = String::from_utf8_lossy(&msg[0]);
-                println!("Request #{}: {}", i, request);
+        if let Ok(Some(msg)) = socket.recv().await {
+            let request = String::from_utf8_lossy(&msg[0]);
+            println!("Request #{i}: {request}");
 
-                let response = format!("Server says: {}", request);
-                socket.send(vec![Bytes::from(response)]).await.ok();
-            }
-            _ => {
-                println!("Connection closed");
-                break;
-            }
+            let response = format!("Server says: {request}");
+            socket.send(vec![Bytes::from(response)]).await.ok();
+        } else {
+            println!("Connection closed");
+            break;
         }
     }
 
     println!("Server shutting down");
 }
 
+#[allow(clippy::future_not_send)]
 async fn run_client(username: &str, password: &str) {
-    println!("Connecting as user: {}", username);
+    println!("Connecting as user: {username}");
 
     let options = SocketOptions::new()
         .with_plain_credentials(username, password)
@@ -121,23 +120,20 @@ async fn run_client(username: &str, password: &str) {
     println!("Connected to server");
 
     for i in 1..=3 {
-        let message = format!("Hello from {} (message {})", username, i);
-        println!("Sending: {}", message);
+        let message = format!("Hello from {username} (message {i})");
+        println!("Sending: {message}");
 
         socket
             .send(vec![Bytes::from(message)])
             .await
             .expect("Send failed");
 
-        match socket.recv().await {
-            Ok(Some(msg)) => {
-                let response = String::from_utf8_lossy(&msg[0]);
-                println!("Response: {}", response);
-            }
-            _ => {
-                println!("Empty response");
-                return;
-            }
+        if let Ok(Some(msg)) = socket.recv().await {
+            let response = String::from_utf8_lossy(&msg[0]);
+            println!("Response: {response}");
+        } else {
+            println!("Empty response");
+            return;
         }
 
         compio::time::sleep(Duration::from_millis(500)).await;

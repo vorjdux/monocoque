@@ -105,7 +105,7 @@ async fn test_req_strict_recv_recv_fails() -> io::Result<()> {
 ///
 /// Relaxed mode skips the strict enforcement that prevents send-after-send.
 /// Full request pipelining (N sends then N recvs) is not yet implemented  -
-/// each recv() still transitions to Idle, so send/recv still need to interleave.
+/// each `recv()` still transitions to Idle, so send/recv still need to interleave.
 #[compio::test]
 async fn test_req_relaxed_send_send_succeeds() -> io::Result<()> {
     // Setup REP server that handles multiple requests
@@ -163,10 +163,10 @@ async fn test_req_strict_normal_flow() -> io::Result<()> {
         // Handle 3 request-reply cycles
         for i in 0..3 {
             let req = rep_socket.recv().await?.expect("Should receive request");
-            assert_eq!(req[0], Bytes::from(format!("request{}", i)));
+            assert_eq!(req[0], Bytes::from(format!("request{i}")));
 
             rep_socket
-                .send(vec![Bytes::from(format!("reply{}", i))])
+                .send(vec![Bytes::from(format!("reply{i}"))])
                 .await?;
         }
 
@@ -182,10 +182,10 @@ async fn test_req_strict_normal_flow() -> io::Result<()> {
     // Proper alternating send→recv→send→recv should work
     for i in 0..3 {
         req_socket
-            .send(vec![Bytes::from(format!("request{}", i))])
+            .send(vec![Bytes::from(format!("request{i}"))])
             .await?;
         let reply = req_socket.recv().await?.expect("Should receive reply");
-        assert_eq!(reply[0], Bytes::from(format!("reply{}", i)));
+        assert_eq!(reply[0], Bytes::from(format!("reply{i}")));
     }
 
     server_task.await?;

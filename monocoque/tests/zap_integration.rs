@@ -1,4 +1,4 @@
-//! ZAP (ZeroMQ Authentication Protocol) Integration Tests
+//! ZAP (`ZeroMQ` Authentication Protocol) Integration Tests
 //!
 //! Tests complete ZAP workflow with PLAIN mechanism.
 
@@ -11,8 +11,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 /// Test PLAIN authentication via ZAP - successful authentication
-/// Ignored: plain_server_handshake_zap expects a post-ZMTP-greeting context but
-/// the test calls it on a raw TcpStream without the ZMTP greeting phase. Full
+/// Ignored: `plain_server_handshake_zap` expects a post-ZMTP-greeting context but
+/// the test calls it on a raw `TcpStream` without the ZMTP greeting phase. Full
 /// ZAP integration needs to be wired into the main ZMTP handshake path first.
 #[compio::test]
 #[ignore = "ZAP integration not yet wired into ZMTP handshake - needs full stack integration"]

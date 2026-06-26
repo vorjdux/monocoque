@@ -22,7 +22,7 @@ async fn test_xpub_xsub_subscription_flow() {
     xpub.set_verbose(true); // Enable subscription event reporting
     let addr = xpub.local_addr().unwrap();
 
-    println!("[TEST] XPUB bound to {}", addr);
+    println!("[TEST] XPUB bound to {addr}");
 
     // 2. Spawn server task
     let server_task = compio::runtime::spawn(async move {
@@ -39,17 +39,17 @@ async fn test_xpub_xsub_subscription_flow() {
         for attempt in 0..100 {
             match xpub.recv_subscription().await {
                 Ok(Some(event)) => {
-                    println!("[SERVER] Received subscription event: {:?}", event);
+                    println!("[SERVER] Received subscription event: {event:?}");
                     return Some(event);
                 }
                 Ok(None) => {
                     if attempt % 10 == 0 {
-                        println!("[SERVER] No event yet, attempt {}/100", attempt);
+                        println!("[SERVER] No event yet, attempt {attempt}/100");
                     }
                     compio::time::sleep(Duration::from_millis(50)).await;
                 }
                 Err(e) => {
-                    println!("[SERVER] Error: {}", e);
+                    println!("[SERVER] Error: {e}");
                     return None;
                 }
             }
@@ -62,7 +62,7 @@ async fn test_xpub_xsub_subscription_flow() {
     compio::time::sleep(Duration::from_millis(100)).await;
 
     // 4. Connect XSUB client
-    println!("[CLIENT] Connecting to {}...", addr);
+    println!("[CLIENT] Connecting to {addr}...");
     let mut xsub = XSubSocket::connect(&addr.to_string()).await.unwrap();
     println!("[CLIENT] Connected successfully");
 
@@ -270,7 +270,7 @@ fn test_subscription_event_encoding() {
     assert_eq!(decoded, unsub);
 }
 
-/// Test SubscriptionEvent prefix() method
+/// Test `SubscriptionEvent` `prefix()` method
 #[test]
 fn test_subscription_event_prefix() {
     let sub = SubscriptionEvent::Subscribe(Bytes::from("weather."));

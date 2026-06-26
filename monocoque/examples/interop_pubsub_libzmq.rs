@@ -52,7 +52,7 @@ fn main() {
 
         // Publish messages
         for i in 1..=3 {
-            let message = format!("topic.event.{}", i);
+            let message = format!("topic.event.{i}");
             pub_socket
                 .send(vec![Bytes::from(message.clone())])
                 .await

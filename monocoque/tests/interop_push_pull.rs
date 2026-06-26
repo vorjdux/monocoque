@@ -37,7 +37,7 @@ fn test_monocoque_push_to_libzmq_pull() {
                         .unwrap();
                 }
             }
-            Err(e) => result_tx.send(Err(format!("recv error: {}", e))).unwrap(),
+            Err(e) => result_tx.send(Err(format!("recv error: {e}"))).unwrap(),
         }
     });
 
@@ -67,11 +67,11 @@ fn test_monocoque_push_to_libzmq_pull() {
     push_thread.join().expect("monocoque PUSH thread panicked");
 
     if let Ok(err) = push_err_rx.try_recv() {
-        panic!("monocoque PUSH error: {}", err);
+        panic!("monocoque PUSH error: {err}");
     }
 
     let result = result_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert!(result.is_ok(), "monocoque→libzmq push failed: {:?}", result);
+    assert!(result.is_ok(), "monocoque→libzmq push failed: {result:?}");
 }
 
 // ── libzmq PUSH → monocoque PULL ─────────────────────────────────────────────
@@ -98,7 +98,7 @@ fn test_libzmq_push_to_monocoque_pull() {
                         result_tx.send(Ok(())).unwrap();
                     }
                     Ok(Some(msg)) => result_tx
-                        .send(Err(format!("Unexpected message: {:?}", msg)))
+                        .send(Err(format!("Unexpected message: {msg:?}")))
                         .unwrap(),
                     Ok(None) => result_tx.send(Err("connection closed".into())).unwrap(),
                     Err(e) => result_tx.send(Err(e.to_string())).unwrap(),
@@ -112,11 +112,11 @@ fn test_libzmq_push_to_monocoque_pull() {
     thread::spawn(move || {
         let ctx = zmq::Context::new();
         let push = ctx.socket(zmq::PUSH).unwrap();
-        push.connect(&format!("tcp://{}", addr)).unwrap();
+        push.connect(&format!("tcp://{addr}")).unwrap();
         std::thread::sleep(Duration::from_millis(50));
         push.send("hello from libzmq", 0).unwrap();
     });
 
     let result = result_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert!(result.is_ok(), "libzmq→monocoque push failed: {:?}", result);
+    assert!(result.is_ok(), "libzmq→monocoque push failed: {result:?}");
 }

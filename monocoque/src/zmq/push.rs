@@ -154,6 +154,32 @@ where
         self.inner.flush().await
     }
 
+    /// Send a batch of messages in a single kernel write.
+    ///
+    /// Encodes all messages into the send buffer and flushes once, regardless of
+    /// whether `write_coalescing` is enabled. Use this when you have a collection
+    /// of messages ready to send and want to minimize syscall count without managing
+    /// `flush()` calls manually:
+    ///
+    /// ```rust,no_run
+    /// # async fn example(push: &mut monocoque::zmq::PushSocket) -> std::io::Result<()> {
+    /// use bytes::Bytes;
+    /// let batch: Vec<Vec<Bytes>> = (0..100)
+    ///     .map(|i| vec![Bytes::from(format!("msg-{i}").into_bytes())])
+    ///     .collect();
+    /// push.send_batch(batch).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// Returns the number of messages sent.
+    pub async fn send_batch<I>(&mut self, msgs: I) -> io::Result<usize>
+    where
+        I: IntoIterator<Item = Vec<bytes::Bytes>>,
+    {
+        self.inner.send_batch(msgs).await
+    }
+
     /// Enable monitoring for this socket.
     pub fn monitor(&mut self) -> SocketMonitor {
         let (sender, receiver) = create_monitor();

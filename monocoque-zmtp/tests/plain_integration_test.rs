@@ -68,7 +68,7 @@ fn test_plain_multiple_users() {
             let result = handler
                 .authenticate(user, pass, "global", "127.0.0.1")
                 .await;
-            assert!(result.is_ok(), "User {} should authenticate", user);
+            assert!(result.is_ok(), "User {user} should authenticate");
         }
 
         // Cross-authentication should fail

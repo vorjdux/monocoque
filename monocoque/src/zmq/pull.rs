@@ -135,6 +135,28 @@ where
         })
     }
 
+    /// Try to receive a message from the already-buffered input without a kernel read.
+    ///
+    /// Returns `Ok(None)` immediately when the receive buffer is empty. Use
+    /// after `recv()` to drain all messages delivered in one kernel read before
+    /// going back to the event loop. This reduces io_uring submissions for
+    /// throughput-bound pull loops.
+    ///
+    /// ```rust,no_run
+    /// # async fn example(pull: &mut monocoque::zmq::PullSocket) -> std::io::Result<()> {
+    /// if let Some(first) = pull.recv().await? {
+    ///     drop(first);
+    ///     while let Some(msg) = pull.try_recv()? {
+    ///         drop(msg);
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn try_recv(&mut self) -> io::Result<Option<Vec<bytes::Bytes>>> {
+        self.inner.try_recv()
+    }
+
     /// Receive a message.
     pub async fn recv(&mut self) -> io::Result<Option<Vec<bytes::Bytes>>> {
         self.inner.recv().await

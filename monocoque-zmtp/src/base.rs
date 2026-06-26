@@ -167,7 +167,7 @@ where
     pub(crate) curve_cipher: Option<crate::security::curve::CurveMessageCipher>,
 }
 
-pub(crate) fn append_zmtp_cmd_frame(buf: &mut BytesMut, body: &[u8]) {
+pub fn append_zmtp_cmd_frame(buf: &mut BytesMut, body: &[u8]) {
     let len = body.len();
     if len <= 255 {
         buf.extend_from_slice(&[0x04, len as u8]);
@@ -413,9 +413,8 @@ where
     /// - `Err(e)`     -  a pending PONG timed out; connection should be closed.
     ///   Callers propagate this with `?` so the error surfaces to the application.
     pub fn check_heartbeat(&mut self) -> io::Result<bool> {
-        let ivl = match self.options.heartbeat_ivl {
-            Some(ivl) => ivl,
-            None => return Ok(false), // heartbeating disabled
+        let Some(ivl) = self.options.heartbeat_ivl else {
+            return Ok(false);
         };
 
         let now = Instant::now();
@@ -453,7 +452,7 @@ where
             // Compute TTL to advertise: use heartbeat_ttl if set, else ivl
             let ttl_dur = self.options.heartbeat_ttl.unwrap_or(ivl);
             // ZMTP TTL is in tenths of a second, capped at u16::MAX
-            let ttl_tenths = (ttl_dur.as_millis() / 100).min(u16::MAX as u128) as u16;
+            let ttl_tenths = (ttl_dur.as_millis() / 100).min(u128::from(u16::MAX)) as u16;
 
             let ping = build_ping_frame(ttl_tenths);
             self.send_buffer.extend_from_slice(&ping);

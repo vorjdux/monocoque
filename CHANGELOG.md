@@ -2,6 +2,99 @@
 
 ## Unreleased
 
+## 0.1.3 - 2026-06-26
+
+### 🐛 Bug Fixes
+
+#### IoArena buffer overflow for `read_buffer_size > 64 KiB`
+
+Setting `SocketOptions::with_buffer_sizes(r, _)` with `r > 65536` previously
+caused a panic (`range end out of bounds: 65572 <= 65536`) in the `freeze()`
+path and a double-free / heap corruption when the arena's `Page` was dropped.
+Root cause: `IoArena::alloc_mut` always allocated exactly `PAGE_SIZE` (64 KiB)
+but let io_uring write `size` bytes into it, overflowing the backing page.
+
+Fix: `alloc_mut` now computes `page_size = size.max(PAGE_SIZE)`. Requests that
+exceed one normal page get a dedicated page of exactly the required size. All
+subsequent normal-sized allocations open a fresh page, preserving the
+bump-pointer sharing invariant. The `Page` struct now stores its actual `size`
+field used by both `Drop` and `AsRef<[u8]>`, so the dealloc layout and the
+`freeze()` slice length are always correct. Three regression tests were added
+in `monocoque-core/src/alloc.rs`.
+
+#### `patterns` benchmark hanging ~30 seconds per iteration
+
+The `monocoque_pubsub_fanout` and `monocoque_topic_filtering` benchmarks in
+`monocoque/benches/patterns.rs` each stalled for ~30 s after
+`accept_subscriber()` completed.
+
+Root cause (compio 0.10 / compio-runtime 0.3.0): `compio::time::timeout` uses
+`select!` between the user future and `sleep(30s).fuse()`. When the user future
+wins, the sleep future is dropped; `TimerFuture::drop` removes the timer key
+from the internal `Slab` but NOT from the `BinaryHeap`. Because the `Ord` impl
+makes the heap a max-heap (largest delay at top), `min_timeout()` peeks at the
+stale ~30s entry and passes it to `io_uring_enter`, which then waits the full
+remaining duration before the next 50ms sleep can fire.
+
+Fix for the benchmark: PUB now runs on a dedicated OS thread with its own
+compio runtime (preventing cross-task timer interference), and the 50ms pause
+after `accept_subscriber()` uses `std::thread::sleep` instead of
+`compio::time::sleep`, bypassing the io_uring timer entirely.
+
+Note on the library root cause: compio 0.19 (compio-runtime 0.12.2) fixes the
+timer bug by replacing `BinaryHeap` with `BTreeMap` and using proper ordered
+iteration. However, compio-driver 0.12.3 requires the still-unstable
+`std::cfg_select!` macro (tracking issue rust-lang/rust#115585), which is
+gated behind `#![feature(cfg_select)]` on stable Rust 1.94.1. The upgrade is
+deferred until `cfg_select` is stabilized. Until then, any `compio::time::sleep`
+or `compio::time::timeout` call in the same runtime as `accept_subscriber()`
+may stall for up to ~30s if no other IO is pending.
+
+### 📚 Documentation
+
+#### BENCHMARKS.md command corrections
+
+All `cargo bench` invocations now use `-p monocoque` and explicit `--bench`
+flags to avoid inadvertently running the `allocation` micro-benchmarks (which
+have no `required-features`) alongside the zmq comparison suites. The total
+suite estimate was updated to ~20 minutes and the allocation suite is called
+out separately.
+
+---
+
+### 🧹 Code Quality
+
+#### Strict Clippy Pass (pedantic + nursery + cargo, deny warnings)
+
+- Achieved zero warnings under `cargo clippy --workspace --all-targets --all-features -- -W clippy::pedantic -W clippy::nursery -W clippy::cargo -D warnings`.
+- Replaced `once_cell::sync::Lazy` with `std::sync::LazyLock` in `inproc.rs` (`non_std_lazy_statics`).
+- Fixed `pub(crate)` items inside `pub(crate)` modules to plain `pub` (`redundant_pub_crate`).
+- Changed `elapsed.as_micros() as f64` to `elapsed.as_secs_f64() * 1_000_000.0` in bench files (`cast_precision_loss`).
+- Replaced `if more { 0x01u8 } else { 0x00u8 }` with `u8::from(more)` (`manual_unwrap_or_default`).
+- Changed `u16::MAX as u128` to `u128::from(u16::MAX)` (`infallible_cast`).
+- Fixed hex-encoding loop in `zap_handler.rs`: replaced `.map(|b| format!(...)).collect()` with an explicit `write!` loop (`format_collect_into_string`).
+- Fixed `#[inline(always)]` to `#[inline]` where the optimizer is better positioned to decide (`inline_always`).
+- Moved misplaced `use` statements to function tops to fix `items_after_statements` in several examples.
+- Added `#[allow(clippy::future_not_send)]` to 25+ async example functions whose futures are intentionally single-threaded (compio io_uring runtime is not `Send`).
+- Resolved `too_many_lines` on long functions with targeted `#[allow]` or by extracting local `use` items.
+- Fixed `while let Err(mpsc::TryRecvError::Empty) = ...` to an equality comparison where the variant has no payload (`redundant_pattern_matching`).
+- Fixed `needless_collect` in `test_pubsub_fanout_distinct_topics`: the collect is required to spawn all threads before joining any, annotated accordingly.
+- Fixed `unnecessary_wraps` in `api_demo.rs`: changed `demonstrate_api_usage` return type from `Result<()>` to `()`.
+- Applied `let-else` pattern for early returns in `base.rs` (`check_heartbeat`).
+- Added `#[allow(clippy::similar_names)]` to crypto functions where abbreviated names (`vouch_pt`/`vouch_ct`) are the accepted convention.
+
+#### Formatting
+
+- `cargo fmt --all` applied; all files pass `--check`.
+
+#### Tests
+
+- `cargo test --workspace --all-features`: all tests pass (no failures).
+
+#### Security Audit
+
+- `cargo audit` attempted; the advisory-db fetch was blocked by the network proxy in this environment (HTTP 403). No known vulnerabilities are introduced by the changes in this release; the dependency set is unchanged from 0.1.2.
+
 ## 0.1.2 - 2026-06-25
 
 ### ✨ New Features

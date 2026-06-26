@@ -32,7 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 2. List endpoints
     println!("2. Current inproc endpoints:");
     for endpoint in list_inproc_endpoints() {
-        println!("   - inproc://{}", endpoint);
+        println!("   - inproc://{endpoint}");
     }
     println!();
 
@@ -51,7 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .collect::<Vec<_>>()
             );
         }
-        println!("   [Server] Shutting down (received {} messages)", count);
+        println!("   [Server] Shutting down (received {count} messages)");
     });
 
     // Small delay to ensure server is ready
@@ -90,7 +90,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n6. Demonstrating zero-copy messaging...");
     let large_data = Bytes::from(vec![b'X'; 1024 * 100]); // 100 KB
     client1
-        .send(vec![Bytes::from("Large"), large_data.clone()])
+        .send(vec![Bytes::from("Large"), large_data])
         .map_err(|_| "send failed")?;
     println!("   ✓ Sent 100 KB message (zero-copy via Arc)");
     thread::sleep(Duration::from_millis(10));
@@ -113,7 +113,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Verify endpoint list is empty
     let endpoints = list_inproc_endpoints();
-    println!("\n8. Final endpoint list: {:?}", endpoints);
+    println!("\n8. Final endpoint list: {endpoints:?}");
     assert!(endpoints.is_empty(), "All endpoints should be unbound");
 
     println!("\n=== Demo Complete ===");

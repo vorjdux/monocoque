@@ -34,7 +34,7 @@ fn test_router_load_balancer_basic() {
     let ctx = zmq::Context::new();
     let dealer = ctx.socket(zmq::DEALER).unwrap();
     dealer.set_identity(b"WORKER_1").unwrap();
-    dealer.connect(&format!("tcp://{}", local_addr)).unwrap();
+    dealer.connect(&format!("tcp://{local_addr}")).unwrap();
 
     dealer.send("Task from worker", 0).unwrap();
 

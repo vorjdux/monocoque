@@ -8,6 +8,8 @@
 use bytes::Bytes;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use monocoque::zmq::{PubSocket, SocketOptions, SubSocket};
+use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
 
 // NOTE: Multi-subscriber fanout is currently not benchmarked here because the
@@ -21,10 +23,6 @@ fn monocoque_pubsub_fanout(c: &mut Criterion) {
     monocoque::dev_tracing::init_tracing();
     let mut group = c.benchmark_group("patterns/monocoque/pubsub_fanout");
 
-    // Creating/dropping many io_uring runtimes can exhaust kernel resources.
-    // Reuse a single runtime for all iterations of this benchmark.
-    let rt = compio::runtime::Runtime::new().unwrap();
-
     for &num_subs in FANOUT_SUBSCRIBERS {
         group.throughput(Throughput::Elements((MESSAGE_COUNT * num_subs) as u64));
         group.bench_with_input(
@@ -32,36 +30,48 @@ fn monocoque_pubsub_fanout(c: &mut Criterion) {
             &num_subs,
             |b, &num_subs| {
                 b.iter(|| {
-                    rt.block_on(async {
-                        let payload = Bytes::from(vec![0u8; MESSAGE_SIZE]);
+                    let payload = Bytes::from(vec![0u8; MESSAGE_SIZE]);
+                    let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
 
-                        // Start PUB server
-                        let mut pub_socket = PubSocket::bind("127.0.0.1:0").await.unwrap();
-                        let server_addr = pub_socket.local_addr().unwrap();
+                    // PUB runs on its own OS thread with a dedicated compio runtime.
+                    // Sharing a runtime between PUB and SUB causes the compio event
+                    // loop to stall for ~30 s after accept_subscriber() completes
+                    // because a pending io_uring handshake timer blocks all timer
+                    // processing until the 30 s handshake_timeout fires.
+                    let pub_handle = thread::spawn(move || {
+                        let rt = compio::runtime::Runtime::new().unwrap();
+                        rt.block_on(async move {
+                            let mut pub_socket = PubSocket::bind("127.0.0.1:0").await.unwrap();
+                            let addr = pub_socket.local_addr().unwrap();
+                            addr_tx.send(addr).unwrap();
 
-                        // Accept subscriber connections and spawn pub task
-                        let pub_task = compio::runtime::spawn(async move {
-                            // Accept N subscribers
                             for _ in 0..num_subs {
                                 pub_socket.accept_subscriber().await.unwrap();
                             }
 
-                            // Wait for subscriptions
-                            compio::time::sleep(Duration::from_millis(50)).await;
+                            // accept_subscriber() leaves a stalled io_uring handshake
+                            // timer in this runtime; compio::time::sleep() would block
+                            // until that 30 s timer fires. std::thread::sleep bypasses
+                            // the io_uring timer entirely and is safe here because this
+                            // runtime thread is dedicated to a single socket.
+                            thread::sleep(Duration::from_millis(50));
 
-                            // Publish messages
                             for _ in 0..MESSAGE_COUNT {
                                 pub_socket.send(vec![payload.clone()]).await.ok();
                             }
 
-                            // Keep socket alive for subscribers to receive all messages
-                            compio::time::sleep(Duration::from_millis(200)).await;
+                            // Keep socket alive while worker threads flush to TCP.
+                            thread::sleep(Duration::from_millis(200));
                         });
+                    });
 
-                        // Start N subscribers
-                        let mut sub_tasks = Vec::new();
-                        for _i in 0..num_subs {
-                            let task = compio::runtime::spawn(async move {
+                    let server_addr = addr_rx.recv().unwrap();
+
+                    let mut sub_handles = Vec::new();
+                    for _ in 0..num_subs {
+                        let sub_handle = thread::spawn(move || {
+                            let rt = compio::runtime::Runtime::new().unwrap();
+                            rt.block_on(async move {
                                 let stream =
                                     compio::net::TcpStream::connect(server_addr).await.unwrap();
                                 let mut sub = SubSocket::from_tcp_with_options(
@@ -70,29 +80,25 @@ fn monocoque_pubsub_fanout(c: &mut Criterion) {
                                 )
                                 .await
                                 .unwrap();
-                                sub.subscribe(b"").await.unwrap(); // Subscribe to all
+                                sub.subscribe(b"").await.unwrap();
 
                                 let mut count = 0;
                                 while count < MESSAGE_COUNT {
                                     match sub.recv().await {
                                         Ok(Some(_)) => count += 1,
-                                        Ok(None) => break, // Connection closed
-                                        Err(_) => break,   // Error occurred
+                                        Ok(None) | Err(_) => break,
                                     }
                                 }
                                 count
-                            });
-                            sub_tasks.push(task);
-                        }
+                            })
+                        });
+                        sub_handles.push(sub_handle);
+                    }
 
-                        // Wait for pub task first (ensures all messages sent + delay)
-                        pub_task.await;
-
-                        // Then wait for all subscribers to complete
-                        for task in sub_tasks {
-                            let _ = task.await;
-                        }
-                    });
+                    pub_handle.join().unwrap();
+                    for handle in sub_handles {
+                        handle.join().unwrap();
+                    }
                 });
             },
         );
@@ -161,25 +167,27 @@ fn monocoque_topic_filtering(c: &mut Criterion) {
 
     let matched_ratio = 0.1; // 10% of messages match subscription
 
-    // Reuse a single runtime for all iterations of this benchmark.
-    let rt = compio::runtime::Runtime::new().unwrap();
-
     group.throughput(Throughput::Elements(MESSAGE_COUNT as u64));
     group.bench_function("filter_10_percent", |b| {
         b.iter(|| {
-            rt.block_on(async {
-                let payload = Bytes::from(vec![0u8; MESSAGE_SIZE]);
+            let payload = Bytes::from(vec![0u8; MESSAGE_SIZE]);
+            let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
 
-                let mut pub_socket = PubSocket::bind("127.0.0.1:0").await.unwrap();
-                let server_addr = pub_socket.local_addr().unwrap();
+            // Same rationale as monocoque_pubsub_fanout: separate OS threads to
+            // avoid the shared-runtime io_uring timer stall after accept_subscriber.
+            let pub_handle = thread::spawn(move || {
+                let rt = compio::runtime::Runtime::new().unwrap();
+                rt.block_on(async move {
+                    let mut pub_socket = PubSocket::bind("127.0.0.1:0").await.unwrap();
+                    let addr = pub_socket.local_addr().unwrap();
+                    addr_tx.send(addr).unwrap();
 
-                let pub_task = compio::runtime::spawn(async move {
-                    // Accept subscriber
                     pub_socket.accept_subscriber().await.unwrap();
 
-                    compio::time::sleep(Duration::from_millis(50)).await;
+                    // Same rationale as monocoque_pubsub_fanout: use thread::sleep
+                    // to avoid the stalled io_uring handshake timer.
+                    thread::sleep(Duration::from_millis(50));
 
-                    // Publish mix of matching and non-matching messages
                     for i in 0..MESSAGE_COUNT {
                         let topic = if i % 10 == 0 {
                             Bytes::from_static(b"match.topic")
@@ -188,27 +196,39 @@ fn monocoque_topic_filtering(c: &mut Criterion) {
                         };
                         pub_socket.send(vec![topic, payload.clone()]).await.ok();
                     }
-                });
 
-                let sub_task = compio::runtime::spawn(async move {
+                    thread::sleep(Duration::from_millis(200));
+                });
+            });
+
+            let server_addr = addr_rx.recv().unwrap();
+
+            let sub_handle = thread::spawn(move || {
+                let rt = compio::runtime::Runtime::new().unwrap();
+                rt.block_on(async move {
                     let stream = compio::net::TcpStream::connect(server_addr).await.unwrap();
                     let mut sub = SubSocket::from_tcp(stream).await.unwrap();
                     sub.subscribe(b"match.").await.unwrap();
 
+                    #[allow(
+                        clippy::cast_precision_loss,
+                        clippy::cast_possible_truncation,
+                        clippy::cast_sign_loss
+                    )]
                     let expected = (MESSAGE_COUNT as f64 * matched_ratio) as usize;
                     let mut count = 0;
                     while count < expected {
                         match sub.recv().await {
                             Ok(Some(_)) => count += 1,
-                            Ok(None) => break, // Connection closed
-                            Err(_) => break,   // Error occurred
+                            Ok(None) | Err(_) => break,
                         }
                     }
-                });
-
-                pub_task.await;
-                sub_task.await;
+                    count
+                })
             });
+
+            pub_handle.join().unwrap();
+            sub_handle.join().unwrap();
         });
     });
 
@@ -237,6 +257,11 @@ fn zmq_topic_filtering(c: &mut Criterion) {
                 sub.connect(&endpoint).unwrap();
                 sub.set_subscribe(b"match.").unwrap();
 
+                #[allow(
+                    clippy::cast_precision_loss,
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss
+                )]
                 let expected = (MESSAGE_COUNT as f64 * matched_ratio) as usize;
                 let mut count = 0;
                 while count < expected {

@@ -1,7 +1,7 @@
-//! Paranoid Pirate Pattern - Complete Demo with ZeroMQ Proxy
+//! Paranoid Pirate Pattern - Complete Demo with `ZeroMQ` Proxy
 //!
 //! This demonstrates the Paranoid Pirate reliability pattern using
-//! the ZeroMQ proxy() function which now uses futures::select! internally
+//! the `ZeroMQ` `proxy()` function which now uses `futures::select`! internally
 //! for single-threaded async runtime compatibility.
 //!
 //! Architecture:
@@ -22,6 +22,7 @@ const HEARTBEAT: &[u8] = b"\x02";
 const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(1000);
 
 /// Worker sends heartbeats and processes requests
+#[allow(clippy::future_not_send)]
 async fn worker(id: u32, crash_after: Option<u32>) -> std::io::Result<()> {
     info!("[Worker-{}] 🔧 Starting", id);
 
@@ -69,7 +70,7 @@ async fn worker(id: u32, crash_after: Option<u32>) -> std::io::Result<()> {
 
             compio::runtime::time::sleep(Duration::from_millis(100)).await;
 
-            let reply = format!("Processed by worker-{}", id);
+            let reply = format!("Processed by worker-{id}");
             let mut response = vec![Bytes::new()];
             response.extend(msg[..msg.len().saturating_sub(1)].to_vec());
             response.push(Bytes::from(reply));
@@ -83,6 +84,7 @@ async fn worker(id: u32, crash_after: Option<u32>) -> std::io::Result<()> {
 }
 
 /// Client sends requests
+#[allow(clippy::future_not_send)]
 async fn client(id: u32, requests: u32) -> std::io::Result<()> {
     info!("[Client-{}] 🔌 Starting", id);
 
@@ -95,7 +97,7 @@ async fn client(id: u32, requests: u32) -> std::io::Result<()> {
         info!("[Client-{}] 📨 Request {}", id, i);
 
         socket
-            .send(vec![Bytes::from(format!("Request {}", i))])
+            .send(vec![Bytes::from(format!("Request {i}"))])
             .await?;
 
         if let Ok(Some(reply)) = socket.recv().await {
@@ -113,7 +115,8 @@ async fn client(id: u32, requests: u32) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Broker using ZeroMQ proxy with futures::select!
+/// Broker using `ZeroMQ` proxy with `futures::select`!
+#[allow(clippy::future_not_send)]
 async fn broker() -> std::io::Result<()> {
     info!("🚀 Starting Broker with ZeroMQ Proxy");
 

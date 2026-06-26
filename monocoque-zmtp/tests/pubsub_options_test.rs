@@ -4,9 +4,9 @@
 //! sent to the PUB peer automatically during socket construction, so callers
 //! do not have to call `subscribe()` manually after creation.
 //!
-//! Test structure mirrors multi_peer_reliability.rs:
+//! Test structure mirrors `multi_peer_reliability.rs`:
 //!  - a sync channel signals the PUB that subscriptions are ready
-//!  - `std::thread::sleep` gives the worker's subscription_reader time to process
+//!  - `std::thread::sleep` gives the worker's `subscription_reader` time to process
 //!  - another sync channel signals the PUB when the SUB is done so the PUB
 //!    keeps the connection alive until all messages have been received
 
@@ -19,7 +19,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-/// Subscriptions set in SocketOptions are applied automatically at construction.
+/// Subscriptions set in `SocketOptions` are applied automatically at construction.
 ///
 /// The SUB connects with `.with_subscribe(b"news.")` in its options; the PUB
 /// sends one matching message followed by one non-matching message.  The SUB
@@ -106,7 +106,7 @@ fn test_sub_options_subscriptions_are_applied() {
     );
 }
 
-/// Multiple subscriptions set in SocketOptions are all applied.
+/// Multiple subscriptions set in `SocketOptions` are all applied.
 ///
 /// Two topics are registered via options; only messages matching either prefix
 /// should be delivered.
@@ -187,8 +187,7 @@ fn test_sub_options_multiple_subscriptions() {
         let topic = &msg[0];
         assert!(
             topic.starts_with(b"alerts.") || topic.starts_with(b"metrics."),
-            "unexpected topic: {:?}",
-            topic
+            "unexpected topic: {topic:?}"
         );
     }
 }

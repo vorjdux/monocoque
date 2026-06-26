@@ -64,7 +64,7 @@ impl SecurityMechanism {
     }
 
     /// The ASCII mechanism name used in ZMTP greetings (20-byte field).
-    pub fn as_greeting_bytes(&self) -> &'static [u8] {
+    pub fn as_greeting_bytes(self) -> &'static [u8] {
         match self {
             Self::Null => b"NULL",
             Self::Plain => b"PLAIN",
@@ -76,6 +76,7 @@ impl SecurityMechanism {
 /// Performs the complete ZMTP handshake, selecting the security mechanism from options.
 ///
 /// This is the primary handshake entry point for sockets that have security configured.
+#[allow(clippy::too_many_lines)]
 pub async fn perform_handshake_with_options<S>(
     stream: &mut S,
     local_socket_type: SocketType,
@@ -385,7 +386,10 @@ where
         let server_public = server_secret.public_key();
         let server_keypair = CurveKeyPair::from_keys(server_public, server_secret);
 
-        if !options.zap_domain.is_empty() {
+        if options.zap_domain.is_empty() {
+            let mut curve_server = CurveServer::new(server_keypair, local_socket_type.as_str());
+            curve_server.handshake(stream, timeout).await
+        } else {
             use crate::security::curve::curve_server_handshake_zap;
             curve_server_handshake_zap(
                 stream,
@@ -396,9 +400,6 @@ where
                 local_socket_type.as_str(),
             )
             .await
-        } else {
-            let mut curve_server = CurveServer::new(server_keypair, local_socket_type.as_str());
-            curve_server.handshake(stream, timeout).await
         }
     } else if let (Some(secret_bytes), Some(server_key_bytes)) =
         (options.curve_secretkey, options.curve_serverkey)

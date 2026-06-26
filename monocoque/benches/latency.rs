@@ -6,7 +6,7 @@
 //! ## Methodology
 //!
 //! - Server runs on a separate OS thread with its own compio runtime.
-//! - The bench thread owns a persistent compio runtime (created once, outside iter_batched).
+//! - The bench thread owns a persistent compio runtime (created once, outside `iter_batched`).
 //! - Warmup rounds happen inside the setup closure, so they are not measured.
 //! - Each measured iteration: single REQ send + REP echo + REQ recv.
 
@@ -24,7 +24,7 @@ const WARMUP_ROUNDS: usize = 1_000;
 /// Benchmark monocoque REQ/REP latency (single round-trip).
 ///
 /// Server binds on its own OS thread. The bench thread connects, does warmup,
-/// then each iter_batched iteration measures one round-trip.
+/// then each `iter_batched` iteration measures one round-trip.
 fn monocoque_req_rep_latency(c: &mut Criterion) {
     let mut group = c.benchmark_group("latency/monocoque/req_rep");
     group.measurement_time(Duration::from_secs(10));
@@ -37,7 +37,7 @@ fn monocoque_req_rep_latency(c: &mut Criterion) {
         let payload = Bytes::from(vec![0u8; size]);
 
         group.bench_with_input(
-            BenchmarkId::new("round_trip", format!("{}B", size)),
+            BenchmarkId::new("round_trip", format!("{size}B")),
             &size,
             |b, _| {
                 b.iter_batched(
@@ -61,7 +61,7 @@ fn monocoque_req_rep_latency(c: &mut Criterion) {
                                 .unwrap();
 
                                 // Echo WARMUP_ROUNDS + 1 messages, then exit cleanly.
-                                for _ in 0..(WARMUP_ROUNDS + 1) {
+                                for _ in 0..=WARMUP_ROUNDS {
                                     if let Ok(Some(msg)) = rep.recv().await {
                                         if rep.send(msg).await.is_err() {
                                             break;
@@ -119,7 +119,7 @@ fn monocoque_req_rep_latency(c: &mut Criterion) {
 /// Benchmark rust-zmq (zmq crate, FFI to libzmq) REQ/REP latency.
 ///
 /// Server binds on its own OS thread. Client connects, does warmup, then each
-/// iter_batched iteration measures one round-trip.
+/// `iter_batched` iteration measures one round-trip.
 fn zmq_req_rep_latency(c: &mut Criterion) {
     let mut group = c.benchmark_group("latency/rust_zmq/req_rep");
     group.measurement_time(Duration::from_secs(10));
@@ -129,7 +129,7 @@ fn zmq_req_rep_latency(c: &mut Criterion) {
         let payload = vec![0u8; size];
 
         group.bench_with_input(
-            BenchmarkId::new("round_trip", format!("{}B", size)),
+            BenchmarkId::new("round_trip", format!("{size}B")),
             &size,
             |b, _| {
                 b.iter_batched(
@@ -145,7 +145,7 @@ fn zmq_req_rep_latency(c: &mut Criterion) {
                             endpoint_tx.send(endpoint).unwrap();
 
                             // Echo WARMUP_ROUNDS + 1 messages, then exit.
-                            for _ in 0..(WARMUP_ROUNDS + 1) {
+                            for _ in 0..=WARMUP_ROUNDS {
                                 match rep.recv_bytes(0) {
                                     Ok(msg) => {
                                         if rep.send(&msg, 0).is_err() {

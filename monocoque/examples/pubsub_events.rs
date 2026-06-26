@@ -1,4 +1,4 @@
-/// PubSub Events Example
+/// `PubSub` Events Example
 ///
 /// This example demonstrates PUB/SUB pattern for event distribution:
 /// - Publisher broadcasts events on different topics using worker pool
@@ -27,7 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Using port {}", port);
 
     // Start publisher
-    let mut pub_socket = PubSocket::bind(format!("127.0.0.1:{}", port)).await?;
+    let mut pub_socket = PubSocket::bind(format!("127.0.0.1:{port}")).await?;
     info!("[Publisher] Bound to port {}", port);
 
     // Channel to signal when subscriber has finished subscribing and is ready
@@ -47,14 +47,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Wait for subscriber to finish subscribing via channel signal.
     // We poll non-blocking with short async sleeps so the runtime stays live.
     // This replaces the old hardcoded 2000ms sleep.
-    loop {
-        match ready_rx.try_recv() {
-            Ok(_) => break,
-            Err(mpsc::TryRecvError::Empty) => {
-                compio::time::sleep(Duration::from_millis(10)).await;
-            }
-            Err(mpsc::TryRecvError::Disconnected) => break,
-        }
+    while ready_rx.try_recv() == Err(mpsc::TryRecvError::Empty) {
+        compio::time::sleep(Duration::from_millis(10)).await;
     }
 
     info!("[Publisher] Publishing events...");
@@ -83,12 +77,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[allow(clippy::future_not_send)]
 async fn run_subscriber(
     port: u16,
     ready_tx: mpsc::Sender<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     info!("[Subscriber] Connecting to port {}...", port);
-    let mut socket = SubSocket::connect(&format!("127.0.0.1:{}", port)).await?;
+    let mut socket = SubSocket::connect(&format!("127.0.0.1:{port}")).await?;
     info!("[Subscriber] Connected!");
 
     // Subscribe to trade events only

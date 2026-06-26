@@ -1,9 +1,9 @@
-//! Demonstration of HWM (High Water Mark) enforcement in DealerSocket
+//! Demonstration of HWM (High Water Mark) enforcement in `DealerSocket`
 //!
-//! This example shows how send_hwm prevents unbounded message buffering by
+//! This example shows how `send_hwm` prevents unbounded message buffering by
 //! returning an error when the limit is reached.
 //!
-//! Run with: cargo run --package monocoque --features zmq --example hwm_enforcement_demo
+//! Run with: cargo run --package monocoque --features zmq --example `hwm_enforcement_demo`
 
 use bytes::Bytes;
 use compio::net::{TcpListener, TcpStream};
@@ -36,7 +36,7 @@ async fn main() -> std::io::Result<()> {
                 while let Ok(Some(_)) = router.recv().await {
                     count += 1;
                     if count % 5 == 0 {
-                        println!("   [SERVER] Received {} messages", count);
+                        println!("   [SERVER] Received {count} messages");
                     }
                     // Simulate slow processing
                     compio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -58,22 +58,19 @@ async fn main() -> std::io::Result<()> {
 
     // Send messages until HWM blocks us
     for i in 0..15 {
-        let msg = vec![Bytes::from(format!("Message {}", i))];
+        let msg = vec![Bytes::from(format!("Message {i}"))];
 
         match dealer.send_buffered(msg) {
             Ok(()) => {
                 sent += 1;
                 print!("✓");
                 if sent % 5 == 0 {
-                    println!(" [{}]", sent);
+                    println!(" [{sent}]");
                 }
             }
             Err(e) if e.kind() == ErrorKind::WouldBlock || e.to_string().contains("water mark") => {
-                println!("\n\n⚠️  HWM ENFORCED: Blocked after {} messages", sent);
-                println!(
-                    "✅ Socket correctly prevented message #{} from buffering",
-                    i
-                );
+                println!("\n\n⚠️  HWM ENFORCED: Blocked after {sent} messages");
+                println!("✅ Socket correctly prevented message #{i} from buffering");
                 println!("\n💡 Application must either:");
                 println!("   - Call flush() to send buffered messages");
                 println!("   - Drop messages");
@@ -81,14 +78,14 @@ async fn main() -> std::io::Result<()> {
                 break;
             }
             Err(e) => {
-                println!("\n❌ Unexpected error: {}", e);
+                println!("\n❌ Unexpected error: {e}");
                 break;
             }
         }
     }
 
     println!("\n📊 Results:");
-    println!("  Messages buffered: {}", sent);
+    println!("  Messages buffered: {sent}");
     println!("  HWM limit: 5");
     println!(
         "  Status: {}",
