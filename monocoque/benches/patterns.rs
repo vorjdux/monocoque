@@ -49,15 +49,19 @@ fn monocoque_pubsub_fanout(c: &mut Criterion) {
                                 pub_socket.accept_subscriber().await.unwrap();
                             }
 
-                            // Let subscription frames propagate to the worker threads.
-                            compio::time::sleep(Duration::from_millis(50)).await;
+                            // accept_subscriber() leaves a stalled io_uring handshake
+                            // timer in this runtime; compio::time::sleep() would block
+                            // until that 30 s timer fires. std::thread::sleep bypasses
+                            // the io_uring timer entirely and is safe here because this
+                            // runtime thread is dedicated to a single socket.
+                            thread::sleep(Duration::from_millis(50));
 
                             for _ in 0..MESSAGE_COUNT {
                                 pub_socket.send(vec![payload.clone()]).await.ok();
                             }
 
                             // Keep socket alive while worker threads flush to TCP.
-                            compio::time::sleep(Duration::from_millis(200)).await;
+                            thread::sleep(Duration::from_millis(200));
                         });
                     });
 
@@ -180,7 +184,9 @@ fn monocoque_topic_filtering(c: &mut Criterion) {
 
                     pub_socket.accept_subscriber().await.unwrap();
 
-                    compio::time::sleep(Duration::from_millis(50)).await;
+                    // Same rationale as monocoque_pubsub_fanout: use thread::sleep
+                    // to avoid the stalled io_uring handshake timer.
+                    thread::sleep(Duration::from_millis(50));
 
                     for i in 0..MESSAGE_COUNT {
                         let topic = if i % 10 == 0 {
@@ -191,7 +197,7 @@ fn monocoque_topic_filtering(c: &mut Criterion) {
                         pub_socket.send(vec![topic, payload.clone()]).await.ok();
                     }
 
-                    compio::time::sleep(Duration::from_millis(200)).await;
+                    thread::sleep(Duration::from_millis(200));
                 });
             });
 
