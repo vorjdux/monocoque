@@ -21,7 +21,7 @@
 use crate::codec::ZmtpError;
 use crate::security::curve::CurveHandshakeResult;
 use crate::session::SocketType;
-use crate::utils::{build_ready, encode_frame, FLAG_COMMAND};
+use crate::utils::{FLAG_COMMAND, build_ready, encode_frame};
 use bytes::{Bytes, BytesMut};
 use compio::buf::BufResult;
 use compio::io::{AsyncRead, AsyncWrite};
@@ -336,7 +336,7 @@ async fn run_plain_exchange<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    use crate::security::plain::{plain_client_handshake, PlainCredentials};
+    use crate::security::plain::{PlainCredentials, plain_client_handshake};
 
     if options.plain_server {
         debug!("[HANDSHAKE] Running PLAIN server exchange");

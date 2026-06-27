@@ -14,7 +14,7 @@ use bytes::Bytes;
 #[cfg(unix)]
 use compio::net::{TcpListener, UnixListener};
 #[cfg(unix)]
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 #[cfg(unix)]
 use monocoque::zmq::{PullSocket, PushSocket, RepSocket, ReqSocket, SocketOptions};
 #[cfg(unix)]

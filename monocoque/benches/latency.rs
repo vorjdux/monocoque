@@ -12,7 +12,7 @@
 
 use bytes::Bytes;
 use compio::net::TcpListener;
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use monocoque::zmq::{RepSocket, ReqSocket, SocketOptions};
 use std::sync::mpsc;
 use std::thread;

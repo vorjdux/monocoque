@@ -118,6 +118,10 @@ where
     /// Reusable write buffer for outgoing data
     pub(crate) write_buf: BytesMut,
 
+    /// Reusable iovec scratch for vectored writes (header/body entries),
+    /// kept across calls so `send_vectored` allocates nothing on the hot path.
+    pub(crate) iov: Vec<Bytes>,
+
     /// Send buffer for message batching
     pub(crate) send_buffer: BytesMut,
 
@@ -215,6 +219,7 @@ where
             arena: IoArena::new(),
             recv: SegmentedBuffer::new(),
             write_buf: BytesMut::with_capacity(write_capacity),
+            iov: Vec::new(),
             send_buffer: BytesMut::with_capacity(write_capacity),
             options,
             last_endpoint: None,
@@ -255,6 +260,7 @@ where
             arena: IoArena::new(),
             recv: SegmentedBuffer::new(),
             write_buf: BytesMut::with_capacity(write_capacity),
+            iov: Vec::new(),
             send_buffer: BytesMut::with_capacity(write_capacity),
             options,
             last_endpoint: Some(endpoint_str),
@@ -678,6 +684,123 @@ where
             self.stream = None;
         }
 
+        result?;
+
+        guard.disarm();
+        Ok(())
+    }
+
+    /// Return `true` if `msg` should be sent with a vectored write rather than
+    /// the copy-into-`send_buffer` path.
+    ///
+    /// Vectored writes pay off once a frame body is large enough that copying it
+    /// into the userspace send buffer dominates the per-message cost. Small
+    /// frames stay on the copy path, where a single contiguous `write` beats the
+    /// per-iovec bookkeeping. CURVE-encrypted connections never qualify: the
+    /// cipher must transform each body into a fresh buffer regardless, so there
+    /// is no copy to save.
+    #[inline]
+    pub(crate) fn should_vectored_write(&self, msg: &[Bytes]) -> bool {
+        if self.curve_cipher.is_some() {
+            return false;
+        }
+        let threshold = self.options.vectored_write_threshold;
+        msg.iter().any(|frame| frame.len() >= threshold)
+    }
+
+    /// Send a multipart message using a vectored write, without copying any
+    /// frame body into the userspace send buffer.
+    ///
+    /// Each frame contributes two iovec entries: a freshly built header (2 or 9
+    /// bytes) and the frame body itself, an O(1) `Bytes::clone` with no data
+    /// copy. The whole iovec list is handed to `write_vectored_all`, so the
+    /// bodies travel straight to the kernel.
+    ///
+    /// Anything already pending in `send_buffer` is flushed first to preserve
+    /// wire ordering. Uses `PoisonGuard` for cancellation safety and applies
+    /// `send_timeout`, mirroring [`flush_send_buffer`](Self::flush_send_buffer).
+    /// On write failure the stream is dropped (`stream = None`) to mark
+    /// disconnection.
+    pub(crate) async fn send_vectored(&mut self, msg: &[Bytes]) -> io::Result<()> {
+        use crate::codec::write_frame_header;
+
+        if msg.is_empty() {
+            return Ok(());
+        }
+
+        // Preserve ordering: flush anything already buffered before this frame.
+        if !self.send_buffer.is_empty() {
+            self.flush_send_buffer().await?;
+        }
+
+        if self.is_poisoned {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "Socket poisoned by cancelled I/O - reconnect required",
+            ));
+        }
+
+        if self.options.send_timeout.is_some_and(|dur| dur.is_zero()) {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "Socket is in non-blocking mode and cannot send immediately",
+            ));
+        }
+
+        // Build all frame headers contiguously in the reused write_buf, then
+        // slice each one back out (O(1), sharing write_buf's allocation). The
+        // iovec list is reused across calls via `self.iov`, so the hot path
+        // performs no per-message heap allocation.
+        let last = msg.len() - 1;
+        self.write_buf.clear();
+        for (i, frame) in msg.iter().enumerate() {
+            write_frame_header(&mut self.write_buf, frame.len(), i < last);
+        }
+        let mut headers = self.write_buf.split().freeze();
+
+        let mut iovecs = std::mem::take(&mut self.iov);
+        iovecs.clear();
+        iovecs.reserve(msg.len() * 2);
+        for frame in msg {
+            let hlen = if frame.len() >= 256 { 9 } else { 2 };
+            iovecs.push(headers.split_to(hlen));
+            iovecs.push(frame.clone());
+        }
+
+        let Some(stream) = self.stream.as_mut() else {
+            self.iov = iovecs; // keep the scratch capacity
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "Socket not connected",
+            ));
+        };
+
+        // Arm poison guard for cancellation safety.
+        let guard = PoisonGuard::new(&mut self.is_poisoned);
+
+        use compio::buf::BufResult;
+        let BufResult(result, returned) = match self.options.send_timeout {
+            None => stream.write_vectored_all(iovecs).await,
+            Some(dur) => {
+                use compio::time::timeout;
+                match timeout(dur, stream.write_vectored_all(iovecs)).await {
+                    Ok(result) => result,
+                    Err(_) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            format!("Send operation timed out after {:?}", dur),
+                        ));
+                    }
+                }
+            }
+        };
+
+        // Reclaim the iovec allocation for the next call.
+        self.iov = returned;
+
+        if result.is_err() {
+            self.stream = None;
+        }
         result?;
 
         guard.disarm();

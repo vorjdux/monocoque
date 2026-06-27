@@ -77,7 +77,7 @@ fn test_pub_hwm_drops_with_slow_subscriber() {
                 let stream = compio::net::TcpStream::connect(pub_addr).await.unwrap();
                 let mut sub = SubSocket::from_tcp(stream).await.unwrap();
                 sub.subscribe(Bytes::new()).await.unwrap(); // subscribe-all
-                                                            // Hold the connection open without reading.
+                // Hold the connection open without reading.
                 std::thread::sleep(Duration::from_secs(10));
             });
     });

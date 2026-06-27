@@ -15,7 +15,7 @@
 
 use bytes::Bytes;
 use compio::net::TcpListener;
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use monocoque::zmq::{PullSocket, PushSocket, SocketOptions};
 use std::sync::mpsc;
 use std::thread;

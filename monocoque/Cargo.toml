@@ -22,6 +22,10 @@ name = "api_demo"
 required-features = ["zmq"]
 
 [[example]]
+name = "bench_changes"
+required-features = ["zmq"]
+
+[[example]]
 name = "handshake_test"
 required-features = ["zmq"]
 

@@ -106,7 +106,7 @@ async fn client(id: u32, requests: u32) -> std::io::Result<()> {
 /// Simple broker (just forwards, doesn't track heartbeats)
 #[allow(clippy::future_not_send)]
 async fn broker() -> std::io::Result<()> {
-    use futures::{select, FutureExt};
+    use futures::{FutureExt, select};
 
     info!("🚀 Starting Simple Broker");
 

@@ -262,6 +262,35 @@ impl ZmtpFrame {
     }
 }
 
+/// Append a ZMTP data-frame header (flags + length prefix) to `buf`.
+///
+/// The vectored write path builds all headers contiguously in one reused buffer
+/// and slices them back out, so the body `Bytes` is never copied into a
+/// userspace buffer on its way to the kernel. `more` sets the MORE flag
+/// (another frame follows in the same multipart message); frames of 256 bytes
+/// or more use the long (8-byte) length form. Returns the header length written
+/// (2 or 9) so the caller can slice it back without recomputing.
+pub fn write_frame_header(buf: &mut BytesMut, body_len: usize, more: bool) -> usize {
+    let is_long = body_len >= 256;
+
+    let mut flags = 0u8;
+    if more {
+        flags |= 0x01; // MORE
+    }
+    if is_long {
+        flags |= 0x02; // LONG
+    }
+
+    buf.extend_from_slice(&[flags]);
+    if is_long {
+        buf.extend_from_slice(&(body_len as u64).to_be_bytes());
+        9
+    } else {
+        buf.extend_from_slice(&[body_len as u8]);
+        2
+    }
+}
+
 /// Encode a multipart message directly into a buffer.
 ///
 /// This is a zero-allocation helper for encoding messages without

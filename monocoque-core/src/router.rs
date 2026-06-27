@@ -88,8 +88,8 @@ impl RouterHub {
     }
 
     pub async fn run(mut self) {
-        use futures::select;
         use futures::FutureExt;
+        use futures::select;
 
         loop {
             // Use futures::select! for runtime-agnostic multiplexing

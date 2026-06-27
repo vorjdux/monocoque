@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+### 🚀 Performance
+
+#### Vectored writes for large frames (PUSH)
+
+`PushSocket::send` now writes large frames with a vectored write (`writev` via
+compio's `write_vectored_all`) instead of copying each body into the userspace
+send buffer. Above `SocketOptions::vectored_write_threshold` and in eager
+(non-coalesced, non-CURVE) mode, the frame header and the refcounted `Bytes` body
+are handed to the kernel as an iovec, removing the redundant memcpy on the
+large-message path. Headers are built into a reused buffer and the iovec list is
+reused across calls, so the path is allocation-free. New
+`with_vectored_write_threshold` builder; set to `usize::MAX` to disable.
+
+The default threshold is **32 KB**, the measured loopback crossover: below it a
+contiguous copy plus one `write` beats a two-segment `writev`; at/above it,
+skipping the copy wins ~1.1-1.3x (4-core cloud Xeon). Tune per hardware. A
+focused harness lives at `monocoque/examples/bench_changes.rs`.
+
+#### PUB/SUB broadcast coalescing
+
+The worker-pool `PubSocket` now coalesces a burst of queued broadcasts into a
+single per-subscriber vectored write, amortizing the syscall cost across the
+batch. The plaintext fan-out stays zero-copy (shared `Bytes` clones); a
+non-broadcast command pulled mid-drain is deferred and processed after the flush
+so command ordering is preserved.
+
+#### `PullSocket::recv_batch`
+
+New receive-side counterpart to `send_batch`: blocks for one message, then
+drains every further message already decoded from the same kernel read, so a
+burst of small messages is returned from a single `.await`. Surfaced on both the
+core and high-level PULL sockets.
+
 ## 0.1.3 - 2026-06-26
 
 ### 🐛 Bug Fixes

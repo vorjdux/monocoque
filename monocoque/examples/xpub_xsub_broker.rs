@@ -50,7 +50,7 @@
 use monocoque::zmq::prelude::*;
 use std::collections::HashSet;
 use std::io;
-use tracing::{info, warn, Level};
+use tracing::{Level, info, warn};
 
 #[compio::main]
 async fn main() -> io::Result<()> {

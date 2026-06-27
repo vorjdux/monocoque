@@ -183,3 +183,144 @@ fn test_pull_bind_push_connect() {
     let msg = msg_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(msg, vec![Bytes::from("reversed topology")]);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Test: vectored write path (Fix 1) delivers large frames intact
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// With a low `vectored_write_threshold`, PUSH sends both a large single-frame
+/// message (long-form length header) and a multipart message that mixes a small
+/// frame with a large one. Exercising the vectored path (header + body as an
+/// iovec, no body copy) must produce byte-identical messages on the PULL side.
+#[test]
+fn test_push_pull_vectored_large_frame() {
+    use monocoque_core::options::SocketOptions;
+
+    let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
+    let (msg_tx, msg_rx) = mpsc::channel::<Vec<Vec<Bytes>>>();
+
+    // 64 KiB body forces the long-form (9-byte) frame header.
+    let big = Bytes::from(vec![0xABu8; 64 * 1024]);
+    let small = Bytes::from_static(b"topic");
+
+    let big_srv = big.clone();
+    let small_srv = small.clone();
+
+    // Server thread: PUSH binds with a 256-byte vectored threshold and sends.
+    thread::spawn(move || {
+        compio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                addr_tx.send(listener.local_addr().unwrap()).unwrap();
+
+                let (stream, _) = listener.accept().await.unwrap();
+                let opts = SocketOptions::default().with_vectored_write_threshold(256);
+                let mut push = PushSocket::from_tcp_with_options(stream, opts)
+                    .await
+                    .unwrap();
+
+                // Single large frame (vectored path).
+                push.send(vec![big_srv.clone()]).await.unwrap();
+                // Multipart: small frame + large frame (still vectored since one
+                // frame exceeds the threshold).
+                push.send(vec![small_srv.clone(), big_srv.clone()])
+                    .await
+                    .unwrap();
+            });
+    });
+
+    let addr = addr_rx.recv().unwrap();
+
+    // Client thread: PULL connects and receives both messages.
+    let client = thread::spawn(move || {
+        compio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let stream = compio::net::TcpStream::connect(addr).await.unwrap();
+                let mut pull = PullSocket::from_tcp(stream).await.unwrap();
+
+                let mut received = Vec::new();
+                for _ in 0..2 {
+                    let msg = compio::time::timeout(Duration::from_secs(5), pull.recv())
+                        .await
+                        .expect("recv timed out")
+                        .expect("io error")
+                        .expect("connection closed");
+                    received.push(msg);
+                }
+                msg_tx.send(received).unwrap();
+            });
+    });
+
+    client.join().expect("client thread panicked");
+
+    let received = msg_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert_eq!(received.len(), 2);
+    assert_eq!(received[0], vec![big.clone()]);
+    assert_eq!(received[1], vec![small, big]);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Test: recv_batch (Fix 2) drains a burst with a single await, in order
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// PUSH sends a batch of small messages in one kernel write; PULL drains them
+/// with `recv_batch`. Every message must come back exactly once, in send order.
+#[test]
+fn test_push_pull_recv_batch() {
+    const N: usize = 1000;
+
+    let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
+    let (msg_tx, msg_rx) = mpsc::channel::<Vec<Vec<Bytes>>>();
+
+    // Server thread: PUSH binds and sends N small messages via send_batch.
+    thread::spawn(move || {
+        compio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                addr_tx.send(listener.local_addr().unwrap()).unwrap();
+
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut push = PushSocket::from_tcp(stream).await.unwrap();
+
+                let batch: Vec<Vec<Bytes>> =
+                    (0..N).map(|i| vec![Bytes::from(i.to_string())]).collect();
+                push.send_batch(batch).await.unwrap();
+            });
+    });
+
+    let addr = addr_rx.recv().unwrap();
+
+    // Client thread: PULL drains messages with recv_batch until it has all N.
+    let client = thread::spawn(move || {
+        compio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let stream = compio::net::TcpStream::connect(addr).await.unwrap();
+                let mut pull = PullSocket::from_tcp(stream).await.unwrap();
+
+                let mut received = Vec::with_capacity(N);
+                while received.len() < N {
+                    match compio::time::timeout(Duration::from_secs(5), pull.recv_batch()).await {
+                        Ok(Ok(Some(batch))) => received.extend(batch),
+                        _ => break,
+                    }
+                }
+                msg_tx.send(received).unwrap();
+            });
+    });
+
+    client.join().expect("client thread panicked");
+
+    let received = msg_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert_eq!(received.len(), N, "expected {N} messages");
+    for (i, msg) in received.iter().enumerate() {
+        assert_eq!(
+            msg,
+            &vec![Bytes::from(i.to_string())],
+            "out-of-order at {i}"
+        );
+    }
+}

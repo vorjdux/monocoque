@@ -13,7 +13,7 @@
 /// "default-deny" security posture: if there is no handler to approve the
 /// connection it must be denied, not silently accepted.
 use crate::security::zap::{ZapMechanism, ZapRequest, ZapResponse, ZapStatus};
-use crate::{inproc_stream::InprocStream, DealerSocket};
+use crate::{DealerSocket, inproc_stream::InprocStream};
 use bytes::Bytes;
 use monocoque_core::options::SocketOptions;
 use std::io;
@@ -104,7 +104,7 @@ impl ZapClient {
                 return Err(io::Error::new(
                     io::ErrorKind::ConnectionReset,
                     "ZAP handler disconnected",
-                ))
+                ));
             }
             Ok(Err(e)) if e.kind() == io::ErrorKind::NotFound => {
                 // Endpoint vanished after send — deny (default-deny).
@@ -118,7 +118,7 @@ impl ZapClient {
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
                     "ZAP request timed out",
-                ))
+                ));
             }
         };
 

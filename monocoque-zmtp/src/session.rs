@@ -226,7 +226,7 @@ impl ZmtpSession {
                             // events.push(SessionEvent::SendBytes(self.local_greeting()));
 
                             // Send READY command immediately after greeting exchange
-                            use crate::utils::{build_ready, encode_frame, FLAG_COMMAND};
+                            use crate::utils::{FLAG_COMMAND, build_ready, encode_frame};
                             let socket_type_str = match self.local_socket_type {
                                 SocketType::Dealer => "DEALER",
                                 SocketType::Router => "ROUTER",

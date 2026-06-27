@@ -3,7 +3,7 @@
 ## Benchmark results
 
 All numbers measured on loopback against rust-zmq (FFI bindings to libzmq).
-Hardware: Linux 6.18, release build, `rustc 1.91`.
+Hardware: Intel Core i7-1355U (12 threads), Linux 6.17, release build, `rustc 1.96`.
 Each benchmark runs sender and receiver on **separate OS threads** with separate
 `compio` runtimes, so the numbers reflect real kernel TCP/IPC round-trips, not
 cooperative task switching within a single runtime.
@@ -24,17 +24,22 @@ a 64 KB buffer flushed in one syscall; call `flush()` after the last send.
 
 | Message size | monocoque eager | monocoque coalesced | rust-zmq | coalesced vs zmq |
 |---|---|---|---|---|
-| 64 B | 153 K msg/s | **6.3 M msg/s** | 971 K msg/s | **6.5x faster** |
-| 256 B | 150 K msg/s | **3.6 M msg/s** | 699 K msg/s | **5.2x faster** |
-| 1 KB | 133 K msg/s | **1.5 M msg/s** | 455 K msg/s | **3.3x faster** |
-| 4 KB | 126 K msg/s | **466 K msg/s** | 168 K msg/s | **2.8x faster** |
-| 16 KB | 111 K msg/s | 120 K msg/s | 71 K msg/s | **1.7x faster** |
+| 64 B | 339 K msg/s | **9.2 M msg/s** | 1.32 M msg/s | **7.0x faster** |
+| 256 B | 343 K msg/s | **5.5 M msg/s** | 1.08 M msg/s | **5.1x faster** |
+| 1 KB | 314 K msg/s | **2.3 M msg/s** | 667 K msg/s | **3.5x faster** |
+| 4 KB | 282 K msg/s | **857 K msg/s** | 314 K msg/s | **2.7x faster** |
+| 16 KB | 252 K msg/s | 265 K msg/s | 111 K msg/s | **2.4x faster** |
 
 The eager mode's lower numbers vs zmq come from one io_uring SQ entry per
 message. Write coalescing batches ~970 x 64 B messages (or ~240 x 256 B) into
 one `write_all()` call, eliminating the per-message kernel boundary crossing.
 libzmq achieves its batching via an internal IO thread; monocoque's coalescing
 is explicit but achieves a higher batch ratio with zero intermediate copies.
+
+For **large** frames, eager mode no longer copies the body into the send buffer:
+above `vectored_write_threshold` (default 32 KB) it writes the header and the
+`Bytes` body as an iovec (`writev`), so the payload is never copied on its way to
+the kernel. See [Vectored writes](#vectored-writes-large-frames) below.
 
 ---
 
@@ -46,10 +51,10 @@ control over batch boundaries:
 
 | Message size | Throughput | Bandwidth |
 |---|---|---|
-| 64 B | 1.24 M msg/s | 76 MiB/s |
-| 256 B | 1.04 M msg/s | 254 MiB/s |
-| 1 KB | 597 K msg/s | 583 MiB/s |
-| 4 KB | 210 K msg/s | 820 MiB/s |
+| 64 B | 2.45 M msg/s | 150 MiB/s |
+| 256 B | 1.98 M msg/s | 484 MiB/s |
+| 1 KB | 1.08 M msg/s | 1.03 GiB/s |
+| 4 KB | 387 K msg/s | 1.48 GiB/s |
 
 ---
 
@@ -62,9 +67,9 @@ Both monocoque and zmq are measured identically.
 
 | Message size | monocoque | rust-zmq | Improvement |
 |---|---|---|---|
-| 64 B | 214 µs | 379 µs | 44% lower |
-| 256 B | 210 µs | 379 µs | 45% lower |
-| 1 KB | 214 µs | 408 µs | 47% lower |
+| 64 B | 63 µs | 304 µs | 79% lower |
+| 256 B | 72 µs | 296 µs | 76% lower |
+| 1 KB | 72 µs | 312 µs | 77% lower |
 
 The monocoque advantage here is mainly that `drop(socket)` is faster: the
 async socket cleanup completes synchronously within `block_on`, while zmq's
@@ -81,20 +86,52 @@ share kernel buffers without copying.
 
 | Transport | 64 B | 256 B | 1 KB |
 |---|---|---|---|
-| TCP loopback | 322 µs | 249 µs | 260 µs |
-| IPC | 248 µs | 248 µs | 241 µs |
-| IPC speedup | 23% faster | similar | 7% faster |
+| TCP loopback | 77 µs | 82 µs | 78 µs |
+| IPC | 83 µs | 84 µs | 92 µs |
+| IPC vs TCP | comparable | comparable | comparable |
+
+On this run IPC and TCP latency land within each other's noise band. The
+per-iteration teardown (FIN/close plus thread join) dominates the measurement
+and is similar for both transports, so IPC's lower per-message cost does not
+show up on the latency axis. The IPC advantage is on throughput, below.
 
 **Throughput (PUSH/PULL eager, 10 000 messages):**
 
 | Transport | 64 B | 256 B | 1 KB |
 |---|---|---|---|
-| TCP loopback | 150 K msg/s | 148 K msg/s | 132 K msg/s |
-| IPC | 357 K msg/s | 347 K msg/s | 329 K msg/s |
-| IPC speedup | 2.4x faster | 2.3x faster | 2.5x faster |
+| TCP loopback | 340 K msg/s | 341 K msg/s | 309 K msg/s |
+| IPC | 716 K msg/s | 702 K msg/s | 662 K msg/s |
+| IPC speedup | 2.1x faster | 2.1x faster | 2.1x faster |
 
-IPC throughput is ~2.4x TCP loopback for small messages because Unix sockets
+IPC throughput is ~2.1x TCP loopback for small messages because Unix sockets
 have lower per-syscall overhead and no TCP framing cost.
+
+---
+
+### PUB/SUB patterns
+
+Both run sender and subscribers on separate OS threads against the same peer
+under test (monocoque vs rust-zmq).
+
+**Fan-out** (single subscriber, 64 B messages):
+
+| | Latency per message | Throughput |
+|---|---|---|
+| monocoque | 37 µs | 2.72 M msg/s |
+| rust-zmq | 115 µs | 870 K msg/s |
+| monocoque vs zmq | | **3.1x faster** |
+
+**Topic filtering** (10% of messages match the subscription):
+
+| | Latency per message | Throughput |
+|---|---|---|
+| monocoque | 5.7 µs | 17.4 M msg/s |
+| rust-zmq | 6.2 µs | 16.1 M msg/s |
+| monocoque vs zmq | | **1.08x faster** |
+
+After a profiling pass on the PUB data path, monocoque leads on both: a large
+margin on fan-out and a slight edge on topic filtering. The topic-filtering
+result is close enough that it moves run to run; the fan-out lead is consistent.
 
 ---
 
@@ -169,6 +206,94 @@ For a pure pipeline with no reply (PUSH/PULL), the pattern is simple: call
 `flush()` once after your send loop and you are done. For request-reply (REQ/REP,
 DEALER/ROUTER), stick with eager mode unless you have benchmarked a real
 bottleneck and know exactly where to place each `flush()`.
+
+---
+
+## Vectored writes (large frames)
+
+In eager mode, large frames are written with a vectored write (`writev`) instead
+of being copied into the userspace send buffer first. The frame header and the
+refcounted `Bytes` body are handed to the kernel as a two-entry iovec, so the
+body travels straight to the socket with no intermediate `memcpy`. The header is
+built into a reused buffer and the iovec list is reused across calls, so the path
+allocates nothing per message.
+
+This is automatic, no API change is needed. The switch happens per message when
+a frame body is at or above `vectored_write_threshold` (default 32 KB). Small and
+medium frames stay on the copy path, where a single contiguous `write` beats the
+per-iovec bookkeeping.
+
+The 32 KB default is the measured crossover on loopback: below it the copy plus
+one `write` is faster than a two-segment `writev`; at or above it, skipping the
+copy wins. On this 4-core test box vectored writes are ~1.1–1.3x for 32 KB–1 MB
+frames and ~30% *slower* at 16 KB, which is exactly why the threshold exists.
+Because the crossover depends on memory bandwidth and syscall cost, benchmark on
+your own hardware and adjust:
+
+```rust
+use monocoque::zmq::{PushSocket, SocketOptions};
+
+// Trigger vectored writes for smaller frames (only if it wins on your box).
+let opts = SocketOptions::default().with_vectored_write_threshold(16384);
+
+// Or disable vectored writes entirely (always copy into the send buffer).
+let opts = SocketOptions::default().with_vectored_write_threshold(usize::MAX);
+```
+
+Notes and limits:
+
+- Applies in **eager** mode only. With write coalescing enabled, messages are
+  batched into the 64 KB buffer instead (the two strategies serve different
+  workloads: coalescing wins for small-message bursts, vectored writes for large
+  frames).
+- Skipped for **CURVE**-encrypted connections: the cipher rewrites each body into
+  a fresh buffer regardless, so there is no copy to avoid.
+- Uses compio's `write_vectored_all` (`writev`). The further `IORING_OP_SEND_ZC`
+  (kernel-buffer zero-copy) lever is not yet wired up.
+
+---
+
+## Receive batching
+
+`PullSocket::recv_batch()` is the receive-side counterpart to the send batch
+API. It blocks until at least one message is available, then drains every
+further message already decoded from the same kernel read, returning the whole
+burst from a single `.await`. One `read` frequently delivers many small
+messages; returning them together amortizes the per-await overhead that becomes
+a real fraction of the budget at multi-million-msg/s rates.
+
+```rust
+use monocoque::zmq::PullSocket;
+
+let mut pull = PullSocket::connect("127.0.0.1:5555").await?;
+while let Some(batch) = pull.recv_batch().await? {
+    for msg in batch {
+        handle(msg);
+    }
+}
+```
+
+For finer control, `recv()` followed by `try_recv()` in a loop drains the same
+buffer manually; `recv_batch()` just packages that pattern into one call.
+
+In a loopback microbenchmark `recv_batch()` did **not** beat a tight `recv()`
+loop (per-await scheduling is not the bottleneck there), so treat it as an
+ergonomic convenience rather than a guaranteed speedup, and measure it against
+`recv()` for your own workload before relying on it.
+
+---
+
+## PUB/SUB broadcast coalescing
+
+The worker-pool `PubSocket` coalesces broadcasts automatically. When a producer
+outpaces a worker and several broadcasts queue up, the worker drains them into a
+batch and writes each subscriber its matching messages in a single vectored
+write, amortizing the syscall cost across the burst. The plaintext fan-out stays
+zero-copy: every subscriber's iovec entries are O(1) `Bytes` clones of the
+shared per-message wire, never copies of the payload.
+
+This is automatic and requires no API change; it is what lets PUB fan-out keep
+up under load rather than paying one syscall per message per subscriber.
 
 ---
 
@@ -308,7 +433,9 @@ let opts = SocketOptions::default()
 
 - Build with `--release`; debug builds are 5-10x slower
 - Linux kernel >= 5.11 for full io_uring benefit
-- Use `with_write_coalescing(true)` + `flush()` for throughput-bound workloads
+- Use `with_write_coalescing(true)` + `flush()` for small-message throughput
+- Large frames use vectored writes automatically (eager mode, >= 32 KB body);
+  tune `vectored_write_threshold` for your hardware
 - Size read/write buffers to match your 99th-percentile message size
 - Use IPC instead of TCP loopback for co-located sockets (~2.4x throughput gain)
 - Run `dhat` or `heaptrack` to catch `Bytes::copy_from_slice` in hot paths

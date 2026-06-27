@@ -10,8 +10,8 @@
 use bytes::Bytes;
 use compio::net::TcpListener;
 use monocoque::zmq::RouterSocket;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{error, info};
 
 #[compio::main]

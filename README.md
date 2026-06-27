@@ -27,28 +27,41 @@ The name comes from Formula 1 engineering, where the monocoque chassis achieves 
 - Automatic reconnection with exponential backoff on all socket types
 - ZMTP 3.1 heartbeating (PING/PONG) wired into all send/recv loops
 - Socket monitoring via channel-based lifecycle events
-- Explicit batching API for maximum throughput
+- Explicit batching API for maximum throughput, plus `recv_batch()` to drain a
+  burst of messages in one `.await`
+- Vectored (`writev`) sends for large frames: the body skips the userspace copy
+- PUB fan-out coalesces queued broadcasts into one vectored write per subscriber
 - Zero-copy message passing via `Bytes` refcounting
 
 ## Performance
 
 Benchmarked against rust-zmq (FFI bindings to libzmq). Separate OS threads for
-sender and receiver, real loopback TCP, Linux 6.18, release build.
+sender and receiver, real loopback TCP, Intel Core i7-1355U (12 threads),
+Linux 6.17, release build.
 
 **PUSH/PULL throughput with write coalescing** (`with_write_coalescing(true)`):
 
 | Message size | monocoque | rust-zmq | Ratio |
 |---|---|---|---|
-| 64 B | **6.1 M msg/s** | 971 K msg/s | 6.3× faster |
-| 256 B | **3.5 M msg/s** | 699 K msg/s | 5.0× faster |
-| 1 KB | **1.4 M msg/s** | 455 K msg/s | 3.1× faster |
-| 4 KB | **391 K msg/s** | 168 K msg/s | 2.3× faster |
-| 16 KB | **113 K msg/s** | 71 K msg/s | 1.6× faster |
+| 64 B | **9.2 M msg/s** | 1.32 M msg/s | 7.0× faster |
+| 256 B | **5.5 M msg/s** | 1.08 M msg/s | 5.1× faster |
+| 1 KB | **2.3 M msg/s** | 667 K msg/s | 3.5× faster |
+| 4 KB | **857 K msg/s** | 314 K msg/s | 2.7× faster |
+| 16 KB | **265 K msg/s** | 111 K msg/s | 2.4× faster |
 
 Default (eager) mode sends each message immediately and is suitable when latency
-matters more than throughput. IPC (Unix domain sockets) is ~2.4× faster than
-TCP loopback for same-host communication. See [docs/performance.md](docs/performance.md)
-for the full breakdown including latency numbers and tuning guidance.
+matters more than throughput. For **large** frames eager mode automatically uses
+a vectored write (`writev`) so the body is never copied into the send buffer;
+the threshold (`vectored_write_threshold`, default 32 KB) is the measured
+loopback crossover and is tunable per workload. IPC (Unix domain sockets) is
+~2.1× faster than TCP loopback for same-host throughput.
+
+After a profiling-driven pass on the PUB data path, **PUB/SUB now leads
+libzmq on both axes**: single-subscriber fan-out runs ~3.1× faster and topic
+filtering at 10% match is a slight edge (~1.08×), where it previously trailed. See
+[docs/performance.md](docs/performance.md) for the full breakdown including
+latency numbers, the vectored-write crossover measurements, PUB/SUB pattern
+results, and tuning guidance.
 
 ## Quick Start
 
@@ -131,9 +144,9 @@ Interop testing against libzmq: see [docs/INTEROP_TESTING.md](docs/INTEROP_TESTI
 
 Core features are complete. Possible future work:
 
-- io_uring fixed buffers (`IORING_OP_READ_FIXED`) - removes the last kernel-boundary copy per read; ~5-15% latency improvement at an already low baseline
-- Prefix trie for topic matching - only relevant with 100+ concurrent subscribers using deep topic hierarchies
-- Concurrent PUB fanout - prevents one slow subscriber from delaying others in large-subscriber deployments
+- io_uring fixed buffers (`IORING_OP_READ_FIXED`) - removes the last kernel-boundary copy per read; ~5-15% latency improvement at an already low baseline. (Large *writes* already use vectored `writev`.)
+- Prefix trie for topic matching - the publisher-side prefilter and per-subscriber matching use a linear prefix scan, which is fast for the handful of distinct prefixes a PUB typically holds; a trie would only help when a single PUB accumulates 100+ *distinct* subscription prefixes or deep hierarchies
+- Per-subscriber concurrent writes - PUB fan-out throughput now exceeds libzmq and is sharded across worker threads (each write has a fault-isolation timeout), but writes *within* a worker are sequential, so one slow subscriber can still delay the others on its worker
 
 Long term: high-performance RPC, additional transports (QUIC, shared memory), custom protocol framework.
 

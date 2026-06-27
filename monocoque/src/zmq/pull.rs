@@ -3,7 +3,7 @@
 //! PULL sockets are used in pipeline patterns for receiving tasks.
 
 use compio::net::{TcpListener, TcpStream};
-use monocoque_core::monitor::{create_monitor, SocketEventSender, SocketMonitor};
+use monocoque_core::monitor::{SocketEventSender, SocketMonitor, create_monitor};
 use monocoque_core::options::SocketOptions;
 use monocoque_zmtp::PullSocket as InternalPull;
 use std::io;
@@ -160,6 +160,16 @@ where
     /// Receive a message.
     pub async fn recv(&mut self) -> io::Result<Option<Vec<bytes::Bytes>>> {
         self.inner.recv().await
+    }
+
+    /// Receive a batch of messages with a single `.await`.
+    ///
+    /// Blocks until at least one message is available, then drains every further
+    /// message already decoded from the same kernel read. Returning a burst of
+    /// small messages from one `.await` amortizes per-await overhead; it is the
+    /// receive-side counterpart to [`PushSocket::send_batch`](crate::zmq::PushSocket::send_batch).
+    pub async fn recv_batch(&mut self) -> io::Result<Option<Vec<Vec<bytes::Bytes>>>> {
+        self.inner.recv_batch().await
     }
 
     /// Enable monitoring for this socket.

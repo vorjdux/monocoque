@@ -32,7 +32,7 @@
 use bytes::Bytes;
 use monocoque::zmq::prelude::*;
 use std::io;
-use tracing::{info, Level};
+use tracing::{Level, info};
 
 #[compio::main]
 async fn main() -> io::Result<()> {
