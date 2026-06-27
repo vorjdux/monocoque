@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.4 - 2026-06-27
+
 ### 🚀 Performance
 
 #### Vectored writes for large frames (PUSH)
@@ -34,6 +36,21 @@ New receive-side counterpart to `send_batch`: blocks for one message, then
 drains every further message already decoded from the same kernel read, so a
 burst of small messages is returned from a single `.await`. Surfaced on both the
 core and high-level PULL sockets.
+
+### 🧰 Tooling
+
+- Migrated the workspace to Rust edition 2024 and reapplied the rustfmt baseline.
+
+### 📚 Documentation
+
+- Refreshed README, `docs/performance.md`, and `monocoque/BENCHMARKS.md` with
+  benchmark numbers measured on the i7-1355U reference machine (Linux 6.17,
+  `rustc 1.96`), and removed the older sandbox section so a single machine is the
+  reference.
+- Corrected the IPC comparison: IPC is ~2.1x TCP loopback on throughput, and IPC
+  and TCP latency land within each other's noise under the teardown-included
+  methodology (no IPC latency win is claimed).
+- Added the benchmark gap remediation plan under `docs/blueprints/`.
 
 ## 0.1.3 - 2026-06-26
 

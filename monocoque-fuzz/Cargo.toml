@@ -1,6 +1,6 @@
 [package]
 name = "monocoque-fuzz"
-version = "0.1.2"
+version = "0.1.4"
 edition = "2024"
 license = "MIT"
 authors = ["Matheus Santos <vorj.dux@gmail.com>"]

@@ -25,7 +25,7 @@ thiserror.workspace = true
 flume.workspace = true
 futures.workspace = true
 compio.workspace = true
-monocoque-core = { version = "0.1.2", path = "../monocoque-core", package = "monocoque-rs-core" }
+monocoque-core = { version = "0.1.4", path = "../monocoque-core", package = "monocoque-rs-core" }
 smallvec.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
