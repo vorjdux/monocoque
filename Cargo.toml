@@ -5,8 +5,8 @@ exclude = ["monocoque-fuzz"]
 default-members = ["monocoque"]
 
 [workspace.package]
-version = "0.1.3"
-edition = "2021"
+version = "0.1.4"
+edition = "2024"
 license = "MIT"
 authors = ["Matheus Santos <vorj.dux@gmail.com>"]
 repository = "https://github.com/vorjdux/monocoque"

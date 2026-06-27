@@ -17,10 +17,10 @@
 
 use bytes::Bytes;
 use compio::net::TcpListener;
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use monocoque::zmq::{DealerSocket, RouterSocket, SocketOptions};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 const MESSAGE_SIZE: usize = 64;

@@ -3,9 +3,9 @@
 use super::common::channel_to_io_error;
 use bytes::Bytes;
 use compio::net::TcpStream;
-use monocoque_core::monitor::{create_monitor, SocketEvent, SocketEventSender, SocketMonitor};
-use monocoque_zmtp::req::ReqSocket as InternalReq;
+use monocoque_core::monitor::{SocketEvent, SocketEventSender, SocketMonitor, create_monitor};
 use monocoque_zmtp::SocketType;
+use monocoque_zmtp::req::ReqSocket as InternalReq;
 use std::io;
 
 /// A REQ socket for synchronous request-reply patterns.

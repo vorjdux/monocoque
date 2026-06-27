@@ -5,7 +5,7 @@
 /// requests from server sockets.
 use crate::security::plain::PlainAuthHandler;
 use crate::security::zap::{ZapMechanism, ZapRequest, ZapResponse};
-use crate::{inproc_stream::InprocStream, DealerSocket};
+use crate::{DealerSocket, inproc_stream::InprocStream};
 use monocoque_core::options::SocketOptions;
 use std::io;
 use std::sync::Arc;
@@ -273,8 +273,8 @@ pub fn start_default_zap_server<H: PlainAuthHandler + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::security::plain::StaticPlainHandler;
     use crate::security::ZapStatus;
+    use crate::security::plain::StaticPlainHandler;
     use bytes::Bytes;
 
     #[test]

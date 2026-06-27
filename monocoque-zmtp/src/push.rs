@@ -95,6 +95,10 @@ where
 
         if self.base.options.write_coalescing {
             self.base.send_coalesced(&msg).await?;
+        } else if self.base.should_vectored_write(&msg) {
+            // Large frame: write header + body as an iovec, skipping the copy
+            // into the userspace send buffer.
+            self.base.send_vectored(&msg).await?;
         } else {
             self.base.encode_message_to_write_buf(&msg)?;
             self.base.write_from_buf().await?;

@@ -32,13 +32,13 @@
 
 use bytes::{Bytes, BytesMut};
 use chacha20poly1305::{
-    aead::{Aead, KeyInit, OsRng},
     XChaCha20Poly1305, XNonce,
+    aead::{Aead, KeyInit, OsRng},
 };
 use compio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use crypto_box::{
-    aead::generic_array::GenericArray, PublicKey as SalsaPublicKey, SalsaBox,
-    SecretKey as SalsaSecretKey,
+    PublicKey as SalsaPublicKey, SalsaBox, SecretKey as SalsaSecretKey,
+    aead::generic_array::GenericArray,
 };
 use rand::RngCore;
 use sha2::{Digest, Sha256};
@@ -707,7 +707,7 @@ impl CurveClient {
         frame.extend_from_slice(self.client_short_keypair.public.as_bytes()); // 32  c'.pk
         frame.extend_from_slice(&nonce_counter.to_be_bytes()); //  8  nonce
         frame.extend_from_slice(&hello_box); // 80  box
-                                             // total = 198
+        // total = 198
 
         write_zmtp_cmd(stream, &frame, timeout).await
     }
@@ -1134,7 +1134,7 @@ impl CurveServer {
         let mut cookie = Vec::with_capacity(96);
         cookie.extend_from_slice(&cookie_nonce_16); // 16
         cookie.extend_from_slice(&cookie_ct); // 80
-                                              // cookie = 96 bytes
+        // cookie = 96 bytes
 
         // Build welcome_box (144 bytes): SalsaBox(S→c').encrypt(s'.pk ‖ cookie)
         let mut server_nonce_16 = [0u8; 16];
@@ -1146,7 +1146,7 @@ impl CurveServer {
         let mut welcome_pt = Vec::with_capacity(128);
         welcome_pt.extend_from_slice(self.server_short_keypair.public.as_bytes()); // s'.pk (32)
         welcome_pt.extend_from_slice(&cookie); // cookie (96)
-                                               // total = 128 bytes
+        // total = 128 bytes
 
         let welcome_box = salsa_encrypt(
             c_prime_pk.as_bytes(),
@@ -1161,7 +1161,7 @@ impl CurveServer {
         body.extend_from_slice(CURVE_WELCOME); //   8
         body.extend_from_slice(&server_nonce_16); //  16
         body.extend_from_slice(&welcome_box); // 144
-                                              // total = 168
+        // total = 168
 
         write_zmtp_cmd(stream, &body, timeout).await
     }

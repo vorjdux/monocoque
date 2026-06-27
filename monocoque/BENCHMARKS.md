@@ -7,7 +7,7 @@ All benchmarks run **sender and receiver on separate OS threads** with separate
 lives on the receiver side for throughput tests. Both sides are given identical
 methodology — same number of operations per message, same warmup structure.
 
-Hardware: Linux 6.18, release build.
+Hardware: Intel Core i7-1355U (12 threads), Linux 6.17, release build.
 
 ---
 
@@ -21,37 +21,45 @@ PUSH/PULL one-way pipeline, 10 000 messages per iteration.
 
 | Message size | msg/s |
 |---|---|
-| 64 B | 153 K |
-| 256 B | 150 K |
-| 1 KB | 133 K |
-| 4 KB | 126 K |
-| 16 KB | 111 K |
+| 64 B | 339 K |
+| 256 B | 343 K |
+| 1 KB | 314 K |
+| 4 KB | 282 K |
+| 16 KB | 252 K |
 
 **monocoque (coalesced)** — `with_write_coalescing(true)`, 64 KB flush threshold:
 
 | Message size | msg/s | vs zmq |
 |---|---|---|
-| 64 B | 6.3 M | **6.5× faster** |
-| 256 B | 3.6 M | **5.2× faster** |
-| 1 KB | 1.5 M | **3.3× faster** |
-| 4 KB | 466 K | **2.8× faster** |
-| 16 KB | 120 K | **1.7× faster** |
+| 64 B | 9.2 M | **7.0× faster** |
+| 256 B | 5.5 M | **5.1× faster** |
+| 1 KB | 2.3 M | **3.5× faster** |
+| 4 KB | 857 K | **2.7× faster** |
+| 16 KB | 265 K | **2.4× faster** |
 
 **rust-zmq (libzmq)**:
 
 | Message size | msg/s |
 |---|---|
-| 64 B | 971 K |
-| 256 B | 699 K |
-| 1 KB | 455 K |
-| 4 KB | 168 K |
-| 16 KB | 71 K |
+| 64 B | 1.32 M |
+| 256 B | 1.08 M |
+| 1 KB | 667 K |
+| 4 KB | 314 K |
+| 16 KB | 111 K |
 
 ---
 
 ### Cross-implementation comparison — `scripts/monocoque_bench_peer`
 
-Two-process, 2-second timed window. All numbers from the same Linux 6.18 machine.
+> Provenance: this section is from a separate prior host (Linux 6.18), not the
+> i7-1355U reference used for the criterion tables above. It was not re-run in
+> the latest pass: the multi-implementation columns (libzmq, rzmq, zmq.rs)
+> require the external omq.rs comparison harness. Treat these as relative,
+> cross-implementation shape rather than absolute numbers for the reference
+> machine. The monocoque-vs-libzmq comparison on the reference machine is the
+> `throughput` and `latency` criterion tables above.
+
+Two-process, 2-second timed window.
 monocoque uses `push` (coalesced, one flush per 64 messages); other implementations
 use their default modes.
 
@@ -99,9 +107,9 @@ join). 1 000 warmup rounds per iteration (not measured).
 
 | Message size | monocoque | rust-zmq | Improvement |
 |---|---|---|---|
-| 64 B | 214 µs | 379 µs | 44% lower |
-| 256 B | 210 µs | 379 µs | 45% lower |
-| 1 KB | 214 µs | 408 µs | 47% lower |
+| 64 B | 63 µs | 304 µs | 79% lower |
+| 256 B | 72 µs | 296 µs | 76% lower |
+| 1 KB | 72 µs | 312 µs | 77% lower |
 
 Note: the per-iteration cost includes one TCP connection teardown. Steady-state
 latency on a persistent connection is ~75 µs for monocoque vs ~200 µs for libzmq.
@@ -114,18 +122,20 @@ latency on a persistent connection is ~75 µs for monocoque vs ~200 µs for libz
 
 | Transport | 64 B | 256 B | 1 KB |
 |---|---|---|---|
-| TCP loopback | 322 µs | 249 µs | 260 µs |
-| IPC (Unix socket) | 248 µs | 248 µs | 241 µs |
+| TCP loopback | 77 µs | 82 µs | 78 µs |
+| IPC (Unix socket) | 83 µs | 84 µs | 92 µs |
 
 **Throughput (PUSH/PULL eager, 10 000 messages):**
 
 | Transport | 64 B | 256 B | 1 KB |
 |---|---|---|---|
-| TCP loopback | 150 K msg/s | 148 K msg/s | 132 K msg/s |
-| IPC | 357 K msg/s | 347 K msg/s | 329 K msg/s |
+| TCP loopback | 340 K msg/s | 341 K msg/s | 309 K msg/s |
+| IPC | 716 K msg/s | 702 K msg/s | 662 K msg/s |
 
-IPC is ~2.4× faster than TCP loopback for throughput; latency advantage is
-smaller (7–23%) because teardown dominates the per-iteration measurement.
+IPC is ~2.1× faster than TCP loopback for throughput. On this run IPC and TCP
+latency land within each other's noise band because per-iteration teardown
+dominates the measurement, so the IPC advantage shows up on throughput, not
+latency.
 
 ---
 
@@ -136,10 +146,41 @@ messages. This is a monocoque-only benchmark demonstrating the explicit batch AP
 
 | Message size | msg/s | Bandwidth |
 |---|---|---|
-| 64 B | 1.24 M | 76 MiB/s |
-| 256 B | 1.04 M | 254 MiB/s |
-| 1 KB | 597 K | 583 MiB/s |
-| 4 KB | 210 K | 820 MiB/s |
+| 64 B | 2.45 M | 150 MiB/s |
+| 256 B | 1.98 M | 484 MiB/s |
+| 1 KB | 1.08 M | 1.03 GiB/s |
+| 4 KB | 387 K | 1.48 GiB/s |
+
+---
+
+### Vectored writes, recv_batch, PUB coalescing
+
+These paths have their own focused harness (not part of the criterion suite):
+`monocoque/examples/bench_changes.rs`, run with
+`cargo run --release --features zmq --example bench_changes`. It toggles each
+change via its public knob so the effect is isolated. Numbers below are a
+separate loopback run; treat them as relative (they show the direction of each
+change), not directly comparable to the criterion tables above.
+
+**Vectored writes (PUSH/PULL eager, one message per `send`)**, copy vs
+`writev`, by frame size:
+
+| Frame size | copy | vectored | ratio |
+|---|---|---|---|
+| 16 KB | 1.86 GB/s | 1.28 GB/s | 0.69x |
+| 32 KB | 1.65 GB/s | 2.10 GB/s | 1.27x |
+| 64 KB | 1.33 GB/s | 1.68 GB/s | 1.26x |
+| 256 KB | 1.82 GB/s | 2.22 GB/s | 1.22x |
+| 1 MB | 1.24 GB/s | 1.48 GB/s | 1.19x |
+
+The crossover is ~32 KB (hence the default `vectored_write_threshold`); below it
+the contiguous copy plus one `write` beats a two-segment `writev`.
+
+**`recv_batch` vs `recv`** (64 B, `send_batch(256)`): 6.1 M vs 7.8 M msg/s, no
+win on loopback; kept as an ergonomic API.
+
+**PUB→SUB delivered broadcast, 1 subscriber** (coalescing on): 64 B ~174 K
+msg/s, 1 KB ~161 K msg/s.
 
 ---
 
@@ -202,9 +243,12 @@ cargo build --release
 
 ### What is not (yet) benchmarked
 
-- Multi-connection fanout (PUB to N SUB)
+- PUB fan-out to **many** subscribers (single-subscriber delivered throughput is
+  measured above; the coalescing path is designed to amortize syscalls across
+  subscribers under load, which still needs an N-SUB benchmark)
 - Concurrent senders (N PUSH to 1 PULL)
 - IPC coalesced throughput against competing IPC implementations
+- A clean on/off A/B for PUB coalescing (the cap is a compile-time constant)
 
 ---
 

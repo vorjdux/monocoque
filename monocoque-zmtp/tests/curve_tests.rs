@@ -1,7 +1,7 @@
 //! Integration tests for CURVE encryption
 
 use monocoque_zmtp::security::curve::{
-    CurveKeyPair, CurvePublicKey, CurveSecretKey, CURVE_KEY_SIZE,
+    CURVE_KEY_SIZE, CurveKeyPair, CurvePublicKey, CurveSecretKey,
 };
 
 #[test]

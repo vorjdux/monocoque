@@ -5,7 +5,7 @@
 //! Run with: cargo bench --package monocoque-zmtp
 
 use bytes::Bytes;
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use monocoque_core::options::SocketOptions;
 use std::time::Duration;
 

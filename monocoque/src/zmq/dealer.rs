@@ -3,7 +3,7 @@
 use super::common::{channel_to_io_error, parse_tcp_endpoint};
 use bytes::Bytes;
 use compio::net::TcpStream;
-use monocoque_core::monitor::{create_monitor, SocketEvent, SocketEventSender, SocketMonitor};
+use monocoque_core::monitor::{SocketEvent, SocketEventSender, SocketMonitor, create_monitor};
 use monocoque_zmtp::dealer::DealerSocket as InternalDealer;
 use std::io;
 

@@ -173,6 +173,39 @@ where
         }
     }
 
+    /// Receive a batch of messages with a single `.await`.
+    ///
+    /// Blocks until at least one message is available (like [`recv`](Self::recv)),
+    /// then drains every further message already decoded from the same kernel
+    /// read(s) without suspending again. One `read` frequently delivers many
+    /// small messages; returning them all from one `.await` amortizes the
+    /// per-await overhead that becomes a real fraction of the budget at
+    /// multi-million-msg/s rates. It is the receive-side counterpart to
+    /// [`PushSocket::send_batch`](crate::push::PushSocket::send_batch).
+    ///
+    /// Returns `Ok(Some(batch))` with one or more messages (in arrival order),
+    /// or `Ok(None)` if the connection was closed before any message arrived.
+    pub async fn recv_batch(&mut self) -> io::Result<Option<Vec<Vec<Bytes>>>> {
+        let Some(first) = self.recv().await? else {
+            return Ok(None);
+        };
+
+        let mut batch = Vec::with_capacity(8);
+        batch.push(first);
+
+        // Drain everything else already sitting in the receive buffer.
+        while let Some(msg) = self.try_recv()? {
+            batch.push(msg);
+        }
+
+        // A PING may have been decoded mid-drain, queuing a PONG; flush it.
+        if !self.base.send_buffer.is_empty() {
+            self.base.flush_send_buffer().await?;
+        }
+
+        Ok(Some(batch))
+    }
+
     /// Close the socket gracefully by shutting down the underlying stream.
     pub async fn close(mut self) -> io::Result<()> {
         trace!("[PULL] Closing socket");

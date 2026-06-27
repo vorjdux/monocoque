@@ -7,7 +7,7 @@
 
 use bytes::Bytes;
 use compio::buf::{IoBufMut, SetBufInit};
-use std::alloc::{alloc, dealloc, Layout};
+use std::alloc::{Layout, alloc, dealloc};
 use std::ptr::NonNull;
 use std::sync::Arc;
 
@@ -22,7 +22,7 @@ pub const PAGE_ALIGN: usize = 128;
 ///
 /// Invariant:
 /// - Memory is allocated once and never moved.
-/// - Freed only when the last Arc<Page> is dropped.
+/// - Freed only when the last `Arc<Page>` is dropped.
 struct Page {
     ptr: NonNull<u8>,
     /// Actual allocation size in bytes. Equal to `PAGE_SIZE` for normal pages;

@@ -191,3 +191,87 @@ fn test_sub_options_multiple_subscriptions() {
         );
     }
 }
+
+/// Broadcast coalescing (Fix 4) delivers a rapid burst intact and in order.
+///
+/// The PUB pushes a tight burst of messages so they queue behind the worker,
+/// which drains them into a single per-subscriber vectored write. Whatever the
+/// actual batch sizes, the subscriber must receive every message exactly once,
+/// in send order, byte-identical — coalescing must never reorder, merge, or drop
+/// a frame.
+#[test]
+fn test_pub_broadcast_coalescing_burst() {
+    const N: usize = 500;
+
+    let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
+    let (sub_ready_tx, sub_ready_rx) = mpsc::channel::<()>();
+    let (client_done_tx, client_done_rx) = mpsc::channel::<()>();
+    let (msgs_tx, msgs_rx) = mpsc::channel::<Vec<Vec<Bytes>>>();
+
+    let pub_handle = thread::spawn(move || {
+        compio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                addr_tx.send(listener.local_addr().unwrap()).unwrap();
+
+                let mut pub_sock = PubSocket::new();
+                pub_sock.accept_subscriber(&listener).await.unwrap();
+
+                sub_ready_rx.recv().unwrap();
+                std::thread::sleep(Duration::from_millis(100));
+
+                // Tight burst: each message carries its sequence number as the
+                // payload (a multipart [topic, seq] message).
+                for i in 0..N {
+                    pub_sock
+                        .send(vec![
+                            Bytes::from_static(b"burst"),
+                            Bytes::from(i.to_string()),
+                        ])
+                        .await
+                        .unwrap();
+                }
+
+                client_done_rx.recv().unwrap();
+            });
+    });
+
+    let addr = addr_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    let client = thread::spawn(move || {
+        compio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let stream = compio::net::TcpStream::connect(addr).await.unwrap();
+                // Empty subscription = receive everything.
+                let opts = SocketOptions::default().with_subscribe(Bytes::from_static(b""));
+                let mut sub = SubSocket::with_options(stream, opts).await.unwrap();
+
+                sub_ready_tx.send(()).unwrap();
+
+                let mut received = Vec::with_capacity(N);
+                for _ in 0..N {
+                    match compio::time::timeout(Duration::from_secs(5), sub.recv()).await {
+                        Ok(Ok(Some(frames))) => received.push(frames),
+                        _ => break,
+                    }
+                }
+                msgs_tx.send(received).unwrap();
+                client_done_tx.send(()).unwrap();
+            });
+    });
+
+    pub_handle.join().expect("pub thread panicked");
+    client.join().expect("client thread panicked");
+
+    let msgs = msgs_rx.recv_timeout(Duration::from_secs(15)).unwrap();
+    assert_eq!(msgs.len(), N, "expected {N} messages, got {}", msgs.len());
+
+    // Every message intact and in send order.
+    for (i, msg) in msgs.iter().enumerate() {
+        assert_eq!(msg.len(), 2, "message {i} should have 2 frames");
+        assert_eq!(msg[0], Bytes::from_static(b"burst"));
+        assert_eq!(msg[1], Bytes::from(i.to_string()), "out-of-order at {i}");
+    }
+}

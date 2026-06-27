@@ -7,7 +7,7 @@
 use bytes::Bytes;
 use compio::net::TcpListener;
 use monocoque_zmtp::pair::PairSocket;
-use monocoque_zmtp::proxy::{proxy_steerable, ProxyCommand};
+use monocoque_zmtp::proxy::{ProxyCommand, proxy_steerable};
 
 /// Bind a TCP listener and return a connected server+client PAIR socket pair.
 #[allow(clippy::future_not_send)]

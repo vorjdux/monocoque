@@ -8,7 +8,7 @@
 use bytes::Bytes;
 use compio::net::TcpListener;
 use monocoque_zmtp::pair::PairSocket;
-use monocoque_zmtp::proxy::{proxy_steerable, ProxyCommand};
+use monocoque_zmtp::proxy::{ProxyCommand, proxy_steerable};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;

@@ -56,8 +56,8 @@ use flume::{Receiver, Sender};
 use monocoque_core::options::SocketOptions;
 use std::collections::HashMap;
 use std::io;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, trace, warn};
 
 // ─────────────────────────────────────────────────────────────────────────────

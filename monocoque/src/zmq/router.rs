@@ -3,10 +3,10 @@
 use super::common::channel_to_io_error;
 use bytes::Bytes;
 use compio::net::{TcpListener, TcpStream};
-use monocoque_core::monitor::{create_monitor, SocketEventSender, SocketMonitor};
+use monocoque_core::monitor::{SocketEventSender, SocketMonitor, create_monitor};
 use monocoque_core::options::SocketOptions;
-use monocoque_zmtp::router::RouterSocket as InternalRouter;
 use monocoque_zmtp::SocketType;
+use monocoque_zmtp::router::RouterSocket as InternalRouter;
 use std::io;
 
 /// A ROUTER socket for identity-based routing.

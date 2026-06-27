@@ -2,10 +2,10 @@
 
 use bytes::Bytes;
 use compio::net::TcpListener;
-use monocoque_core::monitor::{create_monitor, SocketEventSender, SocketMonitor};
+use monocoque_core::monitor::{SocketEventSender, SocketMonitor, create_monitor};
 use monocoque_core::options::SocketOptions;
-use monocoque_zmtp::publisher::PubSocket as InternalPub;
 use monocoque_zmtp::SocketType;
+use monocoque_zmtp::publisher::PubSocket as InternalPub;
 use std::io;
 
 /// A PUB socket for broadcasting messages to multiple subscribers.
@@ -14,7 +14,7 @@ use std::io;
 /// - Multiple OS threads (default: CPU core count)
 /// - Each worker runs its own compio runtime with io_uring
 /// - Round-robin subscriber distribution across workers
-/// - Zero-copy message broadcasting via Arc<Bytes>
+/// - Zero-copy message broadcasting via `Arc<Bytes>`
 /// - Lock-free subscription management
 ///
 /// ## Example
@@ -78,6 +78,16 @@ impl PubSocket {
     /// The first frame is typically used as a topic for subscription filtering.
     pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
         self.inner.send(msg).await
+    }
+
+    /// Broadcast a message given as borrowed frames.
+    ///
+    /// Allocation-light counterpart to [`send`](Self::send): the shared message
+    /// is allocated only when it matches a subscription, so publishing from a
+    /// stack array (`send_frames(&[topic, payload])`) pays no per-message heap
+    /// allocation on the common drop path of a topic-filtered stream.
+    pub async fn send_frames(&mut self, frames: &[Bytes]) -> io::Result<()> {
+        self.inner.send_frames(frames).await
     }
 
     /// Get the number of active subscribers.

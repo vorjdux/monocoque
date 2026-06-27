@@ -2,10 +2,10 @@
 
 use bytes::Bytes;
 use compio::net::TcpStream;
-use monocoque_core::monitor::{create_monitor, SocketEvent, SocketEventSender, SocketMonitor};
+use monocoque_core::monitor::{SocketEvent, SocketEventSender, SocketMonitor, create_monitor};
 use monocoque_core::options::SocketOptions;
-use monocoque_zmtp::subscriber::SubSocket as InternalSub;
 use monocoque_zmtp::SocketType;
+use monocoque_zmtp::subscriber::SubSocket as InternalSub;
 use std::io;
 
 /// A SUB socket for receiving filtered messages.

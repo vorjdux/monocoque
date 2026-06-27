@@ -3,7 +3,7 @@
 //! PUSH sockets are used in pipeline patterns for distributing tasks.
 
 use compio::net::{TcpListener, TcpStream};
-use monocoque_core::monitor::{create_monitor, SocketEventSender, SocketMonitor};
+use monocoque_core::monitor::{SocketEventSender, SocketMonitor, create_monitor};
 use monocoque_core::options::SocketOptions;
 use monocoque_zmtp::PushSocket as InternalPush;
 use std::io;

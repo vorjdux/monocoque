@@ -5,8 +5,8 @@
 //! implemented but requires inproc transport setup.
 
 use monocoque_core::options::SocketOptions;
-use monocoque_zmtp::security::plain::StaticPlainHandler;
 use monocoque_zmtp::security::PlainAuthHandler;
+use monocoque_zmtp::security::plain::StaticPlainHandler;
 use std::time::Duration;
 
 #[test]

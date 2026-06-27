@@ -154,7 +154,7 @@ where
     B: ProxySocket,
     C: ProxySocket,
 {
-    use futures::{select, FutureExt};
+    use futures::{FutureExt, select};
 
     debug!(
         "Starting proxy: {} ←→ {}",
@@ -325,7 +325,7 @@ where
     C: ProxySocket,
     Ctrl: ProxySocket,
 {
-    use futures::{select, FutureExt};
+    use futures::{FutureExt, select};
 
     debug!(
         "Starting steerable proxy: {} ←→ {} (control enabled)",

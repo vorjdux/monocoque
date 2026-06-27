@@ -428,6 +428,26 @@ pub struct SocketOptions {
     ///
     /// - Default: 65536 (64 KB) — one typical TCP segment on loopback
     pub write_coalesce_threshold: usize,
+
+    /// Frame-body size at or above which the send path switches to a vectored
+    /// write (`writev`) instead of copying the body into the userspace send
+    /// buffer.
+    ///
+    /// For large frames the body copy into the coalescing buffer is the
+    /// dominant per-byte cost on the core. Above this threshold the frame header
+    /// and the refcounted `Bytes` body are written as an iovec, so the body is
+    /// handed straight to the kernel with no intermediate copy. Small frames
+    /// stay on the copy path, where a single `write` of one contiguous buffer
+    /// beats the per-iovec bookkeeping.
+    ///
+    /// Only applies in eager mode (write coalescing disabled) and when the
+    /// connection is not CURVE-encrypted (encryption must transform the body
+    /// into a fresh buffer regardless).
+    ///
+    /// - Default: 32768 (32 KB) — the measured crossover on loopback below which
+    ///   copying the body into one contiguous buffer beats a two-segment
+    ///   `writev`; tune for your hardware and message sizes
+    pub vectored_write_threshold: usize,
 }
 
 impl Default for SocketOptions {
@@ -492,6 +512,7 @@ impl Default for SocketOptions {
             invert_matching: false,
             write_coalescing: false,
             write_coalesce_threshold: 65536,
+            vectored_write_threshold: 32768,
         }
     }
 }
@@ -661,6 +682,15 @@ impl SocketOptions {
     /// Set the byte threshold at which the coalesce buffer flushes automatically.
     pub const fn with_write_coalesce_threshold(mut self, threshold: usize) -> Self {
         self.write_coalesce_threshold = threshold;
+        self
+    }
+
+    /// Set the frame-body size at or above which the eager send path uses a
+    /// vectored write (`writev`) instead of copying the body into the send
+    /// buffer. See [`SocketOptions::vectored_write_threshold`]. Set to
+    /// `usize::MAX` to disable vectored writes entirely.
+    pub const fn with_vectored_write_threshold(mut self, threshold: usize) -> Self {
+        self.vectored_write_threshold = threshold;
         self
     }
 

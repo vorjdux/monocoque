@@ -10,7 +10,7 @@
 
 use monocoque_zmtp::security::plain::StaticPlainHandler;
 use monocoque_zmtp::security::zap::{ZapMechanism, ZapRequest, ZapResponse, ZapStatus};
-use monocoque_zmtp::security::zap_handler::{spawn_zap_server, ZapHandler};
+use monocoque_zmtp::security::zap_handler::{ZapHandler, spawn_zap_server};
 use std::collections::HashMap;
 use std::sync::Arc;
 

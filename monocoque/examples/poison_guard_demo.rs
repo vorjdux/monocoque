@@ -21,8 +21,8 @@
 //! 2. Run with a server to see timeout and poisoning behavior
 
 use bytes::Bytes;
-use monocoque::zmq::ReqSocket;
 use monocoque::SocketOptions;
+use monocoque::zmq::ReqSocket;
 use std::io;
 use std::time::Duration;
 

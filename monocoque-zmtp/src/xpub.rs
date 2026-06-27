@@ -203,8 +203,7 @@ impl XPubSocket {
                     if let Err(e) = result {
                         trace!(
                             "[XPUB] Failed to send welcome message to subscriber {}: {}",
-                            id,
-                            e
+                            id, e
                         );
                     }
                 }
@@ -330,8 +329,7 @@ impl XPubSocket {
                                 if let Some(event) = SubscriptionEvent::from_message(&payload) {
                                     trace!(
                                         "[XPUB] Subscription event from subscriber {}: {:?}",
-                                        sub.id,
-                                        event
+                                        sub.id, event
                                     );
 
                                     let should_deliver = if self.options.xpub_verbose {

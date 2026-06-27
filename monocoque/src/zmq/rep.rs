@@ -3,10 +3,10 @@
 use super::common::channel_to_io_error;
 use bytes::Bytes;
 use compio::net::{TcpListener, TcpStream};
-use monocoque_core::monitor::{create_monitor, SocketEventSender, SocketMonitor};
+use monocoque_core::monitor::{SocketEventSender, SocketMonitor, create_monitor};
 use monocoque_core::options::SocketOptions;
-use monocoque_zmtp::rep::RepSocket as InternalRep;
 use monocoque_zmtp::SocketType;
+use monocoque_zmtp::rep::RepSocket as InternalRep;
 use std::io;
 
 /// A REP socket for synchronous reply patterns.

@@ -3,9 +3,9 @@
 //! Tests complete ZAP workflow with PLAIN mechanism.
 
 use monocoque_zmtp::security::plain::{
-    plain_client_handshake, plain_server_handshake_zap, PlainCredentials, StaticPlainHandler,
+    PlainCredentials, StaticPlainHandler, plain_client_handshake, plain_server_handshake_zap,
 };
-use monocoque_zmtp::security::zap_handler::{spawn_zap_server, DefaultZapHandler};
+use monocoque_zmtp::security::zap_handler::{DefaultZapHandler, spawn_zap_server};
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;

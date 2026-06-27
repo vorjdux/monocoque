@@ -22,6 +22,10 @@ name = "api_demo"
 required-features = ["zmq"]
 
 [[example]]
+name = "bench_changes"
+required-features = ["zmq"]
+
+[[example]]
 name = "handshake_test"
 required-features = ["zmq"]
 
@@ -305,8 +309,8 @@ workspace = true
 
 [dependencies]
 # Internal implementation crates (not exposed)
-monocoque-core = { version = "0.1.2", path = "../monocoque-core", package = "monocoque-rs-core" }
-monocoque-zmtp = { version = "0.1.2", path = "../monocoque-zmtp", package = "monocoque-rs-zmtp", optional = true }
+monocoque-core = { version = "0.1.4", path = "../monocoque-core", package = "monocoque-rs-core" }
+monocoque-zmtp = { version = "0.1.4", path = "../monocoque-zmtp", package = "monocoque-rs-zmtp", optional = true }
 
 # Re-export dependencies for user convenience
 bytes.workspace = true

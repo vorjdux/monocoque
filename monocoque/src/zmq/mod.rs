@@ -103,7 +103,7 @@ pub use monocoque_core::ipc;
 /// // - BufferConfig, SocketOptions, SocketType for configuration
 /// ```
 pub mod prelude {
-    pub use super::proxy::{proxy, proxy_steerable, ProxyCommand, ProxySocket};
+    pub use super::proxy::{ProxyCommand, ProxySocket, proxy, proxy_steerable};
     pub use super::{
         BufferConfig, DealerSocket, PairSocket, PubSocket, PullSocket, PushSocket, RepSocket,
         ReqSocket, RouterSocket, SocketOptions, StreamSocket, SubSocket, Subscription,
