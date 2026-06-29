@@ -29,8 +29,12 @@ The name comes from Formula 1 engineering, where the monocoque chassis achieves 
 - Socket monitoring via channel-based lifecycle events
 - Explicit batching API for maximum throughput, plus `recv_batch()` to drain a
   burst of messages in one `.await`
+- Allocation-free receive via `recv_into` / `try_recv_into`: reuse one buffer
+  across a hot recv loop instead of allocating a `Vec` per message
 - Vectored (`writev`) sends for large frames: the body skips the userspace copy
 - PUB fan-out coalesces queued broadcasts into one vectored write per subscriber
+- PUSH/PULL worker pools via `PushFanOut` (round-robin ventilator) and
+  `PullFanIn` (fair-queued sink)
 - Zero-copy message passing via `Bytes` refcounting
 
 ## Performance

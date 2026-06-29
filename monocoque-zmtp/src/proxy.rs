@@ -437,8 +437,8 @@ impl ProxySocket for XSubSocket {
         // or starts sending the relevant topics.
         //
         // The message format produced by XPubSocket::recv_multipart is:
-        //   [b"\x01", topic]  — subscribe
-        //   [b"\x00", topic]  — unsubscribe
+        //   [b"\x01", topic]  - subscribe
+        //   [b"\x00", topic]  - unsubscribe
         //
         // We reconstruct the raw ZMTP subscription frame and dispatch it.
         if msg.is_empty() {
@@ -466,7 +466,7 @@ impl ProxySocket for XSubSocket {
         } else if cmd_byte == 0x00 {
             monocoque_core::subscription::SubscriptionEvent::Unsubscribe(topic)
         } else {
-            // Unknown command — ignore
+            // Unknown command - ignore
             return Ok(());
         };
 

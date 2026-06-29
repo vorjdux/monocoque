@@ -16,10 +16,10 @@ Run: `cargo bench --features zmq` from the `monocoque/` directory.
 
 ---
 
-### Throughput — PUSH/PULL one-way, 10 000 messages
+### Throughput - PUSH/PULL one-way, 10 000 messages
 
-`monocoque (eager)` — default mode, one kernel write per `send()`.
-`monocoque (coalesced)` — `with_write_coalescing(true)`, messages accumulate in
+`monocoque (eager)` - default mode, one kernel write per `send()`.
+`monocoque (coalesced)` - `with_write_coalescing(true)`, messages accumulate in
 a 64 KB buffer flushed in one syscall; call `flush()` after the last send.
 
 | Message size | monocoque eager | monocoque coalesced | rust-zmq | coalesced vs zmq |
@@ -43,7 +43,7 @@ the kernel. See [Vectored writes](#vectored-writes-large-frames) below.
 
 ---
 
-### Throughput — DEALER/ROUTER batch API, 10 000 messages, batches of 100
+### Throughput - DEALER/ROUTER batch API, 10 000 messages, batches of 100
 
 The explicit `send_buffered() / flush()` API (used by the pipelined benchmark)
 encodes N messages then issues one write, similar to coalescing but with manual
@@ -58,7 +58,7 @@ control over batch boundaries:
 
 ---
 
-### Latency — REQ/REP round-trip
+### Latency - REQ/REP round-trip
 
 Each iteration: 1 000 warmup rounds on a fresh connection (not measured), then
 one send + recv + socket teardown. Because teardown is included (TCP FIN + thread
@@ -280,6 +280,59 @@ In a loopback microbenchmark `recv_batch()` did **not** beat a tight `recv()`
 loop (per-await scheduling is not the bottleneck there), so treat it as an
 ergonomic convenience rather than a guaranteed speedup, and measure it against
 `recv()` for your own workload before relying on it.
+
+---
+
+## Allocation-free receive (`recv_into`)
+
+`recv()` allocates a fresh `Vec<Bytes>` for every message. At small message
+sizes that allocation is the dominant per-message cost. `recv_into(&mut out)`
+writes the frames into a caller-owned buffer instead, so a recv loop that reuses
+one buffer allocates nothing per message. `try_recv_into` is the non-blocking
+drain counterpart, for emptying everything decoded from one kernel read.
+
+```rust
+use bytes::Bytes;
+use monocoque::zmq::PullSocket;
+
+let mut pull = PullSocket::connect("127.0.0.1:5555").await?;
+let mut buf: Vec<Bytes> = Vec::with_capacity(4);
+while pull.recv_into(&mut buf).await? {
+    handle(&buf);
+    while pull.try_recv_into(&mut buf)? {
+        handle(&buf);
+    }
+}
+```
+
+On the coalesced PUSH/PULL throughput bench this lifts 64 B from 7.7 M to 9.7 M
+msg/s (about 1.25x) and 256 B by ~15%; the gain tapers as messages grow and the
+path becomes bandwidth-bound. `recv()` and `try_recv()` are unchanged for callers
+that want an owned `Vec`. A runnable example lives at
+`examples/recv_into_zero_alloc.rs`.
+
+---
+
+## Worker pools (fan-out / fan-in)
+
+A single `PushSocket` or `PullSocket` owns one connection. For pool topologies,
+`PushFanOut` binds once and round-robins each `send` across N PULL workers, and
+`PullFanIn` binds once and merges N PUSH workers into one fair-queued stream.
+
+Two notes from measuring these:
+
+- The `PullFanIn` sink runs all its per-connection readers on **one** runtime and
+  batches each kernel-read burst across the merge channel as a single item. That
+  keeps it at the single-core decode ceiling (it matches single-stream PULL).
+  Spreading the readers across threads was measured and is a net loss at small
+  messages: at ~10M msg/s the cost is dominated by cross-core cache and atomic
+  `Bytes` refcount traffic, not decode. Threads only help large, decode-heavy
+  messages, where the link bandwidth is the limit anyway.
+- The `PushFanOut` ventilator round-robins one message at a time. With coalescing
+  each worker's buffer flushes at the threshold, so the writes stay batched while
+  all workers receive interleaved. Handing each worker its whole share in one
+  batched write instead serializes the pool and is markedly slower at large
+  messages, so the per-message path is the one to use.
 
 ---
 

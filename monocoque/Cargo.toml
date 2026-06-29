@@ -39,6 +39,11 @@ harness = false
 required-features = ["zmq"]
 
 [[bench]]
+name = "fanout_fanin"
+harness = false
+required-features = ["zmq"]
+
+[[bench]]
 name = "latency"
 harness = false
 required-features = ["zmq"]
@@ -116,6 +121,10 @@ required-features = ["zmq"]
 
 [[example]]
 name = "pipeline_worker_pool"
+required-features = ["zmq"]
+
+[[example]]
+name = "recv_into_zero_alloc"
 required-features = ["zmq"]
 
 # Interoperability examples (manual verification)
@@ -304,13 +313,21 @@ required-features = ["zmq"]
 name = "interop_push_pull"
 required-features = ["zmq"]
 
+[[test]]
+name = "pipeline_fanout_fanin"
+required-features = ["zmq"]
+
+[[test]]
+name = "recv_into"
+required-features = ["zmq"]
+
 [lints]
 workspace = true
 
 [dependencies]
 # Internal implementation crates (not exposed)
-monocoque-core = { version = "0.1.4", path = "../monocoque-core", package = "monocoque-rs-core" }
-monocoque-zmtp = { version = "0.1.4", path = "../monocoque-zmtp", package = "monocoque-rs-zmtp", optional = true }
+monocoque-core = { version = "0.1.5", path = "../monocoque-core", package = "monocoque-rs-core" }
+monocoque-zmtp = { version = "0.1.5", path = "../monocoque-zmtp", package = "monocoque-rs-zmtp", optional = true }
 
 # Re-export dependencies for user convenience
 bytes.workspace = true
@@ -318,9 +335,11 @@ compio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
+# Used by the PushFanOut / PullFanIn pipeline helpers (zmq feature only)
+flume = { workspace = true, optional = true }
+
 [dev-dependencies]
 zmq.workspace = true
-flume.workspace = true
 futures.workspace = true
 criterion.workspace = true
 tokio.workspace = true
@@ -333,7 +352,7 @@ async-trait.workspace = true
 default = []
 
 # Protocol implementations (opt-in)
-zmq = ["dep:monocoque-zmtp"]
+zmq = ["dep:monocoque-zmtp", "dep:flume"]
 
 # Future protocols
 # mqtt = ["dep:monocoque-mqtt"]

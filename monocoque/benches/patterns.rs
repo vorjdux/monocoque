@@ -13,7 +13,7 @@
 //!
 //! - PUB/SUB is lossy (the publisher drops on HWM and during the slow-joiner
 //!   window before a subscription propagates). Because the publisher keeps
-//!   producing, the subscriber always reaches its target count — a dropped
+//!   producing, the subscriber always reaches its target count - a dropped
 //!   message just means the next delivered one arrives slightly later. There is
 //!   no exact-count receive that can block forever on a lost frame, which is
 //!   what made the previous version hang on the rust-zmq slow joiner.

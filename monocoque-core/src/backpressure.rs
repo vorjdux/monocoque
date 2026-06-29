@@ -230,7 +230,7 @@ mod tests {
         let rt = compio::runtime::Runtime::new().unwrap();
 
         rt.block_on(async {
-            let permit = permits.acquire(2048).await; // 2× max — must not deadlock
+            let permit = permits.acquire(2048).await; // 2× max - must not deadlock
             drop(permit);
             // After release, we can acquire up to max_bytes again.
             let _p = permits.acquire(1024).await;

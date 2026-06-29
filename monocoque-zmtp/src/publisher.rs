@@ -142,7 +142,7 @@ impl SubscriptionUnion {
 /// ~4 ns for the raw match (and a lock-free `ArcSwap` load was no cheaper at
 /// ~20 ns). Subscriptions change very rarely, so the single-threaded publisher
 /// keeps a private cached copy and only re-reads under the lock when `generation`
-/// changes — collapsing the steady-state cost to one relaxed atomic load plus
+/// changes - collapsing the steady-state cost to one relaxed atomic load plus
 /// the raw scan. Writers bump `generation` (Release) after updating `union`.
 struct SharedSubscriptions {
     union: RwLock<SubscriptionUnion>,

@@ -197,7 +197,7 @@ fn test_sub_options_multiple_subscriptions() {
 /// The PUB pushes a tight burst of messages so they queue behind the worker,
 /// which drains them into a single per-subscriber vectored write. Whatever the
 /// actual batch sizes, the subscriber must receive every message exactly once,
-/// in send order, byte-identical — coalescing must never reorder, merge, or drop
+/// in send order, byte-identical - coalescing must never reorder, merge, or drop
 /// a frame.
 #[test]
 fn test_pub_broadcast_coalescing_burst() {

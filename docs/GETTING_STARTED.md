@@ -138,8 +138,10 @@ async fn main() -> std::io::Result<()> {
 | `RouterSocket` | Identity Routing | Server with per-peer routing IDs |
 | `PubSocket` | Broadcast | Publisher (worker-pool, many subscribers) |
 | `SubSocket` | Filtered recv | Subscriber with topic filters |
-| `PushSocket` | Pipeline | Task distributor |
-| `PullSocket` | Pipeline | Task worker |
+| `PushSocket` | Pipeline | Task distributor (one connection) |
+| `PullSocket` | Pipeline | Task worker (one connection) |
+| `PushFanOut` | Pipeline pool | Ventilator that round-robins across N PULL workers |
+| `PullFanIn` | Pipeline pool | Sink that merges results from N PUSH workers |
 | `PairSocket` | Exclusive Pair | One-to-one channel |
 
 ---

@@ -1,7 +1,7 @@
 //! Two-process benchmark peer for monocoque.
 //!
-//! Implements the same wire protocol used by the omq.rs comparison suite
-//! (libzmq bench peer, zmqrs_bench_peer, rzmq_bench_peer) so this binary
+//! Implements the same wire protocol used by the cross-implementation comparison
+//! suite (libzmq bench peer, zmqrs_bench_peer, rzmq_bench_peer) so this binary
 //! can participate in cross-implementation comparison runs.
 //!
 //! ## Subcommands
@@ -11,7 +11,10 @@
 //! ```text
 //! push         <bind-addr> <size>                   -- coalesced (max throughput)
 //! push-eager   <bind-addr> <size>                   -- one write per message (min latency)
-//! pull         <connect-addr> <size> <duration_s>
+//! pull         <connect-addr> <size> <duration_s> [warmup_s]
+//! push-fanout  <bind-addr> <size> <workers>         -- ventilator, round-robin to N PULL
+//! push-connect <connect-addr> <size>                -- fan-in worker, PUSH that connects
+//! pull-fanin   <bind-addr> <size> <duration_s> <workers>  -- sink, merge N PUSH
 //! rep          <bind-addr>
 //! req          <connect-addr> <size> <iterations> <warmup>
 //! pub          <bind-addr> <size>
@@ -23,7 +26,7 @@
 //! ```text
 //! push-ipc     <path-or-0> <size>                   -- coalesced
 //! push-ipc-eager <path-or-0> <size>                 -- eager
-//! pull-ipc     <path> <size> <duration_s>
+//! pull-ipc     <path> <size> <duration_s> [warmup_s]
 //! rep-ipc      <path-or-0>
 //! req-ipc      <path> <size> <iterations> <warmup>
 //! ```
@@ -57,9 +60,9 @@
 //! - `push` uses write coalescing with a flush every 64 messages so the
 //!   64 KB threshold is exceeded naturally in the timed window while keeping
 //!   batch sizes predictable.
-//! - `pull` drains the receive buffer with `try_recv()` after each `recv()`,
-//!   reducing io_uring submissions when the kernel delivers multiple messages
-//!   in one read.
+//! - `pull` receives into one reused buffer with `recv_into` / `try_recv_into`,
+//!   draining every message decoded from a kernel read before the next read and
+//!   allocating nothing per message.
 //! - No warmup sleep on the pull side. The runner's `read_bound_port`
 //!   synchronization is sufficient. (A sleep would fill the kernel send buffer
 //!   and deadlock monocoque's single-threaded runtime on a blocked write.)
@@ -69,8 +72,10 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use compio::net::{TcpListener, TcpStream};
 use monocoque::{
+    zmq::{
+        PubSocket, PullFanIn, PullSocket, PushFanOut, PushSocket, RepSocket, ReqSocket, SubSocket,
+    },
     SocketOptions,
-    zmq::{PubSocket, PullSocket, PushSocket, RepSocket, ReqSocket, SubSocket},
 };
 
 #[cfg(unix)]
@@ -116,15 +121,50 @@ fn resolve_bind(s: &str) -> String {
     }
 }
 
+/// Parse an optional trailing warmup-seconds argument, defaulting to zero.
+fn optional_warmup(args: &[String], idx: usize) -> Duration {
+    args.get(idx)
+        .map(|s| Duration::from_secs_f64(s.parse().unwrap()))
+        .unwrap_or(Duration::ZERO)
+}
+
+/// Receive (and discard) for `warmup` so the timed window measures steady state
+/// rather than connection ramp-up. Shared by the TCP and IPC pull paths.
+async fn warmup_drain<S>(pull: &mut PullSocket<S>, buf: &mut Vec<Bytes>, warmup: Duration)
+where
+    S: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+{
+    if warmup.is_zero() {
+        return;
+    }
+    let deadline = Instant::now() + warmup;
+    'outer: loop {
+        match pull.recv_into(buf).await {
+            Ok(true) => loop {
+                if Instant::now() >= deadline {
+                    break 'outer;
+                }
+                match pull.try_recv_into(buf) {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(_) => break 'outer,
+                }
+            },
+            _ => break,
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let rt = compio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
         match args.get(1).map(String::as_str) {
-            // TCP — throughput
-            Some("push") => {
-                run_push(&resolve_bind(&args[2]), args[3].parse().unwrap(), true).await
-            }
+            // TCP - throughput
+            Some("push") => run_push(&resolve_bind(&args[2]), args[3].parse().unwrap(), true).await,
             Some("push-eager") => {
                 run_push(&resolve_bind(&args[2]), args[3].parse().unwrap(), false).await
             }
@@ -133,10 +173,32 @@ fn main() {
                     &resolve_connect(&args[2]),
                     args[3].parse().unwrap(),
                     Duration::from_secs_f64(args[4].parse().unwrap()),
+                    optional_warmup(&args, 5),
                 )
                 .await;
             }
-            // TCP — latency
+            // TCP - fan-out / fan-in (pipeline pool)
+            Some("push-fanout") => {
+                run_push_fanout(
+                    &resolve_bind(&args[2]),
+                    args[3].parse().unwrap(),
+                    args[4].parse().unwrap(),
+                )
+                .await
+            }
+            Some("push-connect") => {
+                run_push_connect(&resolve_connect(&args[2]), args[3].parse().unwrap()).await
+            }
+            Some("pull-fanin") => {
+                run_pull_fanin(
+                    &resolve_bind(&args[2]),
+                    args[3].parse().unwrap(),
+                    Duration::from_secs_f64(args[4].parse().unwrap()),
+                    args[5].parse().unwrap(),
+                )
+                .await;
+            }
+            // TCP - latency
             Some("rep") => run_rep(&resolve_bind(&args[2])).await,
             Some("req") => {
                 run_req(
@@ -147,7 +209,7 @@ fn main() {
                 )
                 .await;
             }
-            // TCP — pub/sub
+            // TCP - pub/sub
             Some("pub") => run_pub(&resolve_bind(&args[2]), args[3].parse().unwrap()).await,
             Some("sub") => {
                 run_sub(
@@ -157,7 +219,7 @@ fn main() {
                 )
                 .await;
             }
-            // IPC — throughput
+            // IPC - throughput
             #[cfg(unix)]
             Some("push-ipc") => {
                 run_push_ipc(&ipc_bind_path(&args[2]), args[3].parse().unwrap(), true).await
@@ -172,10 +234,11 @@ fn main() {
                     &args[2],
                     args[3].parse().unwrap(),
                     Duration::from_secs_f64(args[4].parse().unwrap()),
+                    optional_warmup(&args, 5),
                 )
                 .await;
             }
-            // IPC — latency
+            // IPC - latency
             #[cfg(unix)]
             Some("rep-ipc") => run_rep_ipc(&ipc_bind_path(&args[2])).await,
             #[cfg(unix)]
@@ -195,7 +258,10 @@ fn main() {
                     "TCP subcommands:\n",
                     "  push         <addr> <size>                  (coalesced)\n",
                     "  push-eager   <addr> <size>                  (one write/msg)\n",
-                    "  pull         <addr> <size> <duration_s>\n",
+                    "  pull         <addr> <size> <duration_s> [warmup_s]\n",
+                    "  push-fanout  <addr> <size> <workers>        (ventilator)\n",
+                    "  push-connect <addr> <size>                  (fan-in worker)\n",
+                    "  pull-fanin   <addr> <size> <duration_s> <workers>  (sink)\n",
                     "  rep          <addr>\n",
                     "  req          <addr> <size> <iterations> <warmup>\n",
                     "  pub          <addr> <size>\n",
@@ -204,7 +270,7 @@ fn main() {
                     "IPC subcommands (Unix only):\n",
                     "  push-ipc         <path|0> <size>            (coalesced)\n",
                     "  push-ipc-eager   <path|0> <size>\n",
-                    "  pull-ipc         <path>   <size> <duration_s>\n",
+                    "  pull-ipc         <path>   <size> <duration_s> [warmup_s]\n",
                     "  rep-ipc          <path|0>\n",
                     "  req-ipc          <path>   <size> <iterations> <warmup>\n",
                     "\n",
@@ -254,8 +320,12 @@ async fn run_push(addr: &str, size: usize, coalesce: bool) {
     }
 }
 
-async fn run_pull(addr: &str, size: usize, duration: Duration) {
+async fn run_pull(addr: &str, size: usize, duration: Duration, warmup: Duration) {
     let mut pull = PullSocket::connect(addr).await.expect("pull connect");
+
+    // One reused message buffer, so the hot recv loop allocates nothing per message.
+    let mut buf: Vec<Bytes> = Vec::with_capacity(4);
+    warmup_drain(&mut pull, &mut buf, warmup).await;
 
     let cpu_before = cpu_time_secs();
     let t0 = Instant::now();
@@ -263,15 +333,111 @@ async fn run_pull(addr: &str, size: usize, duration: Duration) {
     let mut count: u64 = 0;
 
     'outer: loop {
-        match pull.recv().await {
-            Ok(Some(_)) => {
+        match pull.recv_into(&mut buf).await {
+            Ok(true) => {
                 count += 1;
                 // Drain any additional messages decoded from the same read batch.
                 loop {
                     if Instant::now() >= deadline {
                         break 'outer;
                     }
-                    match pull.try_recv() {
+                    match pull.try_recv_into(&mut buf) {
+                        Ok(true) => count += 1,
+                        Ok(false) => break,
+                        Err(_) => break 'outer,
+                    }
+                }
+            }
+            _ => break,
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+    }
+
+    let elapsed = t0.elapsed().as_secs_f64();
+    let cpu = cpu_time_secs() - cpu_before;
+    println!("{count} {elapsed:.6} {size} {cpu:.6}");
+    std::process::exit(0);
+}
+
+// ── TCP fan-out / fan-in ────────────────────────────────────────────────────────
+
+/// Ventilator: bind, accept `workers` PULL connections, then round-robin tasks
+/// across them until killed. Uses write coalescing with a flush every 64 sends,
+/// matching the plain `push` throughput path.
+async fn run_push_fanout(addr: &str, size: usize, workers: usize) {
+    let listener = TcpListener::bind(addr).await.expect("fanout bind");
+    let port = listener.local_addr().unwrap().port();
+    println!("PORT {port}");
+    let mut fanout = PushFanOut::accept_workers(
+        &listener,
+        workers,
+        SocketOptions::default().with_write_coalescing(true),
+    )
+    .await
+    .expect("fanout accept workers");
+
+    let payload = Bytes::from(vec![b'x'; size]);
+    // Flush every 64 sends *per worker*. Round-robin spreads each batch across
+    // all workers, so flushing every 64 total would leave each worker only
+    // 64/workers messages and turn one logical batch into `workers` tiny writes.
+    // Scaling the interval lets every worker accumulate ~64 messages per flush,
+    // matching the single-stream `push` path.
+    let flush_every = (64 * workers.max(1)) as u64;
+    let mut i = 0u64;
+    loop {
+        fanout.send(vec![payload.clone()]).await.unwrap_or(());
+        i += 1;
+        if i % flush_every == 0 {
+            fanout.flush().await.unwrap_or(());
+        }
+    }
+}
+
+/// Fan-in worker: connect a PUSH to the sink and send until killed.
+async fn run_push_connect(addr: &str, size: usize) {
+    let mut push = PushSocket::connect_with_options(
+        addr,
+        SocketOptions::default().with_write_coalescing(true),
+    )
+    .await
+    .expect("push-connect connect");
+    let payload = Bytes::from(vec![b'x'; size]);
+    let mut i = 0u64;
+    loop {
+        push.send(vec![payload.clone()]).await.unwrap_or(());
+        i += 1;
+        if i % 64 == 0 {
+            push.flush().await.unwrap_or(());
+        }
+    }
+}
+
+/// Sink: bind, accept `workers` PUSH connections, count merged messages for
+/// `duration`, then print the throughput line and exit.
+async fn run_pull_fanin(addr: &str, size: usize, duration: Duration, workers: usize) {
+    let listener = TcpListener::bind(addr).await.expect("fanin bind");
+    let port = listener.local_addr().unwrap().port();
+    println!("PORT {port}");
+    let mut sink = PullFanIn::accept_workers(&listener, workers, SocketOptions::default())
+        .await
+        .expect("fanin accept workers");
+
+    let cpu_before = cpu_time_secs();
+    let t0 = Instant::now();
+    let deadline = t0 + duration;
+    let mut count: u64 = 0;
+
+    'outer: loop {
+        match sink.recv().await {
+            Ok(Some(_)) => {
+                count += 1;
+                loop {
+                    if Instant::now() >= deadline {
+                        break 'outer;
+                    }
+                    match sink.try_recv() {
                         Ok(Some(_)) => count += 1,
                         Ok(None) => break,
                         Err(_) => break 'outer,
@@ -441,7 +607,7 @@ async fn run_push_ipc(path: &str, size: usize, coalesce: bool) {
 }
 
 #[cfg(unix)]
-async fn run_pull_ipc(path: &str, size: usize, duration: Duration) {
+async fn run_pull_ipc(path: &str, size: usize, duration: Duration, warmup: Duration) {
     let connect_path = ipc_connect_path(path);
     let stream = UnixStream::connect(&connect_path)
         .await
@@ -450,22 +616,26 @@ async fn run_pull_ipc(path: &str, size: usize, duration: Duration) {
         .await
         .expect("pull-ipc handshake");
 
+    // One reused message buffer, so the hot recv loop allocates nothing per message.
+    let mut buf: Vec<Bytes> = Vec::with_capacity(4);
+    warmup_drain(&mut pull, &mut buf, warmup).await;
+
     let cpu_before = cpu_time_secs();
     let t0 = Instant::now();
     let deadline = t0 + duration;
     let mut count: u64 = 0;
 
     'outer: loop {
-        match pull.recv().await {
-            Ok(Some(_)) => {
+        match pull.recv_into(&mut buf).await {
+            Ok(true) => {
                 count += 1;
                 loop {
                     if Instant::now() >= deadline {
                         break 'outer;
                     }
-                    match pull.try_recv() {
-                        Ok(Some(_)) => count += 1,
-                        Ok(None) => break,
+                    match pull.try_recv_into(&mut buf) {
+                        Ok(true) => count += 1,
+                        Ok(false) => break,
                         Err(_) => break 'outer,
                     }
                 }

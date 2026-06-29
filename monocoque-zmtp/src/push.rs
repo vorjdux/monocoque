@@ -125,7 +125,7 @@ where
     ///
     /// Encodes every message in `msgs` into the send buffer, then flushes once.
     /// This gives the same kernel-call efficiency as write coalescing but with
-    /// explicit batch boundaries — no threshold check and no `flush()` required.
+    /// explicit batch boundaries - no threshold check and no `flush()` required.
     ///
     /// Works independently of the `write_coalescing` option and can be mixed
     /// with `send()` calls freely.

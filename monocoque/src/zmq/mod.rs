@@ -12,6 +12,8 @@
 //! - [`SubSocket`] - Subscriber (receive filtered messages)
 //! - [`PushSocket`] - Pipeline push (distribute tasks)
 //! - [`PullSocket`] - Pipeline pull (receive tasks)
+//! - [`PushFanOut`] - Ventilator that round-robins tasks across a pool of PULL workers
+//! - [`PullFanIn`] - Sink that merges results from a pool of PUSH workers
 //! - [`PairSocket`] - Exclusive pair connection
 //! - [`XPubSocket`] - Extended publisher (subscription events)
 //! - [`XSubSocket`] - Extended subscriber (subscription forwarding)
@@ -61,7 +63,9 @@ mod common;
 mod dealer;
 mod publisher;
 mod pull;
+mod pull_fanin;
 mod push;
+mod push_fanout;
 mod rep;
 mod req;
 mod router;
@@ -79,7 +83,9 @@ pub use monocoque_zmtp::proxy;
 pub use monocoque_zmtp::{PairSocket, StreamSocket, XPubSocket, XSubSocket};
 pub use publisher::PubSocket;
 pub use pull::PullSocket;
+pub use pull_fanin::PullFanIn;
 pub use push::PushSocket;
+pub use push_fanout::PushFanOut;
 pub use rep::RepSocket;
 pub use req::ReqSocket;
 pub use router::RouterSocket;
@@ -98,16 +104,16 @@ pub use monocoque_core::ipc;
 /// // Now you have:
 /// // - DealerSocket, RouterSocket, ReqSocket, RepSocket
 /// // - PubSocket, SubSocket, XPubSocket, XSubSocket
-/// // - PushSocket, PullSocket, PairSocket
+/// // - PushSocket, PullSocket, PushFanOut, PullFanIn, PairSocket
 /// // - Bytes for zero-copy messages
 /// // - BufferConfig, SocketOptions, SocketType for configuration
 /// ```
 pub mod prelude {
     pub use super::proxy::{ProxyCommand, ProxySocket, proxy, proxy_steerable};
     pub use super::{
-        BufferConfig, DealerSocket, PairSocket, PubSocket, PullSocket, PushSocket, RepSocket,
-        ReqSocket, RouterSocket, SocketOptions, StreamSocket, SubSocket, Subscription,
-        SubscriptionEvent, SubscriptionTrie, XPubSocket, XSubSocket,
+        BufferConfig, DealerSocket, PairSocket, PubSocket, PullFanIn, PullSocket, PushFanOut,
+        PushSocket, RepSocket, ReqSocket, RouterSocket, SocketOptions, StreamSocket, SubSocket,
+        Subscription, SubscriptionEvent, SubscriptionTrie, XPubSocket, XSubSocket,
     };
     pub use bytes::Bytes;
     pub use monocoque_core::socket_type::SocketType;
