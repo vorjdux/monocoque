@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+## 0.1.5 - 2026-06-29
+
+### 🚀 Performance
+
+#### Allocation-free receive: `PullSocket::recv_into`
+
+`recv` allocates a fresh `Vec<Bytes>` for every message, which is the dominant
+per-message cost at small sizes. `recv_into(&mut out)` writes the frames into a
+caller-owned buffer instead, so a steady recv loop that reuses one buffer does no
+per-message allocation, with `try_recv_into` as the non-blocking drain counterpart
+to `try_recv`. Measured on the i7-1355U coalesced PUSH/PULL throughput bench,
+reusing the buffer lifts 64 B from 7.7 M to 9.7 M msg/s (about 1.25x) and 256 B by
+~15%; the gain tapers as messages grow and the path becomes bandwidth-bound.
+`recv` and `try_recv` are unchanged for callers that want an owned `Vec`. The
+bench peer's `pull` / `pull-ipc` loops use the reused-buffer path.
+
+### ✨ Features
+
+#### Fan-out and fan-in pipelines (`PushFanOut` / `PullFanIn`)
+
+A plain `PushSocket`/`PullSocket` owns a single connection, so it cannot drive a
+worker pool: binding a PUSH accepts exactly one PULL, and a PULL reads from one
+PUSH. Two new helpers cover the pool topologies:
+
+- `PushFanOut` binds once, accepts a pool of PULL workers, and round-robins each
+  `send` across them (the ZMQ PUSH load-balancing rule). Dead workers are skipped
+  and dropped from the pool. The healthy path moves the message straight into the
+  chosen worker, so it stays zero-copy with no per-message allocation.
+- `PullFanIn` binds once, accepts a pool of PUSH workers, and merges their
+  messages into one fair-queued stream. Each connection gets its own reader task
+  feeding a bounded channel, so no half-read connection is ever abandoned. The
+  handoff is batched: a reader forwards a whole kernel-read batch as one channel
+  item and the sink drains a local buffer, paying one channel hop and one `.await`
+  per batch instead of per message. With coalescing senders this roughly doubles
+  the 64 B sink throughput (5.25 M to 9.92 M msg/s on the i7-1355U reference). A
+  `recv_batch` method returns a whole burst from one `.await`.
+
+The bench peer gains matching subcommands (`push-fanout`, `push-connect`,
+`pull-fanin`) so the comparison suite can drive both topologies, and the
+`pipeline_worker_pool` example now spreads work across the whole pool instead of
+a single worker.
+
 ## 0.1.4 - 2026-06-27
 
 ### 🚀 Performance
@@ -1303,7 +1345,7 @@ let socket = ReqSocket::from_stream_with_config(
 ### Previous Changes
 
 -   Fix: Synchronous ZMTP handshake performed before spawning IO/integration tasks to eliminate handshake races for REQ/REP/DEALER/ROUTER.
--   Perf: Zero-copy framing on send path — frame headers are encoded separately and bodies are sent without memcpy (header+body interleaved), eliminating payload copies during normal data path.
+-   Perf: Zero-copy framing on send path - frame headers are encoded separately and bodies are sent without memcpy (header+body interleaved), eliminating payload copies during normal data path.
 -   Fix: Replaced copy-based `encode_frame` usage with `encode_frame_header` + interleaved bodies; retained `encode_frame` for small protocol commands.
 -   Fix: Handshake uses stack buffers for fixed-size elements and a bounded allocation for READY body (one-time per connection).
 -   Change: Added `ZmtpSession::new_active` and `ZmtpIntegratedActor::new_active` to create actors post-handshake.

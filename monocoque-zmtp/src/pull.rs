@@ -91,7 +91,7 @@ where
     ///
     /// ```rust,no_run
     /// # async fn example(pull: &mut monocoque_zmtp::PullSocket) -> std::io::Result<()> {
-    /// // One kernel read may deliver many messages — drain them all before
+    /// // One kernel read may deliver many messages - drain them all before
     /// // going back to the event loop.
     /// if let Some(first) = pull.recv().await? {
     ///     process(first);
@@ -121,6 +121,31 @@ where
                     if !more {
                         let msg: Vec<Bytes> = self.frames.drain(..).collect();
                         return Ok(Some(msg));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Try to receive a message into a caller-provided buffer, without a kernel read.
+    ///
+    /// The allocation-free counterpart to [`try_recv`](Self::try_recv): on a
+    /// complete message the frames are moved into `out` (reusing its capacity) and
+    /// `Ok(true)` is returned; when no complete message is buffered it returns
+    /// `Ok(false)` and leaves `out` untouched. Partial frames stay in the socket's
+    /// accumulator, so it interleaves correctly with [`recv_into`](Self::recv_into)
+    /// for multipart messages split across reads.
+    pub fn try_recv_into(&mut self, out: &mut Vec<Bytes>) -> io::Result<bool> {
+        loop {
+            match self.base.process_frame()? {
+                crate::base::FrameResult::NeedMore => return Ok(false),
+                crate::base::FrameResult::CommandHandled => {}
+                crate::base::FrameResult::Data(more, payload) => {
+                    self.frames.push(payload);
+                    if !more {
+                        out.clear();
+                        out.extend(self.frames.drain(..));
+                        return Ok(true);
                     }
                 }
             }
@@ -170,6 +195,51 @@ where
                 self.base.flush_send_buffer().await?;
             }
             // Continue decoding with new data
+        }
+    }
+
+    /// Receive a message into a caller-provided buffer, reusing its allocation.
+    ///
+    /// Identical to [`recv`](Self::recv) except the message frames are pushed
+    /// straight into `out` instead of a freshly allocated `Vec`. The caller keeps
+    /// one `Vec` and passes it on every call, so a steady recv loop performs no
+    /// per-message heap allocation (the dominant per-message cost at small message
+    /// sizes). `out` is cleared on entry.
+    ///
+    /// Returns `Ok(true)` when a complete message was read into `out`, `Ok(false)`
+    /// when the connection was closed.
+    pub async fn recv_into(&mut self, out: &mut Vec<Bytes>) -> io::Result<bool> {
+        out.clear();
+        loop {
+            loop {
+                match self.base.process_frame()? {
+                    crate::base::FrameResult::NeedMore => break,
+                    crate::base::FrameResult::CommandHandled => {
+                        if !self.base.send_buffer.is_empty() {
+                            self.base.flush_send_buffer().await?;
+                        }
+                    }
+                    crate::base::FrameResult::Data(more, payload) => {
+                        // Accumulate in the shared frame buffer so a multipart
+                        // message split across reads (or across a try_recv_into)
+                        // is reassembled correctly, then move it into `out`,
+                        // reusing the caller's allocation.
+                        self.frames.push(payload);
+                        if !more {
+                            out.extend(self.frames.drain(..));
+                            return Ok(true);
+                        }
+                    }
+                }
+            }
+
+            let n = self.base.read_raw().await?;
+            if n == 0 {
+                return Ok(false);
+            }
+            if self.base.check_heartbeat()? {
+                self.base.flush_send_buffer().await?;
+            }
         }
     }
 

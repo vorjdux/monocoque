@@ -911,7 +911,7 @@ where
                     }
                     Ok(FrameResult::CommandHandled)
                 } else {
-                    // Reject raw data frames when CURVE is negotiated — all application
+                    // Reject raw data frames when CURVE is negotiated - all application
                     // messages must arrive as CURVE MESSAGE command frames.
                     if self.curve_cipher.is_some() {
                         return Err(io::Error::new(

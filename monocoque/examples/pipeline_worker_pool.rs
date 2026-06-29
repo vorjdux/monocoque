@@ -3,15 +3,20 @@
 //! Classic "divide and conquer" pattern:
 //!
 //! ```text
-//! [Ventilator/PUSH] ──distributes tasks──▶ [Workers/PULL × N]
-//!                                                  │
-//! [Sink/PULL]       ◀──collects results── [Workers/PUSH × N]
+//! [Ventilator / PushFanOut] ──distributes tasks──▶ [Workers / PULL × N]
+//!                                                          │
+//! [Sink / PullFanIn]        ◀──collects results── [Workers / PUSH × N]
 //! ```
+//!
+//! The ventilator round-robins tasks across the whole worker pool and the sink
+//! merges every worker's results into one stream, so this scales past a single
+//! worker (a plain `PushSocket`/`PullSocket` pair only ever talks to one peer).
 //!
 //! Run with: `cargo run --example pipeline_worker_pool`
 
 use bytes::Bytes;
-use monocoque::zmq::{PullSocket, PushSocket};
+use compio::net::TcpListener;
+use monocoque::zmq::{PullFanIn, PullSocket, PushFanOut, PushSocket};
 use std::time::Instant;
 
 const TASKS: usize = 100;
@@ -20,13 +25,12 @@ const WORKERS: usize = 4;
 #[compio::main]
 #[allow(clippy::cast_precision_loss)]
 async fn main() -> std::io::Result<()> {
-    // ── Ventilator: distributes tasks to workers ──────────────────────────
-    let (_vent_listener, mut ventilator) = PushSocket::bind("127.0.0.1:5557").await?;
+    // Bind both listeners up front so the workers can connect to either one
+    // before we start accepting the pool.
+    let vent_listener = TcpListener::bind("127.0.0.1:5557").await?;
+    let sink_listener = TcpListener::bind("127.0.0.1:5558").await?;
 
-    // ── Sink: collects results from workers ───────────────────────────────
-    let (_sink_listener, mut sink) = PullSocket::bind("127.0.0.1:5558").await?;
-
-    // ── Workers: PULL from ventilator, PUSH results to sink ───────────────
+    // ── Workers: PULL from the ventilator, PUSH results to the sink ───────
     for i in 0..WORKERS {
         compio::runtime::spawn(async move {
             let mut work_rx = PullSocket::connect("127.0.0.1:5557").await.unwrap();
@@ -41,8 +45,13 @@ async fn main() -> std::io::Result<()> {
         .detach();
     }
 
-    // Brief pause to let workers connect.
-    compio::time::sleep(std::time::Duration::from_millis(50)).await;
+    // ── Accept the pool on both ends ──────────────────────────────────────
+    let mut ventilator =
+        PushFanOut::accept_workers(&vent_listener, WORKERS, monocoque::SocketOptions::default())
+            .await?;
+    let mut sink =
+        PullFanIn::accept_workers(&sink_listener, WORKERS, monocoque::SocketOptions::default())
+            .await?;
 
     // ── Distribute tasks ──────────────────────────────────────────────────
     println!("Distributing {TASKS} tasks to {WORKERS} workers…");

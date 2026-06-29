@@ -1299,7 +1299,7 @@ impl CurveServer {
         self.peer_identity_recv = peer_id;
 
         self.client_public = Some(CurvePublicKey::from_bytes(c_pk));
-        debug!("[CURVE SERVER] INITIATE verified — client authenticated");
+        debug!("[CURVE SERVER] INITIATE verified - client authenticated");
         Ok(())
     }
 

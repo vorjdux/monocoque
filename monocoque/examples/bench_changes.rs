@@ -1,6 +1,6 @@
 //! Ad-hoc throughput harness for the perf changes on this branch.
 //!
-//! Not a criterion benchmark — a focused before/after that toggles each change
+//! Not a criterion benchmark - a focused before/after that toggles each change
 //! via its public knob so the effect is isolated:
 //!   * vectored writes:   `with_vectored_write_threshold(8K)` vs disabled (MAX)
 //!   * receive batching:  `recv_batch()` vs `recv()`

@@ -101,7 +101,35 @@ while let Ok(Some(task)) = pull.recv().await {
 }
 ```
 
-PUSH distributes messages round-robin across connected PULL sockets. There's no reply path - use a separate PULL socket to collect results if needed.
+A single `PushSocket` and `PullSocket` own one connection each, so the pair above
+is one ventilator talking to one worker. There's no reply path; use a separate
+PULL socket to collect results if needed.
+
+### Worker pools (PushFanOut / PullFanIn)
+
+To spread work across a pool of workers, use `PushFanOut` and `PullFanIn`. The
+ventilator accepts many PULL workers and round-robins each `send` across them;
+the sink accepts many PUSH workers and merges their results into one fair-queued
+stream.
+
+```rust
+// Ventilator: round-robin tasks across 4 PULL workers
+let (_listener, mut vent) = PushFanOut::bind("127.0.0.1:5557", 4).await?;
+for i in 0..100 {
+    vent.send(vec![Bytes::from(format!("task {i}"))]).await?;
+}
+
+// Sink: merge results from 4 PUSH workers
+let (_listener, mut sink) = PullFanIn::bind("127.0.0.1:5558", 4).await?;
+while let Ok(Some(result)) = sink.recv().await {
+    // handle result
+}
+```
+
+`bind(addr, n)` accepts exactly `n` workers before returning. When you need the
+bound port before the workers connect, bind the listener yourself and call
+`accept_workers(&listener, n, options)`. See `examples/pipeline_worker_pool.rs`
+for a full ventilator-workers-sink run.
 
 ---
 

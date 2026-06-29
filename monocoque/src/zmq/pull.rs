@@ -162,6 +162,28 @@ where
         self.inner.recv().await
     }
 
+    /// Receive a message into a caller-provided buffer, reusing its allocation.
+    ///
+    /// Like [`recv`](Self::recv) but the frames are written into `out` (cleared
+    /// first) instead of a freshly allocated `Vec`. Passing the same `out` on
+    /// every call removes the per-message allocation from a steady recv loop,
+    /// which is the dominant per-message cost for small messages. Returns
+    /// `Ok(true)` when a message was read, `Ok(false)` when the connection closed.
+    pub async fn recv_into(&mut self, out: &mut Vec<bytes::Bytes>) -> io::Result<bool> {
+        self.inner.recv_into(out).await
+    }
+
+    /// Try to receive a message into a caller-provided buffer without a kernel read.
+    ///
+    /// The allocation-free counterpart to [`try_recv`](Self::try_recv): returns
+    /// `Ok(true)` with the frames moved into `out` (reusing its capacity) when a
+    /// complete message is already buffered, or `Ok(false)` leaving `out` untouched
+    /// when none is. Use it with [`recv_into`](Self::recv_into) to drain a burst
+    /// from one kernel read without allocating per message.
+    pub fn try_recv_into(&mut self, out: &mut Vec<bytes::Bytes>) -> io::Result<bool> {
+        self.inner.try_recv_into(out)
+    }
+
     /// Receive a batch of messages with a single `.await`.
     ///
     /// Blocks until at least one message is available, then drains every further

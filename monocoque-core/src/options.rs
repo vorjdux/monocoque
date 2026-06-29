@@ -426,7 +426,7 @@ pub struct SocketOptions {
     /// buffer is written to the kernel as a single syscall once it reaches
     /// this many bytes.
     ///
-    /// - Default: 65536 (64 KB) — one typical TCP segment on loopback
+    /// - Default: 65536 (64 KB) - one typical TCP segment on loopback
     pub write_coalesce_threshold: usize,
 
     /// Frame-body size at or above which the send path switches to a vectored
@@ -444,7 +444,7 @@ pub struct SocketOptions {
     /// connection is not CURVE-encrypted (encryption must transform the body
     /// into a fresh buffer regardless).
     ///
-    /// - Default: 32768 (32 KB) — the measured crossover on loopback below which
+    /// - Default: 32768 (32 KB) - the measured crossover on loopback below which
     ///   copying the body into one contiguous buffer beats a two-segment
     ///   `writev`; tune for your hardware and message sizes
     pub vectored_write_threshold: usize,

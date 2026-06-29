@@ -24,7 +24,7 @@ use std::time::Duration;
 const MESSAGE_SIZES: &[usize] = &[64, 256, 1024, 4096, 16384];
 const BATCH_SIZE: usize = 10_000;
 
-/// Benchmark monocoque PUSH/PULL throughput — eager (one syscall per message).
+/// Benchmark monocoque PUSH/PULL throughput - eager (one syscall per message).
 ///
 /// PULL binds on a separate OS thread (own compio runtime). PUSH connects and
 /// sends in the bench thread. The timer lives on the PULL side: it starts just
@@ -95,7 +95,7 @@ fn monocoque_push_pull(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark monocoque PUSH/PULL throughput — with write coalescing enabled.
+/// Benchmark monocoque PUSH/PULL throughput - with write coalescing enabled.
 ///
 /// Same structure as `monocoque_push_pull` but the PUSH socket batches encoded
 /// messages into a 64 KB internal buffer before writing to the kernel.  A
@@ -160,6 +160,87 @@ fn monocoque_push_pull_coalesced(c: &mut Criterion) {
                             push.send(vec![payload_clone.clone()]).await.unwrap();
                         }
                         // Flush remaining bytes that didn't fill the 64 KB threshold.
+                        push.flush().await.unwrap();
+                    });
+
+                    pull_thread.join().unwrap();
+                    total += elapsed_rx.recv().unwrap();
+                }
+
+                total
+            });
+        });
+    }
+
+    group.finish();
+}
+
+/// Benchmark monocoque PUSH/PULL throughput - coalesced, PULL side using
+/// `recv_into` with a reused buffer.
+///
+/// Identical to `monocoque_push_pull_coalesced` except the PULL loop reuses one
+/// `Vec` across calls via `recv_into`, removing the per-message message-`Vec`
+/// allocation. Comparing the two isolates how much that allocation costs.
+fn monocoque_push_pull_coalesced_recv_into(c: &mut Criterion) {
+    monocoque::dev_tracing::init_tracing();
+    let mut group = c.benchmark_group("throughput/monocoque/push_pull_coalesced_recv_into");
+    group.measurement_time(Duration::from_secs(15));
+    group.sample_size(10);
+
+    for &size in MESSAGE_SIZES {
+        group.throughput(Throughput::Elements(BATCH_SIZE as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
+            let payload = Bytes::from(vec![0u8; size]);
+
+            b.iter_custom(|iters| {
+                let mut total = Duration::ZERO;
+
+                for _ in 0..iters {
+                    let (port_tx, port_rx) = mpsc::channel::<u16>();
+                    let (elapsed_tx, elapsed_rx) = mpsc::channel::<Duration>();
+
+                    let payload_clone = payload.clone();
+
+                    let pull_thread = thread::spawn(move || {
+                        let rt = compio::runtime::Runtime::new().unwrap();
+                        rt.block_on(async move {
+                            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                            let port = listener.local_addr().unwrap().port();
+                            port_tx.send(port).unwrap();
+
+                            let (stream, _) = listener.accept().await.unwrap();
+                            let mut pull = PullSocket::from_tcp_with_options(
+                                stream,
+                                SocketOptions::default().with_buffer_sizes(16384, 16384),
+                            )
+                            .await
+                            .unwrap();
+
+                            // One buffer, reused across every recv.
+                            let mut msg: Vec<Bytes> = Vec::with_capacity(4);
+                            let t0 = std::time::Instant::now();
+                            for _ in 0..BATCH_SIZE {
+                                pull.recv_into(&mut msg).await.unwrap();
+                            }
+                            elapsed_tx.send(t0.elapsed()).unwrap();
+                        });
+                    });
+
+                    let port = port_rx.recv().unwrap();
+
+                    let push_rt = compio::runtime::Runtime::new().unwrap();
+                    push_rt.block_on(async move {
+                        let mut push = PushSocket::connect_with_options(
+                            ("127.0.0.1", port),
+                            SocketOptions::default()
+                                .with_buffer_sizes(16384, 16384)
+                                .with_write_coalescing(true),
+                        )
+                        .await
+                        .unwrap();
+                        for _ in 0..BATCH_SIZE {
+                            push.send(vec![payload_clone.clone()]).await.unwrap();
+                        }
                         push.flush().await.unwrap();
                     });
 
@@ -248,6 +329,7 @@ criterion_group!(
     targets =
         monocoque_push_pull,
         monocoque_push_pull_coalesced,
+        monocoque_push_pull_coalesced_recv_into,
         zmq_push_pull
 );
 criterion_main!(benches);
