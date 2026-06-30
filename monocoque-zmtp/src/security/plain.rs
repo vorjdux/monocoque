@@ -38,7 +38,7 @@
 use crate::codec::ZmtpError;
 use crate::security::zap::{ZapMechanism, ZapRequest, ZapStatus};
 use bytes::{Bytes, BytesMut};
-use compio::io::{AsyncRead, AsyncWrite};
+use compio_io::{AsyncRead, AsyncWrite};
 use std::time::Duration;
 use tracing::{debug, warn};
 
@@ -157,7 +157,7 @@ pub async fn plain_client_handshake<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    use compio::buf::BufResult;
+    use compio_buf::BufResult;
     use monocoque_core::timeout::{read_exact_with_timeout, write_all_with_timeout};
 
     debug!(
@@ -240,7 +240,7 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
     H: PlainAuthHandler,
 {
-    use compio::buf::BufResult;
+    use compio_buf::BufResult;
     use monocoque_core::timeout::{read_exact_with_timeout, write_all_with_timeout};
 
     debug!(
@@ -335,7 +335,7 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     use crate::security::zap_client::ZapClient;
-    use compio::buf::BufResult;
+    use compio_buf::BufResult;
     use monocoque_core::timeout::{read_exact_with_timeout, write_all_with_timeout};
 
     debug!(
@@ -449,6 +449,7 @@ pub fn create_plain_zap_request(
 }
 
 #[cfg(test)]
+#[cfg(feature = "runtime-compio")]
 mod tests {
     use super::*;
 

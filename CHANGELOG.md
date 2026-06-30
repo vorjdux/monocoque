@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### ✨ Features
+
+#### Optional tokio runtime backend
+
+Monocoque now runs on either of two interchangeable runtime backends, chosen by a
+Cargo feature. `runtime-compio` (default) keeps the native io_uring path and stays
+the performance baseline; `runtime-tokio` drives the same socket stack on tokio for
+platforms without io_uring (macOS, Windows, older kernels) or to fit an existing
+tokio program. The two are mutually exclusive.
+
+The whole protocol stack was already generic over the `compio::io` traits, so the
+change is additive: a small runtime facade (`monocoque::rt`) is the only place that
+names a concrete runtime, and a thin tokio stream adapter implements the same
+owned-buffer I/O traits with no extra copy on the data path. The tokio backend
+follows compio's thread-per-core model, running on a current-thread runtime inside
+a `LocalSet`, so sockets stay `!Send` on both. `monocoque::rt::LocalRuntime` is a
+backend-agnostic entry point, and the `runtime_backends` example plus the benchmark
+suite run unchanged on either backend.
+
 ## 0.1.5 - 2026-06-29
 
 ### 🚀 Performance

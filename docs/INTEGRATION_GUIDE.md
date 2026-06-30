@@ -11,7 +11,7 @@ compio = { version = "...", features = ["runtime"] }
 bytes = "1"
 ```
 
-monocoque runs on [compio](https://github.com/compio-rs/compio), a completion-based async runtime. If you're already using tokio, you can run compio on a separate thread or use it alongside tokio - they don't conflict.
+monocoque runs on [compio](https://github.com/compio-rs/compio), a completion-based io_uring runtime, by default. If you are already on tokio, you have two choices: keep the default compio backend and run it on its own thread (the two runtimes do not conflict), or build monocoque with its native tokio backend (`default-features = false, features = ["runtime-tokio", "zmq"]`) and run everything on one tokio runtime. The tokio backend uses a current-thread runtime inside a `LocalSet`.
 
 ## Basic patterns
 

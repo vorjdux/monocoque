@@ -34,10 +34,10 @@
 //! pay off for large, decode-heavy messages, where the link bandwidth is the real
 //! limit anyway.
 
-use compio::net::{TcpListener, TcpStream};
-use compio::runtime::{Task, spawn};
 use flume::{Receiver, Sender};
 use monocoque_core::options::SocketOptions;
+use monocoque_core::rt::{JoinHandle, spawn};
+use monocoque_core::rt::{TcpListener, TcpStream};
 use std::collections::VecDeque;
 use std::io;
 
@@ -64,7 +64,7 @@ pub struct PullFanIn {
     buf: VecDeque<Vec<bytes::Bytes>>,
     // Reader tasks are kept alive here. Dropping the handles cancels them, which
     // is exactly what we want when the sink goes away.
-    _readers: Vec<Task<()>>,
+    _readers: Vec<JoinHandle<()>>,
 }
 
 impl PullFanIn {
@@ -86,7 +86,7 @@ impl PullFanIn {
     /// # }
     /// ```
     pub async fn bind(
-        addr: impl compio::net::ToSocketAddrsAsync,
+        addr: impl monocoque_core::rt::ToSocketAddrs,
         n_workers: usize,
     ) -> io::Result<(TcpListener, Self)> {
         Self::bind_with_options(addr, n_workers, SocketOptions::default()).await
@@ -94,7 +94,7 @@ impl PullFanIn {
 
     /// Like [`bind`](Self::bind) but applies `options` to every worker connection.
     pub async fn bind_with_options(
-        addr: impl compio::net::ToSocketAddrsAsync,
+        addr: impl monocoque_core::rt::ToSocketAddrs,
         n_workers: usize,
         options: SocketOptions,
     ) -> io::Result<(TcpListener, Self)> {

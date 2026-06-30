@@ -14,8 +14,8 @@
 //!   internal IO-thread batching.
 
 use bytes::Bytes;
-use compio::net::TcpListener;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use monocoque::rt::TcpListener;
 use monocoque::zmq::{PullSocket, PushSocket, SocketOptions};
 use std::sync::mpsc;
 use std::thread;
@@ -51,7 +51,7 @@ fn monocoque_push_pull(c: &mut Criterion) {
                     let payload_clone = payload.clone();
 
                     let pull_thread = thread::spawn(move || {
-                        let rt = compio::runtime::Runtime::new().unwrap();
+                        let rt = monocoque::rt::LocalRuntime::new().unwrap();
                         rt.block_on(async move {
                             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
                             let port = listener.local_addr().unwrap().port();
@@ -75,7 +75,7 @@ fn monocoque_push_pull(c: &mut Criterion) {
 
                     let port = port_rx.recv().unwrap();
 
-                    let push_rt = compio::runtime::Runtime::new().unwrap();
+                    let push_rt = monocoque::rt::LocalRuntime::new().unwrap();
                     push_rt.block_on(async move {
                         let mut push = PushSocket::connect(("127.0.0.1", port)).await.unwrap();
                         for _ in 0..BATCH_SIZE {
@@ -122,7 +122,7 @@ fn monocoque_push_pull_coalesced(c: &mut Criterion) {
                     let payload_clone = payload.clone();
 
                     let pull_thread = thread::spawn(move || {
-                        let rt = compio::runtime::Runtime::new().unwrap();
+                        let rt = monocoque::rt::LocalRuntime::new().unwrap();
                         rt.block_on(async move {
                             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
                             let port = listener.local_addr().unwrap().port();
@@ -146,7 +146,7 @@ fn monocoque_push_pull_coalesced(c: &mut Criterion) {
 
                     let port = port_rx.recv().unwrap();
 
-                    let push_rt = compio::runtime::Runtime::new().unwrap();
+                    let push_rt = monocoque::rt::LocalRuntime::new().unwrap();
                     push_rt.block_on(async move {
                         let mut push = PushSocket::connect_with_options(
                             ("127.0.0.1", port),
@@ -202,7 +202,7 @@ fn monocoque_push_pull_coalesced_recv_into(c: &mut Criterion) {
                     let payload_clone = payload.clone();
 
                     let pull_thread = thread::spawn(move || {
-                        let rt = compio::runtime::Runtime::new().unwrap();
+                        let rt = monocoque::rt::LocalRuntime::new().unwrap();
                         rt.block_on(async move {
                             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
                             let port = listener.local_addr().unwrap().port();
@@ -228,7 +228,7 @@ fn monocoque_push_pull_coalesced_recv_into(c: &mut Criterion) {
 
                     let port = port_rx.recv().unwrap();
 
-                    let push_rt = compio::runtime::Runtime::new().unwrap();
+                    let push_rt = monocoque::rt::LocalRuntime::new().unwrap();
                     push_rt.block_on(async move {
                         let mut push = PushSocket::connect_with_options(
                             ("127.0.0.1", port),

@@ -20,10 +20,10 @@ use crate::base::SocketBase;
 use crate::inproc_stream::InprocStream;
 use crate::{handshake::perform_handshake_with_options, session::SocketType};
 use bytes::Bytes;
-use compio::io::{AsyncRead, AsyncWrite};
-use compio::net::TcpStream;
+use compio_io::{AsyncRead, AsyncWrite};
 use monocoque_core::endpoint::Endpoint;
 use monocoque_core::options::SocketOptions;
+use monocoque_core::rt::TcpStream;
 use smallvec::SmallVec;
 use std::io;
 use tracing::{debug, trace};
@@ -244,9 +244,9 @@ impl PairSocket<TcpStream> {
     /// # }
     /// ```
     pub async fn bind(
-        addr: impl compio::net::ToSocketAddrsAsync,
-    ) -> io::Result<(compio::net::TcpListener, Self)> {
-        let listener = compio::net::TcpListener::bind(addr).await?;
+        addr: impl monocoque_core::rt::ToSocketAddrs,
+    ) -> io::Result<(monocoque_core::rt::TcpListener, Self)> {
+        let listener = monocoque_core::rt::TcpListener::bind(addr).await?;
         let (stream, _) = listener.accept().await?;
         let socket = Self::from_tcp(stream).await?;
         Ok((listener, socket))
@@ -264,13 +264,13 @@ impl PairSocket<TcpStream> {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn connect(addr: impl compio::net::ToSocketAddrsAsync) -> io::Result<Self> {
+    pub async fn connect(addr: impl monocoque_core::rt::ToSocketAddrs) -> io::Result<Self> {
         Self::connect_with_options(addr, SocketOptions::default()).await
     }
 
     /// Connect with custom options, storing the endpoint for reconnection.
     pub async fn connect_with_options(
-        addr: impl compio::net::ToSocketAddrsAsync,
+        addr: impl monocoque_core::rt::ToSocketAddrs,
         options: SocketOptions,
     ) -> io::Result<Self> {
         let stream = TcpStream::connect(addr).await?;

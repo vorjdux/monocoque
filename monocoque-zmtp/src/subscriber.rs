@@ -10,9 +10,9 @@
 
 use crate::base::SocketBase;
 use bytes::{Bytes, BytesMut};
-use compio::io::{AsyncRead, AsyncWrite};
-use compio::net::TcpStream;
+use compio_io::{AsyncRead, AsyncWrite};
 use monocoque_core::options::SocketOptions;
+use monocoque_core::rt::TcpStream;
 use smallvec::SmallVec;
 use std::io;
 use tracing::{debug, trace};
@@ -130,8 +130,8 @@ where
     /// Using ZMTP framing ensures the PUB's subscription_reader can split
     /// consecutive messages even when they arrive in the same TCP segment.
     async fn send_sub_event(&mut self, cmd: u8, prefix: &[u8]) -> io::Result<()> {
-        use compio::buf::BufResult;
-        use compio::io::AsyncWriteExt;
+        use compio_buf::BufResult;
+        use compio_io::AsyncWriteExt;
         // Build payload: [cmd][prefix]
         let mut payload = BytesMut::with_capacity(1 + prefix.len());
         payload.extend_from_slice(&[cmd]);
@@ -329,13 +329,13 @@ impl SubSocket<TcpStream> {
     }
 
     /// Connect to a remote SUB socket, storing the endpoint for automatic reconnection.
-    pub async fn connect(addr: impl compio::net::ToSocketAddrsAsync) -> io::Result<Self> {
+    pub async fn connect(addr: impl monocoque_core::rt::ToSocketAddrs) -> io::Result<Self> {
         Self::connect_with_options(addr, SocketOptions::default()).await
     }
 
     /// Connect with custom options, storing the endpoint for reconnection.
     pub async fn connect_with_options(
-        addr: impl compio::net::ToSocketAddrsAsync,
+        addr: impl monocoque_core::rt::ToSocketAddrs,
         options: SocketOptions,
     ) -> io::Result<Self> {
         let stream = TcpStream::connect(addr).await?;

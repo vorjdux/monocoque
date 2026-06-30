@@ -37,8 +37,8 @@
 /// - O(n) topic matching where n=topic prefix length
 /// - Zero-copy via `Arc<Bytes>` for message data
 use bytes::Bytes;
-use compio::net::{OwnedReadHalf, OwnedWriteHalf, TcpListener, TcpStream};
 use flume::{Receiver, Sender};
+use monocoque_core::rt::{OwnedReadHalf, OwnedWriteHalf, TcpListener, TcpStream};
 use monocoque_core::subscription::SubscriptionEvent;
 
 use crate::handshake::perform_handshake_with_options;
@@ -191,7 +191,7 @@ enum WorkerCommand {
 /// Per-subscriber state managed by worker
 struct WorkerSubscriber {
     id: SubscriberId,
-    stream: OwnedWriteHalf<TcpStream>,
+    stream: OwnedWriteHalf,
     subscriptions: SubscriptionState,
     cipher: Option<SubCipher>,
 }
@@ -228,14 +228,14 @@ impl WorkerSubscriber {
 /// the same TCP segment.
 async fn subscription_reader(
     id: SubscriberId,
-    mut reader: OwnedReadHalf<TcpStream>,
+    mut reader: OwnedReadHalf,
     subscriptions: SubscriptionState,
     cipher: Option<SubCipher>,
     max_frame_size: Option<usize>,
     union: Arc<SharedSubscriptions>,
 ) {
-    use compio::buf::BufResult;
-    use compio::io::AsyncRead;
+    use compio_buf::BufResult;
+    use compio_io::AsyncRead;
     use monocoque_core::buffer::SegmentedBuffer;
 
     trace!("[PUB] Subscription reader started for subscriber {}", id);
@@ -347,7 +347,7 @@ async fn subscription_reader(
 fn worker_thread(worker_id: usize, rx: Receiver<WorkerCommand>, sub_count: Arc<AtomicUsize>) {
     debug!("[Worker {}] Starting", worker_id);
 
-    let rt = match compio::runtime::Runtime::new() {
+    let rt = match monocoque_core::rt::LocalRuntime::new() {
         Ok(rt) => rt,
         Err(e) => {
             error!("[Worker {}] Failed to create runtime: {}", worker_id, e);
@@ -470,7 +470,7 @@ fn worker_thread(worker_id: usize, rx: Receiver<WorkerCommand>, sub_count: Arc<A
                         }
 
                         // Send with 5-second timeout for fault isolation.
-                        let send_result = compio::time::timeout(
+                        let send_result = monocoque_core::rt::timeout(
                             std::time::Duration::from_secs(5),
                             send_all_to_stream(&mut sub.stream, out),
                         )
@@ -552,9 +552,9 @@ fn worker_thread(worker_id: usize, rx: Receiver<WorkerCommand>, sub_count: Arc<A
 /// `data` is the whole coalesced burst encoded into one buffer (shared O(1) via
 /// `Bytes::clone` across plaintext subscribe-to-all subscribers). One contiguous
 /// write is faster than a many-segment vectored write for small PUB/SUB messages.
-async fn send_all_to_stream(stream: &mut OwnedWriteHalf<TcpStream>, data: Bytes) -> io::Result<()> {
-    use compio::buf::BufResult;
-    use compio::io::AsyncWriteExt;
+async fn send_all_to_stream(stream: &mut OwnedWriteHalf, data: Bytes) -> io::Result<()> {
+    use compio_buf::BufResult;
+    use compio_io::AsyncWriteExt;
     let BufResult(res, _) = stream.write_all(data).await;
     res
 }
@@ -609,15 +609,14 @@ fn add_subscriber(
     // within this worker's compio runtime.
     let sub_state = Arc::clone(&subscriptions);
     let reader_cipher = cipher.clone();
-    compio::runtime::spawn(subscription_reader(
+    monocoque_core::rt::spawn_detached(subscription_reader(
         id,
         read_half,
         sub_state,
         reader_cipher,
         max_frame_size,
         union,
-    ))
-    .detach();
+    ));
 
     subscribers.insert(
         id,

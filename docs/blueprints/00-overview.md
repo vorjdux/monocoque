@@ -17,8 +17,8 @@ _A Rust-native, io_uring-based ZeroMQ-compatible runtime_
 
 The goal is to **outperform libzmq**, while:
 
--   preserving Rust’s **memory safety guarantees**
--   avoiding “black-box” C FFI behavior
+-   preserving Rust's **memory safety guarantees**
+-   avoiding "black-box" C FFI behavior
 -   enabling **protocol-level control and evolution**
 
 ---

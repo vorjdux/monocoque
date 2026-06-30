@@ -137,7 +137,7 @@ cargo run --example curve_demo -- --server-key <public_key_hex>
 
 **Tests hang and don't exit.** Use the standalone `cargo run --example` commands rather than `cargo test` - the compio runtime has known lifecycle issues inside the test harness.
 
-**Connection refused.** Check that ports 5560–5564 are free before running examples.
+**Connection refused.** Check that ports 5560-5564 are free before running examples.
 
 ## What Is Verified
 

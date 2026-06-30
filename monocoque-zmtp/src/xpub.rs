@@ -22,8 +22,8 @@
 //! ```
 
 use bytes::Bytes;
-use compio::net::{TcpListener, TcpStream};
 use monocoque_core::options::SocketOptions;
+use monocoque_core::rt::{TcpListener, TcpStream};
 use monocoque_core::subscription::{SubscriptionEvent, SubscriptionTrie};
 use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet};
@@ -183,8 +183,8 @@ impl XPubSocket {
                 // Send welcome message if configured
                 if let Some(ref welcome_msg) = self.options.xpub_welcome_msg.clone() {
                     use bytes::BytesMut;
-                    use compio::buf::BufResult;
-                    use compio::io::AsyncWriteExt;
+                    use compio_buf::BufResult;
+                    use compio_io::AsyncWriteExt;
 
                     let wire = if let Some(ref mut cipher) = curve_cipher {
                         let mut buf = BytesMut::new();
@@ -262,9 +262,9 @@ impl XPubSocket {
     /// ```
     #[allow(clippy::too_many_lines)]
     pub async fn recv_subscription(&mut self) -> io::Result<Option<SubscriptionEvent>> {
-        use compio::buf::BufResult;
-        use compio::io::AsyncRead;
-        use compio::time::timeout;
+        use compio_buf::BufResult;
+        use compio_io::AsyncRead;
+        use monocoque_core::rt::timeout;
         use std::time::Duration;
 
         // Return pending events first
@@ -306,7 +306,7 @@ impl XPubSocket {
                                         } else {
                                             // Non-MESSAGE command (e.g. PING): handle and skip.
                                             if crate::base::is_ping_payload(&frame.payload) {
-                                                use compio::io::AsyncWriteExt;
+                                                use compio_io::AsyncWriteExt;
                                                 let pong = crate::base::build_pong_frame();
                                                 let BufResult(result, _) = sub.stream.write_all(pong).await;
                                                 let _ = result;
@@ -315,7 +315,7 @@ impl XPubSocket {
                                         }
                                     } else {
                                         if crate::base::is_ping_payload(&frame.payload) {
-                                            use compio::io::AsyncWriteExt;
+                                            use compio_io::AsyncWriteExt;
                                             let pong = crate::base::build_pong_frame();
                                             let BufResult(result, _) =
                                                 sub.stream.write_all(pong).await;
@@ -452,8 +452,8 @@ impl XPubSocket {
     /// ```
     pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
         use bytes::BytesMut;
-        use compio::buf::BufResult;
-        use compio::io::AsyncWriteExt;
+        use compio_buf::BufResult;
+        use compio_io::AsyncWriteExt;
 
         trace!("[XPUB] Broadcasting message with {} frames", msg.len());
 
@@ -667,6 +667,7 @@ impl crate::Socket for XPubSocket {
 }
 
 #[cfg(test)]
+#[cfg(feature = "runtime-compio")]
 mod tests {
     use super::*;
     use crate::publisher::PubSocket as InternalPub;
@@ -723,7 +724,7 @@ mod tests {
     /// started delivering matching messages.
     #[compio::test]
     async fn test_connect_upstream_and_forward_subscription() {
-        use compio::net::TcpListener;
+        use monocoque_core::rt::TcpListener;
 
         // Bind a PubSocket listener (the upstream data source).
         let pub_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -735,7 +736,7 @@ mod tests {
             // Accept the connection that connect_upstream() will make.
             pub_sock.accept_subscriber(&pub_listener).await.unwrap();
             // Give the subscription reader time to process Subscribe("weather").
-            compio::time::sleep(std::time::Duration::from_millis(50)).await;
+            monocoque_core::rt::sleep(std::time::Duration::from_millis(50)).await;
             // Broadcast a matching message  -  should reach the upstream XSubSocket.
             pub_sock
                 .send(vec![Bytes::from("weather"), Bytes::from("sunny")])

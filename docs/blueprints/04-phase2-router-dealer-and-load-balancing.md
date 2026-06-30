@@ -4,7 +4,7 @@
 
 > **Implementation Note**: This document describes design concepts for routing and load balancing. The current implementation uses **direct stream I/O** where each socket (`DealerSocket<S>`, `RouterSocket<S>`) directly manages its own stream. The semantic behavior (multipart, identity routing) remains as described, but is implemented inline within socket types. The `RouterHub` and related components exist in `monocoque-core` for future multi-peer scenarios.
 
-_Where Monocoque stops being “a ZMTP peer” and becomes “a ZeroMQ engine”_
+_Where Monocoque stops being "a ZMTP peer" and becomes "a ZeroMQ engine"_
 
 ---
 
@@ -12,7 +12,7 @@ _Where Monocoque stops being “a ZMTP peer” and becomes “a ZeroMQ engine”
 
 Phase 2 answers the next structural question:
 
-> Can Monocoque correctly implement **ZeroMQ socket behaviors** without corrupting the IO fast path or violating Rust’s safety guarantees?
+> Can Monocoque correctly implement **ZeroMQ socket behaviors** without corrupting the IO fast path or violating Rust's safety guarantees?
 
 Specifically:
 
@@ -232,7 +232,7 @@ This enables:
 
 ---
 
-## 9. The “Ghost Peer” Problem
+## 9. The "Ghost Peer" Problem
 
 ### The Bug
 
@@ -335,4 +335,4 @@ After Phase 2:
 
 This phase is where **most projects collapse**.
 
-Monocoque didn’t.
+Monocoque didn't.

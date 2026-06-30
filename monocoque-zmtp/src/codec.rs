@@ -155,7 +155,7 @@ impl ZmtpDecoder {
 
         let flags = hdr[0];
 
-        // Reserved bits must be zero (bits 3–7)
+        // Reserved bits must be zero (bits 3-7)
         if (flags & 0xF8) != 0 {
             return Err(ZmtpError::ReservedBits);
         }

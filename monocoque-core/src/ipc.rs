@@ -4,7 +4,7 @@
 //! with zero-copy and low-latency characteristics.
 
 #[cfg(unix)]
-use compio::net::{UnixListener, UnixStream};
+use crate::rt::{UnixListener, UnixStream};
 #[cfg(unix)]
 use std::path::Path;
 
@@ -61,6 +61,7 @@ pub async fn accept(listener: &UnixListener) -> std::io::Result<UnixStream> {
 
 #[cfg(test)]
 #[cfg(unix)]
+#[cfg(feature = "runtime-compio")]
 mod tests {
     use super::*;
 

@@ -233,10 +233,9 @@ impl<H: ZapHandler> ZapServer<H> {
 /// ```
 pub fn spawn_zap_server<H: ZapHandler + 'static>(handler: Arc<H>) -> io::Result<()> {
     let mut server = ZapServer::new(handler)?;
-    compio::runtime::spawn(async move {
+    monocoque_core::rt::spawn_detached(async move {
         let _ = server.start().await;
-    })
-    .detach();
+    });
     Ok(())
 }
 
@@ -271,6 +270,7 @@ pub fn start_default_zap_server<H: PlainAuthHandler + 'static>(
 }
 
 #[cfg(test)]
+#[cfg(feature = "runtime-compio")]
 mod tests {
     use super::*;
     use crate::security::ZapStatus;

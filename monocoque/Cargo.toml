@@ -6,7 +6,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "High-performance ZeroMQ-compatible messaging runtime built on io_uring"
+description = "High-performance ZeroMQ-compatible messaging runtime, io_uring by default with an optional tokio backend"
 homepage = "https://github.com/vorjdux/monocoque"
 documentation = "https://docs.rs/monocoque-rs"
 readme = "../README.md"
@@ -86,6 +86,10 @@ required-features = ["zmq"]
 [[bench]]
 name = "allocation"
 harness = false
+
+[[example]]
+name = "runtime_backends"
+required-features = ["zmq"]
 
 [[example]]
 name = "protocol_namespaces"
@@ -326,12 +330,15 @@ workspace = true
 
 [dependencies]
 # Internal implementation crates (not exposed)
-monocoque-core = { version = "0.1.5", path = "../monocoque-core", package = "monocoque-rs-core" }
-monocoque-zmtp = { version = "0.1.5", path = "../monocoque-zmtp", package = "monocoque-rs-zmtp", optional = true }
+monocoque-core = { version = "0.1.5", path = "../monocoque-core", package = "monocoque-rs-core", default-features = false }
+monocoque-zmtp = { version = "0.1.5", path = "../monocoque-zmtp", package = "monocoque-rs-zmtp", optional = true, default-features = false }
 
 # Re-export dependencies for user convenience
 bytes.workspace = true
-compio.workspace = true
+compio-io.workspace = true
+compio-buf.workspace = true
+compio = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
@@ -349,7 +356,19 @@ hex.workspace = true
 async-trait.workspace = true
 
 [features]
-default = []
+default = ["runtime-compio"]
+
+# Runtime backend selection (exactly one). See monocoque-rs-core for details.
+runtime-compio = [
+    "dep:compio",
+    "monocoque-core/runtime-compio",
+    "monocoque-zmtp?/runtime-compio",
+]
+runtime-tokio = [
+    "dep:tokio",
+    "monocoque-core/runtime-tokio",
+    "monocoque-zmtp?/runtime-tokio",
+]
 
 # Protocol implementations (opt-in)
 zmq = ["dep:monocoque-zmtp", "dep:flume"]

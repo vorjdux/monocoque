@@ -23,7 +23,7 @@ You no longer need libzmq installed on the system. Monocoque is pure Rust.
 
 **No context.** libzmq and rust-zmq require a `Context` object that owns all sockets. Monocoque sockets are independent - just create them directly.
 
-**Async everywhere.** All socket operations are `async`. You need a compio runtime: add `#[compio::main]` to your entry point. There's no blocking API.
+**Async everywhere.** All socket operations are `async`. On the default backend you run them on a compio runtime: add `#[compio::main]` to your entry point. If you would rather stay on tokio, build with `default-features = false, features = ["runtime-tokio", "zmq"]` and run on a current-thread tokio runtime inside a `LocalSet`. Either way there is no blocking API.
 
 **`recv()` returns `Result<Option<Vec<Bytes>>>`.** This is the change that will touch the most code. In rust-zmq, `recv_msg(0)` returns `Result<Message>` where the error encodes both I/O problems and timeouts (via errno). In monocoque, `Ok(None)` means the connection closed or a timeout elapsed - it's not an error. `Err(e)` is an actual I/O problem. Update all your recv callsites:
 

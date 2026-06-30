@@ -42,7 +42,7 @@
 //! ## Features
 //!
 //! - **Zero-copy**: Messages use `Bytes` for efficient sharing
-//! - **`io_uring`**: High-performance async I/O via `compio`
+//! - **Runtime backends**: high-performance async I/O via `compio` (io_uring) or tokio
 
 // Pedantic lints configuration
 #![allow(clippy::module_name_repetitions)]

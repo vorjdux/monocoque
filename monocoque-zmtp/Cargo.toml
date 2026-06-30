@@ -19,13 +19,23 @@ name = "monocoque_zmtp"
 [lints]
 workspace = true
 
+[features]
+default = ["runtime-compio"]
+# Native io_uring through compio (see monocoque-rs-core for the rationale).
+runtime-compio = ["dep:compio", "monocoque-core/runtime-compio"]
+# Drive the same socket stack on tokio instead.
+runtime-tokio = ["dep:tokio", "monocoque-core/runtime-tokio"]
+
 [dependencies]
 bytes.workspace = true
 thiserror.workspace = true
 flume.workspace = true
 futures.workspace = true
-compio.workspace = true
-monocoque-core = { version = "0.1.5", path = "../monocoque-core", package = "monocoque-rs-core" }
+compio-io.workspace = true
+compio-buf.workspace = true
+compio = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+monocoque-core = { version = "0.1.5", path = "../monocoque-core", package = "monocoque-rs-core", default-features = false }
 smallvec.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

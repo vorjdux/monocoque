@@ -9,9 +9,9 @@ use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_mai
 use monocoque_core::options::SocketOptions;
 use std::time::Duration;
 
-// Helper to run async code in compio runtime
-fn runtime() -> compio::runtime::Runtime {
-    compio::runtime::Runtime::new().expect("Failed to create runtime")
+// Helper to run async code on the active runtime backend
+fn runtime() -> monocoque::rt::LocalRuntime {
+    monocoque::rt::LocalRuntime::new().expect("Failed to create runtime")
 }
 
 /// Benchmark REQ/REP pattern latency

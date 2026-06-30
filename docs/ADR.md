@@ -4,9 +4,9 @@ Three one-page ADRs for the most consequential design choices in Monocoque.
 
 ---
 
-## ADR-1: Use io_uring / compio instead of Tokio
+## ADR-1: io_uring / compio as the default runtime
 
-**Status**: Accepted  
+**Status**: Accepted (compio is the default); updated 2026-Q2 to add an optional tokio backend  
 **Date**: 2025-Q4
 
 ### Context
@@ -15,7 +15,9 @@ Monocoque requires sub-30 μs round-trip latency and >1 M msg/sec throughput whi
 
 ### Decision
 
-Use **compio** as the sole async runtime. compio exposes io_uring's submission-queue/completion-queue model through Rust futures, eliminating the `epoll → userspace → syscall` round-trip present in Tokio's reactor.
+Use **compio** as the default async runtime. compio exposes io_uring's submission-queue/completion-queue model through Rust futures, eliminating the `epoll → userspace → syscall` round-trip present in Tokio's reactor.
+
+The socket stack is generic over the `compio::io` `AsyncRead`/`AsyncWrite` traits and never names a runtime directly, so a second backend slots in behind the same abstraction. A tokio backend now ships behind the `runtime-tokio` feature for platforms without io_uring; it follows the same thread-per-core model (current-thread runtime, no work stealing). compio stays the default and the performance baseline.
 
 ### Consequences
 
@@ -88,4 +90,4 @@ send(vec![Bytes::from("topic"), payload.clone()])
 - **No lifetime complexity**: `Bytes` is `'static`  -  it can cross thread and task boundaries without borrow-checker gymnastics.
 - **`BytesMut` for mutable staging**: Protocol framing (ZMTP length prefix, flags) builds into `BytesMut` then freezes once complete.
 
-**Trade-off accepted**: Reference counting adds a 1–2 ns atomic increment per clone. At our message rates this is unmeasurable next to the I/O cost. For single-subscriber paths where no fan-out occurs, a copy would be marginally cheaper per message but would require a different type throughout the API, increasing complexity.
+**Trade-off accepted**: Reference counting adds a 1-2 ns atomic increment per clone. At our message rates this is unmeasurable next to the I/O cost. For single-subscriber paths where no fan-out occurs, a copy would be marginally cheaper per message but would require a different type throughout the API, increasing complexity.

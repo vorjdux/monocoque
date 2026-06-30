@@ -9,9 +9,9 @@
 //! receiving messages freely without a strict request-reply pattern.
 
 use bytes::Bytes;
-use compio::io::{AsyncRead, AsyncWrite};
-use compio::net::TcpStream;
+use compio_io::{AsyncRead, AsyncWrite};
 use monocoque_core::options::SocketOptions;
+use monocoque_core::rt::TcpStream;
 use smallvec::SmallVec;
 use std::io;
 use std::time::Duration;
@@ -47,7 +47,7 @@ where
     ///
     /// ```rust,no_run
     /// use monocoque_zmtp::DealerSocket;
-    /// use compio::net::TcpStream;
+    /// use monocoque_core::rt::TcpStream;
     ///
     /// # async fn example() -> std::io::Result<()> {
     /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
@@ -75,7 +75,7 @@ where
     /// use monocoque_zmtp::DealerSocket;
     /// use monocoque_core::options::SocketOptions;
     /// use std::time::Duration;
-    /// use compio::net::TcpStream;
+    /// use monocoque_core::rt::TcpStream;
     ///
     /// # async fn example() -> std::io::Result<()> {
     /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
@@ -342,7 +342,7 @@ where
             }
             Some(dur) => {
                 // Linger = timeout: try to flush within timeout
-                use compio::time::timeout;
+                use monocoque_core::rt::timeout;
                 match timeout(dur, self.flush()).await {
                     Ok(Ok(())) => {
                         debug!("[DEALER] Successfully flushed before close");
@@ -377,7 +377,7 @@ where
     ///
     /// ```rust,ignore
     /// # use monocoque_zmtp::DealerSocket;
-    /// # use compio::net::TcpStream;
+    /// # use monocoque_core::rt::TcpStream;
     /// # use std::time::Duration;
     /// # async fn reconnect_loop(addr: &str) -> std::io::Result<()> {
     /// use monocoque_core::reconnect::ReconnectState;
@@ -404,7 +404,7 @@ where
     ///         Err(e) => {
     ///             eprintln!("Connection failed: {}, retrying...", e);
     ///             let delay = reconnect.next_delay();
-    ///             compio::time::sleep(delay).await;
+    ///             monocoque_core::rt::sleep(delay).await;
     ///         }
     ///     }
     /// }
@@ -545,9 +545,9 @@ impl DealerSocket<TcpStream> {
     /// # }
     /// ```
     pub async fn bind(
-        addr: impl compio::net::ToSocketAddrsAsync,
-    ) -> io::Result<(compio::net::TcpListener, Self)> {
-        let listener = compio::net::TcpListener::bind(addr).await?;
+        addr: impl monocoque_core::rt::ToSocketAddrs,
+    ) -> io::Result<(monocoque_core::rt::TcpListener, Self)> {
+        let listener = monocoque_core::rt::TcpListener::bind(addr).await?;
         let (stream, _) = listener.accept().await?;
         let socket = Self::from_tcp(stream).await?;
         Ok((listener, socket))
@@ -570,13 +570,13 @@ impl DealerSocket<TcpStream> {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn connect(addr: impl compio::net::ToSocketAddrsAsync) -> io::Result<Self> {
+    pub async fn connect(addr: impl monocoque_core::rt::ToSocketAddrs) -> io::Result<Self> {
         Self::connect_with_options(addr, SocketOptions::default()).await
     }
 
     /// Connect with custom options, storing the endpoint for reconnection.
     pub async fn connect_with_options(
-        addr: impl compio::net::ToSocketAddrsAsync,
+        addr: impl monocoque_core::rt::ToSocketAddrs,
         options: SocketOptions,
     ) -> io::Result<Self> {
         let stream = TcpStream::connect(addr).await?;
@@ -620,7 +620,7 @@ impl DealerSocket<TcpStream> {
     ///
     /// ```rust,no_run
     /// use monocoque_zmtp::DealerSocket;
-    /// use compio::net::TcpStream;
+    /// use monocoque_core::rt::TcpStream;
     ///
     /// # async fn example() -> std::io::Result<()> {
     /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
@@ -641,7 +641,7 @@ impl DealerSocket<TcpStream> {
     /// ```rust,no_run
     /// use monocoque_zmtp::DealerSocket;
     /// use monocoque_core::options::SocketOptions;
-    /// use compio::net::TcpStream;
+    /// use monocoque_core::rt::TcpStream;
     /// use std::time::Duration;
     ///
     /// # async fn example() -> std::io::Result<()> {

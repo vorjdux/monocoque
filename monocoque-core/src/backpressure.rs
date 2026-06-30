@@ -150,7 +150,7 @@ impl BytePermits for SemaphorePermits {
         // the async executor. parking_lot::Condvar::wait is synchronous and
         // safe to use here because SemInner uses parking_lot::Mutex.
         let inner = self.inner.clone();
-        let actual = compio::runtime::spawn_blocking(move || {
+        let actual = crate::rt::spawn_blocking(move || {
             let (mutex, condvar) = &*inner;
             let mut guard = mutex.lock();
             // Clamp to max_bytes so a single oversized message never deadlocks:
@@ -172,6 +172,7 @@ impl BytePermits for SemaphorePermits {
 }
 
 #[cfg(test)]
+#[cfg(feature = "runtime-compio")]
 mod tests {
     use super::*;
 

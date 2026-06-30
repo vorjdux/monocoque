@@ -4,8 +4,8 @@
 //! allowing inproc transport to integrate seamlessly with existing socket infrastructure.
 
 use bytes::{Bytes, BytesMut};
-use compio::buf::{BufResult, IoBuf, IoBufMut};
-use compio::io::{AsyncRead, AsyncWrite};
+use compio_buf::{BufResult, IoBuf, IoBufMut};
+use compio_io::{AsyncRead, AsyncWrite};
 use monocoque_core::inproc::{InprocReceiver, InprocSender};
 use std::io;
 
@@ -123,14 +123,15 @@ impl std::fmt::Debug for InprocStream {
 }
 
 #[cfg(test)]
+#[cfg(feature = "runtime-compio")]
 mod tests {
     use super::*;
     use monocoque_core::inproc::{bind_inproc, connect_inproc};
 
     #[test]
     fn test_inproc_stream_basic() -> io::Result<()> {
-        use compio::buf::BufResult;
-        use compio::io::AsyncRead;
+        use compio_buf::BufResult;
+        use compio_io::AsyncRead;
 
         let endpoint = "inproc://test-stream-basic";
         let (tx1, rx1) = bind_inproc(endpoint)?;

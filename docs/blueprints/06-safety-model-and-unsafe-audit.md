@@ -2,13 +2,13 @@
 
 # Safety Model & Unsafe Code Audit
 
-_Why Monocoque does not violate Rust’s memory guarantees_
+_Why Monocoque does not violate Rust's memory guarantees_
 
 ---
 
 ## 1. The Core Question
 
-> “I’m concerned about unsafe code and if it will not break Rust memory guarantees.”
+> "I'm concerned about unsafe code and if it will not break Rust memory guarantees."
 
 This concern is **correct**, **healthy**, and exactly where many high-performance Rust projects fail.
 
@@ -16,7 +16,7 @@ This file answers that concern **formally**, not hand-wavingly.
 
 ---
 
-## 2. Monocoque’s Safety Philosophy
+## 2. Monocoque's Safety Philosophy
 
 Monocoque follows a **kernel-style safety model**:
 
@@ -75,7 +75,7 @@ Everything above Phase 0 is **100% safe Rust**.
 
 ### Why this is sound
 
-Rust’s aliasing rules allow:
+Rust's aliasing rules allow:
 
 > _Multiple immutable readers OR exactly one mutable writer_
 
@@ -212,7 +212,7 @@ This eliminates an entire class of bugs seen in:
 | NATS         | networking core      |
 | Monocoque    | **IO boundary only** |
 
-Monocoque’s unsafe footprint is **smaller** than most async runtimes.
+Monocoque's unsafe footprint is **smaller** than most async runtimes.
 
 ---
 
@@ -245,6 +245,6 @@ But the current architecture already supports safe extension.
 
 ## 14. Final Verdict
 
-> **Yes - Monocoque respects Rust’s memory guarantees.**
+> **Yes - Monocoque respects Rust's memory guarantees.**
 
 Not by accident. By design, isolation, and discipline.

@@ -2,8 +2,8 @@
 //!
 //! Provides timeout wrappers for async read/write operations using compio's timeout support.
 
-use compio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use compio::time::timeout;
+use crate::rt::timeout;
+use compio_io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use std::io;
 use std::time::Duration;
 
@@ -14,10 +14,10 @@ pub async fn read_exact_with_timeout<S, B>(
     stream: &mut S,
     buf: B,
     duration: Option<Duration>,
-) -> io::Result<compio::buf::BufResult<(), B>>
+) -> io::Result<compio_buf::BufResult<(), B>>
 where
     S: AsyncRead + Unpin,
-    B: compio::buf::IoBufMut,
+    B: compio_buf::IoBufMut,
 {
     match duration {
         None => {
@@ -51,10 +51,10 @@ pub async fn write_all_with_timeout<S, B>(
     stream: &mut S,
     buf: B,
     duration: Option<Duration>,
-) -> io::Result<compio::buf::BufResult<(), B>>
+) -> io::Result<compio_buf::BufResult<(), B>>
 where
     S: AsyncWrite + Unpin,
-    B: compio::buf::IoBuf,
+    B: compio_buf::IoBuf,
 {
     match duration {
         None => {

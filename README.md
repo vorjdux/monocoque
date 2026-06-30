@@ -4,7 +4,7 @@
 
 # Monocoque
 
-> _A Rust-native ZeroMQ-compatible messaging runtime built on `io_uring`_
+> _A Rust-native ZeroMQ-compatible messaging runtime, io_uring by default with an optional tokio backend_
 
 [![CI](https://github.com/vorjdux/monocoque/actions/workflows/ci.yml/badge.svg)](https://github.com/vorjdux/monocoque/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/monocoque-rs.svg)](https://crates.io/crates/monocoque-rs)
@@ -15,7 +15,7 @@
 
 ---
 
-Monocoque is a ZeroMQ-compatible messaging library written in Rust. It implements ZMTP 3.1 from scratch on top of `io_uring` (via `compio`), so it interoperates with any existing libzmq peer while staying entirely within Rust's memory model.
+Monocoque is a ZeroMQ-compatible messaging library written in Rust. It implements ZMTP 3.1 from scratch over a small runtime facade: io_uring by default (via `compio`), with an optional tokio backend for portability. Either way it interoperates with any existing libzmq peer while staying entirely within Rust's memory model.
 
 The name comes from Formula 1 engineering, where the monocoque chassis achieves structural strength through form rather than bolt-on reinforcement. Same idea here: performance through correct architecture, not unsafe shortcuts.
 
@@ -72,7 +72,9 @@ results, and tuning guidance.
 ```toml
 [dependencies]
 monocoque-rs = { version = "0.1", features = ["zmq"] }
-compio = { version = "0.13", features = ["runtime"] }
+# Drives the default io_uring backend and provides the #[compio::main] macro.
+# To run on tokio instead, see "Runtime backends" below.
+compio = { version = "0.13", features = ["runtime", "macros"] }
 ```
 
 ```rust
@@ -125,9 +127,65 @@ for msg in &batch {
 dealer.flush().await?;
 ```
 
+## Runtime backends
+
+Monocoque runs on `io_uring` through compio by default, but the socket stack is
+written against a small runtime facade, so it can drive the same code on tokio
+instead. Pick one backend at compile time:
+
+```toml
+# Default: native io_uring via compio
+monocoque-rs = { version = "0.1", features = ["zmq"] }
+
+# Or run on tokio
+monocoque-rs = { version = "0.1", default-features = false, features = ["runtime-tokio", "zmq"] }
+```
+
+The two backends are mutually exclusive. The protocol layer, frame codec and
+buffer model are identical on both: only the connect/spawn/timer primitives
+differ. The tokio backend follows compio's thread-per-core model, so run it on a
+current-thread runtime inside a `LocalSet`.
+
+```rust
+let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+let local = tokio::task::LocalSet::new();
+local.block_on(&rt, async {
+    let mut push = PushSocket::connect("127.0.0.1:5555").await?;
+    push.send(vec![b"hello".into()]).await?;
+    Ok::<_, std::io::Error>(())
+})?;
+```
+
+If you would rather not name a runtime in your own code, `monocoque::rt::LocalRuntime`
+is a backend-agnostic entry point: it builds the right single-threaded runtime for
+whichever feature is enabled, so the same source runs on either.
+
+```rust
+let rt = monocoque::rt::LocalRuntime::new()?;
+rt.block_on(async {
+    let mut push = PushSocket::connect("127.0.0.1:5555").await?;
+    push.send(vec![b"hello".into()]).await?;
+    Ok::<_, std::io::Error>(())
+})?;
+```
+
+The `runtime_backends` example is the same program run both ways:
+
+```bash
+cargo run --example runtime_backends --features zmq                                   # compio
+cargo run --example runtime_backends --no-default-features --features runtime-tokio,zmq  # tokio
+```
+
 ## Safety
 
-`unsafe` code is confined to a single file: `monocoque-core/src/alloc.rs`, which implements the arena allocator for io_uring-safe buffer management. Everything else is 100% safe Rust.
+`unsafe` is confined to a handful of small, well-contained spots, each marked with `#![allow(unsafe_code)]`:
+
+- `monocoque-core/src/alloc.rs` - the arena allocator that provides pinned, io_uring-safe buffers.
+- `monocoque-core/src/rt.rs` - the tokio stream adapter, which reads into an owned buffer's spare capacity and declares the read length.
+- `monocoque-core/src/tcp.rs` - TCP socket tuning (nodelay, keepalive) through the raw socket handle.
+- `monocoque-zmtp/src/inproc_stream.rs` - the in-process stream adapter that fills an owned buffer.
+
+Everything else is safe Rust.
 
 Memory invariants:
 - Buffers are never reused while referenced (tracked via `Bytes` refcounts)
@@ -140,6 +198,9 @@ Memory invariants:
 cargo build --release --workspace
 cargo test --workspace --features zmq
 cargo bench --features zmq       # runs the benchmark suite
+
+# The same suite runs on the tokio backend
+cargo bench --no-default-features --features runtime-tokio,zmq
 ```
 
 Interop testing against libzmq: see [docs/INTEROP_TESTING.md](docs/INTEROP_TESTING.md).

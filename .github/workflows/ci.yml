@@ -21,8 +21,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Run tests
-        run: cargo test --workspace --all-features
+      # The two runtime backends are mutually exclusive, so they are tested
+      # separately rather than with --all-features.
+      - name: Run tests (compio backend)
+        run: cargo test --workspace --features zmq
+      - name: Run tests (tokio backend)
+        run: |
+          cargo test --workspace --lib --no-default-features --features runtime-tokio,zmq
+          cargo test -p monocoque-rs --test tokio_runtime --no-default-features --features runtime-tokio,zmq
 
   clippy:
     name: Clippy
@@ -33,8 +39,10 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Clippy
-        run: cargo clippy --workspace --all-features -- -D warnings
+      - name: Clippy (compio backend)
+        run: cargo clippy --workspace --all-targets --features zmq -- -D warnings
+      - name: Clippy (tokio backend)
+        run: cargo clippy --workspace --lib --benches --no-default-features --features runtime-tokio,zmq -- -D warnings
 
   fmt:
     name: Rustfmt
@@ -65,7 +73,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Check docs (no warnings)
-        run: cargo doc --no-deps --workspace
+        run: cargo doc --no-deps --workspace --features zmq
         env:
           RUSTDOCFLAGS: "-D warnings"
 

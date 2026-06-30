@@ -2,9 +2,9 @@
 //!
 //! PULL sockets are used in pipeline patterns for receiving tasks.
 
-use compio::net::{TcpListener, TcpStream};
 use monocoque_core::monitor::{SocketEventSender, SocketMonitor, create_monitor};
 use monocoque_core::options::SocketOptions;
+use monocoque_core::rt::{TcpListener, TcpStream};
 use monocoque_zmtp::PullSocket as InternalPull;
 use std::io;
 
@@ -13,7 +13,7 @@ use std::io;
 /// PULL sockets receive messages from connected PUSH sockets.
 pub struct PullSocket<S = TcpStream>
 where
-    S: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+    S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
 {
     inner: InternalPull<S>,
     monitor: Option<SocketEventSender>,
@@ -38,7 +38,7 @@ impl PullSocket<TcpStream> {
     /// # }
     /// ```
     pub async fn bind(
-        addr: impl compio::net::ToSocketAddrsAsync,
+        addr: impl monocoque_core::rt::ToSocketAddrs,
     ) -> io::Result<(TcpListener, Self)> {
         let listener = TcpListener::bind(addr).await?;
         let (stream, _) = listener.accept().await?;
@@ -61,7 +61,7 @@ impl PullSocket<TcpStream> {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn connect(addr: impl compio::net::ToSocketAddrsAsync) -> io::Result<Self> {
+    pub async fn connect(addr: impl monocoque_core::rt::ToSocketAddrs) -> io::Result<Self> {
         Ok(Self {
             inner: InternalPull::connect(addr).await?,
             monitor: None,
@@ -70,7 +70,7 @@ impl PullSocket<TcpStream> {
 
     /// Connect with custom options, storing the endpoint for automatic reconnection.
     pub async fn connect_with_options(
-        addr: impl compio::net::ToSocketAddrsAsync,
+        addr: impl monocoque_core::rt::ToSocketAddrs,
         options: SocketOptions,
     ) -> io::Result<Self> {
         Ok(Self {
@@ -117,7 +117,7 @@ impl PullSocket<TcpStream> {
 
 impl<S> PullSocket<S>
 where
-    S: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+    S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
 {
     /// Create a PULL socket from any stream.
     pub async fn new(stream: S) -> io::Result<Self> {
@@ -209,9 +209,9 @@ where
 }
 
 #[cfg(unix)]
-impl PullSocket<compio::net::UnixStream> {
+impl PullSocket<monocoque_core::rt::UnixStream> {
     /// Create a PULL socket from a Unix domain socket stream (IPC).
-    pub async fn from_unix_stream(stream: compio::net::UnixStream) -> io::Result<Self> {
+    pub async fn from_unix_stream(stream: monocoque_core::rt::UnixStream) -> io::Result<Self> {
         Ok(Self {
             inner: InternalPull::new(stream).await?,
             monitor: None,
@@ -220,7 +220,7 @@ impl PullSocket<compio::net::UnixStream> {
 
     /// Create a PULL socket from a Unix domain socket stream with custom options.
     pub async fn from_unix_stream_with_options(
-        stream: compio::net::UnixStream,
+        stream: monocoque_core::rt::UnixStream,
         options: SocketOptions,
     ) -> io::Result<Self> {
         Ok(Self {

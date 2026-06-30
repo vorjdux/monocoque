@@ -16,8 +16,8 @@
 //! - No contention or lock overhead
 
 use bytes::Bytes;
-use compio::net::TcpListener;
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use monocoque::rt::TcpListener;
 use monocoque::zmq::{DealerSocket, RouterSocket, SocketOptions};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -49,7 +49,7 @@ fn monocoque_multithreaded_dealers(c: &mut Criterion) {
             |b, &num_threads| {
                 b.iter(|| {
                     // Use a single runtime for the server
-                    let rt = compio::runtime::Runtime::new().unwrap();
+                    let rt = monocoque::rt::LocalRuntime::new().unwrap();
 
                     rt.block_on(async {
                         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -59,7 +59,7 @@ fn monocoque_multithreaded_dealers(c: &mut Criterion) {
                         let received_count = Arc::new(AtomicUsize::new(0));
 
                         // Router server task (handles all connections)
-                        let router_task = compio::runtime::spawn({
+                        let router_task = monocoque::rt::spawn({
                             let received_count = Arc::clone(&received_count);
                             async move {
                                 // Accept connections and spawn handler for each
@@ -68,7 +68,7 @@ fn monocoque_multithreaded_dealers(c: &mut Criterion) {
                                     let (stream, _) = listener.accept().await.unwrap();
                                     let received_count = Arc::clone(&received_count);
 
-                                    let handler = compio::runtime::spawn(async move {
+                                    let handler = monocoque::rt::spawn(async move {
                                         let mut router = RouterSocket::from_tcp_with_options(
                                             stream,
                                             SocketOptions::default()
@@ -93,13 +93,13 @@ fn monocoque_multithreaded_dealers(c: &mut Criterion) {
 
                                 // Wait for all handlers
                                 for handler in handlers {
-                                    handler.await;
+                                    let _ = handler.await;
                                 }
                             }
                         });
 
                         // Small delay to ensure server is listening
-                        compio::time::sleep(Duration::from_millis(50)).await;
+                        monocoque::rt::sleep(Duration::from_millis(50)).await;
 
                         // Spawn N dealer threads, each with its own runtime
                         let mut dealer_handles = Vec::new();
@@ -108,10 +108,11 @@ fn monocoque_multithreaded_dealers(c: &mut Criterion) {
 
                             let handle = std::thread::spawn(move || {
                                 // Each thread gets its own compio runtime
-                                let rt = compio::runtime::Runtime::new().unwrap();
+                                let rt = monocoque::rt::LocalRuntime::new().unwrap();
                                 rt.block_on(async {
-                                    let stream =
-                                        compio::net::TcpStream::connect(server_addr).await.unwrap();
+                                    let stream = monocoque::rt::TcpStream::connect(server_addr)
+                                        .await
+                                        .unwrap();
                                     let mut dealer = DealerSocket::from_tcp_with_options(
                                         stream,
                                         SocketOptions::default().with_buffer_sizes(16384, 16384),
@@ -146,7 +147,7 @@ fn monocoque_multithreaded_dealers(c: &mut Criterion) {
                         }
 
                         // Wait for router to finish
-                        router_task.await;
+                        let _ = router_task.await;
                     });
                 });
             },
@@ -182,13 +183,13 @@ fn monocoque_multithreaded_independent_pairs(c: &mut Criterion) {
 
                         let handle = std::thread::spawn(move || {
                             // Each pair gets its own compio runtime
-                            let rt = compio::runtime::Runtime::new().unwrap();
+                            let rt = monocoque::rt::LocalRuntime::new().unwrap();
                             rt.block_on(async {
                                 let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
                                 let server_addr = listener.local_addr().unwrap();
 
                                 // Router task
-                                let router_task = compio::runtime::spawn(async move {
+                                let router_task = monocoque::rt::spawn(async move {
                                     let (stream, _) = listener.accept().await.unwrap();
                                     let mut router = RouterSocket::from_tcp_with_options(
                                         stream,
@@ -205,8 +206,9 @@ fn monocoque_multithreaded_independent_pairs(c: &mut Criterion) {
                                 });
 
                                 // Dealer task
-                                let stream =
-                                    compio::net::TcpStream::connect(server_addr).await.unwrap();
+                                let stream = monocoque::rt::TcpStream::connect(server_addr)
+                                    .await
+                                    .unwrap();
                                 let mut dealer = DealerSocket::from_tcp_with_options(
                                     stream,
                                     SocketOptions::default().with_buffer_sizes(16384, 16384),
@@ -231,7 +233,7 @@ fn monocoque_multithreaded_independent_pairs(c: &mut Criterion) {
                                     }
                                 }
 
-                                router_task.await;
+                                let _ = router_task.await;
                             });
                         });
                         handles.push(handle);
@@ -282,12 +284,12 @@ fn monocoque_core_efficiency(c: &mut Criterion) {
                         let payload = payload.clone();
 
                         let handle = std::thread::spawn(move || {
-                            let rt = compio::runtime::Runtime::new().unwrap();
+                            let rt = monocoque::rt::LocalRuntime::new().unwrap();
                             rt.block_on(async {
                                 let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
                                 let server_addr = listener.local_addr().unwrap();
 
-                                let router_task = compio::runtime::spawn(async move {
+                                let router_task = monocoque::rt::spawn(async move {
                                     let (stream, _) = listener.accept().await.unwrap();
                                     let mut router = RouterSocket::from_tcp_with_options(
                                         stream,
@@ -303,8 +305,9 @@ fn monocoque_core_efficiency(c: &mut Criterion) {
                                     }
                                 });
 
-                                let stream =
-                                    compio::net::TcpStream::connect(server_addr).await.unwrap();
+                                let stream = monocoque::rt::TcpStream::connect(server_addr)
+                                    .await
+                                    .unwrap();
                                 let mut dealer = DealerSocket::from_tcp_with_options(
                                     stream,
                                     SocketOptions::default().with_buffer_sizes(16384, 16384),
@@ -329,7 +332,7 @@ fn monocoque_core_efficiency(c: &mut Criterion) {
                                     }
                                 }
 
-                                router_task.await;
+                                let _ = router_task.await;
                             });
                         });
                         handles.push(handle);

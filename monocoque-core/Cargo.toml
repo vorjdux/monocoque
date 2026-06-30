@@ -6,7 +6,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Protocol-agnostic messaging kernel with io_uring-based I/O"
+description = "Protocol-agnostic messaging kernel with pluggable io_uring (compio) or tokio I/O"
 keywords = ["messaging", "io_uring", "async", "zeromq", "kernel"]
 categories = ["network-programming", "asynchronous"]
 homepage = "https://github.com/vorjdux/monocoque"
@@ -19,10 +19,20 @@ name = "monocoque_core"
 [lints]
 workspace = true
 
+[features]
+default = ["runtime-compio"]
+# Native io_uring through compio: pulls the compio runtime, timers, macros and
+# the io_uring driver on top of the always-present compio I/O trait crates.
+runtime-compio = ["dep:compio"]
+# Drive the same socket stack on tokio instead.
+runtime-tokio = ["dep:tokio"]
+
 [dependencies]
 async-lock.workspace = true
 bytes.workspace = true
-compio.workspace = true
+compio-io.workspace = true
+compio-buf.workspace = true
+compio = { workspace = true, optional = true }
 dashmap.workspace = true
 flume.workspace = true
 futures.workspace = true
@@ -34,3 +44,4 @@ smallvec.workspace = true
 socket2.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+tokio = { workspace = true, optional = true }

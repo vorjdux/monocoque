@@ -202,7 +202,7 @@ Fix 5 is deferred by request.
   Wired into `PushSocket::send`'s eager path; skipped for CURVE (the cipher
   rewrites the body regardless) and for coalesced mode. Covered by
   `test_push_pull_vectored_large_frame`. **Measured** (loopback, 4-core cloud
-  Xeon): vectored loses below ~32 KB and wins ~1.1–1.3x at/above it, so the
+  Xeon): vectored loses below ~32 KB and wins ~1.1-1.3x at/above it, so the
   default threshold is **32 KB**, not 8 KB (see §6). `SEND_ZC` is **not**
   implemented (still gated on the compio op decision).
 - **Fix 2: batch / drain hot path (partly done).** `PullSocket::recv_batch`
@@ -244,7 +244,7 @@ absolute. Harness: `monocoque/examples/bench_changes.rs`
 | 1 MB | 1.24 GB/s | 1.48 GB/s | 1.19x |
 
 The crossover is ~32 KB: below it the contiguous copy + single `write` beats a
-two-segment `writev`; at/above it skipping the copy wins ~1.1–1.3x. Removing the
+two-segment `writev`; at/above it skipping the copy wins ~1.1-1.3x. Removing the
 per-call allocations (reused `write_buf` headers + reused iovec `Vec`) moved the
 crossover down from ~256 KB to ~32 KB. Hence the **32 KB default threshold**. On
 a machine with real memory-bandwidth pressure the copy costs more and the

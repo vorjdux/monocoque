@@ -13,8 +13,8 @@
 //! Attempting to send before receiving, or receive before sending will return an error.
 
 use bytes::Bytes;
-use compio::io::{AsyncRead, AsyncWrite};
-use compio::net::TcpStream;
+use compio_io::{AsyncRead, AsyncWrite};
+use monocoque_core::rt::TcpStream;
 use smallvec::SmallVec;
 use std::io;
 use tracing::{debug, trace};
@@ -56,7 +56,7 @@ pub enum RepState {
 ///
 /// ```rust,no_run
 /// use monocoque_zmtp::rep::RepSocket;
-/// use compio::net::TcpStream;
+/// use monocoque_core::rt::TcpStream;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
@@ -346,13 +346,14 @@ where
 }
 
 #[cfg(test)]
+#[cfg(feature = "runtime-compio")]
 mod tests {
     use super::*;
 
     #[test]
     fn test_rep_state_machine() {
         use bytes::Bytes;
-        use compio::net::TcpListener;
+        use monocoque_core::rt::TcpListener;
 
         compio::runtime::Runtime::new().unwrap().block_on(async {
             // Create a pair of connected sockets
@@ -361,8 +362,8 @@ mod tests {
 
             // Spawn client that will connect and send request
             let client_task = compio::runtime::spawn(async move {
-                compio::time::sleep(std::time::Duration::from_millis(10)).await;
-                let stream = compio::net::TcpStream::connect(addr).await.unwrap();
+                monocoque_core::rt::sleep(std::time::Duration::from_millis(10)).await;
+                let stream = monocoque_core::rt::TcpStream::connect(addr).await.unwrap();
                 let mut req = crate::req::ReqSocket::new(stream).await.unwrap();
 
                 // Send request

@@ -16,8 +16,8 @@
 //! runtime) so the measured time reflects real inter-thread communication.
 
 use bytes::Bytes;
-use compio::net::TcpListener;
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use monocoque::rt::TcpListener;
 use monocoque::zmq::{DealerSocket, RouterSocket, SocketOptions};
 use std::sync::mpsc;
 use std::thread;
@@ -52,7 +52,7 @@ fn monocoque_dealer_router_pipelined(c: &mut Criterion) {
 
                     // ROUTER thread: bind, receive + echo in batches, report elapsed.
                     let router_thread = thread::spawn(move || {
-                        let rt = compio::runtime::Runtime::new().unwrap();
+                        let rt = monocoque::rt::LocalRuntime::new().unwrap();
                         rt.block_on(async move {
                             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
                             let port = listener.local_addr().unwrap().port();
@@ -86,9 +86,9 @@ fn monocoque_dealer_router_pipelined(c: &mut Criterion) {
                     let port = port_rx.recv().unwrap();
 
                     // DEALER thread: connect, send + recv in batches.
-                    let dealer_rt = compio::runtime::Runtime::new().unwrap();
+                    let dealer_rt = monocoque::rt::LocalRuntime::new().unwrap();
                     dealer_rt.block_on(async move {
-                        let stream = compio::net::TcpStream::connect(("127.0.0.1", port))
+                        let stream = monocoque::rt::TcpStream::connect(("127.0.0.1", port))
                             .await
                             .unwrap();
                         let mut dealer = DealerSocket::from_tcp_with_options(

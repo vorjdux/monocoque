@@ -9,9 +9,9 @@
 //! back to specific senders.
 
 use bytes::Bytes;
-use compio::io::{AsyncRead, AsyncWrite};
-use compio::net::TcpStream;
+use compio_io::{AsyncRead, AsyncWrite};
 use monocoque_core::options::SocketOptions;
+use monocoque_core::rt::TcpStream;
 use smallvec::SmallVec;
 use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -51,7 +51,7 @@ where
     /// # Example
     /// ```rust,no_run
     /// # use monocoque_zmtp::router::RouterSocket;
-    /// # use compio::net::TcpStream;
+    /// # use monocoque_core::rt::TcpStream;
     /// # async fn example() -> std::io::Result<()> {
     /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
     /// let socket = RouterSocket::new(stream).await?;
@@ -73,7 +73,7 @@ where
     /// ```rust,no_run
     /// # use monocoque_zmtp::router::RouterSocket;
     /// # use monocoque_core::options::SocketOptions;
-    /// # use compio::net::TcpStream;
+    /// # use monocoque_core::rt::TcpStream;
     /// # async fn example() -> std::io::Result<()> {
     /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
     /// let opts = SocketOptions::large(); // 16KB buffers for throughput
@@ -359,7 +359,7 @@ where
                 Ok(())
             }
             Some(dur) => {
-                use compio::time::timeout;
+                use monocoque_core::rt::timeout;
                 match timeout(dur, self.flush()).await {
                     Ok(Ok(())) => {
                         debug!("[ROUTER] Successfully flushed before close");
@@ -475,7 +475,7 @@ impl RouterSocket<TcpStream> {
     /// # Example
     /// ```rust,no_run
     /// # use monocoque_zmtp::router::RouterSocket;
-    /// # use compio::net::TcpStream;
+    /// # use monocoque_core::rt::TcpStream;
     /// # async fn example() -> std::io::Result<()> {
     /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
     /// let socket = RouterSocket::from_tcp(stream).await?;
@@ -494,7 +494,7 @@ impl RouterSocket<TcpStream> {
     /// ```rust,no_run
     /// # use monocoque_zmtp::router::RouterSocket;
     /// # use monocoque_core::options::SocketOptions;
-    /// # use compio::net::TcpStream;
+    /// # use monocoque_core::rt::TcpStream;
     /// # async fn example() -> std::io::Result<()> {
     /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
     /// let mut opts = SocketOptions::large();

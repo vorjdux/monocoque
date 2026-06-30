@@ -20,8 +20,8 @@
 //! throughput bench.
 
 use bytes::Bytes;
-use compio::net::TcpListener;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use monocoque::rt::TcpListener;
 use monocoque::zmq::{PullFanIn, PullSocket, PushFanOut, PushSocket, SocketOptions};
 use std::sync::mpsc;
 use std::sync::{Arc, Barrier};
@@ -68,7 +68,7 @@ fn monocoque_fanout(c: &mut Criterion) {
                     let vent_payload = payload.clone();
                     let vent_barrier = barrier.clone();
                     let ventilator = thread::spawn(move || {
-                        let rt = compio::runtime::Runtime::new().unwrap();
+                        let rt = monocoque::rt::LocalRuntime::new().unwrap();
                         rt.block_on(async move {
                             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
                             port_tx.send(listener.local_addr().unwrap().port()).unwrap();
@@ -100,7 +100,7 @@ fn monocoque_fanout(c: &mut Criterion) {
                         let worker_barrier = barrier.clone();
                         let worker_elapsed = elapsed_tx.clone();
                         thread::spawn(move || {
-                            let rt = compio::runtime::Runtime::new().unwrap();
+                            let rt = monocoque::rt::LocalRuntime::new().unwrap();
                             rt.block_on(async move {
                                 let mut pull =
                                     PullSocket::connect(("127.0.0.1", port)).await.unwrap();
@@ -169,7 +169,7 @@ fn fanin(c: &mut Criterion, group_name: &str, coalesce: bool) {
                     let (elapsed_tx, elapsed_rx) = mpsc::channel::<Duration>();
 
                     let sink_thread = thread::spawn(move || {
-                        let rt = compio::runtime::Runtime::new().unwrap();
+                        let rt = monocoque::rt::LocalRuntime::new().unwrap();
                         rt.block_on(async move {
                             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
                             port_tx.send(listener.local_addr().unwrap().port()).unwrap();
@@ -201,7 +201,7 @@ fn fanin(c: &mut Criterion, group_name: &str, coalesce: bool) {
                     for _ in 0..WORKERS {
                         let worker_payload = payload.clone();
                         workers.push(thread::spawn(move || {
-                            let rt = compio::runtime::Runtime::new().unwrap();
+                            let rt = monocoque::rt::LocalRuntime::new().unwrap();
                             rt.block_on(async move {
                                 let options = if coalesce {
                                     coalescing_options()

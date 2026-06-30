@@ -12,14 +12,14 @@
 //! - **Reconnection support**: Optional endpoint storage and backoff logic
 
 use bytes::{BufMut, Bytes, BytesMut};
-use compio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
-use compio::net::TcpStream;
+use compio_io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use monocoque_core::alloc::IoArena;
 use monocoque_core::buffer::SegmentedBuffer;
 use monocoque_core::endpoint::Endpoint;
 use monocoque_core::options::SocketOptions;
 use monocoque_core::poison::PoisonGuard;
 use monocoque_core::reconnect::ReconnectState;
+use monocoque_core::rt::TcpStream;
 use std::fmt;
 use std::io;
 use std::time::Instant;
@@ -498,7 +498,7 @@ where
         }
 
         // Read from stream
-        use compio::buf::BufResult;
+        use compio_buf::BufResult;
         let slab = self.arena.alloc_mut(self.options.read_buffer_size);
 
         // Get stream reference only for I/O
@@ -517,7 +517,7 @@ where
                 ));
             }
             Some(dur) => {
-                use compio::time::timeout;
+                use monocoque_core::rt::timeout;
                 match timeout(dur, AsyncRead::read(stream, slab)).await {
                     Ok(result) => result,
                     Err(_) => {
@@ -586,14 +586,14 @@ where
         // Arm poison guard
         let guard = PoisonGuard::new(&mut self.is_poisoned);
 
-        use compio::buf::BufResult;
+        use compio_buf::BufResult;
         let buf = self.send_buffer.split().freeze();
 
         // Apply send timeout
         let BufResult(result, _) = match self.options.send_timeout {
             None => stream.write_all(buf).await,
             Some(dur) => {
-                use compio::time::timeout;
+                use monocoque_core::rt::timeout;
                 match timeout(dur, stream.write_all(buf)).await {
                     Ok(result) => result,
                     Err(_) => {
@@ -656,7 +656,7 @@ where
         // Send write_buf contents
         let buf = self.write_buf.split().freeze();
 
-        use compio::buf::BufResult;
+        use compio_buf::BufResult;
 
         // Apply send timeout from options
         let BufResult(result, _) = match self.options.send_timeout {
@@ -666,7 +666,7 @@ where
             }
             Some(dur) => {
                 // Timed mode - apply timeout
-                use compio::time::timeout;
+                use monocoque_core::rt::timeout;
                 match timeout(dur, stream.write_all(buf)).await {
                     Ok(result) => result,
                     Err(_) => {
@@ -778,11 +778,11 @@ where
         // Arm poison guard for cancellation safety.
         let guard = PoisonGuard::new(&mut self.is_poisoned);
 
-        use compio::buf::BufResult;
+        use compio_buf::BufResult;
         let BufResult(result, returned) = match self.options.send_timeout {
             None => stream.write_vectored_all(iovecs).await,
             Some(dur) => {
-                use compio::time::timeout;
+                use monocoque_core::rt::timeout;
                 match timeout(dur, stream.write_vectored_all(iovecs)).await {
                     Ok(result) => result,
                     Err(_) => {
@@ -947,8 +947,8 @@ impl SocketBase<TcpStream> {
         })?;
 
         // Apply backoff delay if we have reconnection state.
-        // Use std::thread::sleep rather than compio::time::sleep: multiple
-        // handshake timeouts (via compio::time::timeout) leave residual timer
+        // Use std::thread::sleep rather than monocoque_core::rt::sleep: multiple
+        // handshake timeouts (via monocoque_core::rt::timeout) leave residual timer
         // state that makes subsequent compio sleeps hang indefinitely.
         // Blocking sleep is safe here because the socket has no pending I/O.
         if let Some(reconnect) = &mut self.reconnect {
@@ -1030,9 +1030,10 @@ where
 }
 
 #[cfg(test)]
+#[cfg(feature = "runtime-compio")]
 mod tests {
     use super::*;
-    use compio::buf::{BufResult, IoBuf, IoBufMut};
+    use compio_buf::{BufResult, IoBuf, IoBufMut};
     use std::collections::VecDeque;
     use std::io;
     use std::sync::{Arc, Mutex};

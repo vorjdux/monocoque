@@ -8,6 +8,11 @@ Each benchmark runs sender and receiver on **separate OS threads** with separate
 `compio` runtimes, so the numbers reflect real kernel TCP/IPC round-trips, not
 cooperative task switching within a single runtime.
 
+These numbers are the default io_uring (compio) backend, which is the performance
+baseline. The tokio backend runs the identical suite (`cargo bench
+--no-default-features --features runtime-tokio,zmq`); it trades some latency for
+portability since it goes through tokio's epoll reactor instead of io_uring.
+
 Throughput timer lives on the receiver side (starts before first recv, stops
 after last recv). Latency timer wraps one send + recv + socket teardown per
 iteration, after 1 000 warmup rounds on a fresh connection.
@@ -225,7 +230,7 @@ per-iovec bookkeeping.
 
 The 32 KB default is the measured crossover on loopback: below it the copy plus
 one `write` is faster than a two-segment `writev`; at or above it, skipping the
-copy wins. On this 4-core test box vectored writes are ~1.1–1.3x for 32 KB–1 MB
+copy wins. On this 4-core test box vectored writes are ~1.1-1.3x for 32 KB-1 MB
 frames and ~30% *slower* at 16 KB, which is exactly why the threshold exists.
 Because the crossover depends on memory bandwidth and syscall cost, benchmark on
 your own hardware and adjust:
@@ -391,6 +396,9 @@ Setting HWM to 0 disables the limit (unbounded queue, use with care).
 
 ## io_uring tuning
 
+This section applies to the default compio backend. The tokio backend does not
+use io_uring, so these knobs do not apply to it.
+
 compio uses a shared io_uring ring per thread. On Linux >= 5.11 you get
 the full benefit; older kernels fall back to thread-pool I/O.
 
@@ -419,7 +427,13 @@ for _ in 0..num_cpus::get() {
 }
 ```
 
-Avoid sharing sockets across threads; monocoque sockets are `!Send`.
+For backend-agnostic code, `monocoque::rt::LocalRuntime::new()?.block_on(...)`
+builds the right single-threaded runtime for whichever backend is enabled (a
+compio runtime, or a current-thread tokio runtime in a `LocalSet`).
+
+Avoid sharing sockets across threads; monocoque sockets are `!Send`. This holds
+on both backends: the tokio backend uses a current-thread runtime, not the
+multi-threaded work-stealing scheduler.
 
 ---
 

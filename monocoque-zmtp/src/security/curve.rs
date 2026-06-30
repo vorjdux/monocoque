@@ -35,7 +35,7 @@ use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
     aead::{Aead, KeyInit, OsRng},
 };
-use compio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use compio_io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use crypto_box::{
     PublicKey as SalsaPublicKey, SalsaBox, SecretKey as SalsaSecretKey,
     aead::generic_array::GenericArray,
@@ -301,7 +301,7 @@ async fn read_zmtp_cmd<S>(
 where
     S: AsyncRead + Unpin,
 {
-    use compio::buf::BufResult;
+    use compio_buf::BufResult;
     use monocoque_core::timeout::read_exact_with_timeout;
 
     let BufResult(r, flags_buf) = read_exact_with_timeout(stream, [0u8; 1], timeout)
@@ -358,7 +358,7 @@ async fn write_zmtp_cmd<S>(
 where
     S: AsyncWrite + Unpin,
 {
-    use compio::buf::BufResult;
+    use compio_buf::BufResult;
     use monocoque_core::timeout::write_all_with_timeout;
 
     let len = body.len();
@@ -1489,7 +1489,7 @@ async fn send_zmtp_error<S>(stream: &mut S, reason: &str)
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    use compio::buf::BufResult;
+    use compio_buf::BufResult;
 
     // Cap reason at 248 bytes: body = 6 ("\x05ERROR") + 1 (len byte) + reason ≤ 255 (short-frame limit)
     let reason_bytes = reason.as_bytes();
@@ -1512,9 +1512,10 @@ where
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[cfg(feature = "runtime-compio")]
 mod tests {
     use super::*;
-    use compio::buf::{BufResult, IoBuf, IoBufMut};
+    use compio_buf::{BufResult, IoBuf, IoBufMut};
     use std::collections::VecDeque;
     use std::io;
 
