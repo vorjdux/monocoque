@@ -74,7 +74,7 @@ results, and tuning guidance.
 monocoque-rs = { version = "0.1", features = ["zmq"] }
 # Drives the default io_uring backend and provides the #[compio::main] macro.
 # To run on tokio instead, see "Runtime backends" below.
-compio = { version = "0.13", features = ["runtime", "macros"] }
+compio = { version = "0.10", features = ["runtime", "macros"] }
 ```
 
 ```rust
