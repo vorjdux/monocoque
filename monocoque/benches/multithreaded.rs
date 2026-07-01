@@ -17,6 +17,14 @@
 
 use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+
+// Identifies which runtime backend this build benchmarks, so compio and tokio
+// results land under distinct criterion ids instead of overwriting each other.
+const BENCH_BACKEND: &str = if cfg!(feature = "runtime-tokio") {
+    "tokio"
+} else {
+    "compio"
+};
 use monocoque::rt::TcpListener;
 use monocoque::zmq::{DealerSocket, RouterSocket, SocketOptions};
 use std::sync::Arc;
@@ -33,7 +41,7 @@ const BATCH_SIZE: usize = 100; // Process in batches to avoid deadlock
 /// This tests horizontal scalability and lock-free architecture.
 #[allow(dead_code)]
 fn monocoque_multithreaded_dealers(c: &mut Criterion) {
-    let mut group = c.benchmark_group("multithreaded/monocoque/dealers");
+    let mut group = c.benchmark_group(format!("multithreaded/monocoque-{BENCH_BACKEND}/dealers"));
     group.measurement_time(Duration::from_secs(20));
     group.sample_size(10); // Minimum required by criterion
 
@@ -160,7 +168,9 @@ fn monocoque_multithreaded_dealers(c: &mut Criterion) {
 ///
 /// This tests scalability when each thread has completely isolated communication.
 fn monocoque_multithreaded_independent_pairs(c: &mut Criterion) {
-    let mut group = c.benchmark_group("multithreaded/monocoque/independent_pairs");
+    let mut group = c.benchmark_group(format!(
+        "multithreaded/monocoque-{BENCH_BACKEND}/independent_pairs"
+    ));
     group.measurement_time(Duration::from_secs(20));
     group.sample_size(10);
 
@@ -255,7 +265,9 @@ fn monocoque_multithreaded_independent_pairs(c: &mut Criterion) {
 /// Measures how efficiently threads utilize CPU cores (msg/sec per core).
 #[allow(dead_code)]
 fn monocoque_core_efficiency(c: &mut Criterion) {
-    let mut group = c.benchmark_group("multithreaded/monocoque/core_efficiency");
+    let mut group = c.benchmark_group(format!(
+        "multithreaded/monocoque-{BENCH_BACKEND}/core_efficiency"
+    ));
     group.measurement_time(Duration::from_secs(20));
     group.sample_size(10);
 

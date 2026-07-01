@@ -21,6 +21,14 @@
 
 use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+
+// Identifies which runtime backend this build benchmarks, so compio and tokio
+// results land under distinct criterion ids instead of overwriting each other.
+const BENCH_BACKEND: &str = if cfg!(feature = "runtime-tokio") {
+    "tokio"
+} else {
+    "compio"
+};
 use monocoque::rt::TcpListener;
 use monocoque::zmq::{PullFanIn, PullSocket, PushFanOut, PushSocket, SocketOptions};
 use std::sync::mpsc;
@@ -47,7 +55,7 @@ fn coalescing_options() -> SocketOptions {
 /// slowest worker's window, i.e. when the last message of the batch arrives.
 fn monocoque_fanout(c: &mut Criterion) {
     monocoque::dev_tracing::init_tracing();
-    let mut group = c.benchmark_group("fanout_fanin/monocoque/fanout");
+    let mut group = c.benchmark_group(format!("fanout_fanin/monocoque-{BENCH_BACKEND}/fanout"));
     group.measurement_time(Duration::from_secs(10));
     group.sample_size(10);
 

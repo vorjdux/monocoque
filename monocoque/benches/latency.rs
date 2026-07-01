@@ -12,6 +12,14 @@
 
 use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+
+// Identifies which runtime backend this build benchmarks, so compio and tokio
+// results land under distinct criterion ids instead of overwriting each other.
+const BENCH_BACKEND: &str = if cfg!(feature = "runtime-tokio") {
+    "tokio"
+} else {
+    "compio"
+};
 use monocoque::rt::TcpListener;
 use monocoque::zmq::{RepSocket, ReqSocket, SocketOptions};
 use std::sync::mpsc;
@@ -26,7 +34,7 @@ const WARMUP_ROUNDS: usize = 1_000;
 /// Server binds on its own OS thread. The bench thread connects, does warmup,
 /// then each `iter_batched` iteration measures one round-trip.
 fn monocoque_req_rep_latency(c: &mut Criterion) {
-    let mut group = c.benchmark_group("latency/monocoque/req_rep");
+    let mut group = c.benchmark_group(format!("latency/monocoque-{BENCH_BACKEND}/req_rep"));
     group.measurement_time(Duration::from_secs(10));
     group.sample_size(100);
 

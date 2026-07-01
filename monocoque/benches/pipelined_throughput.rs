@@ -17,6 +17,14 @@
 
 use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+
+// Identifies which runtime backend this build benchmarks, so compio and tokio
+// results land under distinct criterion ids instead of overwriting each other.
+const BENCH_BACKEND: &str = if cfg!(feature = "runtime-tokio") {
+    "tokio"
+} else {
+    "compio"
+};
 use monocoque::rt::TcpListener;
 use monocoque::zmq::{DealerSocket, RouterSocket, SocketOptions};
 use std::sync::mpsc;
@@ -33,7 +41,7 @@ const BATCH_SIZE: usize = 100;
 /// Both use `send_buffered + flush` to minimize syscall overhead.
 fn monocoque_dealer_router_pipelined(c: &mut Criterion) {
     monocoque::dev_tracing::init_tracing();
-    let mut group = c.benchmark_group("pipelined/monocoque/dealer_router");
+    let mut group = c.benchmark_group(format!("pipelined/monocoque-{BENCH_BACKEND}/dealer_router"));
     group.measurement_time(Duration::from_secs(20));
     group.sample_size(10);
 

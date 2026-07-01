@@ -13,6 +13,14 @@
 use bytes::Bytes;
 #[cfg(unix)]
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+
+// Identifies which runtime backend this build benchmarks, so compio and tokio
+// results land under distinct criterion ids instead of overwriting each other.
+const BENCH_BACKEND: &str = if cfg!(feature = "runtime-tokio") {
+    "tokio"
+} else {
+    "compio"
+};
 #[cfg(unix)]
 use monocoque::rt::{TcpListener, UnixListener};
 #[cfg(unix)]
@@ -53,7 +61,7 @@ fn ipc_path(label: &str) -> String {
 ///
 /// Server on its own thread; client connects, warms up, measures one round-trip.
 fn monocoque_tcp_latency(c: &mut Criterion) {
-    let mut group = c.benchmark_group("ipc_vs_tcp/monocoque/tcp_latency");
+    let mut group = c.benchmark_group(format!("ipc_vs_tcp/monocoque-{BENCH_BACKEND}/tcp_latency"));
     group.measurement_time(Duration::from_secs(10));
     group.sample_size(100);
 
@@ -144,7 +152,7 @@ fn monocoque_tcp_latency(c: &mut Criterion) {
 /// Server on its own thread; client connects via a unique socket path, warms up,
 /// measures one round-trip.
 fn monocoque_ipc_latency(c: &mut Criterion) {
-    let mut group = c.benchmark_group("ipc_vs_tcp/monocoque/ipc_latency");
+    let mut group = c.benchmark_group(format!("ipc_vs_tcp/monocoque-{BENCH_BACKEND}/ipc_latency"));
     group.measurement_time(Duration::from_secs(10));
     group.sample_size(100);
 
@@ -237,7 +245,9 @@ fn monocoque_ipc_latency(c: &mut Criterion) {
 /// PULL binds in a separate thread. PUSH connects in the bench thread.
 /// Timer on PULL side.
 fn monocoque_tcp_throughput(c: &mut Criterion) {
-    let mut group = c.benchmark_group("ipc_vs_tcp/monocoque/tcp_throughput");
+    let mut group = c.benchmark_group(format!(
+        "ipc_vs_tcp/monocoque-{BENCH_BACKEND}/tcp_throughput"
+    ));
     group.measurement_time(Duration::from_secs(15));
     group.sample_size(10);
 
@@ -305,7 +315,9 @@ fn monocoque_tcp_throughput(c: &mut Criterion) {
 /// PULL binds in a separate thread. PUSH connects in the bench thread.
 /// Timer on PULL side.
 fn monocoque_ipc_throughput(c: &mut Criterion) {
-    let mut group = c.benchmark_group("ipc_vs_tcp/monocoque/ipc_throughput");
+    let mut group = c.benchmark_group(format!(
+        "ipc_vs_tcp/monocoque-{BENCH_BACKEND}/ipc_throughput"
+    ));
     group.measurement_time(Duration::from_secs(15));
     group.sample_size(10);
 

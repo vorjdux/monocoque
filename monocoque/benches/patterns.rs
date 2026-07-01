@@ -22,6 +22,14 @@
 
 use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+
+// Identifies which runtime backend this build benchmarks, so compio and tokio
+// results land under distinct criterion ids instead of overwriting each other.
+const BENCH_BACKEND: &str = if cfg!(feature = "runtime-tokio") {
+    "tokio"
+} else {
+    "compio"
+};
 use monocoque::zmq::{PubSocket, SocketOptions, SubSocket};
 use std::sync::mpsc;
 use std::thread;
@@ -126,7 +134,7 @@ async fn recv_n(sub: &mut SubSocket, n: usize) {
 
 fn monocoque_pubsub_fanout(c: &mut Criterion) {
     monocoque::dev_tracing::init_tracing();
-    let mut group = c.benchmark_group("patterns/monocoque/pubsub_fanout");
+    let mut group = c.benchmark_group(format!("patterns/monocoque-{BENCH_BACKEND}/pubsub_fanout"));
     for &num_subs in FANOUT_SUBSCRIBERS {
         group.throughput(Throughput::Elements((MESSAGE_COUNT * num_subs) as u64));
         group.bench_with_input(
@@ -295,7 +303,9 @@ fn run_monocoque_topic_filtering(iters: u64) -> Duration {
 
 fn monocoque_topic_filtering(c: &mut Criterion) {
     monocoque::dev_tracing::init_tracing();
-    let mut group = c.benchmark_group("patterns/monocoque/topic_filtering");
+    let mut group = c.benchmark_group(format!(
+        "patterns/monocoque-{BENCH_BACKEND}/topic_filtering"
+    ));
     group.throughput(Throughput::Elements(MESSAGE_COUNT as u64));
     group.bench_function("filter_10_percent", |b| {
         b.iter_custom(run_monocoque_topic_filtering);
