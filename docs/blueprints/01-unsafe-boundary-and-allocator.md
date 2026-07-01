@@ -2,7 +2,7 @@
 
 # Unsafe Boundary & Allocator
 
-_How Monocoque uses `unsafe` without breaking Rust’s guarantees_
+_How Monocoque uses `unsafe` without breaking Rust's guarantees_
 
 ---
 
@@ -12,7 +12,7 @@ Monocoque needs unsafe code for exactly one reason:
 
 > `io_uring` requires that memory passed to the kernel **does not move** while an operation is in flight.
 
-Rust can’t express “this pointer stays stable while the kernel owns it” purely in the type system without either:
+Rust can't express "this pointer stays stable while the kernel owns it" purely in the type system without either:
 
 -   pinning + bespoke buffer types, or
 -   an ownership-passing I/O API that enforces exclusivity (what `compio` does)
@@ -54,7 +54,7 @@ must be safe Rust only.
 
 -   points to a stable allocation
 -   can be written into by `io_uring`
--   later “freezes” into `Bytes` for zero-copy usage
+-   later "freezes" into `Bytes` for zero-copy usage
 
 Conceptually:
 
@@ -154,7 +154,7 @@ Guaranteed by:
 
 ---
 
-## 5. IoBuf / IoBufMut “Pre-Flight” Checklist
+## 5. IoBuf / IoBufMut "Pre-Flight" Checklist
 
 This is the critical correctness surface.
 
@@ -200,7 +200,7 @@ The implementation must ensure:
 
 ### Footgun 5 - Reuse While Still Referenced (Use-after-free)
 
--   Fixed by refcount behavior of `Bytes` owner or arena “graveyard”
+-   Fixed by refcount behavior of `Bytes` owner or arena "graveyard"
 -   Reuse only allowed when strong count indicates no outstanding views
 
 ---
@@ -236,7 +236,7 @@ _(Miri may not love io_uring runtime paths, but unit tests for slab logic should
 
 ---
 
-## 8. What “Safe Enough” Looks Like
+## 8. What "Safe Enough" Looks Like
 
 You are safe if:
 

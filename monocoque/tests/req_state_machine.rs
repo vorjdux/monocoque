@@ -8,14 +8,23 @@ use monocoque_zmtp::rep::RepSocket;
 use monocoque_zmtp::req::ReqSocket;
 use std::io;
 
+/// Drive an async test body on whichever runtime backend is active.
+fn block_on<F: std::future::Future<Output = io::Result<()>>>(f: F) -> io::Result<()> {
+    monocoque::rt::LocalRuntime::new()?.block_on(f)
+}
+
 /// Test strict REQ state machine - send→send should fail
-#[compio::test]
-async fn test_req_strict_send_send_fails() -> io::Result<()> {
+#[test]
+fn test_req_strict_send_send_fails() -> io::Result<()> {
+    block_on(test_req_strict_send_send_fails_impl())
+}
+
+async fn test_req_strict_send_send_fails_impl() -> io::Result<()> {
     // Setup REP server
-    let listener = compio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let listener = monocoque::rt::TcpListener::bind("127.0.0.1:0").await?;
     let server_addr = listener.local_addr()?;
 
-    let server_task = compio::runtime::spawn(async move {
+    let server_task = monocoque::rt::spawn(async move {
         let (stream, _) = listener.accept().await?;
         let mut rep_socket = RepSocket::new(stream).await?;
 
@@ -27,10 +36,10 @@ async fn test_req_strict_send_send_fails() -> io::Result<()> {
     });
 
     // Give server time to start
-    compio::time::sleep(std::time::Duration::from_millis(50)).await;
+    monocoque::rt::sleep(std::time::Duration::from_millis(50)).await;
 
     // Create REQ socket with STRICT mode (req_relaxed = false, which is default)
-    let stream = compio::net::TcpStream::connect(server_addr).await?;
+    let stream = monocoque::rt::TcpStream::connect(server_addr).await?;
     let options = SocketOptions {
         req_relaxed: false,
         ..Default::default()
@@ -53,19 +62,23 @@ async fn test_req_strict_send_send_fails() -> io::Result<()> {
 
     // Clean up
     let _reply = req_socket.recv().await?;
-    server_task.await?;
+    monocoque::rt::join(server_task).await?;
 
     Ok(())
 }
 
 /// Test strict REQ state machine - recv→recv should fail
-#[compio::test]
-async fn test_req_strict_recv_recv_fails() -> io::Result<()> {
+#[test]
+fn test_req_strict_recv_recv_fails() -> io::Result<()> {
+    block_on(test_req_strict_recv_recv_fails_impl())
+}
+
+async fn test_req_strict_recv_recv_fails_impl() -> io::Result<()> {
     // Setup REP server
-    let listener = compio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let listener = monocoque::rt::TcpListener::bind("127.0.0.1:0").await?;
     let server_addr = listener.local_addr()?;
 
-    let server_task = compio::runtime::spawn(async move {
+    let server_task = monocoque::rt::spawn(async move {
         let (stream, _) = listener.accept().await?;
         let mut rep_socket = RepSocket::new(stream).await?;
 
@@ -76,10 +89,10 @@ async fn test_req_strict_recv_recv_fails() -> io::Result<()> {
         Ok::<(), io::Error>(())
     });
 
-    compio::time::sleep(std::time::Duration::from_millis(50)).await;
+    monocoque::rt::sleep(std::time::Duration::from_millis(50)).await;
 
     // Create REQ socket in strict mode
-    let stream = compio::net::TcpStream::connect(server_addr).await?;
+    let stream = monocoque::rt::TcpStream::connect(server_addr).await?;
     let mut req_socket = ReqSocket::new(stream).await?; // Default is strict
 
     // Send and recv - normal flow
@@ -97,7 +110,7 @@ async fn test_req_strict_recv_recv_fails() -> io::Result<()> {
     assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     assert!(err.to_string().contains("Idle") || err.to_string().contains("send"));
 
-    server_task.await?;
+    monocoque::rt::join(server_task).await?;
     Ok(())
 }
 
@@ -106,13 +119,17 @@ async fn test_req_strict_recv_recv_fails() -> io::Result<()> {
 /// Relaxed mode skips the strict enforcement that prevents send-after-send.
 /// Full request pipelining (N sends then N recvs) is not yet implemented  -
 /// each `recv()` still transitions to Idle, so send/recv still need to interleave.
-#[compio::test]
-async fn test_req_relaxed_send_send_succeeds() -> io::Result<()> {
+#[test]
+fn test_req_relaxed_send_send_succeeds() -> io::Result<()> {
+    block_on(test_req_relaxed_send_send_succeeds_impl())
+}
+
+async fn test_req_relaxed_send_send_succeeds_impl() -> io::Result<()> {
     // Setup REP server that handles multiple requests
-    let listener = compio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let listener = monocoque::rt::TcpListener::bind("127.0.0.1:0").await?;
     let server_addr = listener.local_addr()?;
 
-    let server_task = compio::runtime::spawn(async move {
+    let server_task = monocoque::rt::spawn(async move {
         let (stream, _) = listener.accept().await?;
         let mut rep_socket = RepSocket::new(stream).await?;
 
@@ -125,9 +142,9 @@ async fn test_req_relaxed_send_send_succeeds() -> io::Result<()> {
         Ok::<(), io::Error>(())
     });
 
-    compio::time::sleep(std::time::Duration::from_millis(50)).await;
+    monocoque::rt::sleep(std::time::Duration::from_millis(50)).await;
 
-    let stream = compio::net::TcpStream::connect(server_addr).await?;
+    let stream = monocoque::rt::TcpStream::connect(server_addr).await?;
     let options = SocketOptions {
         req_relaxed: true,
         ..Default::default()
@@ -145,18 +162,22 @@ async fn test_req_relaxed_send_send_succeeds() -> io::Result<()> {
     let reply2 = req_socket.recv().await?;
     assert!(reply2.is_some());
 
-    server_task.await?;
+    monocoque::rt::join(server_task).await?;
     Ok(())
 }
 
 /// Test strict REQ mode - normal alternating send/recv works
-#[compio::test]
-async fn test_req_strict_normal_flow() -> io::Result<()> {
+#[test]
+fn test_req_strict_normal_flow() -> io::Result<()> {
+    block_on(test_req_strict_normal_flow_impl())
+}
+
+async fn test_req_strict_normal_flow_impl() -> io::Result<()> {
     // Setup REP server
-    let listener = compio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let listener = monocoque::rt::TcpListener::bind("127.0.0.1:0").await?;
     let server_addr = listener.local_addr()?;
 
-    let server_task = compio::runtime::spawn(async move {
+    let server_task = monocoque::rt::spawn(async move {
         let (stream, _) = listener.accept().await?;
         let mut rep_socket = RepSocket::new(stream).await?;
 
@@ -173,10 +194,10 @@ async fn test_req_strict_normal_flow() -> io::Result<()> {
         Ok::<(), io::Error>(())
     });
 
-    compio::time::sleep(std::time::Duration::from_millis(50)).await;
+    monocoque::rt::sleep(std::time::Duration::from_millis(50)).await;
 
     // Create REQ socket in strict mode
-    let stream = compio::net::TcpStream::connect(server_addr).await?;
+    let stream = monocoque::rt::TcpStream::connect(server_addr).await?;
     let mut req_socket = ReqSocket::new(stream).await?;
 
     // Proper alternating send→recv→send→recv should work
@@ -188,18 +209,22 @@ async fn test_req_strict_normal_flow() -> io::Result<()> {
         assert_eq!(reply[0], Bytes::from(format!("reply{i}")));
     }
 
-    server_task.await?;
+    monocoque::rt::join(server_task).await?;
     Ok(())
 }
 
 /// Test REQ correlation mode - request IDs are validated
-#[compio::test]
-async fn test_req_correlation_mode() -> io::Result<()> {
+#[test]
+fn test_req_correlation_mode() -> io::Result<()> {
+    block_on(test_req_correlation_mode_impl())
+}
+
+async fn test_req_correlation_mode_impl() -> io::Result<()> {
     // Setup REP server that echoes back correlation IDs
-    let listener = compio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let listener = monocoque::rt::TcpListener::bind("127.0.0.1:0").await?;
     let server_addr = listener.local_addr()?;
 
-    let server_task = compio::runtime::spawn(async move {
+    let server_task = monocoque::rt::spawn(async move {
         let (stream, _) = listener.accept().await?;
         let mut rep_socket = RepSocket::new(stream).await?;
 
@@ -212,10 +237,10 @@ async fn test_req_correlation_mode() -> io::Result<()> {
         Ok::<(), io::Error>(())
     });
 
-    compio::time::sleep(std::time::Duration::from_millis(50)).await;
+    monocoque::rt::sleep(std::time::Duration::from_millis(50)).await;
 
     // Create REQ socket with correlation enabled
-    let stream = compio::net::TcpStream::connect(server_addr).await?;
+    let stream = monocoque::rt::TcpStream::connect(server_addr).await?;
     let options = SocketOptions {
         req_correlate: true,
         ..Default::default()
@@ -232,6 +257,6 @@ async fn test_req_correlation_mode() -> io::Result<()> {
     assert_eq!(reply.len(), 1);
     assert_eq!(reply[0], Bytes::from("payload"));
 
-    server_task.await?;
+    monocoque::rt::join(server_task).await?;
     Ok(())
 }

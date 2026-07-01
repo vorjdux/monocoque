@@ -46,6 +46,7 @@ pub mod options;
 pub mod poison;
 pub mod reconnect;
 pub mod router;
+pub mod rt;
 pub mod socket_type;
 pub mod subscription;
 pub mod tcp;

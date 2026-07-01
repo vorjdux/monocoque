@@ -255,7 +255,7 @@ The hub enforces this contract.
 
 ## 12. Safety Analysis (Your Original Concern)
 
-> “Will unsafe code break Rust’s guarantees?”
+> "Will unsafe code break Rust's guarantees?"
 
 ### Phase 3 answer: **No**
 

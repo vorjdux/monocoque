@@ -1,6 +1,6 @@
 # Contributing to Monocoque
 
-Thanks for taking an interest. Monocoque is a ZeroMQ-compatible messaging runtime written in pure Rust on io_uring. It is young, so bug reports, interop findings, protocol coverage, docs, and performance work are all useful.
+Thanks for taking an interest. Monocoque is a ZeroMQ-compatible messaging runtime written in pure Rust, running on io_uring (via compio) by default with an optional tokio backend. It is young, so bug reports, interop findings, protocol coverage, docs, and performance work are all useful.
 
 This guide covers the layout, how to build and test, what CI expects, and a few rules that keep the codebase coherent.
 
@@ -19,7 +19,7 @@ If you are planning a larger change, open an issue first so we can agree on the 
 The workspace has three crates plus a separate fuzzing crate.
 
 - `monocoque` is the public crate. It is the only API surface users depend on, and where the examples, benches, and interop tests live.
-- `monocoque-core` is internal. It is the protocol-agnostic kernel: transports, buffers, backpressure, and the io_uring I/O engine.
+- `monocoque-core` is internal. It is the protocol-agnostic kernel: transports, buffers, backpressure, and the runtime facade (`rt`) that selects the io_uring or tokio I/O engine.
 - `monocoque-zmtp` is internal. It is the ZMTP 3.1 implementation. Do not depend on it directly, the public API goes through `monocoque`.
 - `monocoque-fuzz` holds the fuzz targets and is excluded from the workspace.
 
@@ -43,10 +43,16 @@ sudo apt-get install -y libzmq3-dev
 
 ## Building and testing
 
-Run the test suite the way CI does:
+Run the test suite the way CI does. The two runtime backends are mutually
+exclusive, so each is tested on its own rather than with `--all-features`:
 
 ```
-cargo test --workspace --all-features
+# default backend (io_uring via compio)
+cargo test --workspace --features zmq
+
+# tokio backend (libs plus the tokio smoke test)
+cargo test --workspace --lib --no-default-features --features runtime-tokio,zmq
+cargo test -p monocoque-rs --test tokio_runtime --no-default-features --features runtime-tokio,zmq
 ```
 
 Interop tests against libzmq, which need the library installed above:
@@ -73,8 +79,10 @@ scripts/run_fuzzer.sh
 A pull request needs to pass all of these, so it saves a round trip to run them locally first:
 
 - Formatting: `cargo fmt --all -- --check`
-- Lints, with warnings treated as errors: `cargo clippy --workspace --all-features -- -D warnings`
-- Tests on each supported OS: `cargo test --workspace --all-features`
+- Lints on both backends, with warnings treated as errors:
+  `cargo clippy --workspace --all-targets --features zmq -- -D warnings` and
+  `cargo clippy --workspace --lib --benches --no-default-features --features runtime-tokio,zmq -- -D warnings`
+- Tests on both backends (see above)
 - A build on the MSRV (1.85): `cargo build --workspace`
 - Docs build with no warnings: `cargo doc --no-deps --workspace`
 - A security audit of dependencies

@@ -2,9 +2,9 @@
 
 use super::common::channel_to_io_error;
 use bytes::Bytes;
-use compio::net::{TcpListener, TcpStream};
 use monocoque_core::monitor::{SocketEventSender, SocketMonitor, create_monitor};
 use monocoque_core::options::SocketOptions;
+use monocoque_core::rt::{TcpListener, TcpStream};
 use monocoque_zmtp::SocketType;
 use monocoque_zmtp::rep::RepSocket as InternalRep;
 use std::io;
@@ -29,7 +29,7 @@ use std::io;
 ///
 /// ```rust,no_run
 /// use monocoque::zmq::RepSocket;
-/// use compio::net::TcpListener;
+/// use monocoque_core::rt::TcpListener;
 /// use bytes::Bytes;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -51,7 +51,7 @@ use std::io;
 /// ```
 pub struct RepSocket<S = TcpStream>
 where
-    S: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+    S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
 {
     inner: InternalRep<S>,
     monitor: Option<SocketEventSender>,
@@ -77,7 +77,7 @@ impl RepSocket {
     /// # }
     /// ```
     pub async fn bind(
-        addr: impl compio::net::ToSocketAddrsAsync,
+        addr: impl monocoque_core::rt::ToSocketAddrs,
     ) -> io::Result<(TcpListener, Self)> {
         let listener = TcpListener::bind(addr).await?;
         let (stream, _) = listener.accept().await?;
@@ -87,7 +87,7 @@ impl RepSocket {
 
     /// Bind with custom socket options.
     pub async fn bind_with_options(
-        addr: impl compio::net::ToSocketAddrsAsync,
+        addr: impl monocoque_core::rt::ToSocketAddrs,
         options: SocketOptions,
     ) -> io::Result<(TcpListener, Self)> {
         let listener = TcpListener::bind(addr).await?;
@@ -123,7 +123,7 @@ impl RepSocket {
         options: monocoque_core::options::SocketOptions,
     ) -> io::Result<RepSocket<Stream>>
     where
-        Stream: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+        Stream: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
     {
         Ok(RepSocket {
             inner: InternalRep::with_options(stream, options).await?,
@@ -135,7 +135,7 @@ impl RepSocket {
 // Generic impl - works with any stream type
 impl<S> RepSocket<S>
 where
-    S: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+    S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
 {
     /// Enable monitoring for this socket.
     ///
@@ -271,9 +271,9 @@ where
 
 // Unix-specific impl for IPC support
 #[cfg(unix)]
-impl RepSocket<compio::net::UnixStream> {
+impl RepSocket<monocoque_core::rt::UnixStream> {
     /// Create a REP socket from an existing Unix domain socket stream (IPC).
-    pub async fn from_unix_stream(stream: compio::net::UnixStream) -> io::Result<Self> {
+    pub async fn from_unix_stream(stream: monocoque_core::rt::UnixStream) -> io::Result<Self> {
         Ok(Self {
             inner: InternalRep::new(stream).await?,
             monitor: None,
@@ -284,7 +284,7 @@ impl RepSocket<compio::net::UnixStream> {
     ///
     /// This method provides full control over socket behavior through SocketOptions.
     pub async fn from_unix_stream_with_options(
-        stream: compio::net::UnixStream,
+        stream: monocoque_core::rt::UnixStream,
         options: monocoque_core::options::SocketOptions,
     ) -> io::Result<Self> {
         Ok(Self {

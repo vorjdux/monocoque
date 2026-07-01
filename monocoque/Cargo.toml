@@ -6,7 +6,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "High-performance ZeroMQ-compatible messaging runtime built on io_uring"
+description = "High-performance ZeroMQ-compatible messaging runtime, io_uring by default with an optional tokio backend"
 homepage = "https://github.com/vorjdux/monocoque"
 documentation = "https://docs.rs/monocoque-rs"
 readme = "../README.md"
@@ -19,19 +19,19 @@ name = "monocoque"
 # Examples
 [[example]]
 name = "api_demo"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "bench_changes"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "handshake_test"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "hello_dealer"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[bench]]
 name = "throughput"
@@ -88,201 +88,205 @@ name = "allocation"
 harness = false
 
 [[example]]
-name = "protocol_namespaces"
+name = "runtime_backends"
 required-features = ["zmq"]
+
+[[example]]
+name = "protocol_namespaces"
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "pubsub_events"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "proxy_broker"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "proxy_steerable"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "pubsub_multi_compio"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "multi_pub_minimal"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "router_dealer_basic"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "router_worker_pool"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "pipeline_worker_pool"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "recv_into_zero_alloc"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 # Interoperability examples (manual verification)
 [[example]]
 name = "interop_dealer_libzmq"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "interop_router_libzmq"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "interop_pubsub_libzmq"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "xpub_subscription_logging"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "xsub_dynamic_subscription"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "xpub_xsub_broker"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "plain_auth_demo"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "curve_demo"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "authenticated_req_rep"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "debug_handshake_timing"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "debug_rep_server"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "endpoint_parsing"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "hwm_enforcement_demo"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "inproc_demo"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "inproc_pair_demo"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "interop_rep_libzmq"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "interop_req_libzmq"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "ipc_transport"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "monitoring"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "multi_pub_test"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "multi_sub_client"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "multi_subscriber"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "paranoid_pirate"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "paranoid_pirate_proxy"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "paranoid_pirate_simple"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "poison_guard_demo"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "pubsub_events_new"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "reconnection_demo"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "rep_server"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "req_client"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "router_identity"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "simple_rep_server"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "simple_req_client"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "simple_req_rep"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "socket_introspection"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "socket_monitoring"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "stream_sink_adapters"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "tcp_and_ipc_demo"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 [[example]]
 name = "zap_server_demo"
-required-features = ["zmq"]
+required-features = ["zmq", "runtime-compio"]
 
 # Integration tests with libzmq
 [[test]]
@@ -326,12 +330,15 @@ workspace = true
 
 [dependencies]
 # Internal implementation crates (not exposed)
-monocoque-core = { version = "0.1.5", path = "../monocoque-core", package = "monocoque-rs-core" }
-monocoque-zmtp = { version = "0.1.5", path = "../monocoque-zmtp", package = "monocoque-rs-zmtp", optional = true }
+monocoque-core = { version = "0.1.6", path = "../monocoque-core", package = "monocoque-rs-core", default-features = false }
+monocoque-zmtp = { version = "0.1.6", path = "../monocoque-zmtp", package = "monocoque-rs-zmtp", optional = true, default-features = false }
 
 # Re-export dependencies for user convenience
 bytes.workspace = true
-compio.workspace = true
+compio-io.workspace = true
+compio-buf.workspace = true
+compio = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
@@ -349,7 +356,19 @@ hex.workspace = true
 async-trait.workspace = true
 
 [features]
-default = []
+default = ["runtime-compio"]
+
+# Runtime backend selection (exactly one). See monocoque-rs-core for details.
+runtime-compio = [
+    "dep:compio",
+    "monocoque-core/runtime-compio",
+    "monocoque-zmtp?/runtime-compio",
+]
+runtime-tokio = [
+    "dep:tokio",
+    "monocoque-core/runtime-tokio",
+    "monocoque-zmtp?/runtime-tokio",
+]
 
 # Protocol implementations (opt-in)
 zmq = ["dep:monocoque-zmtp", "dep:flume"]

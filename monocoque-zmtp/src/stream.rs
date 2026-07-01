@@ -51,9 +51,9 @@
 //! ```
 
 use bytes::Bytes;
-use compio::net::{OwnedReadHalf, OwnedWriteHalf, TcpListener, TcpStream};
 use flume::{Receiver, Sender};
 use monocoque_core::options::SocketOptions;
+use monocoque_core::rt::{OwnedReadHalf, OwnedWriteHalf, TcpListener};
 use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
@@ -80,11 +80,11 @@ type InboundMsg = Vec<Bytes>; // [routing_id, empty, data]
 /// disconnect notification `[id, "", ""]` when the connection closes.
 async fn peer_reader(
     routing_id: RoutingId,
-    mut reader: OwnedReadHalf<TcpStream>,
+    mut reader: OwnedReadHalf,
     inbound: Sender<InboundMsg>,
 ) {
-    use compio::buf::BufResult;
-    use compio::io::AsyncRead;
+    use compio_buf::BufResult;
+    use compio_io::AsyncRead;
 
     // Connection notification
     let _ = inbound
@@ -119,9 +119,9 @@ async fn peer_reader(
 }
 
 /// Writes raw bytes from the per-peer send channel to the TCP connection.
-async fn peer_writer(mut writer: OwnedWriteHalf<TcpStream>, outbound: Receiver<Bytes>) {
-    use compio::buf::BufResult;
-    use compio::io::AsyncWriteExt;
+async fn peer_writer(mut writer: OwnedWriteHalf, outbound: Receiver<Bytes>) {
+    use compio_buf::BufResult;
+    use compio_io::AsyncWriteExt;
 
     while let Ok(data) = outbound.recv_async().await {
         let BufResult(res, _) = writer.write_all(data.to_vec()).await;
@@ -169,7 +169,7 @@ impl StreamSocket {
     /// # Errors
     ///
     /// Returns an error if the address cannot be bound (e.g., port in use).
-    pub async fn bind(addr: impl compio::net::ToSocketAddrsAsync) -> io::Result<Self> {
+    pub async fn bind(addr: impl monocoque_core::rt::ToSocketAddrs) -> io::Result<Self> {
         let listener = TcpListener::bind(addr).await?;
         debug!("[STREAM] Bound to {}", listener.local_addr()?);
         let (tx, rx) = flume::unbounded();
@@ -213,10 +213,10 @@ impl StreamSocket {
         // Spawn reader.
         let inbound = self.inbound_tx.clone();
         let rid = routing_id.clone();
-        compio::runtime::spawn(peer_reader(rid, read_half, inbound)).detach();
+        monocoque_core::rt::spawn_detached(peer_reader(rid, read_half, inbound));
 
         // Spawn writer.
-        compio::runtime::spawn(peer_writer(write_half, out_rx)).detach();
+        monocoque_core::rt::spawn_detached(peer_writer(write_half, out_rx));
 
         debug!("[STREAM] Peer {:?} registered", routing_id);
         Ok(routing_id)

@@ -21,10 +21,10 @@
 
 use crate::base::SocketBase;
 use bytes::Bytes;
-use compio::io::{AsyncRead, AsyncWrite};
-use compio::net::TcpStream;
+use compio_io::{AsyncRead, AsyncWrite};
 use monocoque_core::endpoint::Endpoint;
 use monocoque_core::options::SocketOptions;
+use monocoque_core::rt::TcpStream;
 use monocoque_core::subscription::{SubscriptionEvent, SubscriptionTrie};
 use smallvec::SmallVec;
 use std::io;
@@ -49,9 +49,8 @@ use crate::session::SocketType;
 /// use monocoque_zmtp::xsub::XSubSocket;
 /// use bytes::Bytes;
 ///
-/// #[compio::main]
-/// async fn main() -> std::io::Result<()> {
-///     let mut xsub = XSubSocket::connect("127.0.0.1:5555").await?;
+/// # async fn example() -> std::io::Result<()> {
+/// let mut xsub = XSubSocket::connect("127.0.0.1:5555").await?;
 ///     
 ///     // Subscribe to topics
 ///     xsub.subscribe("topic.").await?;
@@ -62,10 +61,10 @@ use crate::session::SocketType;
 ///     }
 ///
 ///     // Unsubscribe
-///     xsub.unsubscribe("topic.").await?;
-///     
-///     Ok(())
-/// }
+/// xsub.unsubscribe("topic.").await?;
+///
+/// # Ok(())
+/// # }
 /// ```
 pub struct XSubSocket<S = TcpStream>
 where
@@ -193,8 +192,8 @@ where
     /// ```
     pub async fn send_subscription_event(&mut self, event: SubscriptionEvent) -> io::Result<()> {
         use bytes::BytesMut;
-        use compio::buf::BufResult;
-        use compio::io::AsyncWriteExt;
+        use compio_buf::BufResult;
+        use compio_io::AsyncWriteExt;
 
         let raw = event.to_message();
         trace!(
@@ -478,7 +477,7 @@ mod tests {
 
     #[test]
     fn test_subscription_tracking() {
-        use compio::runtime::Runtime;
+        use monocoque_core::rt::LocalRuntime as Runtime;
 
         Runtime::new().unwrap().block_on(async {
             // Mock stream for testing

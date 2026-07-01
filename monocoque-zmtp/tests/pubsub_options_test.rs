@@ -11,8 +11,8 @@
 //!    keeps the connection alive until all messages have been received
 
 use bytes::Bytes;
-use compio::net::TcpListener;
 use monocoque_core::options::SocketOptions;
+use monocoque_core::rt::TcpListener;
 use monocoque_zmtp::publisher::PubSocket;
 use monocoque_zmtp::subscriber::SubSocket;
 use std::sync::mpsc;
@@ -34,7 +34,7 @@ fn test_sub_options_subscriptions_are_applied() {
     let (msg_tx, msg_rx) = mpsc::channel::<Option<Vec<Bytes>>>();
 
     let pub_handle = thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
                 let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -69,10 +69,10 @@ fn test_sub_options_subscriptions_are_applied() {
     let addr = addr_rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     let client = thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
-                let stream = compio::net::TcpStream::connect(addr).await.unwrap();
+                let stream = monocoque_core::rt::TcpStream::connect(addr).await.unwrap();
 
                 // Create SUB with subscription declared in options  -  no manual subscribe().
                 let opts = SocketOptions::default().with_subscribe(Bytes::from("news."));
@@ -81,7 +81,7 @@ fn test_sub_options_subscriptions_are_applied() {
                 // Signal that subscription bytes have been sent.
                 sub_ready_tx.send(()).unwrap();
 
-                let first = compio::time::timeout(Duration::from_secs(5), sub.recv())
+                let first = monocoque_core::rt::timeout(Duration::from_secs(5), sub.recv())
                     .await
                     .expect("recv timed out")
                     .unwrap();
@@ -118,7 +118,7 @@ fn test_sub_options_multiple_subscriptions() {
     let (msgs_tx, msgs_rx) = mpsc::channel::<Vec<Vec<Bytes>>>();
 
     let pub_handle = thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
                 let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -148,10 +148,10 @@ fn test_sub_options_multiple_subscriptions() {
     let addr = addr_rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     let client = thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
-                let stream = compio::net::TcpStream::connect(addr).await.unwrap();
+                let stream = monocoque_core::rt::TcpStream::connect(addr).await.unwrap();
 
                 let opts = SocketOptions::default()
                     .with_subscribe(Bytes::from("alerts."))
@@ -162,7 +162,7 @@ fn test_sub_options_multiple_subscriptions() {
 
                 let mut received = Vec::new();
                 for _ in 0..3 {
-                    match compio::time::timeout(Duration::from_secs(3), sub.recv()).await {
+                    match monocoque_core::rt::timeout(Duration::from_secs(3), sub.recv()).await {
                         Ok(Ok(Some(frames))) => received.push(frames),
                         _ => break,
                     }
@@ -209,7 +209,7 @@ fn test_pub_broadcast_coalescing_burst() {
     let (msgs_tx, msgs_rx) = mpsc::channel::<Vec<Vec<Bytes>>>();
 
     let pub_handle = thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
                 let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -240,10 +240,10 @@ fn test_pub_broadcast_coalescing_burst() {
     let addr = addr_rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     let client = thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
-                let stream = compio::net::TcpStream::connect(addr).await.unwrap();
+                let stream = monocoque_core::rt::TcpStream::connect(addr).await.unwrap();
                 // Empty subscription = receive everything.
                 let opts = SocketOptions::default().with_subscribe(Bytes::from_static(b""));
                 let mut sub = SubSocket::with_options(stream, opts).await.unwrap();
@@ -252,7 +252,7 @@ fn test_pub_broadcast_coalescing_burst() {
 
                 let mut received = Vec::with_capacity(N);
                 for _ in 0..N {
-                    match compio::time::timeout(Duration::from_secs(5), sub.recv()).await {
+                    match monocoque_core::rt::timeout(Duration::from_secs(5), sub.recv()).await {
                         Ok(Ok(Some(frames))) => received.push(frames),
                         _ => break,
                     }

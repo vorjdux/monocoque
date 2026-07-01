@@ -22,8 +22,8 @@
 //! ```
 
 use bytes::Bytes;
-use compio::net::{TcpListener, TcpStream};
 use monocoque_core::options::SocketOptions;
+use monocoque_core::rt::{TcpListener, TcpStream};
 use monocoque_core::subscription::{SubscriptionEvent, SubscriptionTrie};
 use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet};
@@ -77,9 +77,8 @@ impl XPubSubscriber {
 /// use monocoque_zmtp::xpub::XPubSocket;
 /// use bytes::Bytes;
 ///
-/// #[compio::main]
-/// async fn main() -> std::io::Result<()> {
-///     let mut xpub = XPubSocket::bind("127.0.0.1:5555").await?;
+/// # async fn example() -> std::io::Result<()> {
+/// let mut xpub = XPubSocket::bind("127.0.0.1:5555").await?;
 ///     
 ///     loop {
 ///         // Receive subscription events from subscribers
@@ -90,7 +89,7 @@ impl XPubSubscriber {
 ///         // Broadcast messages to matching subscribers
 ///         xpub.send(vec![Bytes::from("topic"), Bytes::from("data")]).await?;
 ///     }
-/// }
+/// # }
 /// ```
 pub struct XPubSocket {
     listener: TcpListener,
@@ -183,8 +182,8 @@ impl XPubSocket {
                 // Send welcome message if configured
                 if let Some(ref welcome_msg) = self.options.xpub_welcome_msg.clone() {
                     use bytes::BytesMut;
-                    use compio::buf::BufResult;
-                    use compio::io::AsyncWriteExt;
+                    use compio_buf::BufResult;
+                    use compio_io::AsyncWriteExt;
 
                     let wire = if let Some(ref mut cipher) = curve_cipher {
                         let mut buf = BytesMut::new();
@@ -262,9 +261,9 @@ impl XPubSocket {
     /// ```
     #[allow(clippy::too_many_lines)]
     pub async fn recv_subscription(&mut self) -> io::Result<Option<SubscriptionEvent>> {
-        use compio::buf::BufResult;
-        use compio::io::AsyncRead;
-        use compio::time::timeout;
+        use compio_buf::BufResult;
+        use compio_io::AsyncRead;
+        use monocoque_core::rt::timeout;
         use std::time::Duration;
 
         // Return pending events first
@@ -306,7 +305,7 @@ impl XPubSocket {
                                         } else {
                                             // Non-MESSAGE command (e.g. PING): handle and skip.
                                             if crate::base::is_ping_payload(&frame.payload) {
-                                                use compio::io::AsyncWriteExt;
+                                                use compio_io::AsyncWriteExt;
                                                 let pong = crate::base::build_pong_frame();
                                                 let BufResult(result, _) = sub.stream.write_all(pong).await;
                                                 let _ = result;
@@ -315,7 +314,7 @@ impl XPubSocket {
                                         }
                                     } else {
                                         if crate::base::is_ping_payload(&frame.payload) {
-                                            use compio::io::AsyncWriteExt;
+                                            use compio_io::AsyncWriteExt;
                                             let pong = crate::base::build_pong_frame();
                                             let BufResult(result, _) =
                                                 sub.stream.write_all(pong).await;
@@ -452,8 +451,8 @@ impl XPubSocket {
     /// ```
     pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
         use bytes::BytesMut;
-        use compio::buf::BufResult;
-        use compio::io::AsyncWriteExt;
+        use compio_buf::BufResult;
+        use compio_io::AsyncWriteExt;
 
         trace!("[XPUB] Broadcasting message with {} frames", msg.len());
 
@@ -671,8 +670,14 @@ mod tests {
     use super::*;
     use crate::publisher::PubSocket as InternalPub;
 
-    #[compio::test]
-    async fn test_xpub_bind() {
+    #[test]
+    fn test_xpub_bind() {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(test_xpub_bind_impl())
+    }
+
+    async fn test_xpub_bind_impl() {
         let xpub = XPubSocket::bind("127.0.0.1:0").await.unwrap();
         assert_eq!(xpub.subscriber_count(), 0);
         let addr = xpub.local_addr().unwrap();
@@ -691,8 +696,14 @@ mod tests {
     }
 
     /// `send_subscription` errors when manual mode is off.
-    #[compio::test]
-    async fn test_send_subscription_requires_manual_mode() {
+    #[test]
+    fn test_send_subscription_requires_manual_mode() {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(test_send_subscription_requires_manual_mode_impl())
+    }
+
+    async fn test_send_subscription_requires_manual_mode_impl() {
         let mut xpub = XPubSocket::bind("127.0.0.1:0").await.unwrap();
         // manual mode is off by default
         let err = xpub
@@ -703,8 +714,14 @@ mod tests {
     }
 
     /// `send_subscription` errors when no upstream is connected.
-    #[compio::test]
-    async fn test_send_subscription_requires_upstream() {
+    #[test]
+    fn test_send_subscription_requires_upstream() {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(test_send_subscription_requires_upstream_impl())
+    }
+
+    async fn test_send_subscription_requires_upstream_impl() {
         let mut xpub = XPubSocket::bind("127.0.0.1:0").await.unwrap();
         xpub.set_manual(true);
         let err = xpub
@@ -721,21 +738,27 @@ mod tests {
     /// indirectly: after forwarding Subscribe("weather"), publishing a "weather" message
     /// reaches the upstream connection (the XSubSocket), confirming the PUB socket
     /// started delivering matching messages.
-    #[compio::test]
-    async fn test_connect_upstream_and_forward_subscription() {
-        use compio::net::TcpListener;
+    #[test]
+    fn test_connect_upstream_and_forward_subscription() {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(test_connect_upstream_and_forward_subscription_impl())
+    }
+
+    async fn test_connect_upstream_and_forward_subscription_impl() {
+        use monocoque_core::rt::TcpListener;
 
         // Bind a PubSocket listener (the upstream data source).
         let pub_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let pub_addr = pub_listener.local_addr().unwrap();
 
         // Spawn PubSocket: accept the XSubSocket upstream connection, then broadcast.
-        let pub_task = compio::runtime::spawn(async move {
+        let pub_task = monocoque_core::rt::spawn(async move {
             let mut pub_sock = InternalPub::new();
             // Accept the connection that connect_upstream() will make.
             pub_sock.accept_subscriber(&pub_listener).await.unwrap();
             // Give the subscription reader time to process Subscribe("weather").
-            compio::time::sleep(std::time::Duration::from_millis(50)).await;
+            monocoque_core::rt::sleep(std::time::Duration::from_millis(50)).await;
             // Broadcast a matching message  -  should reach the upstream XSubSocket.
             pub_sock
                 .send(vec![Bytes::from("weather"), Bytes::from("sunny")])
@@ -756,7 +779,7 @@ mod tests {
             .unwrap();
 
         // Wait for the PubSocket to broadcast.
-        pub_task.await;
+        monocoque_core::rt::join(pub_task).await;
 
         // The upstream XSubSocket should have received the "weather" message.
         let msg = xpub

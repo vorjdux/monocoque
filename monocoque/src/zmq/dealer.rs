@@ -2,8 +2,8 @@
 
 use super::common::{channel_to_io_error, parse_tcp_endpoint};
 use bytes::Bytes;
-use compio::net::TcpStream;
 use monocoque_core::monitor::{SocketEvent, SocketEventSender, SocketMonitor, create_monitor};
+use monocoque_core::rt::TcpStream;
 use monocoque_zmtp::dealer::DealerSocket as InternalDealer;
 use std::io;
 
@@ -42,7 +42,7 @@ use std::io;
 /// ```
 pub struct DealerSocket<S = TcpStream>
 where
-    S: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+    S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
 {
     inner: InternalDealer<S>,
     monitor: Option<SocketEventSender>,
@@ -148,7 +148,9 @@ impl DealerSocket {
     /// # }
     /// ```
     #[cfg(unix)]
-    pub async fn connect_ipc(path: &str) -> io::Result<DealerSocket<compio::net::UnixStream>> {
+    pub async fn connect_ipc(
+        path: &str,
+    ) -> io::Result<DealerSocket<monocoque_core::rt::UnixStream>> {
         use std::path::PathBuf;
 
         let clean_path = path.strip_prefix("ipc://").unwrap_or(path);
@@ -197,9 +199,9 @@ impl DealerSocket {
     /// # }
     /// ```
     pub async fn bind(
-        addr: impl compio::net::ToSocketAddrsAsync,
-    ) -> io::Result<(compio::net::TcpListener, Self)> {
-        let listener = compio::net::TcpListener::bind(addr).await?;
+        addr: impl monocoque_core::rt::ToSocketAddrs,
+    ) -> io::Result<(monocoque_core::rt::TcpListener, Self)> {
+        let listener = monocoque_core::rt::TcpListener::bind(addr).await?;
         let (stream, _) = listener.accept().await?;
         let socket = Self::from_tcp(stream).await?;
         Ok((listener, socket))
@@ -217,7 +219,7 @@ impl DealerSocket {
     ///
     /// ```rust,no_run
     /// use monocoque::zmq::DealerSocket;
-    /// use compio::net::TcpStream;
+    /// use monocoque_core::rt::TcpStream;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
@@ -240,7 +242,7 @@ impl DealerSocket {
     ///
     /// ```rust,no_run
     /// use monocoque::zmq::{DealerSocket, SocketOptions};
-    /// use compio::net::TcpStream;
+    /// use monocoque_core::rt::TcpStream;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
@@ -256,7 +258,7 @@ impl DealerSocket {
     ///
     /// ```rust,no_run
     /// # use monocoque::zmq::{DealerSocket, SocketOptions};
-    /// # use compio::net::TcpStream;
+    /// # use monocoque_core::rt::TcpStream;
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # let stream = TcpStream::connect("127.0.0.1:5555").await?;
     /// // Customize both buffers and HWM
@@ -288,7 +290,7 @@ impl DealerSocket {
     ///
     /// ```rust,no_run
     /// use monocoque::zmq::{DealerSocket, SocketOptions};
-    /// use compio::net::TcpStream;
+    /// use monocoque_core::rt::TcpStream;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
@@ -304,7 +306,7 @@ impl DealerSocket {
         options: monocoque_core::options::SocketOptions,
     ) -> io::Result<DealerSocket<Stream>>
     where
-        Stream: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+        Stream: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
     {
         Ok(DealerSocket {
             inner: InternalDealer::with_options(stream, options).await?,
@@ -316,7 +318,7 @@ impl DealerSocket {
 // Generic impl - works with any stream type
 impl<S> DealerSocket<S>
 where
-    S: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+    S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
 {
     /// Enable monitoring for this socket.
     ///
@@ -333,7 +335,7 @@ where
     /// let monitor = socket.monitor();
     ///
     /// // Spawn task to handle events
-    /// compio::runtime::spawn(async move {
+    /// monocoque::rt::spawn_detached(async move {
     ///     while let Ok(event) = monitor.recv_async().await {
     ///         println!("Socket event: {}", event);
     ///     }
@@ -479,7 +481,7 @@ where
 
 impl<S> DealerSocket<S>
 where
-    S: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+    S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
 {
     /// Get the socket type.
     ///
@@ -534,9 +536,9 @@ where
 
 // Unix-specific impl for IPC support
 #[cfg(unix)]
-impl DealerSocket<compio::net::UnixStream> {
+impl DealerSocket<monocoque_core::rt::UnixStream> {
     /// Create a DEALER socket from an existing Unix domain socket stream (IPC).
-    pub async fn from_unix_stream(stream: compio::net::UnixStream) -> io::Result<Self> {
+    pub async fn from_unix_stream(stream: monocoque_core::rt::UnixStream) -> io::Result<Self> {
         Ok(Self {
             inner: InternalDealer::new(stream).await?,
             monitor: None,
@@ -545,7 +547,7 @@ impl DealerSocket<compio::net::UnixStream> {
 
     /// Create a DEALER socket from an existing Unix stream with custom options.
     pub async fn from_unix_stream_with_options(
-        stream: compio::net::UnixStream,
+        stream: monocoque_core::rt::UnixStream,
         options: monocoque_core::options::SocketOptions,
     ) -> io::Result<Self> {
         Ok(Self {

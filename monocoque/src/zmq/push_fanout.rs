@@ -15,8 +15,8 @@
 //! Workers connect with an ordinary `PullSocket::connect`, so the worker side
 //! needs no special type.
 
-use compio::net::{TcpListener, TcpStream};
 use monocoque_core::options::SocketOptions;
+use monocoque_core::rt::{TcpListener, TcpStream};
 use std::io;
 
 use super::PushSocket;
@@ -53,7 +53,7 @@ impl PushFanOut {
     /// # }
     /// ```
     pub async fn bind(
-        addr: impl compio::net::ToSocketAddrsAsync,
+        addr: impl monocoque_core::rt::ToSocketAddrs,
         n_workers: usize,
     ) -> io::Result<(TcpListener, Self)> {
         Self::bind_with_options(addr, n_workers, SocketOptions::default()).await
@@ -61,7 +61,7 @@ impl PushFanOut {
 
     /// Like [`bind`](Self::bind) but applies `options` to every worker connection.
     pub async fn bind_with_options(
-        addr: impl compio::net::ToSocketAddrsAsync,
+        addr: impl monocoque_core::rt::ToSocketAddrs,
         n_workers: usize,
         options: SocketOptions,
     ) -> io::Result<(TcpListener, Self)> {

@@ -2,8 +2,8 @@
 
 use super::common::channel_to_io_error;
 use bytes::Bytes;
-use compio::net::TcpStream;
 use monocoque_core::monitor::{SocketEvent, SocketEventSender, SocketMonitor, create_monitor};
+use monocoque_core::rt::TcpStream;
 use monocoque_zmtp::SocketType;
 use monocoque_zmtp::req::ReqSocket as InternalReq;
 use std::io;
@@ -51,7 +51,7 @@ use std::io;
 /// ```
 pub struct ReqSocket<S = TcpStream>
 where
-    S: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+    S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
 {
     inner: InternalReq<S>,
     monitor: Option<SocketEventSender>,
@@ -186,7 +186,7 @@ impl ReqSocket {
     /// # }
     /// ```
     #[cfg(unix)]
-    pub async fn connect_ipc(path: &str) -> io::Result<ReqSocket<compio::net::UnixStream>> {
+    pub async fn connect_ipc(path: &str) -> io::Result<ReqSocket<monocoque_core::rt::UnixStream>> {
         use std::path::PathBuf;
 
         let clean_path = path.strip_prefix("ipc://").unwrap_or(path);
@@ -225,7 +225,7 @@ impl ReqSocket {
         options: monocoque_core::options::SocketOptions,
     ) -> io::Result<ReqSocket<Stream>>
     where
-        Stream: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+        Stream: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
     {
         Ok(ReqSocket {
             inner: InternalReq::with_options(stream, options).await?,
@@ -237,7 +237,7 @@ impl ReqSocket {
 // Generic impl - works with any stream type
 impl<S> ReqSocket<S>
 where
-    S: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+    S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
 {
     /// Enable monitoring for this socket.
     ///
@@ -429,9 +429,9 @@ where
 
 // Unix-specific impl for IPC support
 #[cfg(unix)]
-impl ReqSocket<compio::net::UnixStream> {
+impl ReqSocket<monocoque_core::rt::UnixStream> {
     /// Create a REQ socket from an existing Unix domain socket stream (IPC).
-    pub async fn from_unix_stream(stream: compio::net::UnixStream) -> io::Result<Self> {
+    pub async fn from_unix_stream(stream: monocoque_core::rt::UnixStream) -> io::Result<Self> {
         Ok(Self {
             inner: InternalReq::new(stream).await?,
             monitor: None,
@@ -442,7 +442,7 @@ impl ReqSocket<compio::net::UnixStream> {
     ///
     /// This method provides full control over socket behavior through SocketOptions.
     pub async fn from_unix_stream_with_options(
-        stream: compio::net::UnixStream,
+        stream: monocoque_core::rt::UnixStream,
         options: monocoque_core::options::SocketOptions,
     ) -> io::Result<Self> {
         Ok(Self {

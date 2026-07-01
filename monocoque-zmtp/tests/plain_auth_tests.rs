@@ -4,8 +4,14 @@ use bytes::Bytes;
 use monocoque_zmtp::security::plain::{PlainAuthHandler, StaticPlainHandler};
 use monocoque_zmtp::security::zap::{ZapMechanism, ZapRequest};
 
-#[compio::test]
-async fn test_static_plain_handler_valid_credentials() {
+#[test]
+fn test_static_plain_handler_valid_credentials() {
+    monocoque_core::rt::LocalRuntime::new()
+        .unwrap()
+        .block_on(test_static_plain_handler_valid_credentials_impl())
+}
+
+async fn test_static_plain_handler_valid_credentials_impl() {
     let mut handler = StaticPlainHandler::new();
     handler.add_user("admin", "secret123");
     handler.add_user("guest", "guest123");
@@ -25,8 +31,14 @@ async fn test_static_plain_handler_valid_credentials() {
     assert_eq!(result.unwrap(), "guest");
 }
 
-#[compio::test]
-async fn test_static_plain_handler_invalid_password() {
+#[test]
+fn test_static_plain_handler_invalid_password() {
+    monocoque_core::rt::LocalRuntime::new()
+        .unwrap()
+        .block_on(test_static_plain_handler_invalid_password_impl())
+}
+
+async fn test_static_plain_handler_invalid_password_impl() {
     let mut handler = StaticPlainHandler::new();
     handler.add_user("admin", "secret123");
 
@@ -37,8 +49,14 @@ async fn test_static_plain_handler_invalid_password() {
     assert_eq!(result.unwrap_err(), "Invalid password");
 }
 
-#[compio::test]
-async fn test_static_plain_handler_unknown_user() {
+#[test]
+fn test_static_plain_handler_unknown_user() {
+    monocoque_core::rt::LocalRuntime::new()
+        .unwrap()
+        .block_on(test_static_plain_handler_unknown_user_impl())
+}
+
+async fn test_static_plain_handler_unknown_user_impl() {
     let mut handler = StaticPlainHandler::new();
     handler.add_user("admin", "secret123");
 

@@ -47,4 +47,4 @@ jobs:
         run: |
           python3 -m pytest test_req_rep_interop.py \
                             test_pub_sub_interop.py \
-                            -v --timeout=30 || echo "Python tests require manual libzmq server — skipping in CI"
+                            -v --timeout=30 || echo "Python tests require manual libzmq server - skipping in CI"

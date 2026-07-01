@@ -4,10 +4,11 @@ A five-minute guide to sending your first message with Monocoque.
 
 **Performance Highlights:**
 
-- **31-37% faster latency** than libzmq (23 μs vs 33-36 μs round-trip)
-- **3.24 M msg/sec throughput** with the batching API
-- **Pure Rust**  -  no C dependencies, full async/await
-- **Memory safe**  -  zero unsafe code in the protocol layer
+- **~5x lower latency** than libzmq (43-58 µs vs ~270 µs REQ/REP round-trip)
+- **Up to 13.6 M msg/sec throughput** with write coalescing
+- **Two runtimes** - io_uring via compio (default) or epoll via tokio, same API
+- **Pure Rust** - no C dependencies, full async/await
+- **Memory safe** - unsafe is confined to the slab allocator and runtime facade
 
 ---
 
@@ -18,6 +19,60 @@ A five-minute guide to sending your first message with Monocoque.
 monocoque-rs = { version = "0.1", features = ["zmq"] }
 bytes    = "1"
 compio   = { version = "0.10", features = ["runtime", "macros"] }
+```
+
+The examples below use the default backend (io_uring via compio) and its
+`#[compio::main]` entry point. See the next section if you want to run on tokio.
+
+---
+
+## Choosing a runtime
+
+Monocoque ships two interchangeable runtime backends, selected by a Cargo
+feature. The protocol, codec and API are identical on both; only the runtime
+primitives differ.
+
+- **`runtime-compio`** (default): native io_uring on Linux. Its edge shows on
+  real network I/O and high connection counts.
+- **`runtime-tokio`**: standard tokio (epoll/mio). Use it where io_uring is not
+  available (macOS, Windows, older kernels) or to fit an existing tokio stack. On
+  single-flow loopback microbenchmarks it is actually a touch faster than compio
+  (see [performance.md](performance.md)); pick by your real workload, not the
+  microbenchmark.
+
+```toml
+# tokio backend
+[dependencies]
+monocoque-rs = { version = "0.1", default-features = false, features = ["runtime-tokio", "zmq"] }
+bytes = "1"
+tokio = { version = "1", features = ["rt", "macros"] }
+```
+
+The tokio backend follows the same thread-per-core model as compio, so run it on
+a current-thread runtime inside a `LocalSet`:
+
+```rust,no_run
+# use monocoque::zmq::ReqSocket;
+# use bytes::Bytes;
+fn main() -> std::io::Result<()> {
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+    let local = tokio::task::LocalSet::new();
+    local.block_on(&rt, async {
+        let mut socket = ReqSocket::connect("127.0.0.1:5555").await?;
+        socket.send(vec![Bytes::from("PING")]).await?;
+        let _reply = socket.recv().await;
+        Ok::<(), std::io::Error>(())
+    })
+}
+```
+
+To keep your own code free of any runtime name, use `monocoque::rt::LocalRuntime`,
+which builds the right single-threaded runtime for whichever feature is enabled.
+The `runtime_backends` example is one program that runs unchanged on both:
+
+```bash
+cargo run --example runtime_backends --features zmq                                      # compio
+cargo run --example runtime_backends --no-default-features --features runtime-tokio,zmq  # tokio
 ```
 
 ---

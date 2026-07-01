@@ -11,8 +11,16 @@
 //! - Each measured iteration: single REQ send + REP echo + REQ recv.
 
 use bytes::Bytes;
-use compio::net::TcpListener;
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+
+// Identifies which runtime backend this build benchmarks, so compio and tokio
+// results land under distinct criterion ids instead of overwriting each other.
+const BENCH_BACKEND: &str = if cfg!(feature = "runtime-tokio") {
+    "tokio"
+} else {
+    "compio"
+};
+use monocoque::rt::TcpListener;
 use monocoque::zmq::{RepSocket, ReqSocket, SocketOptions};
 use std::sync::mpsc;
 use std::thread;
@@ -26,12 +34,12 @@ const WARMUP_ROUNDS: usize = 1_000;
 /// Server binds on its own OS thread. The bench thread connects, does warmup,
 /// then each `iter_batched` iteration measures one round-trip.
 fn monocoque_req_rep_latency(c: &mut Criterion) {
-    let mut group = c.benchmark_group("latency/monocoque/req_rep");
+    let mut group = c.benchmark_group(format!("latency/monocoque-{BENCH_BACKEND}/req_rep"));
     group.measurement_time(Duration::from_secs(10));
     group.sample_size(100);
 
     // Single runtime reused across all iterations to avoid io_uring resource exhaustion.
-    let rt = compio::runtime::Runtime::new().unwrap();
+    let rt = monocoque::rt::LocalRuntime::new().unwrap();
 
     for &size in MESSAGE_SIZES {
         let payload = Bytes::from(vec![0u8; size]);
@@ -46,7 +54,7 @@ fn monocoque_req_rep_latency(c: &mut Criterion) {
                         let (port_tx, port_rx) = mpsc::channel::<u16>();
 
                         let server_thread = thread::spawn(move || {
-                            let rt = compio::runtime::Runtime::new().unwrap();
+                            let rt = monocoque::rt::LocalRuntime::new().unwrap();
                             rt.block_on(async move {
                                 let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
                                 let port = listener.local_addr().unwrap().port();
@@ -76,7 +84,7 @@ fn monocoque_req_rep_latency(c: &mut Criterion) {
                         let port = port_rx.recv().unwrap();
 
                         let req = rt.block_on(async {
-                            let stream = compio::net::TcpStream::connect(("127.0.0.1", port))
+                            let stream = monocoque::rt::TcpStream::connect(("127.0.0.1", port))
                                 .await
                                 .unwrap();
                             let mut req = ReqSocket::from_tcp_with_options(

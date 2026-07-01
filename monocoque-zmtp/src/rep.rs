@@ -13,8 +13,8 @@
 //! Attempting to send before receiving, or receive before sending will return an error.
 
 use bytes::Bytes;
-use compio::io::{AsyncRead, AsyncWrite};
-use compio::net::TcpStream;
+use compio_io::{AsyncRead, AsyncWrite};
+use monocoque_core::rt::TcpStream;
 use smallvec::SmallVec;
 use std::io;
 use tracing::{debug, trace};
@@ -56,7 +56,7 @@ pub enum RepState {
 ///
 /// ```rust,no_run
 /// use monocoque_zmtp::rep::RepSocket;
-/// use compio::net::TcpStream;
+/// use monocoque_core::rt::TcpStream;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
@@ -352,47 +352,49 @@ mod tests {
     #[test]
     fn test_rep_state_machine() {
         use bytes::Bytes;
-        use compio::net::TcpListener;
+        use monocoque_core::rt::TcpListener;
 
-        compio::runtime::Runtime::new().unwrap().block_on(async {
-            // Create a pair of connected sockets
-            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let addr = listener.local_addr().unwrap();
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(async {
+                // Create a pair of connected sockets
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let addr = listener.local_addr().unwrap();
 
-            // Spawn client that will connect and send request
-            let client_task = compio::runtime::spawn(async move {
-                compio::time::sleep(std::time::Duration::from_millis(10)).await;
-                let stream = compio::net::TcpStream::connect(addr).await.unwrap();
-                let mut req = crate::req::ReqSocket::new(stream).await.unwrap();
+                // Spawn client that will connect and send request
+                let client_task = monocoque_core::rt::spawn(async move {
+                    monocoque_core::rt::sleep(std::time::Duration::from_millis(10)).await;
+                    let stream = monocoque_core::rt::TcpStream::connect(addr).await.unwrap();
+                    let mut req = crate::req::ReqSocket::new(stream).await.unwrap();
 
-                // Send request
-                req.send(vec![Bytes::from("test")]).await.unwrap();
+                    // Send request
+                    req.send(vec![Bytes::from("test")]).await.unwrap();
 
-                // Wait for and verify reply
-                let reply = req.recv().await.unwrap();
-                assert!(reply.is_some());
+                    // Wait for and verify reply
+                    let reply = req.recv().await.unwrap();
+                    assert!(reply.is_some());
 
-                req
+                    req
+                });
+
+                let (server_stream, _) = listener.accept().await.unwrap();
+                let mut rep = RepSocket::new(server_stream).await.unwrap();
+
+                // Initial state
+                assert_eq!(rep.state(), RepState::AwaitingRequest);
+
+                // Receive should transition to ReadyToReply
+                let msg = rep.recv().await.unwrap();
+                assert!(msg.is_some());
+                assert_eq!(rep.state(), RepState::ReadyToReply);
+
+                // Send reply should transition back to AwaitingRequest
+                rep.send(msg.unwrap()).await.unwrap();
+                assert_eq!(rep.state(), RepState::AwaitingRequest);
+
+                // Wait for client
+                monocoque_core::rt::join(client_task).await;
             });
-
-            let (server_stream, _) = listener.accept().await.unwrap();
-            let mut rep = RepSocket::new(server_stream).await.unwrap();
-
-            // Initial state
-            assert_eq!(rep.state(), RepState::AwaitingRequest);
-
-            // Receive should transition to ReadyToReply
-            let msg = rep.recv().await.unwrap();
-            assert!(msg.is_some());
-            assert_eq!(rep.state(), RepState::ReadyToReply);
-
-            // Send reply should transition back to AwaitingRequest
-            rep.send(msg.unwrap()).await.unwrap();
-            assert_eq!(rep.state(), RepState::AwaitingRequest);
-
-            // Wait for client
-            client_task.await;
-        });
     }
 }
 

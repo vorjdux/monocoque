@@ -5,7 +5,7 @@ exclude = ["monocoque-fuzz"]
 default-members = ["monocoque"]
 
 [workspace.package]
-version = "0.1.5"
+version = "0.1.6"
 edition = "2024"
 license = "MIT"
 authors = ["Matheus Santos <vorj.dux@gmail.com>"]
@@ -16,7 +16,13 @@ rust-version = "1.85"
 # Core dependencies
 # 1.11.1 is the security floor for RUSTSEC-2026-0007 (BytesMut::reserve overflow).
 bytes = "1.11.1"
-compio = { version = "0.10", features = ["runtime", "macros", "time", "bytes"] }
+# The I/O traits and buffer types are split out into two lean crates that carry
+# no runtime and no io_uring driver, so they compile under either backend. The
+# full compio umbrella (net/runtime/time/macros/io_uring) is pulled in only by
+# the `runtime-compio` feature. See each crate's [features].
+compio-io = "0.2"
+compio-buf = { version = "0.3", features = ["bytes"] }
+compio = { version = "0.10", default-features = false, features = ["runtime", "macros", "time", "io-uring"] }
 flume = "0.11"
 futures = "0.3"
 async-trait = "0.1"
@@ -31,7 +37,7 @@ once_cell = "1.19"
 parking_lot = "0.12"
 
 # Networking
-socket2 = "0.5"
+socket2 = { version = "0.5", features = ["all"] }
 
 # Logging
 tracing = "0.1"
@@ -52,7 +58,7 @@ num_cpus = "1.16"
 # Testing
 zmq = "0.10"
 criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
 portpicker = "0.1"
 hex = "0.4"
 

@@ -98,7 +98,7 @@ impl ZapClient {
         // Wait for response with timeout.
         // NotFound on recv also indicates the endpoint disappeared → deny.
         let recv_future = self.socket.recv();
-        let response_frames = match compio::time::timeout(self.timeout, recv_future).await {
+        let response_frames = match monocoque_core::rt::timeout(self.timeout, recv_future).await {
             Ok(Ok(Some(frames))) => frames,
             Ok(Ok(None)) => {
                 return Err(io::Error::new(

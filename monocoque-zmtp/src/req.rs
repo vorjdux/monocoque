@@ -17,38 +17,37 @@
 //!     ↕
 //! ZmtpDecoder + SegmentedBuffer
 //!     ↕
-//! compio::net::TcpStream (io_uring)
+//! monocoque_core::rt::TcpStream (io_uring)
 //! ```
 //!
 //! # Example
 //!
 //! ```rust,no_run
 //! use monocoque_zmtp::req::ReqSocket;
-//! use compio::net::TcpStream;
+//! use monocoque_core::rt::TcpStream;
 //! use bytes::Bytes;
 //!
-//! #[compio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let stream = TcpStream::connect("127.0.0.1:5555").await?;
-//!     let mut socket = ReqSocket::new(stream).await?;
-//!     
-//!     // Send request
-//!     socket.send(vec![Bytes::from("Hello")]).await?;
-//!     
-//!     // Receive reply
-//!     let reply = socket.recv().await?;
-//!     
-//!     Ok(())
-//! }
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let stream = TcpStream::connect("127.0.0.1:5555").await?;
+//! let mut socket = ReqSocket::new(stream).await?;
+//!
+//! // Send request
+//! socket.send(vec![Bytes::from("Hello")]).await?;
+//!
+//! // Receive reply
+//! let reply = socket.recv().await?;
+//!
+//! # Ok(())
+//! # }
 //! ```
 
 use crate::base::SocketBase;
 use crate::{handshake::perform_handshake_with_options, session::SocketType};
 use bytes::Bytes;
-use compio::io::{AsyncRead, AsyncWrite};
-use compio::net::TcpStream;
+use compio_io::{AsyncRead, AsyncWrite};
 use monocoque_core::endpoint::Endpoint;
 use monocoque_core::options::SocketOptions;
+use monocoque_core::rt::TcpStream;
 use smallvec::SmallVec;
 use std::io;
 use tracing::{debug, trace};
@@ -77,7 +76,7 @@ pub enum ReqState {
 ///
 /// ```rust,no_run
 /// use monocoque_zmtp::req::ReqSocket;
-/// use compio::net::TcpStream;
+/// use monocoque_core::rt::TcpStream;
 /// use bytes::Bytes;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -119,7 +118,7 @@ where
     /// # Example
     /// ```rust,no_run
     /// use monocoque_zmtp::req::ReqSocket;
-    /// use compio::net::TcpStream;
+    /// use monocoque_core::rt::TcpStream;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
@@ -142,7 +141,7 @@ where
     /// ```rust,no_run
     /// # use monocoque_zmtp::req::ReqSocket;
     /// # use monocoque_core::options::SocketOptions;
-    /// # use compio::net::TcpStream;
+    /// # use monocoque_core::rt::TcpStream;
     /// # async fn example() -> std::io::Result<()> {
     /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
     /// let mut opts = SocketOptions::small(); // 4KB for low latency
@@ -514,7 +513,7 @@ impl ReqSocket<TcpStream> {
     /// ```rust,no_run
     /// # use monocoque_zmtp::req::ReqSocket;
     /// # use monocoque_core::options::SocketOptions;
-    /// # use compio::net::TcpStream;
+    /// # use monocoque_core::rt::TcpStream;
     /// # async fn example() -> std::io::Result<()> {
     /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
     /// let mut opts = SocketOptions::small();
@@ -534,13 +533,13 @@ impl ReqSocket<TcpStream> {
     }
 
     /// Connect to a remote REQ socket, storing the endpoint for automatic reconnection.
-    pub async fn connect(addr: impl compio::net::ToSocketAddrsAsync) -> io::Result<Self> {
+    pub async fn connect(addr: impl monocoque_core::rt::ToSocketAddrs) -> io::Result<Self> {
         Self::connect_with_options(addr, SocketOptions::default()).await
     }
 
     /// Connect with custom options, storing the endpoint for reconnection.
     pub async fn connect_with_options(
-        addr: impl compio::net::ToSocketAddrsAsync,
+        addr: impl monocoque_core::rt::ToSocketAddrs,
         options: SocketOptions,
     ) -> io::Result<Self> {
         let stream = TcpStream::connect(addr).await?;

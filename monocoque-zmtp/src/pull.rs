@@ -19,9 +19,9 @@
 use crate::base::SocketBase;
 use crate::{handshake::perform_handshake_with_options, session::SocketType};
 use bytes::Bytes;
-use compio::io::{AsyncRead, AsyncWrite};
-use compio::net::TcpStream;
+use compio_io::{AsyncRead, AsyncWrite};
 use monocoque_core::options::SocketOptions;
+use monocoque_core::rt::TcpStream;
 use smallvec::SmallVec;
 use std::io;
 use tracing::{debug, trace};
@@ -319,13 +319,13 @@ impl PullSocket<TcpStream> {
     }
 
     /// Connect to a remote PULL socket, storing the endpoint for automatic reconnection.
-    pub async fn connect(addr: impl compio::net::ToSocketAddrsAsync) -> io::Result<Self> {
+    pub async fn connect(addr: impl monocoque_core::rt::ToSocketAddrs) -> io::Result<Self> {
         Self::connect_with_options(addr, SocketOptions::default()).await
     }
 
     /// Connect with custom options, storing the endpoint for reconnection.
     pub async fn connect_with_options(
-        addr: impl compio::net::ToSocketAddrsAsync,
+        addr: impl monocoque_core::rt::ToSocketAddrs,
         options: SocketOptions,
     ) -> io::Result<Self> {
         let stream = TcpStream::connect(addr).await?;

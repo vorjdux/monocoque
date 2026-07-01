@@ -2,9 +2,9 @@
 
 use super::common::channel_to_io_error;
 use bytes::Bytes;
-use compio::net::{TcpListener, TcpStream};
 use monocoque_core::monitor::{SocketEventSender, SocketMonitor, create_monitor};
 use monocoque_core::options::SocketOptions;
+use monocoque_core::rt::{TcpListener, TcpStream};
 use monocoque_zmtp::SocketType;
 use monocoque_zmtp::router::RouterSocket as InternalRouter;
 use std::io;
@@ -47,7 +47,7 @@ use std::io;
 /// ```
 pub struct RouterSocket<S = TcpStream>
 where
-    S: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+    S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
 {
     inner: InternalRouter<S>,
     monitor: Option<SocketEventSender>,
@@ -88,7 +88,7 @@ impl RouterSocket {
     /// # }
     /// ```
     pub async fn bind(
-        addr: impl compio::net::ToSocketAddrsAsync,
+        addr: impl monocoque_core::rt::ToSocketAddrs,
     ) -> io::Result<(TcpListener, Self)> {
         let listener = TcpListener::bind(addr).await?;
         let (stream, _) = listener.accept().await?;
@@ -107,7 +107,7 @@ impl RouterSocket {
     ///
     /// ```rust,no_run
     /// use monocoque::zmq::RouterSocket;
-    /// use compio::net::TcpListener;
+    /// use monocoque_core::rt::TcpListener;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let listener = TcpListener::bind("127.0.0.1:5555").await?;
@@ -160,7 +160,7 @@ impl RouterSocket {
         options: monocoque_core::options::SocketOptions,
     ) -> io::Result<RouterSocket<Stream>>
     where
-        Stream: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+        Stream: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
     {
         Ok(RouterSocket {
             inner: InternalRouter::with_options(stream, options).await?,
@@ -172,7 +172,7 @@ impl RouterSocket {
 // Generic impl - works with any stream type
 impl<S> RouterSocket<S>
 where
-    S: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+    S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
 {
     /// Enable monitoring for this socket.
     ///
@@ -189,7 +189,7 @@ where
     /// let monitor = socket.monitor();
     ///
     /// // Spawn task to handle events
-    /// compio::runtime::spawn(async move {
+    /// monocoque::rt::spawn_detached(async move {
     ///     while let Ok(event) = monitor.recv_async().await {
     ///         println!("Socket event: {}", event);
     ///     }
@@ -460,9 +460,9 @@ where
 
 // Unix-specific impl for IPC support
 #[cfg(unix)]
-impl RouterSocket<compio::net::UnixStream> {
+impl RouterSocket<monocoque_core::rt::UnixStream> {
     /// Create a ROUTER socket from an existing Unix domain socket stream (IPC).
-    pub async fn from_unix_stream(stream: compio::net::UnixStream) -> io::Result<Self> {
+    pub async fn from_unix_stream(stream: monocoque_core::rt::UnixStream) -> io::Result<Self> {
         Ok(Self {
             inner: InternalRouter::new(stream).await?,
             monitor: None,
@@ -473,7 +473,7 @@ impl RouterSocket<compio::net::UnixStream> {
     ///
     /// This method provides full control over socket behavior through SocketOptions.
     pub async fn from_unix_stream_with_options(
-        stream: compio::net::UnixStream,
+        stream: monocoque_core::rt::UnixStream,
         options: monocoque_core::options::SocketOptions,
     ) -> io::Result<Self> {
         Ok(Self {

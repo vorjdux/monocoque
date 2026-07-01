@@ -174,7 +174,7 @@ impl ZmtpSession {
         // Version 3.0 (backward compatible with all ZMQ 4.x)
         b.extend_from_slice(&[0x03, 0x00]);
 
-        // Mechanism: NULL (Phase 1–3)
+        // Mechanism: NULL (Phase 1-3)
         b.extend_from_slice(b"NULL");
         b.extend_from_slice(&[0u8; 16]);
 

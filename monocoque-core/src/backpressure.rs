@@ -104,7 +104,7 @@ impl BytePermits for NoOpPermits {
 /// ```
 /// use monocoque_core::backpressure::{BytePermits, SemaphorePermits};
 ///
-/// # compio::runtime::Runtime::new().unwrap().block_on(async {
+/// # monocoque_core::rt::LocalRuntime::new().unwrap().block_on(async {
 /// // Allow up to 10MB of buffered data
 /// let permits = SemaphorePermits::new(10 * 1024 * 1024);
 ///
@@ -150,7 +150,7 @@ impl BytePermits for SemaphorePermits {
         // the async executor. parking_lot::Condvar::wait is synchronous and
         // safe to use here because SemInner uses parking_lot::Mutex.
         let inner = self.inner.clone();
-        let actual = compio::runtime::spawn_blocking(move || {
+        let actual = crate::rt::spawn_blocking(move || {
             let (mutex, condvar) = &*inner;
             let mut guard = mutex.lock();
             // Clamp to max_bytes so a single oversized message never deadlocks:
@@ -178,7 +178,7 @@ mod tests {
     #[test]
     fn noop_permits_always_succeed() {
         let permits = NoOpPermits;
-        let rt = compio::runtime::Runtime::new().unwrap();
+        let rt = crate::rt::LocalRuntime::new().unwrap();
         rt.block_on(async {
             let _p1 = permits.acquire(1024).await;
             let _p2 = permits.acquire(1_000_000).await;
@@ -189,7 +189,7 @@ mod tests {
     #[test]
     fn semaphore_permits_enforce_limit() {
         let permits = SemaphorePermits::new(1024);
-        let rt = compio::runtime::Runtime::new().unwrap();
+        let rt = crate::rt::LocalRuntime::new().unwrap();
 
         rt.block_on(async {
             // First 1024 bytes should succeed
@@ -208,7 +208,7 @@ mod tests {
     #[test]
     fn semaphore_permits_release_on_drop() {
         let permits = SemaphorePermits::new(1000);
-        let rt = compio::runtime::Runtime::new().unwrap();
+        let rt = crate::rt::LocalRuntime::new().unwrap();
 
         rt.block_on(async {
             {
@@ -227,7 +227,7 @@ mod tests {
         // A single acquire larger than max_bytes must complete (clamped to max_bytes)
         // rather than deadlocking forever waiting for capacity that can never exist.
         let permits = SemaphorePermits::new(1024);
-        let rt = compio::runtime::Runtime::new().unwrap();
+        let rt = crate::rt::LocalRuntime::new().unwrap();
 
         rt.block_on(async {
             let permit = permits.acquire(2048).await; // 2× max - must not deadlock
@@ -241,7 +241,7 @@ mod tests {
     fn semaphore_permits_single_atomic_acquire() {
         // Verify that acquiring N bytes is done atomically (not O(N) individual acquires)
         let permits = SemaphorePermits::new(1024 * 1024); // 1MB
-        let rt = compio::runtime::Runtime::new().unwrap();
+        let rt = crate::rt::LocalRuntime::new().unwrap();
 
         rt.block_on(async {
             // Acquire a large block in one shot - this should not loop N times

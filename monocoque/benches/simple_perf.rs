@@ -1,7 +1,7 @@
 //! Simple direct performance test - BOTH DIRECT IMPLEMENTATIONS
 
 use bytes::Bytes;
-use compio::net::{TcpListener, TcpStream};
+use monocoque::rt::{TcpListener, TcpStream};
 use monocoque_zmtp::rep::RepSocket;
 use monocoque_zmtp::req::ReqSocket;
 use std::time::Instant;
@@ -9,12 +9,12 @@ use std::time::Instant;
 const ITERATIONS: usize = 1000;
 
 fn main() {
-    compio::runtime::Runtime::new().unwrap().block_on(async {
+    monocoque::rt::LocalRuntime::new().unwrap().block_on(async {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
 
         // Start echo server with DIRECT IMPLEMENTATION
-        let server = compio::runtime::spawn(async move {
+        let server = monocoque::rt::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let mut rep = RepSocket::new(stream).await.unwrap();
 
@@ -42,7 +42,7 @@ fn main() {
         });
 
         // Give server time to start
-        compio::time::sleep(std::time::Duration::from_millis(10)).await;
+        monocoque::rt::sleep(std::time::Duration::from_millis(10)).await;
 
         // Connect client
         let stream = TcpStream::connect(addr).await.unwrap();
@@ -74,7 +74,7 @@ fn main() {
         }
         let elapsed = start.elapsed();
 
-        server.await;
+        let _ = server.await;
 
         println!("Client completed {success_count} messages");
         let per_msg = elapsed.as_secs_f64() * 1_000_000.0 / f64::from(success_count);

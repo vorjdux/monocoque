@@ -1,7 +1,7 @@
 //! Stream and Sink adapters for futures ecosystem integration
 //!
 //! This module provides wrappers that implement `futures::Stream` and `futures::Sink`
-//! for ZeroMQ sockets, allowing seamless integration with the Rust async ecosystem.
+//! for ZeroMQ sockets, so they work with the Rust async ecosystem.
 //!
 //! # Examples
 //!

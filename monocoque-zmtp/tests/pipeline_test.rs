@@ -25,10 +25,12 @@ fn test_push_pull_basic() {
 
     // Server thread: PUSH binds and sends one message.
     thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
-                let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let listener = monocoque_core::rt::TcpListener::bind("127.0.0.1:0")
+                    .await
+                    .unwrap();
                 addr_tx.send(listener.local_addr().unwrap()).unwrap();
 
                 let (stream, _) = listener.accept().await.unwrap();
@@ -44,13 +46,13 @@ fn test_push_pull_basic() {
 
     // Client thread: PULL connects and receives the message.
     let client = thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
-                let stream = compio::net::TcpStream::connect(addr).await.unwrap();
+                let stream = monocoque_core::rt::TcpStream::connect(addr).await.unwrap();
                 let mut pull = PullSocket::from_tcp(stream).await.unwrap();
 
-                let msg = compio::time::timeout(Duration::from_secs(5), pull.recv())
+                let msg = monocoque_core::rt::timeout(Duration::from_secs(5), pull.recv())
                     .await
                     .expect("recv timed out")
                     .expect("io error")
@@ -79,10 +81,12 @@ fn test_push_pull_multi_message() {
 
     // Server thread: PUSH binds and sends N messages.
     thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
-                let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let listener = monocoque_core::rt::TcpListener::bind("127.0.0.1:0")
+                    .await
+                    .unwrap();
                 addr_tx.send(listener.local_addr().unwrap()).unwrap();
 
                 let (stream, _) = listener.accept().await.unwrap();
@@ -100,15 +104,15 @@ fn test_push_pull_multi_message() {
 
     // Client thread: PULL connects and receives all N messages.
     let client = thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
-                let stream = compio::net::TcpStream::connect(addr).await.unwrap();
+                let stream = monocoque_core::rt::TcpStream::connect(addr).await.unwrap();
                 let mut pull = PullSocket::from_tcp(stream).await.unwrap();
 
                 let mut received = Vec::new();
                 for _ in 0..N {
-                    let msg = compio::time::timeout(Duration::from_secs(5), pull.recv())
+                    let msg = monocoque_core::rt::timeout(Duration::from_secs(5), pull.recv())
                         .await
                         .expect("recv timed out")
                         .expect("io error")
@@ -144,16 +148,18 @@ fn test_pull_bind_push_connect() {
 
     // Server thread: PULL binds and waits for a message.
     thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
-                let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let listener = monocoque_core::rt::TcpListener::bind("127.0.0.1:0")
+                    .await
+                    .unwrap();
                 addr_tx.send(listener.local_addr().unwrap()).unwrap();
 
                 let (stream, _) = listener.accept().await.unwrap();
                 let mut pull = PullSocket::from_tcp(stream).await.unwrap();
 
-                let msg = compio::time::timeout(Duration::from_secs(5), pull.recv())
+                let msg = monocoque_core::rt::timeout(Duration::from_secs(5), pull.recv())
                     .await
                     .expect("recv timed out")
                     .expect("io error")
@@ -166,10 +172,10 @@ fn test_pull_bind_push_connect() {
 
     // Client thread: PUSH connects and sends one message.
     let client = thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
-                let stream = compio::net::TcpStream::connect(addr).await.unwrap();
+                let stream = monocoque_core::rt::TcpStream::connect(addr).await.unwrap();
                 let mut push = PushSocket::from_tcp(stream).await.unwrap();
 
                 push.send(vec![Bytes::from("reversed topology")])
@@ -208,10 +214,12 @@ fn test_push_pull_vectored_large_frame() {
 
     // Server thread: PUSH binds with a 256-byte vectored threshold and sends.
     thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
-                let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let listener = monocoque_core::rt::TcpListener::bind("127.0.0.1:0")
+                    .await
+                    .unwrap();
                 addr_tx.send(listener.local_addr().unwrap()).unwrap();
 
                 let (stream, _) = listener.accept().await.unwrap();
@@ -234,15 +242,15 @@ fn test_push_pull_vectored_large_frame() {
 
     // Client thread: PULL connects and receives both messages.
     let client = thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
-                let stream = compio::net::TcpStream::connect(addr).await.unwrap();
+                let stream = monocoque_core::rt::TcpStream::connect(addr).await.unwrap();
                 let mut pull = PullSocket::from_tcp(stream).await.unwrap();
 
                 let mut received = Vec::new();
                 for _ in 0..2 {
-                    let msg = compio::time::timeout(Duration::from_secs(5), pull.recv())
+                    let msg = monocoque_core::rt::timeout(Duration::from_secs(5), pull.recv())
                         .await
                         .expect("recv timed out")
                         .expect("io error")
@@ -276,10 +284,12 @@ fn test_push_pull_recv_batch() {
 
     // Server thread: PUSH binds and sends N small messages via send_batch.
     thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
-                let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let listener = monocoque_core::rt::TcpListener::bind("127.0.0.1:0")
+                    .await
+                    .unwrap();
                 addr_tx.send(listener.local_addr().unwrap()).unwrap();
 
                 let (stream, _) = listener.accept().await.unwrap();
@@ -295,15 +305,17 @@ fn test_push_pull_recv_batch() {
 
     // Client thread: PULL drains messages with recv_batch until it has all N.
     let client = thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
-                let stream = compio::net::TcpStream::connect(addr).await.unwrap();
+                let stream = monocoque_core::rt::TcpStream::connect(addr).await.unwrap();
                 let mut pull = PullSocket::from_tcp(stream).await.unwrap();
 
                 let mut received = Vec::with_capacity(N);
                 while received.len() < N {
-                    match compio::time::timeout(Duration::from_secs(5), pull.recv_batch()).await {
+                    match monocoque_core::rt::timeout(Duration::from_secs(5), pull.recv_batch())
+                        .await
+                    {
                         Ok(Ok(Some(batch))) => received.extend(batch),
                         _ => break,
                     }

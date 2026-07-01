@@ -3,7 +3,7 @@
 //! This measures the actual round-trip latency without Criterion overhead.
 
 use bytes::Bytes;
-use compio::net::{TcpListener, TcpStream};
+use monocoque::rt::{TcpListener, TcpStream};
 use monocoque_zmtp::{RepSocket, ReqSocket};
 use std::time::{Duration, Instant};
 
@@ -16,7 +16,7 @@ async fn measure_latency() -> Duration {
     let addr = listener.local_addr().unwrap();
 
     // Start server
-    compio::runtime::spawn(async move {
+    monocoque::rt::spawn_detached(async move {
         let (stream, _) = listener.accept().await.unwrap();
         let mut rep = RepSocket::new(stream).await.unwrap();
         for _ in 0..(WARMUP + ITERATIONS) {
@@ -24,10 +24,9 @@ async fn measure_latency() -> Duration {
                 rep.send(msg).await.ok();
             }
         }
-    })
-    .detach();
+    });
 
-    compio::time::sleep(Duration::from_millis(50)).await;
+    monocoque::rt::sleep(Duration::from_millis(50)).await;
 
     // Connect client
     let stream = TcpStream::connect(addr).await.unwrap();
@@ -50,7 +49,7 @@ async fn measure_latency() -> Duration {
 }
 
 fn main() {
-    compio::runtime::Runtime::new().unwrap().block_on(async {
+    monocoque::rt::LocalRuntime::new().unwrap().block_on(async {
         println!("Measuring {ITERATIONS} iterations (64B payload)...\n");
 
         let total = measure_latency().await;

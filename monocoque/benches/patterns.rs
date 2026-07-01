@@ -22,6 +22,14 @@
 
 use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+
+// Identifies which runtime backend this build benchmarks, so compio and tokio
+// results land under distinct criterion ids instead of overwriting each other.
+const BENCH_BACKEND: &str = if cfg!(feature = "runtime-tokio") {
+    "tokio"
+} else {
+    "compio"
+};
 use monocoque::zmq::{PubSocket, SocketOptions, SubSocket};
 use std::sync::mpsc;
 use std::thread;
@@ -37,7 +45,7 @@ const MESSAGE_SIZE: usize = 256;
 const WARMUP_MSGS: usize = 200;
 /// Brief settle after the subscription is issued, to cut the initial
 /// slow-joiner drop burst (untimed). Uses `thread::sleep`, not
-/// `compio::time::sleep`, which would block on the stalled io_uring handshake
+/// `monocoque::rt::sleep`, which would block on the stalled io_uring handshake
 /// timer left behind by `accept_subscriber`.
 const SETTLE: Duration = Duration::from_millis(50);
 /// Of every `MESSAGE_COUNT` published in the topic-filtering test, this many
@@ -58,7 +66,7 @@ fn run_monocoque_fanout(num_subs: usize, iters: u64) -> Duration {
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
 
     let pub_handle = thread::spawn(move || {
-        let rt = compio::runtime::Runtime::new().unwrap();
+        let rt = monocoque::rt::LocalRuntime::new().unwrap();
         rt.block_on(async move {
             let mut pub_socket = PubSocket::bind("127.0.0.1:0").await.unwrap();
             addr_tx.send(pub_socket.local_addr().unwrap()).unwrap();
@@ -81,9 +89,11 @@ fn run_monocoque_fanout(num_subs: usize, iters: u64) -> Duration {
     let mut sub_handles = Vec::new();
     for _ in 0..num_subs {
         sub_handles.push(thread::spawn(move || {
-            let rt = compio::runtime::Runtime::new().unwrap();
+            let rt = monocoque::rt::LocalRuntime::new().unwrap();
             rt.block_on(async move {
-                let stream = compio::net::TcpStream::connect(server_addr).await.unwrap();
+                let stream = monocoque::rt::TcpStream::connect(server_addr)
+                    .await
+                    .unwrap();
                 let mut sub = SubSocket::from_tcp_with_options(
                     stream,
                     SocketOptions::default().with_buffer_sizes(16384, 16384),
@@ -124,7 +134,7 @@ async fn recv_n(sub: &mut SubSocket, n: usize) {
 
 fn monocoque_pubsub_fanout(c: &mut Criterion) {
     monocoque::dev_tracing::init_tracing();
-    let mut group = c.benchmark_group("patterns/monocoque/pubsub_fanout");
+    let mut group = c.benchmark_group(format!("patterns/monocoque-{BENCH_BACKEND}/pubsub_fanout"));
     for &num_subs in FANOUT_SUBSCRIBERS {
         group.throughput(Throughput::Elements((MESSAGE_COUNT * num_subs) as u64));
         group.bench_with_input(
@@ -249,7 +259,7 @@ fn run_monocoque_topic_filtering(iters: u64) -> Duration {
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
 
     let pub_handle = thread::spawn(move || {
-        let rt = compio::runtime::Runtime::new().unwrap();
+        let rt = monocoque::rt::LocalRuntime::new().unwrap();
         rt.block_on(async move {
             let mut pub_socket = PubSocket::bind("127.0.0.1:0").await.unwrap();
             addr_tx.send(pub_socket.local_addr().unwrap()).unwrap();
@@ -271,9 +281,11 @@ fn run_monocoque_topic_filtering(iters: u64) -> Duration {
     let server_addr = addr_rx.recv().unwrap();
 
     let sub_handle = thread::spawn(move || {
-        let rt = compio::runtime::Runtime::new().unwrap();
+        let rt = monocoque::rt::LocalRuntime::new().unwrap();
         rt.block_on(async move {
-            let stream = compio::net::TcpStream::connect(server_addr).await.unwrap();
+            let stream = monocoque::rt::TcpStream::connect(server_addr)
+                .await
+                .unwrap();
             let mut sub = SubSocket::from_tcp(stream).await.unwrap();
             sub.subscribe(b"match.").await.unwrap();
             recv_n(&mut sub, MATCHED_PER_ROUND * 2).await; // untimed warmup
@@ -291,7 +303,9 @@ fn run_monocoque_topic_filtering(iters: u64) -> Duration {
 
 fn monocoque_topic_filtering(c: &mut Criterion) {
     monocoque::dev_tracing::init_tracing();
-    let mut group = c.benchmark_group("patterns/monocoque/topic_filtering");
+    let mut group = c.benchmark_group(format!(
+        "patterns/monocoque-{BENCH_BACKEND}/topic_filtering"
+    ));
     group.throughput(Throughput::Elements(MESSAGE_COUNT as u64));
     group.bench_function("filter_10_percent", |b| {
         b.iter_custom(run_monocoque_topic_filtering);

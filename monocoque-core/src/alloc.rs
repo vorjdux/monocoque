@@ -6,7 +6,7 @@
 #![allow(unsafe_code)]
 
 use bytes::Bytes;
-use compio::buf::{IoBufMut, SetBufInit};
+use compio_buf::{IoBufMut, SetBufInit};
 use std::alloc::{Layout, alloc, dealloc};
 use std::ptr::NonNull;
 use std::sync::Arc;
@@ -77,7 +77,7 @@ unsafe impl Sync for SlabMut {}
 // - as_buf_ptr() returns a valid pointer to initialized memory region
 // - The memory region [ptr, ptr + len) contains initialized data
 // - The buffer is pinned and stable during IO operations
-unsafe impl compio::buf::IoBuf for SlabMut {
+unsafe impl compio_buf::IoBuf for SlabMut {
     #[inline]
     fn as_buf_ptr(&self) -> *const u8 {
         self.ptr.as_ptr()
@@ -221,7 +221,7 @@ impl IoArena {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use compio::buf::IoBuf;
+    use compio_buf::IoBuf;
 
     #[test]
     fn oversized_alloc_does_not_panic_or_corrupt() {

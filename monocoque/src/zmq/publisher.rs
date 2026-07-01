@@ -1,9 +1,9 @@
 //! PUB socket implementation with worker pool architecture.
 
 use bytes::Bytes;
-use compio::net::TcpListener;
 use monocoque_core::monitor::{SocketEventSender, SocketMonitor, create_monitor};
 use monocoque_core::options::SocketOptions;
+use monocoque_core::rt::TcpListener;
 use monocoque_zmtp::SocketType;
 use monocoque_zmtp::publisher::PubSocket as InternalPub;
 use std::io;
@@ -42,7 +42,7 @@ pub struct PubSocket {
 
 impl PubSocket {
     /// Bind to an address with default worker count (CPU cores).
-    pub async fn bind(addr: impl compio::net::ToSocketAddrsAsync) -> io::Result<Self> {
+    pub async fn bind(addr: impl monocoque_core::rt::ToSocketAddrs) -> io::Result<Self> {
         let listener = TcpListener::bind(addr).await?;
         Ok(Self {
             inner: InternalPub::new(),
@@ -53,7 +53,7 @@ impl PubSocket {
 
     /// Bind with a specific number of worker threads.
     pub async fn bind_with_workers(
-        addr: impl compio::net::ToSocketAddrsAsync,
+        addr: impl monocoque_core::rt::ToSocketAddrs,
         worker_count: usize,
     ) -> io::Result<Self> {
         let listener = TcpListener::bind(addr).await?;

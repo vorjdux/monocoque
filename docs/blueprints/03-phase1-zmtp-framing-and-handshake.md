@@ -227,7 +227,7 @@ This is one of the most important memory-safety decisions in the project.
 
 ---
 
-## 8. Interop: The “It’s Alive” Test
+## 8. Interop: The "It's Alive" Test
 
 Phase 1 is validated against **real `libzmq`**, not mocks.
 

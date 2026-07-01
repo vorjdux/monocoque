@@ -87,7 +87,7 @@ let client_opts = SocketOptions::default()
 let mut client = DealerSocket::connect_with_options("server:5555", client_opts).await?;
 ```
 
-The ZMTP handshake completes automatically on connect/accept. Handshake overhead is roughly 3 ms; per-message overhead is around 32 bytes (MAC + nonce). Throughput is typically 90–95% of NULL.
+The ZMTP handshake completes automatically on connect/accept. Handshake overhead is roughly 3 ms; per-message overhead is around 32 bytes (MAC + nonce). Throughput is typically 90-95% of NULL.
 
 Store the server secret key in an environment variable or a secrets manager. Never log it, never commit it.
 
@@ -130,7 +130,7 @@ impl ZapHandler for AllowlistHandler {
 spawn_zap_server(Arc::new(AllowlistHandler { allowed_keys: load_allowlist() }))?;
 ```
 
-ZAP adds one inproc round-trip to connection setup (typically 50–500 µs depending on handler complexity). It does not affect per-message performance.
+ZAP adds one inproc round-trip to connection setup (typically 50-500 µs depending on handler complexity). It does not affect per-message performance.
 
 Domains let you apply different policies on the same server:
 

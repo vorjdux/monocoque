@@ -1,6 +1,6 @@
 use bytes::{BufMut, Bytes, BytesMut};
-use compio::net::TcpStream;
 use monocoque_core::options::SocketOptions;
+use monocoque_core::rt::TcpStream;
 use std::io;
 use tracing::debug;
 

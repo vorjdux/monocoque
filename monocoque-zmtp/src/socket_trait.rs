@@ -92,7 +92,7 @@ macro_rules! impl_socket_trait {
         #[async_trait::async_trait(?Send)]
         impl<S> $crate::Socket for $socket_type
         where
-            S: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin + 'static,
+            S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin + 'static,
         {
             async fn send(&mut self, msg: Vec<bytes::Bytes>) -> std::io::Result<()> {
                 self.send(msg).await

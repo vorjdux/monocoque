@@ -20,8 +20,16 @@
 //! throughput bench.
 
 use bytes::Bytes;
-use compio::net::TcpListener;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+
+// Identifies which runtime backend this build benchmarks, so compio and tokio
+// results land under distinct criterion ids instead of overwriting each other.
+const BENCH_BACKEND: &str = if cfg!(feature = "runtime-tokio") {
+    "tokio"
+} else {
+    "compio"
+};
+use monocoque::rt::TcpListener;
 use monocoque::zmq::{PullFanIn, PullSocket, PushFanOut, PushSocket, SocketOptions};
 use std::sync::mpsc;
 use std::sync::{Arc, Barrier};
@@ -47,7 +55,7 @@ fn coalescing_options() -> SocketOptions {
 /// slowest worker's window, i.e. when the last message of the batch arrives.
 fn monocoque_fanout(c: &mut Criterion) {
     monocoque::dev_tracing::init_tracing();
-    let mut group = c.benchmark_group("fanout_fanin/monocoque/fanout");
+    let mut group = c.benchmark_group(format!("fanout_fanin/monocoque-{BENCH_BACKEND}/fanout"));
     group.measurement_time(Duration::from_secs(10));
     group.sample_size(10);
 
@@ -68,7 +76,7 @@ fn monocoque_fanout(c: &mut Criterion) {
                     let vent_payload = payload.clone();
                     let vent_barrier = barrier.clone();
                     let ventilator = thread::spawn(move || {
-                        let rt = compio::runtime::Runtime::new().unwrap();
+                        let rt = monocoque::rt::LocalRuntime::new().unwrap();
                         rt.block_on(async move {
                             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
                             port_tx.send(listener.local_addr().unwrap().port()).unwrap();
@@ -100,7 +108,7 @@ fn monocoque_fanout(c: &mut Criterion) {
                         let worker_barrier = barrier.clone();
                         let worker_elapsed = elapsed_tx.clone();
                         thread::spawn(move || {
-                            let rt = compio::runtime::Runtime::new().unwrap();
+                            let rt = monocoque::rt::LocalRuntime::new().unwrap();
                             rt.block_on(async move {
                                 let mut pull =
                                     PullSocket::connect(("127.0.0.1", port)).await.unwrap();
@@ -134,14 +142,22 @@ fn monocoque_fanout(c: &mut Criterion) {
 /// Fan-in with write-coalescing senders: many messages per kernel write, so each
 /// kernel read on the sink carries a big batch.
 fn monocoque_fanin_coalesced(c: &mut Criterion) {
-    fanin(c, "fanout_fanin/monocoque/fanin_coalesced", true);
+    fanin(
+        c,
+        &format!("fanout_fanin/monocoque-{BENCH_BACKEND}/fanin_coalesced"),
+        true,
+    );
 }
 
 /// Fan-in with eager senders: one kernel write per message, so a kernel read on
 /// the sink may carry as little as one message. This is the case where batching
 /// the merge channel could in principle add overhead rather than amortize it.
 fn monocoque_fanin_eager(c: &mut Criterion) {
-    fanin(c, "fanout_fanin/monocoque/fanin_eager", false);
+    fanin(
+        c,
+        &format!("fanout_fanin/monocoque-{BENCH_BACKEND}/fanin_eager"),
+        false,
+    );
 }
 
 /// Fan-in: `WORKERS` PUSH workers each send `PER_WORKER` messages to one
@@ -169,7 +185,7 @@ fn fanin(c: &mut Criterion, group_name: &str, coalesce: bool) {
                     let (elapsed_tx, elapsed_rx) = mpsc::channel::<Duration>();
 
                     let sink_thread = thread::spawn(move || {
-                        let rt = compio::runtime::Runtime::new().unwrap();
+                        let rt = monocoque::rt::LocalRuntime::new().unwrap();
                         rt.block_on(async move {
                             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
                             port_tx.send(listener.local_addr().unwrap().port()).unwrap();
@@ -201,7 +217,7 @@ fn fanin(c: &mut Criterion, group_name: &str, coalesce: bool) {
                     for _ in 0..WORKERS {
                         let worker_payload = payload.clone();
                         workers.push(thread::spawn(move || {
-                            let rt = compio::runtime::Runtime::new().unwrap();
+                            let rt = monocoque::rt::LocalRuntime::new().unwrap();
                             rt.block_on(async move {
                                 let options = if coalesce {
                                     coalescing_options()

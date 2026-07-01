@@ -54,7 +54,7 @@ async fn main() -> std::io::Result<()> {
             .await?;
 
     // ── Distribute tasks ──────────────────────────────────────────────────
-    println!("Distributing {TASKS} tasks to {WORKERS} workers…");
+    println!("Distributing {TASKS} tasks to {WORKERS} workers...");
     let start = Instant::now();
     for i in 0..TASKS {
         ventilator

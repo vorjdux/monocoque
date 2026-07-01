@@ -172,8 +172,14 @@ fn test_curve_debug_impl_hides_secret() {
     assert!(!debug_str.contains("0x")); // No hex dumps
 }
 
-#[compio::test]
-async fn test_curve_handshake_sequence() {
+#[test]
+fn test_curve_handshake_sequence() {
+    monocoque_core::rt::LocalRuntime::new()
+        .unwrap()
+        .block_on(test_curve_handshake_sequence_impl())
+}
+
+async fn test_curve_handshake_sequence_impl() {
     // This would be a full integration test with actual TCP streams
     // For now, we just verify the state machine can be created
 

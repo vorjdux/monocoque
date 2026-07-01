@@ -6,10 +6,14 @@ Add monocoque to your `Cargo.toml`:
 [dependencies]
 monocoque-rs = "0.1"
 bytes = "1.0"
-compio = "0.12"
+compio = { version = "0.10", features = ["runtime", "macros"] }
 ```
 
-All socket operations are async and require a compio runtime. Annotate your entry point with `#[compio::main]`.
+All socket operations are async. On the default backend you run them on a compio
+runtime; annotate your entry point with `#[compio::main]`. To run on tokio
+instead, build with `default-features = false, features = ["runtime-tokio", "zmq"]`
+and drive the sockets from a current-thread tokio runtime inside a `LocalSet`.
+See [Getting Started](GETTING_STARTED.md#choosing-a-runtime) for both setups.
 
 ---
 

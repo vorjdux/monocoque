@@ -4,8 +4,8 @@
 //! allowing inproc transport to integrate seamlessly with existing socket infrastructure.
 
 use bytes::{Bytes, BytesMut};
-use compio::buf::{BufResult, IoBuf, IoBufMut};
-use compio::io::{AsyncRead, AsyncWrite};
+use compio_buf::{BufResult, IoBuf, IoBufMut};
+use compio_io::{AsyncRead, AsyncWrite};
 use monocoque_core::inproc::{InprocReceiver, InprocSender};
 use std::io;
 
@@ -129,8 +129,8 @@ mod tests {
 
     #[test]
     fn test_inproc_stream_basic() -> io::Result<()> {
-        use compio::buf::BufResult;
-        use compio::io::AsyncRead;
+        use compio_buf::BufResult;
+        use compio_io::AsyncRead;
 
         let endpoint = "inproc://test-stream-basic";
         let (tx1, rx1) = bind_inproc(endpoint)?;
@@ -141,7 +141,7 @@ mod tests {
         // Send data into stream1's receiver before reading (channel buffers it)
         tx2.send(vec![Bytes::from_static(b"hello")]).unwrap();
 
-        let rt = compio::runtime::Runtime::new()?;
+        let rt = monocoque_core::rt::LocalRuntime::new()?;
         let (n, buf) = rt.block_on(async {
             let buf = vec![0u8; 10];
             let BufResult(result, buf) = AsyncRead::read(&mut stream1, buf).await;

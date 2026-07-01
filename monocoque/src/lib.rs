@@ -1,12 +1,13 @@
 //! # Monocoque
 //!
-//! A high-performance, multi-protocol messaging runtime built on `io_uring`.
+//! A high-performance, multi-protocol messaging runtime. It runs on `io_uring`
+//! (via `compio`) by default, with an optional tokio backend for portability.
 //!
 //! ## Architecture
 //!
 //! Monocoque is structured as a **messaging kernel** with clean layering:
 //!
-//! - **`monocoque-core`**: Lock-free allocators, `io_uring` proactor, SPSC queues
+//! - **`monocoque-core`**: Lock-free allocators, runtime facade, SPSC queues
 //! - **Protocol crates**: Pure state machines (sans-IO)
 //! - **`monocoque`**: Public API surface (this crate)
 //!
@@ -67,7 +68,7 @@
 //! ## Performance
 //!
 //! - **Zero-copy**: Uses `bytes::Bytes` for refcounted message buffers
-//! - **`io_uring`**: Native Linux async I/O (via `compio`)
+//! - **Runtime backends**: native `io_uring` via `compio` (default), or tokio
 //! - **Lock-free**: SPSC queues, no shared mutable state in hot paths
 //! - **Sans-IO**: Protocol logic is pure, testable, and runtime-agnostic
 //!
@@ -99,6 +100,14 @@ pub use bytes::Bytes;
 pub use monocoque_core::options::SocketOptions;
 pub use monocoque_core::reconnect::{ReconnectError, ReconnectState};
 pub use monocoque_core::socket_type::SocketType;
+
+/// Runtime-agnostic networking types (TCP/Unix streams, listeners).
+///
+/// These resolve to the active backend (compio by default, tokio with the
+/// `runtime-tokio` feature). Socket constructors such as `from_unix_stream`
+/// accept the types re-exported here, so application code never names a runtime
+/// crate directly.
+pub use monocoque_core::rt;
 
 // Protocol modules (opt-in via features)
 #[cfg(feature = "zmq")]

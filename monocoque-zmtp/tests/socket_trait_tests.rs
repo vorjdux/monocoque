@@ -3,9 +3,15 @@
 use bytes::Bytes;
 use monocoque_zmtp::Socket;
 
-#[compio::test]
+#[test]
 #[allow(clippy::future_not_send)]
-async fn test_socket_trait_send_recv_signature() {
+fn test_socket_trait_send_recv_signature() {
+    monocoque_core::rt::LocalRuntime::new()
+        .unwrap()
+        .block_on(test_socket_trait_send_recv_signature_impl())
+}
+
+async fn test_socket_trait_send_recv_signature_impl() {
     // Verify the Socket trait's send/recv method signatures compile correctly.
     // This test is primarily a compile-time check.
     async fn send_message<S: Socket>(socket: &mut S, msg: Vec<Bytes>) -> std::io::Result<()> {
@@ -22,10 +28,12 @@ async fn test_socket_trait_send_recv_signature() {
     }
 
     // Test that the trait is implemented correctly by using real connected sockets
-    let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = monocoque_core::rt::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
     let addr = listener.local_addr().unwrap();
 
-    let server_task = compio::runtime::spawn(async move {
+    let server_task = monocoque_core::rt::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
         monocoque_zmtp::RouterSocket::from_tcp(stream)
             .await
@@ -33,7 +41,7 @@ async fn test_socket_trait_send_recv_signature() {
     });
 
     let mut dealer = monocoque_zmtp::DealerSocket::connect(addr).await.unwrap();
-    let mut router = server_task.await;
+    let mut router = monocoque_core::rt::join(server_task).await;
 
     // Verify types via trait
     assert_eq!(
@@ -53,14 +61,22 @@ async fn test_socket_trait_send_recv_signature() {
     assert!(msg.is_some());
 }
 
-#[compio::test]
-async fn test_multiple_socket_types() {
+#[test]
+fn test_multiple_socket_types() {
+    monocoque_core::rt::LocalRuntime::new()
+        .unwrap()
+        .block_on(test_multiple_socket_types_impl())
+}
+
+async fn test_multiple_socket_types_impl() {
     use monocoque_zmtp::session::SocketType;
 
-    let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = monocoque_core::rt::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
     let addr = listener.local_addr().unwrap();
 
-    let server_task = compio::runtime::spawn(async move {
+    let server_task = monocoque_core::rt::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
         monocoque_zmtp::RouterSocket::from_tcp(stream)
             .await
@@ -68,7 +84,7 @@ async fn test_multiple_socket_types() {
     });
 
     let dealer = monocoque_zmtp::DealerSocket::connect(addr).await.unwrap();
-    let router = server_task.await;
+    let router = monocoque_core::rt::join(server_task).await;
 
     assert_eq!(dealer.socket_type(), SocketType::Dealer);
     assert_eq!(router.socket_type(), SocketType::Router);

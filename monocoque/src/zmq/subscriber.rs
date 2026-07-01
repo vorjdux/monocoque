@@ -1,9 +1,9 @@
 //! SUB socket implementation.
 
 use bytes::Bytes;
-use compio::net::TcpStream;
 use monocoque_core::monitor::{SocketEvent, SocketEventSender, SocketMonitor, create_monitor};
 use monocoque_core::options::SocketOptions;
+use monocoque_core::rt::TcpStream;
 use monocoque_zmtp::SocketType;
 use monocoque_zmtp::subscriber::SubSocket as InternalSub;
 use std::io;
@@ -44,7 +44,7 @@ use std::io;
 /// ```
 pub struct SubSocket<S = TcpStream>
 where
-    S: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+    S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
 {
     inner: InternalSub<S>,
     monitor: Option<SocketEventSender>,
@@ -127,7 +127,7 @@ impl SubSocket {
     /// # }
     /// ```
     #[cfg(unix)]
-    pub async fn connect_ipc(path: &str) -> io::Result<SubSocket<compio::net::UnixStream>> {
+    pub async fn connect_ipc(path: &str) -> io::Result<SubSocket<monocoque_core::rt::UnixStream>> {
         use std::path::PathBuf;
 
         // Strip "ipc://" prefix if present
@@ -156,7 +156,7 @@ impl SubSocket {
     ///
     /// ```rust,no_run
     /// use monocoque::zmq::{SubSocket, SocketOptions};
-    /// use compio::net::TcpStream;
+    /// use monocoque_core::rt::TcpStream;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
@@ -185,7 +185,7 @@ impl SubSocket {
         options: monocoque_core::options::SocketOptions,
     ) -> io::Result<SubSocket<Stream>>
     where
-        Stream: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+        Stream: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
     {
         Ok(SubSocket {
             inner: InternalSub::with_options(stream, options).await?,
@@ -197,7 +197,7 @@ impl SubSocket {
 // Generic impl - works with any stream type
 impl<S> SubSocket<S>
 where
-    S: compio::io::AsyncRead + compio::io::AsyncWrite + Unpin,
+    S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
 {
     /// Enable monitoring for this socket.
     ///
@@ -300,9 +300,9 @@ where
 
 // Unix-specific impl for IPC support
 #[cfg(unix)]
-impl SubSocket<compio::net::UnixStream> {
+impl SubSocket<monocoque_core::rt::UnixStream> {
     /// Create a SUB socket from an existing Unix domain socket stream (IPC).
-    pub async fn from_unix_stream(stream: compio::net::UnixStream) -> io::Result<Self> {
+    pub async fn from_unix_stream(stream: monocoque_core::rt::UnixStream) -> io::Result<Self> {
         Ok(Self {
             inner: InternalSub::new(stream).await?,
             monitor: None,
@@ -313,7 +313,7 @@ impl SubSocket<compio::net::UnixStream> {
     ///
     /// This method provides full control over socket behavior through SocketOptions.
     pub async fn from_unix_stream_with_options(
-        stream: compio::net::UnixStream,
+        stream: monocoque_core::rt::UnixStream,
         options: monocoque_core::options::SocketOptions,
     ) -> io::Result<Self> {
         Ok(Self {

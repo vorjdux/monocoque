@@ -38,7 +38,7 @@
 use crate::codec::ZmtpError;
 use crate::security::zap::{ZapMechanism, ZapRequest, ZapStatus};
 use bytes::{Bytes, BytesMut};
-use compio::io::{AsyncRead, AsyncWrite};
+use compio_io::{AsyncRead, AsyncWrite};
 use std::time::Duration;
 use tracing::{debug, warn};
 
@@ -157,7 +157,7 @@ pub async fn plain_client_handshake<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    use compio::buf::BufResult;
+    use compio_buf::BufResult;
     use monocoque_core::timeout::{read_exact_with_timeout, write_all_with_timeout};
 
     debug!(
@@ -240,7 +240,7 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
     H: PlainAuthHandler,
 {
-    use compio::buf::BufResult;
+    use compio_buf::BufResult;
     use monocoque_core::timeout::{read_exact_with_timeout, write_all_with_timeout};
 
     debug!(
@@ -335,7 +335,7 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     use crate::security::zap_client::ZapClient;
-    use compio::buf::BufResult;
+    use compio_buf::BufResult;
     use monocoque_core::timeout::{read_exact_with_timeout, write_all_with_timeout};
 
     debug!(
@@ -452,8 +452,14 @@ pub fn create_plain_zap_request(
 mod tests {
     use super::*;
 
-    #[compio::test]
-    async fn test_static_plain_handler() {
+    #[test]
+    fn test_static_plain_handler() {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(test_static_plain_handler_impl())
+    }
+
+    async fn test_static_plain_handler_impl() {
         let mut handler = StaticPlainHandler::new();
         handler.add_user("admin", "secret123");
         handler.add_user("guest", "guest123");

@@ -12,9 +12,17 @@
 #[cfg(unix)]
 use bytes::Bytes;
 #[cfg(unix)]
-use compio::net::{TcpListener, UnixListener};
-#[cfg(unix)]
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+
+// Identifies which runtime backend this build benchmarks, so compio and tokio
+// results land under distinct criterion ids instead of overwriting each other.
+const BENCH_BACKEND: &str = if cfg!(feature = "runtime-tokio") {
+    "tokio"
+} else {
+    "compio"
+};
+#[cfg(unix)]
+use monocoque::rt::{TcpListener, UnixListener};
 #[cfg(unix)]
 use monocoque::zmq::{PullSocket, PushSocket, RepSocket, ReqSocket, SocketOptions};
 #[cfg(unix)]
@@ -53,12 +61,12 @@ fn ipc_path(label: &str) -> String {
 ///
 /// Server on its own thread; client connects, warms up, measures one round-trip.
 fn monocoque_tcp_latency(c: &mut Criterion) {
-    let mut group = c.benchmark_group("ipc_vs_tcp/monocoque/tcp_latency");
+    let mut group = c.benchmark_group(format!("ipc_vs_tcp/monocoque-{BENCH_BACKEND}/tcp_latency"));
     group.measurement_time(Duration::from_secs(10));
     group.sample_size(100);
 
     // Single runtime reused across iterations.
-    let rt = compio::runtime::Runtime::new().unwrap();
+    let rt = monocoque::rt::LocalRuntime::new().unwrap();
 
     for &size in MESSAGE_SIZES {
         let payload = Bytes::from(vec![0u8; size]);
@@ -72,7 +80,7 @@ fn monocoque_tcp_latency(c: &mut Criterion) {
                         let (port_tx, port_rx) = mpsc::channel::<u16>();
 
                         let server_thread = thread::spawn(move || {
-                            let rt = compio::runtime::Runtime::new().unwrap();
+                            let rt = monocoque::rt::LocalRuntime::new().unwrap();
                             rt.block_on(async move {
                                 let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
                                 let port = listener.local_addr().unwrap().port();
@@ -101,7 +109,7 @@ fn monocoque_tcp_latency(c: &mut Criterion) {
                         let port = port_rx.recv().unwrap();
 
                         let req = rt.block_on(async {
-                            let stream = compio::net::TcpStream::connect(("127.0.0.1", port))
+                            let stream = monocoque::rt::TcpStream::connect(("127.0.0.1", port))
                                 .await
                                 .unwrap();
                             let mut req = ReqSocket::from_tcp_with_options(
@@ -144,11 +152,11 @@ fn monocoque_tcp_latency(c: &mut Criterion) {
 /// Server on its own thread; client connects via a unique socket path, warms up,
 /// measures one round-trip.
 fn monocoque_ipc_latency(c: &mut Criterion) {
-    let mut group = c.benchmark_group("ipc_vs_tcp/monocoque/ipc_latency");
+    let mut group = c.benchmark_group(format!("ipc_vs_tcp/monocoque-{BENCH_BACKEND}/ipc_latency"));
     group.measurement_time(Duration::from_secs(10));
     group.sample_size(100);
 
-    let rt = compio::runtime::Runtime::new().unwrap();
+    let rt = monocoque::rt::LocalRuntime::new().unwrap();
 
     for &size in MESSAGE_SIZES {
         let payload = Bytes::from(vec![0u8; size]);
@@ -162,7 +170,7 @@ fn monocoque_ipc_latency(c: &mut Criterion) {
                         let (path_tx, path_rx) = mpsc::channel::<String>();
 
                         let server_thread = thread::spawn(move || {
-                            let rt = compio::runtime::Runtime::new().unwrap();
+                            let rt = monocoque::rt::LocalRuntime::new().unwrap();
                             rt.block_on(async move {
                                 let path = ipc_path("lat");
                                 let _ = std::fs::remove_file(&path);
@@ -171,7 +179,7 @@ fn monocoque_ipc_latency(c: &mut Criterion) {
 
                                 let (stream, _) = listener.accept().await.unwrap();
                                 let mut rep =
-                                    RepSocket::<compio::net::UnixStream>::from_unix_stream_with_options(
+                                    RepSocket::<monocoque::rt::UnixStream>::from_unix_stream_with_options(
                                         stream,
                                         SocketOptions::default().with_buffer_sizes(4096, 4096),
                                     )
@@ -195,9 +203,9 @@ fn monocoque_ipc_latency(c: &mut Criterion) {
 
                         let req = rt.block_on(async {
                             let stream =
-                                compio::net::UnixStream::connect(&path).await.unwrap();
+                                monocoque::rt::UnixStream::connect(&path).await.unwrap();
                             let mut req =
-                                ReqSocket::<compio::net::UnixStream>::from_unix_stream_with_options(
+                                ReqSocket::<monocoque::rt::UnixStream>::from_unix_stream_with_options(
                                     stream,
                                     SocketOptions::default().with_buffer_sizes(4096, 4096),
                                 )
@@ -237,7 +245,9 @@ fn monocoque_ipc_latency(c: &mut Criterion) {
 /// PULL binds in a separate thread. PUSH connects in the bench thread.
 /// Timer on PULL side.
 fn monocoque_tcp_throughput(c: &mut Criterion) {
-    let mut group = c.benchmark_group("ipc_vs_tcp/monocoque/tcp_throughput");
+    let mut group = c.benchmark_group(format!(
+        "ipc_vs_tcp/monocoque-{BENCH_BACKEND}/tcp_throughput"
+    ));
     group.measurement_time(Duration::from_secs(15));
     group.sample_size(10);
 
@@ -254,7 +264,7 @@ fn monocoque_tcp_throughput(c: &mut Criterion) {
                     let payload_clone = payload.clone();
 
                     let pull_thread = thread::spawn(move || {
-                        let rt = compio::runtime::Runtime::new().unwrap();
+                        let rt = monocoque::rt::LocalRuntime::new().unwrap();
                         rt.block_on(async move {
                             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
                             let port = listener.local_addr().unwrap().port();
@@ -278,7 +288,7 @@ fn monocoque_tcp_throughput(c: &mut Criterion) {
 
                     let port = port_rx.recv().unwrap();
 
-                    let push_rt = compio::runtime::Runtime::new().unwrap();
+                    let push_rt = monocoque::rt::LocalRuntime::new().unwrap();
                     push_rt.block_on(async move {
                         let mut push = PushSocket::connect(("127.0.0.1", port)).await.unwrap();
                         for _ in 0..MESSAGE_COUNT {
@@ -305,7 +315,9 @@ fn monocoque_tcp_throughput(c: &mut Criterion) {
 /// PULL binds in a separate thread. PUSH connects in the bench thread.
 /// Timer on PULL side.
 fn monocoque_ipc_throughput(c: &mut Criterion) {
-    let mut group = c.benchmark_group("ipc_vs_tcp/monocoque/ipc_throughput");
+    let mut group = c.benchmark_group(format!(
+        "ipc_vs_tcp/monocoque-{BENCH_BACKEND}/ipc_throughput"
+    ));
     group.measurement_time(Duration::from_secs(15));
     group.sample_size(10);
 
@@ -322,7 +334,7 @@ fn monocoque_ipc_throughput(c: &mut Criterion) {
                     let payload_clone = payload.clone();
 
                     let pull_thread = thread::spawn(move || {
-                        let rt = compio::runtime::Runtime::new().unwrap();
+                        let rt = monocoque::rt::LocalRuntime::new().unwrap();
                         rt.block_on(async move {
                             let path = ipc_path("tp");
                             let _ = std::fs::remove_file(&path);
@@ -331,7 +343,7 @@ fn monocoque_ipc_throughput(c: &mut Criterion) {
 
                             let (stream, _) = listener.accept().await.unwrap();
                             let mut pull =
-                                PullSocket::<compio::net::UnixStream>::from_unix_stream_with_options(
+                                PullSocket::<monocoque::rt::UnixStream>::from_unix_stream_with_options(
                                     stream,
                                     SocketOptions::default().with_buffer_sizes(16384, 16384),
                                 )
@@ -349,12 +361,12 @@ fn monocoque_ipc_throughput(c: &mut Criterion) {
 
                     let path = path_rx.recv().unwrap();
 
-                    let push_rt = compio::runtime::Runtime::new().unwrap();
+                    let push_rt = monocoque::rt::LocalRuntime::new().unwrap();
                     push_rt.block_on(async move {
                         let stream =
-                            compio::net::UnixStream::connect(&path).await.unwrap();
+                            monocoque::rt::UnixStream::connect(&path).await.unwrap();
                         let mut push =
-                            PushSocket::<compio::net::UnixStream>::from_unix_stream_with_options(
+                            PushSocket::<monocoque::rt::UnixStream>::from_unix_stream_with_options(
                                 stream,
                                 SocketOptions::default().with_buffer_sizes(16384, 16384),
                             )

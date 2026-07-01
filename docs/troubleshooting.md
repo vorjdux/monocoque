@@ -107,8 +107,10 @@ mode) and no message is queued. Either:
 1. **Buffer too small**: Read buffer smaller than your message causes fragmented
    reads. Increase with `.with_read_buffer_size(n)`.
 
-2. **io_uring not active**: On kernels < 5.11, compio falls back to thread-pool
-   I/O. Check `uname -r` and update the kernel if possible.
+2. **io_uring not active** (default compio backend): On kernels < 5.11, compio
+   falls back to thread-pool I/O. Check `uname -r` and update the kernel if
+   possible, or build with the tokio backend (`runtime-tokio`) on platforms
+   without io_uring.
 
 3. **HWM too low**: If HWM is small, sends block frequently. Increase or set to 0.
 
