@@ -208,7 +208,8 @@ cargo build --release --workspace
 cargo test --workspace --features zmq
 cargo bench --features zmq       # runs the benchmark suite
 
-# The same suite runs on the tokio backend
+# The same tests and benchmarks also run on the tokio backend
+cargo test --workspace --no-default-features --features runtime-tokio,zmq
 cargo bench --no-default-features --features runtime-tokio,zmq
 ```
 
@@ -230,4 +231,4 @@ MIT - see [LICENSE](LICENSE).
 
 ---
 
-Built with: `compio`, `bytes`, `flume`, `smallvec`
+Built with: `compio` (default backend) or `tokio` (optional backend), `bytes`, `flume`, `smallvec`
