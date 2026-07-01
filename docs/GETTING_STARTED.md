@@ -4,10 +4,11 @@ A five-minute guide to sending your first message with Monocoque.
 
 **Performance Highlights:**
 
-- **31-37% faster latency** than libzmq (23 μs vs 33-36 μs round-trip)
-- **3.24 M msg/sec throughput** with the batching API
-- **Pure Rust**  -  no C dependencies, full async/await
-- **Memory safe**  -  zero unsafe code in the protocol layer
+- **~5x lower latency** than libzmq (43-58 µs vs ~270 µs REQ/REP round-trip)
+- **Up to 13.6 M msg/sec throughput** with write coalescing
+- **Two runtimes** - io_uring via compio (default) or epoll via tokio, same API
+- **Pure Rust** - no C dependencies, full async/await
+- **Memory safe** - unsafe is confined to the slab allocator and runtime facade
 
 ---
 
@@ -31,10 +32,13 @@ Monocoque ships two interchangeable runtime backends, selected by a Cargo
 feature. The protocol, codec and API are identical on both; only the runtime
 primitives differ.
 
-- **`runtime-compio`** (default): native io_uring on Linux. Fastest, and the
-  performance baseline.
+- **`runtime-compio`** (default): native io_uring on Linux. Its edge shows on
+  real network I/O and high connection counts.
 - **`runtime-tokio`**: standard tokio (epoll/mio). Use it where io_uring is not
-  available (macOS, Windows, older kernels) or to fit an existing tokio stack.
+  available (macOS, Windows, older kernels) or to fit an existing tokio stack. On
+  single-flow loopback microbenchmarks it is actually a touch faster than compio
+  (see [performance.md](performance.md)); pick by your real workload, not the
+  microbenchmark.
 
 ```toml
 # tokio backend

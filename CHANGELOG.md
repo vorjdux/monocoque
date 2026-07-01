@@ -1,16 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.1.6 - 2026-07-01
 
 ### ✨ Features
 
 #### Optional tokio runtime backend
 
 Monocoque now runs on either of two interchangeable runtime backends, chosen by a
-Cargo feature. `runtime-compio` (default) keeps the native io_uring path and stays
-the performance baseline; `runtime-tokio` drives the same socket stack on tokio for
-platforms without io_uring (macOS, Windows, older kernels) or to fit an existing
-tokio program. The two are mutually exclusive.
+Cargo feature. `runtime-compio` (default) keeps the native io_uring path;
+`runtime-tokio` drives the same socket stack on tokio for platforms without
+io_uring (macOS, Windows, older kernels) or to fit an existing tokio program. The
+two are mutually exclusive. Both run the full benchmark suite; on single-flow
+loopback microbenchmarks the tokio/epoll backend is a touch faster, while
+io_uring's advantage lands on real network I/O and high connection counts.
 
 The whole protocol stack was already generic over the `compio::io` traits, so the
 change is additive: a small runtime facade (`monocoque::rt`) is the only place that
@@ -20,6 +22,35 @@ follows compio's thread-per-core model, running on a current-thread runtime insi
 a `LocalSet`, so sockets stay `!Send` on both. `monocoque::rt::LocalRuntime` is a
 backend-agnostic entry point, and the `runtime_backends` example plus the benchmark
 suite run unchanged on either backend.
+
+### 📚 Documentation
+
+- Benchmark tables in `README.md`, `docs/performance.md`, and
+  `monocoque/BENCHMARKS.md` re-measured on a fresh machine and split per backend
+  (compio and tokio side by side against rust-zmq). Framing updated to reflect
+  that on single-flow loopback microbenchmarks the epoll backend edges io_uring,
+  whose advantage is on real network I/O and high connection counts.
+- Every criterion benchmark group is now labelled with the active backend
+  (including the fan-in pools), so compio and tokio results no longer overwrite
+  each other in `target/criterion`.
+
+### 🧪 Testing
+
+- The full test suite (unit, integration, and doctests across all crates) now
+  runs on both runtime backends. Tests and the compio-only examples that named a
+  concrete runtime were moved onto the `monocoque::rt` facade; `rt::join` was
+  added so a spawned task's output can be awaited uniformly (compio's `Task`
+  yields the value directly, tokio's `JoinHandle` yields a `Result`).
+
+### ⚠️ Known limitation
+
+- On the tokio backend the worker-pool `PubSocket` needs its accepting runtime to
+  stay alive until broadcasts have flushed: `send()` queues to a worker thread
+  whose write targets a tokio stream bound to the accepting runtime. A normal
+  long-running PUB server is unaffected; a short-lived publisher that broadcasts a
+  burst and immediately drops its runtime can lose the tail of that burst. See the
+  "Worker-pool PUB and runtime lifetime" note in `docs/performance.md`. compio is
+  unaffected (its sockets are portable across threads).
 
 ## 0.1.5 - 2026-06-29
 

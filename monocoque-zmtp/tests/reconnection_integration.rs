@@ -33,10 +33,12 @@ fn test_dealer_detects_server_disconnect() {
     let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
 
     thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
-                let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let listener = monocoque_core::rt::TcpListener::bind("127.0.0.1:0")
+                    .await
+                    .unwrap();
                 addr_tx.send(listener.local_addr().unwrap()).unwrap();
 
                 let (stream, _) = listener.accept().await.unwrap();
@@ -48,7 +50,7 @@ fn test_dealer_detects_server_disconnect() {
     let addr = addr_rx.recv().unwrap();
     std::thread::sleep(Duration::from_millis(20));
 
-    compio::runtime::Runtime::new()
+    monocoque_core::rt::LocalRuntime::new()
         .unwrap()
         .block_on(async move {
             let mut dealer = DealerSocket::connect(addr).await.unwrap();
@@ -86,10 +88,12 @@ fn test_recv_with_reconnect_after_server_restart() {
 
     // Server thread: sends proactively on both connections.
     thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
-                let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let listener = monocoque_core::rt::TcpListener::bind("127.0.0.1:0")
+                    .await
+                    .unwrap();
                 addr_tx.send(listener.local_addr().unwrap()).unwrap();
 
                 // First connection: send a message, then drop → client EOF.
@@ -114,7 +118,7 @@ fn test_recv_with_reconnect_after_server_restart() {
 
     // Client thread.
     let client = thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
                 let mut dealer = DealerSocket::connect_with_options(addr, fast_opts())
@@ -122,7 +126,7 @@ fn test_recv_with_reconnect_after_server_restart() {
                     .unwrap();
 
                 // Receive the proactive "first" message from the first connection.
-                let msg1 = compio::time::timeout(Duration::from_secs(5), dealer.recv())
+                let msg1 = monocoque_core::rt::timeout(Duration::from_secs(5), dealer.recv())
                     .await
                     .expect("recv 1 timed out")
                     .expect("io error recv 1")
@@ -131,12 +135,14 @@ fn test_recv_with_reconnect_after_server_restart() {
 
                 // After the server drops the first connection, recv_with_reconnect
                 // should detect EOF, reconnect, and return "second".
-                let msg2 =
-                    compio::time::timeout(Duration::from_secs(10), dealer.recv_with_reconnect())
-                        .await
-                        .expect("recv_with_reconnect timed out")
-                        .expect("io error on reconnect recv")
-                        .expect("connection closed without second message");
+                let msg2 = monocoque_core::rt::timeout(
+                    Duration::from_secs(10),
+                    dealer.recv_with_reconnect(),
+                )
+                .await
+                .expect("recv_with_reconnect timed out")
+                .expect("io error on reconnect recv")
+                .expect("connection closed without second message");
 
                 assert_eq!(msg2, vec![Bytes::from("second")], "wrong second message");
             });
@@ -163,10 +169,12 @@ fn test_send_with_reconnect_after_server_restart() {
     let (drop_tx, drop_rx) = mpsc::channel::<()>();
 
     thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
-                let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let listener = monocoque_core::rt::TcpListener::bind("127.0.0.1:0")
+                    .await
+                    .unwrap();
                 addr_tx.send(listener.local_addr().unwrap()).unwrap();
 
                 // First connection: receive one message, then drop.
@@ -191,7 +199,7 @@ fn test_send_with_reconnect_after_server_restart() {
     let addr = addr_rx.recv().unwrap();
 
     let client = thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
                 let mut dealer = DealerSocket::connect_with_options(addr, fast_opts())
@@ -244,10 +252,12 @@ fn test_reconnect_max_attempts_exceeded() {
 
     // Server: accept once, drop, listener also drops (no more accepts).
     thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
-                let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let listener = monocoque_core::rt::TcpListener::bind("127.0.0.1:0")
+                    .await
+                    .unwrap();
                 addr_tx.send(listener.local_addr().unwrap()).unwrap();
                 let (stream, _) = listener.accept().await.unwrap();
                 let _router = RouterSocket::from_tcp(stream).await.unwrap();
@@ -258,7 +268,7 @@ fn test_reconnect_max_attempts_exceeded() {
     let addr = addr_rx.recv().unwrap();
 
     let result = thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
                 let opts = SocketOptions::default()
@@ -304,10 +314,12 @@ fn test_no_reconnect_without_stored_endpoint() {
     let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
 
     thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
-                let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let listener = monocoque_core::rt::TcpListener::bind("127.0.0.1:0")
+                    .await
+                    .unwrap();
                 addr_tx.send(listener.local_addr().unwrap()).unwrap();
                 let (stream, _) = listener.accept().await.unwrap();
                 let _router = RouterSocket::from_tcp(stream).await.unwrap();
@@ -318,11 +330,11 @@ fn test_no_reconnect_without_stored_endpoint() {
     let addr = addr_rx.recv().unwrap();
 
     let result = thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
                 // from_tcp() does NOT store the endpoint → cannot reconnect.
-                let stream = compio::net::TcpStream::connect(addr).await.unwrap();
+                let stream = monocoque_core::rt::TcpStream::connect(addr).await.unwrap();
                 let mut dealer = DealerSocket::from_tcp(stream).await.unwrap();
 
                 // Force EOF.

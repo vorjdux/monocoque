@@ -10,25 +10,34 @@ use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Drive an async test body on whichever runtime backend is active.
+fn block_on<F: std::future::Future<Output = io::Result<()>>>(f: F) -> io::Result<()> {
+    monocoque::rt::LocalRuntime::new()?.block_on(f)
+}
+
 /// Test PLAIN authentication via ZAP - successful authentication
 /// Ignored: `plain_server_handshake_zap` expects a post-ZMTP-greeting context but
 /// the test calls it on a raw `TcpStream` without the ZMTP greeting phase. Full
 /// ZAP integration needs to be wired into the main ZMTP handshake path first.
-#[compio::test]
+#[test]
 #[ignore = "ZAP integration not yet wired into ZMTP handshake - needs full stack integration"]
-async fn test_plain_zap_success() -> io::Result<()> {
+fn test_plain_zap_success() -> io::Result<()> {
+    block_on(test_plain_zap_success_impl())
+}
+
+async fn test_plain_zap_success_impl() -> io::Result<()> {
     let mut handler = StaticPlainHandler::new();
     handler.add_user("testuser", "testpass");
     let plain_handler = Arc::new(handler);
     let zap_handler = Arc::new(DefaultZapHandler::new(plain_handler, false));
     spawn_zap_server(zap_handler)?;
 
-    compio::time::sleep(Duration::from_millis(100)).await;
+    monocoque::rt::sleep(Duration::from_millis(100)).await;
 
-    let listener = compio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let listener = monocoque::rt::TcpListener::bind("127.0.0.1:0").await?;
     let server_addr = listener.local_addr()?;
 
-    let server_task = compio::runtime::spawn(async move {
+    let server_task = monocoque::rt::spawn(async move {
         let (mut stream, peer_addr) = listener.accept().await?;
         let peer_str = peer_addr.ip().to_string();
 
@@ -44,9 +53,9 @@ async fn test_plain_zap_success() -> io::Result<()> {
         Ok::<(), io::Error>(())
     });
 
-    compio::time::sleep(Duration::from_millis(50)).await;
+    monocoque::rt::sleep(Duration::from_millis(50)).await;
 
-    let mut client_stream = compio::net::TcpStream::connect(server_addr).await?;
+    let mut client_stream = monocoque::rt::TcpStream::connect(server_addr).await?;
     let credentials = PlainCredentials::new("testuser", "testpass");
     plain_client_handshake(
         &mut client_stream,
@@ -56,22 +65,26 @@ async fn test_plain_zap_success() -> io::Result<()> {
     .await
     .map_err(|e| io::Error::other(e.to_string()))?;
 
-    server_task.await?;
+    monocoque::rt::join(server_task).await?;
 
     Ok(())
 }
 
 /// Test PLAIN authentication via ZAP - failed authentication (wrong password)
-#[compio::test]
-async fn test_plain_zap_failure() -> io::Result<()> {
+#[test]
+fn test_plain_zap_failure() -> io::Result<()> {
+    block_on(test_plain_zap_failure_impl())
+}
+
+async fn test_plain_zap_failure_impl() -> io::Result<()> {
     // Use a separate ZAP server bound to a different domain won't work since ZAP endpoint is global.
     // This test verifies that wrong credentials cause a failure.
-    compio::time::sleep(Duration::from_millis(150)).await;
+    monocoque::rt::sleep(Duration::from_millis(150)).await;
 
-    let listener = compio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let listener = monocoque::rt::TcpListener::bind("127.0.0.1:0").await?;
     let server_addr = listener.local_addr()?;
 
-    let server_task = compio::runtime::spawn(async move {
+    let server_task = monocoque::rt::spawn(async move {
         let (mut stream, peer_addr) = listener.accept().await?;
         let peer_str = peer_addr.ip().to_string();
 
@@ -88,9 +101,9 @@ async fn test_plain_zap_failure() -> io::Result<()> {
         Ok::<(), io::Error>(())
     });
 
-    compio::time::sleep(Duration::from_millis(50)).await;
+    monocoque::rt::sleep(Duration::from_millis(50)).await;
 
-    let mut client_stream = compio::net::TcpStream::connect(server_addr).await?;
+    let mut client_stream = monocoque::rt::TcpStream::connect(server_addr).await?;
     let credentials = PlainCredentials::new("testuser", "WRONGPASS");
     let result = plain_client_handshake(
         &mut client_stream,

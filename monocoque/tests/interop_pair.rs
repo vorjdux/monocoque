@@ -9,8 +9,10 @@ fn test_interop_pair() {
     let (result_tx, result_rx) = std::sync::mpsc::channel::<Result<(), String>>();
 
     thread::spawn(move || {
-        compio::runtime::Runtime::new().unwrap().block_on(async {
-            let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        monocoque::rt::LocalRuntime::new().unwrap().block_on(async {
+            let listener = monocoque::rt::TcpListener::bind("127.0.0.1:0")
+                .await
+                .unwrap();
             let local_addr = listener.local_addr().unwrap();
             ready_tx.send(local_addr).unwrap();
 

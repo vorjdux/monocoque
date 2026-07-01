@@ -43,10 +43,12 @@ fn test_pub_hwm_drops_with_slow_subscriber() {
 
     // Publisher thread
     thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
-                let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let listener = monocoque_core::rt::TcpListener::bind("127.0.0.1:0")
+                    .await
+                    .unwrap();
                 addr_tx.send(listener.local_addr().unwrap()).unwrap();
 
                 let opts = SocketOptions::default().with_send_hwm(HWM);
@@ -71,10 +73,12 @@ fn test_pub_hwm_drops_with_slow_subscriber() {
 
     // Subscriber: connect and subscribe to everything, but never recv().
     thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
-                let stream = compio::net::TcpStream::connect(pub_addr).await.unwrap();
+                let stream = monocoque_core::rt::TcpStream::connect(pub_addr)
+                    .await
+                    .unwrap();
                 let mut sub = SubSocket::from_tcp(stream).await.unwrap();
                 sub.subscribe(Bytes::new()).await.unwrap(); // subscribe-all
                 // Hold the connection open without reading.
@@ -106,10 +110,12 @@ fn test_dealer_send_buffered_hwm_returns_would_block() {
 
     // Server: accept and hold open.
     thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
-                let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let listener = monocoque_core::rt::TcpListener::bind("127.0.0.1:0")
+                    .await
+                    .unwrap();
                 addr_tx.send(listener.local_addr().unwrap()).unwrap();
                 let (stream, _) = listener.accept().await.unwrap();
                 let router = monocoque_zmtp::router::RouterSocket::from_tcp(stream)
@@ -123,7 +129,7 @@ fn test_dealer_send_buffered_hwm_returns_would_block() {
 
     let addr = addr_rx.recv().unwrap();
 
-    compio::runtime::Runtime::new()
+    monocoque_core::rt::LocalRuntime::new()
         .unwrap()
         .block_on(async move {
             let opts = SocketOptions::default().with_send_hwm(HWM);
@@ -168,16 +174,18 @@ fn test_dealer_hwm_stress_no_deadlock() {
 
     // Server: drain messages from all clients.
     thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
-                let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let listener = monocoque_core::rt::TcpListener::bind("127.0.0.1:0")
+                    .await
+                    .unwrap();
                 addr_tx.send(listener.local_addr().unwrap()).unwrap();
 
                 let mut tasks = Vec::new();
                 for _ in 0..N_CLIENTS {
                     let (stream, _) = listener.accept().await.unwrap();
-                    let task = compio::runtime::spawn(async move {
+                    let task = monocoque_core::rt::spawn(async move {
                         let mut router = monocoque_zmtp::router::RouterSocket::from_tcp(stream)
                             .await
                             .unwrap();
@@ -186,7 +194,7 @@ fn test_dealer_hwm_stress_no_deadlock() {
                     tasks.push(task);
                 }
                 for t in tasks {
-                    t.await;
+                    monocoque_core::rt::join(t).await;
                 }
             });
     });
@@ -196,7 +204,7 @@ fn test_dealer_hwm_stress_no_deadlock() {
     let handles: Vec<_> = (0..N_CLIENTS)
         .map(|_| {
             thread::spawn(move || {
-                compio::runtime::Runtime::new()
+                monocoque_core::rt::LocalRuntime::new()
                     .unwrap()
                     .block_on(async move {
                         let opts = SocketOptions::default().with_send_hwm(HWM);

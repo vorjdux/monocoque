@@ -27,19 +27,18 @@
 //! use monocoque_core::rt::TcpStream;
 //! use bytes::Bytes;
 //!
-//! #[compio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let stream = TcpStream::connect("127.0.0.1:5555").await?;
-//!     let mut socket = ReqSocket::new(stream).await?;
-//!     
-//!     // Send request
-//!     socket.send(vec![Bytes::from("Hello")]).await?;
-//!     
-//!     // Receive reply
-//!     let reply = socket.recv().await?;
-//!     
-//!     Ok(())
-//! }
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let stream = TcpStream::connect("127.0.0.1:5555").await?;
+//! let mut socket = ReqSocket::new(stream).await?;
+//!
+//! // Send request
+//! socket.send(vec![Bytes::from("Hello")]).await?;
+//!
+//! // Receive reply
+//! let reply = socket.recv().await?;
+//!
+//! # Ok(())
+//! # }
 //! ```
 
 use crate::base::SocketBase;
@@ -479,7 +478,6 @@ where
 }
 
 #[cfg(test)]
-#[cfg(feature = "runtime-compio")]
 mod tests {
     use super::*;
 

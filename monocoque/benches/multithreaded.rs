@@ -101,7 +101,7 @@ fn monocoque_multithreaded_dealers(c: &mut Criterion) {
 
                                 // Wait for all handlers
                                 for handler in handlers {
-                                    let _ = handler.await;
+                                    monocoque::rt::join(handler).await;
                                 }
                             }
                         });
@@ -155,7 +155,7 @@ fn monocoque_multithreaded_dealers(c: &mut Criterion) {
                         }
 
                         // Wait for router to finish
-                        let _ = router_task.await;
+                        monocoque::rt::join(router_task).await;
                     });
                 });
             },
@@ -243,7 +243,7 @@ fn monocoque_multithreaded_independent_pairs(c: &mut Criterion) {
                                     }
                                 }
 
-                                let _ = router_task.await;
+                                monocoque::rt::join(router_task).await;
                             });
                         });
                         handles.push(handle);
@@ -344,7 +344,7 @@ fn monocoque_core_efficiency(c: &mut Criterion) {
                                     }
                                 }
 
-                                let _ = router_task.await;
+                                monocoque::rt::join(router_task).await;
                             });
                         });
                         handles.push(handle);

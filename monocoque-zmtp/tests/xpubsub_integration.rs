@@ -15,8 +15,14 @@ use monocoque_zmtp::xsub::XSubSocket;
 use std::time::Duration;
 
 /// Test XPUB receives subscriptions from XSUB
-#[compio::test]
-async fn test_xpub_xsub_subscription_flow() {
+#[test]
+fn test_xpub_xsub_subscription_flow() {
+    monocoque_core::rt::LocalRuntime::new()
+        .unwrap()
+        .block_on(test_xpub_xsub_subscription_flow_impl())
+}
+
+async fn test_xpub_xsub_subscription_flow_impl() {
     // 1. Create and bind XPUB server
     let mut xpub = XPubSocket::bind("127.0.0.1:0").await.unwrap();
     xpub.set_verbose(true); // Enable subscription event reporting
@@ -25,7 +31,7 @@ async fn test_xpub_xsub_subscription_flow() {
     println!("[TEST] XPUB bound to {addr}");
 
     // 2. Spawn server task
-    let server_task = compio::runtime::spawn(async move {
+    let server_task = monocoque_core::rt::spawn(async move {
         println!("[SERVER] Waiting to accept connection...");
 
         // Accept the XSUB client
@@ -46,7 +52,7 @@ async fn test_xpub_xsub_subscription_flow() {
                     if attempt % 10 == 0 {
                         println!("[SERVER] No event yet, attempt {attempt}/100");
                     }
-                    compio::time::sleep(Duration::from_millis(50)).await;
+                    monocoque_core::rt::sleep(Duration::from_millis(50)).await;
                 }
                 Err(e) => {
                     println!("[SERVER] Error: {e}");
@@ -59,7 +65,7 @@ async fn test_xpub_xsub_subscription_flow() {
     });
 
     // 3. Give server time to start listening
-    compio::time::sleep(Duration::from_millis(100)).await;
+    monocoque_core::rt::sleep(Duration::from_millis(100)).await;
 
     // 4. Connect XSUB client
     println!("[CLIENT] Connecting to {addr}...");
@@ -72,7 +78,7 @@ async fn test_xpub_xsub_subscription_flow() {
     println!("[CLIENT] Subscription sent");
 
     // 6. Wait for server result
-    let event_option = server_task.await;
+    let event_option = monocoque_core::rt::join(server_task).await;
     assert!(
         event_option.is_some(),
         "Expected to receive subscription event"
@@ -91,8 +97,14 @@ async fn test_xpub_xsub_subscription_flow() {
 }
 
 /// Test XPUB socket creation and configuration
-#[compio::test]
-async fn test_xpub_creation_and_config() {
+#[test]
+fn test_xpub_creation_and_config() {
+    monocoque_core::rt::LocalRuntime::new()
+        .unwrap()
+        .block_on(test_xpub_creation_and_config_impl())
+}
+
+async fn test_xpub_creation_and_config_impl() {
     let mut xpub = XPubSocket::bind("127.0.0.1:0").await.unwrap();
 
     // Test configuration methods
@@ -108,8 +120,14 @@ async fn test_xpub_creation_and_config() {
 }
 
 /// Test XSUB socket subscription API
-#[compio::test]
-async fn test_xsub_subscription_api() {
+#[test]
+fn test_xsub_subscription_api() {
+    monocoque_core::rt::LocalRuntime::new()
+        .unwrap()
+        .block_on(test_xsub_subscription_api_impl())
+}
+
+async fn test_xsub_subscription_api_impl() {
     // Test subscription tracking without full connection
     let mut trie = SubscriptionTrie::new();
 
@@ -133,8 +151,14 @@ async fn test_xsub_subscription_api() {
 }
 
 /// Test subscription trie matching logic
-#[compio::test]
-async fn test_subscription_trie_matching() {
+#[test]
+fn test_subscription_trie_matching() {
+    monocoque_core::rt::LocalRuntime::new()
+        .unwrap()
+        .block_on(test_subscription_trie_matching_impl())
+}
+
+async fn test_subscription_trie_matching_impl() {
     let mut trie = SubscriptionTrie::new();
 
     // Add subscriptions
@@ -166,8 +190,14 @@ async fn test_subscription_trie_matching() {
 }
 
 /// Test XPUB manual mode (no automatic subscription tracking)
-#[compio::test]
-async fn test_xpub_manual_mode() {
+#[test]
+fn test_xpub_manual_mode() {
+    monocoque_core::rt::LocalRuntime::new()
+        .unwrap()
+        .block_on(test_xpub_manual_mode_impl())
+}
+
+async fn test_xpub_manual_mode_impl() {
     let mut xpub = XPubSocket::bind("127.0.0.1:0").await.unwrap();
     xpub.set_manual(true); // Manual mode
     xpub.set_verbose(true); // Still receive events
@@ -180,8 +210,14 @@ async fn test_xpub_manual_mode() {
 }
 
 /// Test XPUB welcome message (placeholder for future implementation)
-#[compio::test]
-async fn test_xpub_welcome_message() {
+#[test]
+fn test_xpub_welcome_message() {
+    monocoque_core::rt::LocalRuntime::new()
+        .unwrap()
+        .block_on(test_xpub_welcome_message_impl())
+}
+
+async fn test_xpub_welcome_message_impl() {
     let xpub = XPubSocket::bind("127.0.0.1:0").await.unwrap();
 
     let addr = xpub.local_addr().unwrap();
@@ -192,10 +228,18 @@ async fn test_xpub_welcome_message() {
 }
 
 /// Test XSUB socket subscription tracking
-#[compio::test]
-async fn test_xsub_subscription_tracking() {
+#[test]
+fn test_xsub_subscription_tracking() {
+    monocoque_core::rt::LocalRuntime::new()
+        .unwrap()
+        .block_on(test_xsub_subscription_tracking_impl())
+}
+
+async fn test_xsub_subscription_tracking_impl() {
     // Bind a dummy listener for XSUB to connect to
-    let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = monocoque_core::rt::TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap();
     let addr = listener.local_addr().unwrap();
 
     // In a real scenario, this would connect to a PUB socket
@@ -207,8 +251,14 @@ async fn test_xsub_subscription_tracking() {
 }
 
 /// Test XPUB subscriber count
-#[compio::test]
-async fn test_xpub_subscriber_count() {
+#[test]
+fn test_xpub_subscriber_count() {
+    monocoque_core::rt::LocalRuntime::new()
+        .unwrap()
+        .block_on(test_xpub_subscriber_count_impl())
+}
+
+async fn test_xpub_subscriber_count_impl() {
     let xpub = XPubSocket::bind("127.0.0.1:0").await.unwrap();
 
     // Initially no subscribers
@@ -232,8 +282,14 @@ fn test_empty_prefix_subscription_matching() {
 }
 
 /// Test XPUB manual mode configuration
-#[compio::test]
-async fn test_xpub_manual_mode_config() {
+#[test]
+fn test_xpub_manual_mode_config() {
+    monocoque_core::rt::LocalRuntime::new()
+        .unwrap()
+        .block_on(test_xpub_manual_mode_config_impl())
+}
+
+async fn test_xpub_manual_mode_config_impl() {
     let mut xpub = XPubSocket::bind("127.0.0.1:0").await.unwrap();
 
     // Test manual mode configuration
@@ -302,8 +358,14 @@ fn test_subscription_trie_overlapping() {
 }
 
 /// Test XPUB with no verbose mode
-#[compio::test]
-async fn test_xpub_non_verbose() {
+#[test]
+fn test_xpub_non_verbose() {
+    monocoque_core::rt::LocalRuntime::new()
+        .unwrap()
+        .block_on(test_xpub_non_verbose_impl())
+}
+
+async fn test_xpub_non_verbose_impl() {
     let xpub = XPubSocket::bind("127.0.0.1:0").await.unwrap();
     // verbose = false by default (verified internally in socket)
 

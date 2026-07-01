@@ -5,7 +5,7 @@
 //! to cleanly exit the proxy loop.
 
 use bytes::Bytes;
-use compio::net::TcpListener;
+use monocoque_core::rt::TcpListener;
 use monocoque_zmtp::pair::PairSocket;
 use monocoque_zmtp::proxy::{ProxyCommand, proxy_steerable};
 
@@ -15,10 +15,10 @@ async fn pair_connected() -> (PairSocket, PairSocket) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     // Spawn the connect side so it runs concurrently with the accept+handshake below.
-    let client_task = compio::runtime::spawn(PairSocket::connect(addr));
+    let client_task = monocoque_core::rt::spawn(PairSocket::connect(addr));
     let (stream, _) = listener.accept().await.unwrap();
     let server = PairSocket::from_tcp(stream).await.unwrap();
-    let client = client_task.await.unwrap();
+    let client = monocoque_core::rt::join(client_task).await.unwrap();
     (server, client)
 }
 
@@ -46,13 +46,19 @@ fn test_proxy_command_parsing() {
 }
 
 /// Proxy forwards a message from the frontend-side client to the backend-side client.
-#[compio::test]
-async fn test_proxy_pair_forward() {
+#[test]
+fn test_proxy_pair_forward() {
+    monocoque_core::rt::LocalRuntime::new()
+        .unwrap()
+        .block_on(test_proxy_pair_forward_impl())
+}
+
+async fn test_proxy_pair_forward_impl() {
     let (frontend, mut client_a) = pair_connected().await;
     let (backend, mut client_b) = pair_connected().await;
     let (control, mut ctrl_client) = pair_connected().await;
 
-    let proxy_task = compio::runtime::spawn(async move {
+    let proxy_task = monocoque_core::rt::spawn(async move {
         let mut fe = frontend;
         let mut be = backend;
         let mut ctrl = control;
@@ -68,17 +74,23 @@ async fn test_proxy_pair_forward() {
         .send(vec![Bytes::from("TERMINATE")])
         .await
         .unwrap();
-    proxy_task.await.unwrap();
+    monocoque_core::rt::join(proxy_task).await.unwrap();
 }
 
 /// Proxy forwards messages in both directions (frontend→backend and backend→frontend).
-#[compio::test]
-async fn test_proxy_pair_bidirectional() {
+#[test]
+fn test_proxy_pair_bidirectional() {
+    monocoque_core::rt::LocalRuntime::new()
+        .unwrap()
+        .block_on(test_proxy_pair_bidirectional_impl())
+}
+
+async fn test_proxy_pair_bidirectional_impl() {
     let (frontend, mut client_a) = pair_connected().await;
     let (backend, mut client_b) = pair_connected().await;
     let (control, mut ctrl_client) = pair_connected().await;
 
-    let proxy_task = compio::runtime::spawn(async move {
+    let proxy_task = monocoque_core::rt::spawn(async move {
         let mut fe = frontend;
         let mut be = backend;
         let mut ctrl = control;
@@ -100,18 +112,24 @@ async fn test_proxy_pair_bidirectional() {
         .send(vec![Bytes::from("TERMINATE")])
         .await
         .unwrap();
-    proxy_task.await.unwrap();
+    monocoque_core::rt::join(proxy_task).await.unwrap();
 }
 
 /// Capture socket receives a copy of every message the proxy forwards.
-#[compio::test]
-async fn test_proxy_capture_socket() {
+#[test]
+fn test_proxy_capture_socket() {
+    monocoque_core::rt::LocalRuntime::new()
+        .unwrap()
+        .block_on(test_proxy_capture_socket_impl())
+}
+
+async fn test_proxy_capture_socket_impl() {
     let (frontend, mut client_a) = pair_connected().await;
     let (backend, mut client_b) = pair_connected().await;
     let (control, mut ctrl_client) = pair_connected().await;
     let (capture_server, mut capture_client) = pair_connected().await;
 
-    let proxy_task = compio::runtime::spawn(async move {
+    let proxy_task = monocoque_core::rt::spawn(async move {
         let mut fe = frontend;
         let mut be = backend;
         let mut ctrl = control;
@@ -132,17 +150,23 @@ async fn test_proxy_capture_socket() {
         .send(vec![Bytes::from("TERMINATE")])
         .await
         .unwrap();
-    proxy_task.await.unwrap();
+    monocoque_core::rt::join(proxy_task).await.unwrap();
 }
 
 /// TERMINATE command stops the proxy after it has forwarded at least one message.
-#[compio::test]
-async fn test_proxy_steerable_terminate() {
+#[test]
+fn test_proxy_steerable_terminate() {
+    monocoque_core::rt::LocalRuntime::new()
+        .unwrap()
+        .block_on(test_proxy_steerable_terminate_impl())
+}
+
+async fn test_proxy_steerable_terminate_impl() {
     let (frontend, mut client_a) = pair_connected().await;
     let (backend, mut client_b) = pair_connected().await;
     let (control, mut ctrl_client) = pair_connected().await;
 
-    let proxy_task = compio::runtime::spawn(async move {
+    let proxy_task = monocoque_core::rt::spawn(async move {
         let mut fe = frontend;
         let mut be = backend;
         let mut ctrl = control;
@@ -159,7 +183,7 @@ async fn test_proxy_steerable_terminate() {
         .send(vec![Bytes::from("TERMINATE")])
         .await
         .unwrap();
-    let result = proxy_task.await;
+    let result = monocoque_core::rt::join(proxy_task).await;
     assert!(
         result.is_ok(),
         "proxy_steerable should return Ok(()) on TERMINATE"

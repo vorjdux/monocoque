@@ -3,9 +3,18 @@
 Benchmarks comparing monocoque against rust-zmq (Rust FFI bindings to libzmq).
 
 All benchmarks run **sender and receiver on separate OS threads** with separate
-`compio` runtimes, so results reflect real kernel TCP/IPC round-trips. The timer
-lives on the receiver side for throughput tests. Both sides are given identical
+runtimes, so results reflect real kernel TCP/IPC round-trips. The timer lives on
+the receiver side for throughput tests. Both sides are given identical
 methodology - same number of operations per message, same warmup structure.
+
+Both runtime backends run the identical suite (compio uses io_uring, tokio uses
+epoll). On these single-flow loopback microbenchmarks the tokio/epoll backend is
+consistently a bit faster: a one-connection ping-pong does not exercise io_uring's
+strengths (batched submission, registered buffers, many concurrent connections)
+and just pays its per-op submission overhead. compio (io_uring) is the default;
+its edge is on real network I/O and high connection counts, which these benches
+do not cover. The rust-zmq control was stable across both backend runs, so the
+compio-vs-tokio gap is a real measurement, not machine drift.
 
 Hardware: Intel Core i7-1355U (12 threads), Linux 6.17, release build.
 
@@ -17,41 +26,46 @@ Hardware: Intel Core i7-1355U (12 threads), Linux 6.17, release build.
 
 PUSH/PULL one-way pipeline, 10 000 messages per iteration.
 
-**monocoque (eager)** - default, one kernel write per `send()`:
+**eager** - default, one kernel write per `send()`:
 
-| Message size | msg/s |
-|---|---|
-| 64 B | 339 K |
-| 256 B | 343 K |
-| 1 KB | 314 K |
-| 4 KB | 282 K |
-| 16 KB | 252 K |
-
-**monocoque (coalesced)** - `with_write_coalescing(true)`, 64 KB flush threshold:
-
-| Message size | msg/s | vs zmq |
+| Message size | compio | tokio |
 |---|---|---|
-| 64 B | 9.2 M | **7.0× faster** |
-| 256 B | 5.5 M | **5.1× faster** |
-| 1 KB | 2.3 M | **3.5× faster** |
-| 4 KB | 857 K | **2.7× faster** |
-| 16 KB | 265 K | **2.4× faster** |
+| 64 B | 339 K | 520 K |
+| 256 B | 344 K | 514 K |
+| 1 KB | 318 K | 410 K |
+| 4 KB | 292 K | 417 K |
+| 16 KB | 266 K | 317 K |
+
+**coalesced** - `with_write_coalescing(true)`, 64 KB flush threshold:
+
+| Message size | compio | tokio |
+|---|---|---|
+| 64 B | 9.2 M | **13.6 M** |
+| 256 B | 5.6 M | **9.8 M** |
+| 1 KB | 2.4 M | **5.3 M** |
+| 4 KB | 841 K | **1.74 M** |
+| 16 KB | 268 K | **473 K** |
 
 **rust-zmq (libzmq)**:
 
 | Message size | msg/s |
 |---|---|
-| 64 B | 1.32 M |
-| 256 B | 1.08 M |
-| 1 KB | 667 K |
-| 4 KB | 314 K |
-| 16 KB | 111 K |
+| 64 B | 1.33 M |
+| 256 B | 1.09 M |
+| 1 KB | 656 K |
+| 4 KB | 328 K |
+| 16 KB | 117 K |
+
+Coalesced, both backends beat libzmq by a wide margin: ~7x (compio) to ~10x
+(tokio) at 64 B, tapering to ~2.3x and ~4.0x at 16 KB. In eager mode both trail
+libzmq, which amortizes its syscall over an internal IO-thread batch.
 
 The PULL side allocates a `Vec<Bytes>` per message by default. Receiving into a
 reused buffer with `recv_into` removes that allocation; the
-`push_pull_coalesced_recv_into` bench case shows ~1.25x at 64 B and ~15% at 256 B
-over the `recv()` path (the gain tapers as messages grow and the path becomes
-bandwidth-bound). See `docs/performance.md` for details.
+`push_pull_coalesced_recv_into` bench case shows ~1.23x at 64 B (9.2 M to 11.3 M
+on compio, 13.6 M to 15.7 M on tokio) and ~13% at 256 B over the `recv()` path
+(the gain tapers as messages grow and the path becomes bandwidth-bound). See
+`docs/performance.md` for details.
 
 ---
 
@@ -111,14 +125,17 @@ handoff on the round-trip path.
 REQ/REP round-trip on TCP loopback. Includes socket teardown (TCP FIN + thread
 join). 1 000 warmup rounds per iteration (not measured).
 
-| Message size | monocoque | rust-zmq | Improvement |
+| Message size | compio | tokio | rust-zmq |
 |---|---|---|---|
-| 64 B | 63 µs | 304 µs | 79% lower |
-| 256 B | 72 µs | 296 µs | 76% lower |
-| 1 KB | 72 µs | 312 µs | 77% lower |
+| 64 B | 58 µs | 43 µs | 277 µs |
+| 256 B | 51 µs | 42 µs | 265 µs |
+| 1 KB | 61 µs | 48 µs | 261 µs |
 
-Note: the per-iteration cost includes one TCP connection teardown. Steady-state
-latency on a persistent connection is ~75 µs for monocoque vs ~200 µs for libzmq.
+Both backends are ~5x lower latency than libzmq (79% lower for compio, 84% for
+tokio at 64 B); tokio edges compio because the epoll wakeup for a single-flow
+round-trip is shorter than submitting and reaping an io_uring completion. The
+per-iteration cost includes one TCP connection teardown, so steady-state latency
+on a persistent connection is lower than these figures for both.
 
 ---
 
@@ -128,20 +145,24 @@ latency on a persistent connection is ~75 µs for monocoque vs ~200 µs for libz
 
 | Transport | 64 B | 256 B | 1 KB |
 |---|---|---|---|
-| TCP loopback | 77 µs | 82 µs | 78 µs |
-| IPC (Unix socket) | 83 µs | 84 µs | 92 µs |
+| compio TCP | 59 µs | 51 µs | 56 µs |
+| compio IPC | 57 µs | 67 µs | 60 µs |
+| tokio TCP | 42 µs | 45 µs | 44 µs |
+| tokio IPC | 55 µs | 54 µs | 57 µs |
 
 **Throughput (PUSH/PULL eager, 10 000 messages):**
 
 | Transport | 64 B | 256 B | 1 KB |
 |---|---|---|---|
-| TCP loopback | 340 K msg/s | 341 K msg/s | 309 K msg/s |
-| IPC | 716 K msg/s | 702 K msg/s | 662 K msg/s |
+| compio TCP | 349 K msg/s | 346 K msg/s | 315 K msg/s |
+| compio IPC | 724 K msg/s | 710 K msg/s | 683 K msg/s |
+| tokio TCP | 520 K msg/s | 508 K msg/s | 463 K msg/s |
+| tokio IPC | 1.47 M msg/s | 1.64 M msg/s | 1.39 M msg/s |
 
-IPC is ~2.1× faster than TCP loopback for throughput. On this run IPC and TCP
-latency land within each other's noise band because per-iteration teardown
-dominates the measurement, so the IPC advantage shows up on throughput, not
-latency.
+IPC is ~2.1× (compio) to ~3× (tokio) faster than TCP loopback for throughput. On
+both backends IPC and TCP latency land within each other's noise band because
+per-iteration teardown dominates the measurement, so the IPC advantage shows up
+on throughput, not latency.
 
 ---
 
@@ -150,12 +171,13 @@ latency.
 DEALER/ROUTER with `send_buffered() + flush()`, batches of 100, 10 000 total
 messages. This is a monocoque-only benchmark demonstrating the explicit batch API.
 
-| Message size | msg/s | Bandwidth |
+| Message size | compio | tokio |
 |---|---|---|
-| 64 B | 2.45 M | 150 MiB/s |
-| 256 B | 1.98 M | 484 MiB/s |
-| 1 KB | 1.08 M | 1.03 GiB/s |
-| 4 KB | 387 K | 1.48 GiB/s |
+| 64 B | 2.61 M (159 MiB/s) | 2.77 M (169 MiB/s) |
+| 256 B | 2.04 M (497 MiB/s) | 2.14 M (522 MiB/s) |
+| 1 KB | 1.14 M (1.09 GiB/s) | 1.56 M (1.49 GiB/s) |
+| 4 KB | 372 K (1.42 GiB/s) | 619 K (2.36 GiB/s) |
+| 16 KB | 97 K (1.49 GiB/s) | 118 K (1.80 GiB/s) |
 
 ---
 
@@ -170,13 +192,14 @@ bench peer's `push-fanout` / `pull-fanin` subcommands. The msg/s figure is
 aggregate delivered throughput across the pool; bandwidth is the matching payload
 rate.
 
-Fan-out (one ventilator, four PULL workers), coalescing senders:
+Fan-out (one ventilator, four PULL workers), coalescing senders (msg/s;
+bandwidth is msg/s x frame size):
 
-| Message size | msg/s | Bandwidth |
+| Message size | compio | tokio |
 |---|---|---|
-| 64 B | 9.07 M | 553 MiB/s |
-| 1 KB | 2.07 M | 1.97 GiB/s |
-| 16 KB | 185 K | 2.82 GiB/s |
+| 64 B | 12.7 M | 12.2 M |
+| 1 KB | 2.56 M | 2.89 M |
+| 16 KB | 259 K | 260 K |
 
 The ventilator round-robins one message at a time; with coalescing each worker's
 buffer flushes at the 64 KB threshold, so the writes stay batched while the four
@@ -193,27 +216,29 @@ kernel-read batch as one channel item and the sink drains a local buffer, so
 
 Fan-in, coalescing senders (large kernel-read batches):
 
-| Message size | msg/s | Bandwidth |
+| Message size | compio | tokio |
 |---|---|---|
-| 64 B | 9.92 M | 605 MiB/s |
-| 1 KB | 1.76 M | 1.68 GiB/s |
-| 16 KB | 174 K | 2.65 GiB/s |
+| 64 B | 10.9 M | 11.5 M |
+| 1 KB | 2.12 M | 2.55 M |
+| 16 KB | 259 K | 273 K |
 
-Batching lifts the 64 B sink from 5.25 M to 9.92 M msg/s (about 1.9x); at larger
-sizes the path is bandwidth-bound, so the gain narrows.
+The reader-side batching keeps the coalesced 64 B sink around 11 M msg/s; at larger
+sizes the path is bandwidth-bound, so the sender mode matters less.
 
 Fan-in, eager senders (one write per message):
 
-| Message size | msg/s | Bandwidth |
+| Message size | compio | tokio |
 |---|---|---|
-| 64 B | 498 K | 30 MiB/s |
-| 1 KB | 448 K | 437 MiB/s |
-| 16 KB | 153 K | 2.33 GiB/s |
+| 64 B | 567 K | 1.12 M |
+| 1 KB | ~520 K | ~110 K |
+| 16 KB | 229 K | 262 K |
 
 With eager senders the four PUSH workers cap throughput at their per-message write
 rate, well below what the sink can drain, so the sink is no longer the bottleneck
 and the same batched path neither helps nor hurts. The batch size simply follows
 what each kernel read delivers, so there is one code path for both sender modes.
+The 1 KB eager row is noisy run to run (the workers and sink trade the
+bottleneck), so treat it as approximate.
 
 ---
 

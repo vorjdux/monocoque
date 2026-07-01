@@ -16,11 +16,10 @@ use std::path::Path;
 /// ```no_run
 /// use monocoque_core::ipc;
 ///
-/// #[compio::main]
-/// async fn main() -> std::io::Result<()> {
-///     let stream = ipc::connect("/tmp/socket.sock").await?;
-///     Ok(())
-/// }
+/// # async fn example() -> std::io::Result<()> {
+/// let stream = ipc::connect("/tmp/socket.sock").await?;
+/// # Ok(())
+/// # }
 /// ```
 pub async fn connect<P: AsRef<Path>>(path: P) -> std::io::Result<UnixStream> {
     UnixStream::connect(path).await
@@ -36,11 +35,10 @@ pub async fn connect<P: AsRef<Path>>(path: P) -> std::io::Result<UnixStream> {
 /// ```no_run
 /// use monocoque_core::ipc;
 ///
-/// #[compio::main]
-/// async fn main() -> std::io::Result<()> {
-///     let listener = ipc::bind("/tmp/socket.sock").await?;
-///     Ok(())
-/// }
+/// # async fn example() -> std::io::Result<()> {
+/// let listener = ipc::bind("/tmp/socket.sock").await?;
+/// # Ok(())
+/// # }
 /// ```
 pub async fn bind<P: AsRef<Path>>(path: P) -> std::io::Result<UnixListener> {
     // Remove existing socket file if it exists
@@ -61,12 +59,17 @@ pub async fn accept(listener: &UnixListener) -> std::io::Result<UnixStream> {
 
 #[cfg(test)]
 #[cfg(unix)]
-#[cfg(feature = "runtime-compio")]
 mod tests {
     use super::*;
 
-    #[compio::test]
-    async fn test_ipc_connect_bind() {
+    #[test]
+    fn test_ipc_connect_bind() {
+        crate::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(test_ipc_connect_bind_impl())
+    }
+
+    async fn test_ipc_connect_bind_impl() {
         let path = "/tmp/monocoque_test_ipc.sock";
 
         // Clean up any existing socket
@@ -75,16 +78,16 @@ mod tests {
         let listener = bind(path).await.unwrap();
 
         // Spawn accept task
-        let accept_handle = compio::runtime::spawn(async move { accept(&listener).await });
+        let accept_handle = crate::rt::spawn(async move { accept(&listener).await });
 
         // Give listener time to start
-        compio::time::sleep(std::time::Duration::from_millis(10)).await;
+        crate::rt::sleep(std::time::Duration::from_millis(10)).await;
 
         // Connect
         let client = connect(path).await.unwrap();
 
         // Wait for accept
-        let server = accept_handle.await.unwrap();
+        let server = crate::rt::join(accept_handle).await.unwrap();
 
         assert!(client.peer_addr().is_ok());
         assert!(server.local_addr().is_ok());

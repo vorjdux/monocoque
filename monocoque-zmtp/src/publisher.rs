@@ -226,6 +226,10 @@ impl WorkerSubscriber {
 /// `\x00prefix` (unsubscribe) payloads.  ZMTP framing provides a length header
 /// so consecutive messages can always be split correctly even if they arrive in
 /// the same TCP segment.
+// The subscriptions write lock is intentionally held across `union.update` so a
+// subscription and its union entry change together atomically; releasing it
+// earlier (as the lint suggests) would let a broadcast observe a torn state.
+#[allow(clippy::significant_drop_tightening)]
 async fn subscription_reader(
     id: SubscriberId,
     mut reader: OwnedReadHalf,
@@ -578,6 +582,7 @@ fn encode_curve_wire(msg: &[Bytes], cipher: &SubCipher) -> Option<Bytes> {
         let body = cipher.encrypt_frame(frame, i < last).ok()?;
         crate::base::append_zmtp_cmd_frame(&mut buf, &body);
     }
+    drop(cipher);
     Some(buf.freeze())
 }
 

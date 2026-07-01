@@ -88,6 +88,15 @@ mod backend {
         compio::runtime::spawn_blocking(f).await
     }
 
+    /// Await a spawned task and return its output.
+    ///
+    /// Normalizes the difference between backends: compio's task awaits directly
+    /// to the output, so this is just the await.
+    #[inline]
+    pub async fn join<T>(handle: JoinHandle<T>) -> T {
+        handle.await
+    }
+
     /// A self-contained runtime owned by a single thread.
     ///
     /// Used by worker threads that drive their own event loop independently of
@@ -178,6 +187,18 @@ mod backend {
         tokio::task::spawn_blocking(f)
             .await
             .expect("blocking task panicked")
+    }
+
+    /// Await a spawned task and return its output.
+    ///
+    /// Normalizes the difference between backends: tokio's `JoinHandle` awaits to
+    /// a `Result`, so this unwraps the join error (a panicked or cancelled task)
+    /// to match compio, where the panic simply propagates through the await.
+    #[inline]
+    pub async fn join<T>(handle: JoinHandle<T>) -> T {
+        handle
+            .await
+            .expect("spawned task panicked or was cancelled")
     }
 
     /// A self-contained runtime owned by a single thread.
@@ -420,6 +441,7 @@ mod backend {
             ///
             /// Async to mirror the compio backend, where binding awaits; tokio's
             /// bind is synchronous, so this just wraps it.
+            #[allow(clippy::unused_async)] // signature parity with the compio backend
             pub async fn bind<P: AsRef<Path>>(path: P) -> io::Result<Self> {
                 let inner = tokio::net::UnixListener::bind(path)?;
                 Ok(Self { inner })

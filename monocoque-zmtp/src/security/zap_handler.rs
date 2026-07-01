@@ -270,7 +270,6 @@ pub fn start_default_zap_server<H: PlainAuthHandler + 'static>(
 }
 
 #[cfg(test)]
-#[cfg(feature = "runtime-compio")]
 mod tests {
     use super::*;
     use crate::security::ZapStatus;
@@ -279,111 +278,121 @@ mod tests {
 
     #[test]
     fn test_default_zap_handler_null() {
-        compio::runtime::Runtime::new().unwrap().block_on(async {
-            let plain_handler = Arc::new(StaticPlainHandler::new());
-            let handler = DefaultZapHandler::new(plain_handler, true);
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(async {
+                let plain_handler = Arc::new(StaticPlainHandler::new());
+                let handler = DefaultZapHandler::new(plain_handler, true);
 
-            let request = ZapRequest {
-                version: "1.0".to_string(),
-                request_id: "1".to_string(),
-                domain: "global".to_string(),
-                address: "127.0.0.1".to_string(),
-                identity: Bytes::new(),
-                mechanism: ZapMechanism::Null,
-                credentials: vec![],
-            };
+                let request = ZapRequest {
+                    version: "1.0".to_string(),
+                    request_id: "1".to_string(),
+                    domain: "global".to_string(),
+                    address: "127.0.0.1".to_string(),
+                    identity: Bytes::new(),
+                    mechanism: ZapMechanism::Null,
+                    credentials: vec![],
+                };
 
-            let response = handler.authenticate(&request).await;
-            assert_eq!(response.status_code, ZapStatus::Success);
-        });
+                let response = handler.authenticate(&request).await;
+                assert_eq!(response.status_code, ZapStatus::Success);
+            });
     }
 
     #[test]
     fn test_default_zap_handler_plain_success() {
-        compio::runtime::Runtime::new().unwrap().block_on(async {
-            let mut plain_handler = StaticPlainHandler::new();
-            plain_handler.add_user("admin", "secret");
-            let handler = DefaultZapHandler::new(Arc::new(plain_handler), true);
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(async {
+                let mut plain_handler = StaticPlainHandler::new();
+                plain_handler.add_user("admin", "secret");
+                let handler = DefaultZapHandler::new(Arc::new(plain_handler), true);
 
-            let request = ZapRequest {
-                version: "1.0".to_string(),
-                request_id: "2".to_string(),
-                domain: "global".to_string(),
-                address: "127.0.0.1".to_string(),
-                identity: Bytes::new(),
-                mechanism: ZapMechanism::Plain,
-                credentials: vec![Bytes::from("admin"), Bytes::from("secret")],
-            };
+                let request = ZapRequest {
+                    version: "1.0".to_string(),
+                    request_id: "2".to_string(),
+                    domain: "global".to_string(),
+                    address: "127.0.0.1".to_string(),
+                    identity: Bytes::new(),
+                    mechanism: ZapMechanism::Plain,
+                    credentials: vec![Bytes::from("admin"), Bytes::from("secret")],
+                };
 
-            let response = handler.authenticate(&request).await;
-            assert_eq!(response.status_code, ZapStatus::Success);
-            assert_eq!(response.user_id, "admin");
-        });
+                let response = handler.authenticate(&request).await;
+                assert_eq!(response.status_code, ZapStatus::Success);
+                assert_eq!(response.user_id, "admin");
+            });
     }
 
     #[test]
     fn test_default_zap_handler_plain_failure() {
-        compio::runtime::Runtime::new().unwrap().block_on(async {
-            let plain_handler = Arc::new(StaticPlainHandler::new());
-            let handler = DefaultZapHandler::new(plain_handler, true);
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(async {
+                let plain_handler = Arc::new(StaticPlainHandler::new());
+                let handler = DefaultZapHandler::new(plain_handler, true);
 
-            let request = ZapRequest {
-                version: "1.0".to_string(),
-                request_id: "3".to_string(),
-                domain: "global".to_string(),
-                address: "127.0.0.1".to_string(),
-                identity: Bytes::new(),
-                mechanism: ZapMechanism::Plain,
-                credentials: vec![Bytes::from("admin"), Bytes::from("wrong")],
-            };
+                let request = ZapRequest {
+                    version: "1.0".to_string(),
+                    request_id: "3".to_string(),
+                    domain: "global".to_string(),
+                    address: "127.0.0.1".to_string(),
+                    identity: Bytes::new(),
+                    mechanism: ZapMechanism::Plain,
+                    credentials: vec![Bytes::from("admin"), Bytes::from("wrong")],
+                };
 
-            let response = handler.authenticate(&request).await;
-            assert_eq!(response.status_code, ZapStatus::Failure);
-        });
+                let response = handler.authenticate(&request).await;
+                assert_eq!(response.status_code, ZapStatus::Failure);
+            });
     }
 
     #[test]
     fn test_default_zap_handler_curve_success() {
-        compio::runtime::Runtime::new().unwrap().block_on(async {
-            let plain_handler = Arc::new(StaticPlainHandler::new());
-            let handler = DefaultZapHandler::new(plain_handler, true);
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(async {
+                let plain_handler = Arc::new(StaticPlainHandler::new());
+                let handler = DefaultZapHandler::new(plain_handler, true);
 
-            let public_key = [0u8; 32];
-            let request = ZapRequest {
-                version: "1.0".to_string(),
-                request_id: "4".to_string(),
-                domain: "global".to_string(),
-                address: "127.0.0.1".to_string(),
-                identity: Bytes::new(),
-                mechanism: ZapMechanism::Curve,
-                credentials: vec![Bytes::copy_from_slice(&public_key)],
-            };
+                let public_key = [0u8; 32];
+                let request = ZapRequest {
+                    version: "1.0".to_string(),
+                    request_id: "4".to_string(),
+                    domain: "global".to_string(),
+                    address: "127.0.0.1".to_string(),
+                    identity: Bytes::new(),
+                    mechanism: ZapMechanism::Curve,
+                    credentials: vec![Bytes::copy_from_slice(&public_key)],
+                };
 
-            let response = handler.authenticate(&request).await;
-            assert_eq!(response.status_code, ZapStatus::Success);
-        });
+                let response = handler.authenticate(&request).await;
+                assert_eq!(response.status_code, ZapStatus::Success);
+            });
     }
 
     #[test]
     fn test_default_zap_handler_curve_disabled() {
-        compio::runtime::Runtime::new().unwrap().block_on(async {
-            let plain_handler = Arc::new(StaticPlainHandler::new());
-            let handler = DefaultZapHandler::new(plain_handler, false);
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(async {
+                let plain_handler = Arc::new(StaticPlainHandler::new());
+                let handler = DefaultZapHandler::new(plain_handler, false);
 
-            let public_key = [0u8; 32];
-            let request = ZapRequest {
-                version: "1.0".to_string(),
-                request_id: "5".to_string(),
-                domain: "global".to_string(),
-                address: "127.0.0.1".to_string(),
-                identity: Bytes::new(),
-                mechanism: ZapMechanism::Curve,
-                credentials: vec![Bytes::copy_from_slice(&public_key)],
-            };
+                let public_key = [0u8; 32];
+                let request = ZapRequest {
+                    version: "1.0".to_string(),
+                    request_id: "5".to_string(),
+                    domain: "global".to_string(),
+                    address: "127.0.0.1".to_string(),
+                    identity: Bytes::new(),
+                    mechanism: ZapMechanism::Curve,
+                    credentials: vec![Bytes::copy_from_slice(&public_key)],
+                };
 
-            let response = handler.authenticate(&request).await;
-            assert_eq!(response.status_code, ZapStatus::Failure);
-        });
+                let response = handler.authenticate(&request).await;
+                assert_eq!(response.status_code, ZapStatus::Failure);
+            });
     }
 
     /// A ZAP handler that rejects connections from a configurable deny-list of
@@ -422,104 +431,108 @@ mod tests {
     /// causes those addresses to be treated as rejected, while others are accepted.
     #[test]
     fn test_ip_based_rejection() {
-        compio::runtime::Runtime::new().unwrap().block_on(async {
-            let handler = IpDenyListHandler::new(vec!["192.168.1.100", "10.0.0.1"]);
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(async {
+                let handler = IpDenyListHandler::new(vec!["192.168.1.100", "10.0.0.1"]);
 
-            // --- Denied address: should receive a Failure (400) response ---
-            let denied_request = ZapRequest {
-                version: "1.0".to_string(),
-                request_id: "deny-1".to_string(),
-                domain: "global".to_string(),
-                address: "192.168.1.100".to_string(), // in the deny list
-                identity: Bytes::new(),
-                mechanism: ZapMechanism::Null,
-                credentials: vec![],
-            };
-            let denied_response = handler.authenticate(&denied_request).await;
-            assert_eq!(
-                denied_response.status_code,
-                ZapStatus::Failure,
-                "connections from denied IPs must be rejected with status 400"
-            );
-            assert!(
-                denied_response.status_text.contains("192.168.1.100"),
-                "failure message should name the blocked address"
-            );
+                // --- Denied address: should receive a Failure (400) response ---
+                let denied_request = ZapRequest {
+                    version: "1.0".to_string(),
+                    request_id: "deny-1".to_string(),
+                    domain: "global".to_string(),
+                    address: "192.168.1.100".to_string(), // in the deny list
+                    identity: Bytes::new(),
+                    mechanism: ZapMechanism::Null,
+                    credentials: vec![],
+                };
+                let denied_response = handler.authenticate(&denied_request).await;
+                assert_eq!(
+                    denied_response.status_code,
+                    ZapStatus::Failure,
+                    "connections from denied IPs must be rejected with status 400"
+                );
+                assert!(
+                    denied_response.status_text.contains("192.168.1.100"),
+                    "failure message should name the blocked address"
+                );
 
-            // --- Another denied address ---
-            let denied_request2 = ZapRequest {
-                version: "1.0".to_string(),
-                request_id: "deny-2".to_string(),
-                domain: "global".to_string(),
-                address: "10.0.0.1".to_string(), // also in the deny list
-                identity: Bytes::new(),
-                mechanism: ZapMechanism::Null,
-                credentials: vec![],
-            };
-            let denied_response2 = handler.authenticate(&denied_request2).await;
-            assert_eq!(
-                denied_response2.status_code,
-                ZapStatus::Failure,
-                "10.0.0.1 is on the deny list and must be rejected"
-            );
+                // --- Another denied address ---
+                let denied_request2 = ZapRequest {
+                    version: "1.0".to_string(),
+                    request_id: "deny-2".to_string(),
+                    domain: "global".to_string(),
+                    address: "10.0.0.1".to_string(), // also in the deny list
+                    identity: Bytes::new(),
+                    mechanism: ZapMechanism::Null,
+                    credentials: vec![],
+                };
+                let denied_response2 = handler.authenticate(&denied_request2).await;
+                assert_eq!(
+                    denied_response2.status_code,
+                    ZapStatus::Failure,
+                    "10.0.0.1 is on the deny list and must be rejected"
+                );
 
-            // --- Allowed address: should receive a Success (200) response ---
-            let allowed_request = ZapRequest {
-                version: "1.0".to_string(),
-                request_id: "allow-1".to_string(),
-                domain: "global".to_string(),
-                address: "127.0.0.1".to_string(), // NOT in the deny list
-                identity: Bytes::new(),
-                mechanism: ZapMechanism::Null,
-                credentials: vec![],
-            };
-            let allowed_response = handler.authenticate(&allowed_request).await;
-            assert_eq!(
-                allowed_response.status_code,
-                ZapStatus::Success,
-                "connections from allowed IPs must succeed with status 200"
-            );
-        });
+                // --- Allowed address: should receive a Success (200) response ---
+                let allowed_request = ZapRequest {
+                    version: "1.0".to_string(),
+                    request_id: "allow-1".to_string(),
+                    domain: "global".to_string(),
+                    address: "127.0.0.1".to_string(), // NOT in the deny list
+                    identity: Bytes::new(),
+                    mechanism: ZapMechanism::Null,
+                    credentials: vec![],
+                };
+                let allowed_response = handler.authenticate(&allowed_request).await;
+                assert_eq!(
+                    allowed_response.status_code,
+                    ZapStatus::Success,
+                    "connections from allowed IPs must succeed with status 200"
+                );
+            });
     }
 
     /// Verify that an IP subnet prefix match also blocks sub-addresses correctly.
     #[test]
     fn test_ip_subnet_prefix_rejection() {
-        compio::runtime::Runtime::new().unwrap().block_on(async {
-            // Block the entire 10.0.0.x range using a prefix
-            let handler = IpDenyListHandler::new(vec!["10.0.0."]);
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(async {
+                // Block the entire 10.0.0.x range using a prefix
+                let handler = IpDenyListHandler::new(vec!["10.0.0."]);
 
-            let blocked = ZapRequest {
-                version: "1.0".to_string(),
-                request_id: "subnet-1".to_string(),
-                domain: "global".to_string(),
-                address: "10.0.0.55".to_string(),
-                identity: Bytes::new(),
-                mechanism: ZapMechanism::Null,
-                credentials: vec![],
-            };
-            let resp = handler.authenticate(&blocked).await;
-            assert_eq!(
-                resp.status_code,
-                ZapStatus::Failure,
-                "addresses matching a denied subnet prefix must be rejected"
-            );
+                let blocked = ZapRequest {
+                    version: "1.0".to_string(),
+                    request_id: "subnet-1".to_string(),
+                    domain: "global".to_string(),
+                    address: "10.0.0.55".to_string(),
+                    identity: Bytes::new(),
+                    mechanism: ZapMechanism::Null,
+                    credentials: vec![],
+                };
+                let resp = handler.authenticate(&blocked).await;
+                assert_eq!(
+                    resp.status_code,
+                    ZapStatus::Failure,
+                    "addresses matching a denied subnet prefix must be rejected"
+                );
 
-            let allowed = ZapRequest {
-                version: "1.0".to_string(),
-                request_id: "subnet-2".to_string(),
-                domain: "global".to_string(),
-                address: "10.0.1.1".to_string(), // different subnet
-                identity: Bytes::new(),
-                mechanism: ZapMechanism::Null,
-                credentials: vec![],
-            };
-            let resp2 = handler.authenticate(&allowed).await;
-            assert_eq!(
-                resp2.status_code,
-                ZapStatus::Success,
-                "addresses not matching a denied prefix must be accepted"
-            );
-        });
+                let allowed = ZapRequest {
+                    version: "1.0".to_string(),
+                    request_id: "subnet-2".to_string(),
+                    domain: "global".to_string(),
+                    address: "10.0.1.1".to_string(), // different subnet
+                    identity: Bytes::new(),
+                    mechanism: ZapMechanism::Null,
+                    credentials: vec![],
+                };
+                let resp2 = handler.authenticate(&allowed).await;
+                assert_eq!(
+                    resp2.status_code,
+                    ZapStatus::Success,
+                    "addresses not matching a denied prefix must be accepted"
+                );
+            });
     }
 }

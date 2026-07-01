@@ -142,14 +142,22 @@ fn monocoque_fanout(c: &mut Criterion) {
 /// Fan-in with write-coalescing senders: many messages per kernel write, so each
 /// kernel read on the sink carries a big batch.
 fn monocoque_fanin_coalesced(c: &mut Criterion) {
-    fanin(c, "fanout_fanin/monocoque/fanin_coalesced", true);
+    fanin(
+        c,
+        &format!("fanout_fanin/monocoque-{BENCH_BACKEND}/fanin_coalesced"),
+        true,
+    );
 }
 
 /// Fan-in with eager senders: one kernel write per message, so a kernel read on
 /// the sink may carry as little as one message. This is the case where batching
 /// the merge channel could in principle add overhead rather than amortize it.
 fn monocoque_fanin_eager(c: &mut Criterion) {
-    fanin(c, "fanout_fanin/monocoque/fanin_eager", false);
+    fanin(
+        c,
+        &format!("fanout_fanin/monocoque-{BENCH_BACKEND}/fanin_eager"),
+        false,
+    );
 }
 
 /// Fan-in: `WORKERS` PUSH workers each send `PER_WORKER` messages to one

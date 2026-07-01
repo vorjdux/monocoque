@@ -41,31 +41,40 @@ The name comes from Formula 1 engineering, where the monocoque chassis achieves 
 
 Benchmarked against rust-zmq (FFI bindings to libzmq). Separate OS threads for
 sender and receiver, real loopback TCP, Intel Core i7-1355U (12 threads),
-Linux 6.17, release build.
+Linux 6.17, release build. Both runtime backends run the identical suite; the
+rust-zmq control was stable across both runs, so the difference between them is a
+real measurement.
 
 **PUSH/PULL throughput with write coalescing** (`with_write_coalescing(true)`):
 
-| Message size | monocoque | rust-zmq | Ratio |
+| Message size | compio | tokio | rust-zmq |
 |---|---|---|---|
-| 64 B | **9.2 M msg/s** | 1.32 M msg/s | 7.0× faster |
-| 256 B | **5.5 M msg/s** | 1.08 M msg/s | 5.1× faster |
-| 1 KB | **2.3 M msg/s** | 667 K msg/s | 3.5× faster |
-| 4 KB | **857 K msg/s** | 314 K msg/s | 2.7× faster |
-| 16 KB | **265 K msg/s** | 111 K msg/s | 2.4× faster |
+| 64 B | 9.2 M msg/s | **13.6 M msg/s** | 1.33 M msg/s |
+| 256 B | 5.6 M msg/s | **9.8 M msg/s** | 1.09 M msg/s |
+| 1 KB | 2.4 M msg/s | **5.3 M msg/s** | 656 K msg/s |
+| 4 KB | 841 K msg/s | **1.74 M msg/s** | 328 K msg/s |
+| 16 KB | 268 K msg/s | **473 K msg/s** | 117 K msg/s |
 
-Default (eager) mode sends each message immediately and is suitable when latency
-matters more than throughput. For **large** frames eager mode automatically uses
-a vectored write (`writev`) so the body is never copied into the send buffer;
-the threshold (`vectored_write_threshold`, default 32 KB) is the measured
-loopback crossover and is tunable per workload. IPC (Unix domain sockets) is
-~2.1× faster than TCP loopback for same-host throughput.
+Both backends beat libzmq by a wide margin once coalescing batches the writes
+(~7× on compio, ~10× on tokio at 64 B). On these single-flow loopback
+microbenchmarks the tokio/epoll backend is the faster of the two: a one-connection
+ping-pong does not exercise io_uring's strengths (batched submission, registered
+buffers, many concurrent connections) and just pays its per-op submission
+overhead. compio (io_uring) is the default and is where the wins land for real
+network I/O and high connection counts. Measure on your own workload.
 
-After a profiling-driven pass on the PUB data path, **PUB/SUB now leads
-libzmq on both axes**: single-subscriber fan-out runs ~3.1× faster and topic
-filtering at 10% match is a slight edge (~1.08×), where it previously trailed. See
+Default (eager) mode sends each message immediately and suits latency-sensitive
+work. For **large** frames eager mode automatically uses a vectored write
+(`writev`) so the body is never copied into the send buffer; the threshold
+(`vectored_write_threshold`, default 32 KB) is tunable per workload. IPC (Unix
+domain sockets) is ~2.1× (compio) to ~3× (tokio) faster than TCP loopback for
+same-host throughput.
+
+**PUB/SUB leads libzmq on both axes**: single-subscriber fan-out runs ~3.1× (compio)
+to ~3.3× (tokio) faster, and topic filtering at 10% match is a near tie. See
 [docs/performance.md](docs/performance.md) for the full breakdown including
-latency numbers, the vectored-write crossover measurements, PUB/SUB pattern
-results, and tuning guidance.
+latency numbers, per-backend tables, the vectored-write crossover measurements,
+PUB/SUB pattern results, and tuning guidance.
 
 ## Quick Start
 

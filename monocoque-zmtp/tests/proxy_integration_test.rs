@@ -6,7 +6,7 @@
 //! Coordination between threads uses `std::sync::mpsc` channels.
 
 use bytes::Bytes;
-use compio::net::TcpListener;
+use monocoque_core::rt::TcpListener;
 use monocoque_zmtp::pair::PairSocket;
 use monocoque_zmtp::proxy::{ProxyCommand, proxy_steerable};
 use std::sync::mpsc;
@@ -32,10 +32,10 @@ async fn bind_listener() -> (TcpListener, std::net::SocketAddr) {
 #[allow(clippy::future_not_send)]
 async fn pair_connected() -> (PairSocket, PairSocket) {
     let (listener, addr) = bind_listener().await;
-    let client_task = compio::runtime::spawn(PairSocket::connect(addr));
+    let client_task = monocoque_core::rt::spawn(PairSocket::connect(addr));
     let (stream, _) = listener.accept().await.unwrap();
     let server = PairSocket::from_tcp(stream).await.unwrap();
-    let client = client_task.await.unwrap();
+    let client = monocoque_core::rt::join(client_task).await.unwrap();
     (server, client)
 }
 
@@ -50,7 +50,7 @@ fn test_proxy_steerable_terminate() {
     let (result_tx, result_rx) = mpsc::channel::<bool>();
 
     thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
                 // Set up three PAIR socket pairs: frontend, backend, control.
@@ -59,7 +59,7 @@ fn test_proxy_steerable_terminate() {
                 let (control, mut ctrl_client) = pair_connected().await;
 
                 // Spawn proxy task inside the same runtime.
-                let proxy_task = compio::runtime::spawn(async move {
+                let proxy_task = monocoque_core::rt::spawn(async move {
                     let mut fe = frontend;
                     let mut be = backend;
                     let mut ctrl = control;
@@ -69,7 +69,7 @@ fn test_proxy_steerable_terminate() {
 
                 // Send one message through the proxy to confirm it is running.
                 client_a.send(vec![Bytes::from("ping")]).await.unwrap();
-                let _msg = compio::time::timeout(Duration::from_secs(5), client_b.recv())
+                let _msg = monocoque_core::rt::timeout(Duration::from_secs(5), client_b.recv())
                     .await
                     .expect("forward timed out")
                     .expect("io error")
@@ -81,7 +81,7 @@ fn test_proxy_steerable_terminate() {
                     .await
                     .unwrap();
 
-                let proxy_result = compio::time::timeout(Duration::from_secs(5), proxy_task)
+                let proxy_result = monocoque_core::rt::timeout(Duration::from_secs(5), proxy_task)
                     .await
                     .expect("proxy did not exit within timeout");
 
@@ -104,14 +104,14 @@ fn test_proxy_steerable_statistics() {
     let (stats_tx, stats_rx) = mpsc::channel::<String>();
 
     thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
                 let (frontend, mut client_a) = pair_connected().await;
                 let (backend, mut client_b) = pair_connected().await;
                 let (control, mut ctrl_client) = pair_connected().await;
 
-                let proxy_task = compio::runtime::spawn(async move {
+                let proxy_task = monocoque_core::rt::spawn(async move {
                     let mut fe = frontend;
                     let mut be = backend;
                     let mut ctrl = control;
@@ -125,7 +125,7 @@ fn test_proxy_steerable_statistics() {
                         .send(vec![Bytes::from(format!("msg-{i}"))])
                         .await
                         .unwrap();
-                    let _msg = compio::time::timeout(Duration::from_secs(5), client_b.recv())
+                    let _msg = monocoque_core::rt::timeout(Duration::from_secs(5), client_b.recv())
                         .await
                         .expect("forward timed out")
                         .expect("io error")
@@ -139,11 +139,12 @@ fn test_proxy_steerable_statistics() {
                     .unwrap();
 
                 // The proxy sends the stats reply back on the same control socket.
-                let stats_msg = compio::time::timeout(Duration::from_secs(5), ctrl_client.recv())
-                    .await
-                    .expect("statistics reply timed out")
-                    .expect("io error")
-                    .expect("connection closed");
+                let stats_msg =
+                    monocoque_core::rt::timeout(Duration::from_secs(5), ctrl_client.recv())
+                        .await
+                        .expect("statistics reply timed out")
+                        .expect("io error")
+                        .expect("connection closed");
 
                 let reply = std::str::from_utf8(&stats_msg[0])
                     .expect("non-UTF-8 stats reply")
@@ -155,7 +156,7 @@ fn test_proxy_steerable_statistics() {
                     .send(vec![Bytes::from("TERMINATE")])
                     .await
                     .unwrap();
-                let _ = compio::time::timeout(Duration::from_secs(5), proxy_task).await;
+                let _ = monocoque_core::rt::timeout(Duration::from_secs(5), proxy_task).await;
             });
     });
 

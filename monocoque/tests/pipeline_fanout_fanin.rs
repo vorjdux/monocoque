@@ -6,13 +6,13 @@
 //! - Fan-out: one `PushFanOut` ventilator spreads tasks across N PULL workers.
 //! - Fan-in: N PUSH workers feed one `PullFanIn` sink.
 //!
-//! Each socket runs in its own thread with its own compio runtime, matching the
+//! Each socket runs in its own thread with its own runtime, matching the
 //! pattern used by the other multi-peer tests. Addresses are handed back over a
 //! std channel so workers only connect once the bound port is known.
 
 use bytes::Bytes;
-use compio::net::TcpListener;
 use monocoque::SocketOptions;
+use monocoque::rt::TcpListener;
 use monocoque::zmq::{PullFanIn, PullSocket, PushFanOut, PushSocket};
 use std::sync::mpsc;
 use std::thread;
@@ -31,7 +31,7 @@ fn test_fanout_round_robin_reaches_every_worker() {
 
     // Ventilator: bind, announce the port, accept the pool, then send.
     let ventilator = thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
                 let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -57,13 +57,13 @@ fn test_fanout_round_robin_reaches_every_worker() {
     let workers: Vec<_> = (0..WORKERS)
         .map(|_| {
             thread::spawn(move || {
-                compio::runtime::Runtime::new()
+                monocoque::rt::LocalRuntime::new()
                     .unwrap()
                     .block_on(async move {
                         let mut pull = PullSocket::connect(addr).await.unwrap();
                         let mut count = 0usize;
                         for _ in 0..PER_WORKER {
-                            let msg = compio::time::timeout(Duration::from_secs(10), pull.recv())
+                            let msg = monocoque::rt::timeout(Duration::from_secs(10), pull.recv())
                                 .await
                                 .expect("worker recv timed out")
                                 .expect("io error")
@@ -100,7 +100,7 @@ fn test_fanin_merges_every_worker() {
 
     // Sink: bind, announce the port, accept the pool, then drain TOTAL messages.
     let sink = thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
                 let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -115,7 +115,7 @@ fn test_fanin_merges_every_worker() {
 
                 let mut count = 0usize;
                 while count < TOTAL {
-                    let recvd = compio::time::timeout(Duration::from_secs(10), sink.recv())
+                    let recvd = monocoque::rt::timeout(Duration::from_secs(10), sink.recv())
                         .await
                         .unwrap_or_else(|_| panic!("sink recv timed out at {count}/{TOTAL}"));
                     match recvd {
@@ -133,7 +133,7 @@ fn test_fanin_merges_every_worker() {
     let workers: Vec<_> = (0..WORKERS)
         .map(|w| {
             thread::spawn(move || {
-                compio::runtime::Runtime::new()
+                monocoque::rt::LocalRuntime::new()
                     .unwrap()
                     .block_on(async move {
                         let mut push = PushSocket::connect(addr).await.unwrap();
@@ -172,7 +172,7 @@ fn test_fanout_coalescing_send_then_flush_delivers_all() {
     let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
 
     let ventilator = thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
                 let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -199,13 +199,13 @@ fn test_fanout_coalescing_send_then_flush_delivers_all() {
     let addr = addr_rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     let worker = thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
                 let mut pull = PullSocket::connect(addr).await.unwrap();
                 let mut count = 0usize;
                 for i in 0..MSGS {
-                    let msg = compio::time::timeout(Duration::from_secs(10), pull.recv())
+                    let msg = monocoque::rt::timeout(Duration::from_secs(10), pull.recv())
                         .await
                         .expect("recv timed out: flush did not deliver the batch")
                         .expect("io error")

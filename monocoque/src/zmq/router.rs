@@ -189,7 +189,7 @@ where
     /// let monitor = socket.monitor();
     ///
     /// // Spawn task to handle events
-    /// compio::runtime::spawn(async move {
+    /// monocoque::rt::spawn_detached(async move {
     ///     while let Ok(event) = monitor.recv_async().await {
     ///         println!("Socket event: {}", event);
     ///     }

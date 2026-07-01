@@ -29,52 +29,56 @@ fn test_plain_auth_options_configuration() {
 
 #[test]
 fn test_plain_handler_user_database() {
-    compio::runtime::Runtime::new().unwrap().block_on(async {
-        let mut handler = StaticPlainHandler::new();
-        handler.add_user("alice", "secret1");
-        handler.add_user("bob", "secret2");
+    monocoque_core::rt::LocalRuntime::new()
+        .unwrap()
+        .block_on(async {
+            let mut handler = StaticPlainHandler::new();
+            handler.add_user("alice", "secret1");
+            handler.add_user("bob", "secret2");
 
-        // Test valid credentials
-        let result = handler
-            .authenticate("alice", "secret1", "global", "127.0.0.1")
-            .await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "alice");
+            // Test valid credentials
+            let result = handler
+                .authenticate("alice", "secret1", "global", "127.0.0.1")
+                .await;
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap(), "alice");
 
-        // Test invalid password
-        let result = handler
-            .authenticate("alice", "wrong", "global", "127.0.0.1")
-            .await;
-        assert!(result.is_err());
+            // Test invalid password
+            let result = handler
+                .authenticate("alice", "wrong", "global", "127.0.0.1")
+                .await;
+            assert!(result.is_err());
 
-        // Test unknown user
-        let result = handler
-            .authenticate("charlie", "anypass", "global", "127.0.0.1")
-            .await;
-        assert!(result.is_err());
-    });
+            // Test unknown user
+            let result = handler
+                .authenticate("charlie", "anypass", "global", "127.0.0.1")
+                .await;
+            assert!(result.is_err());
+        });
 }
 
 #[test]
 fn test_plain_multiple_users() {
-    compio::runtime::Runtime::new().unwrap().block_on(async {
-        let mut handler = StaticPlainHandler::new();
-        handler.add_user("user1", "pass1");
-        handler.add_user("user2", "pass2");
-        handler.add_user("user3", "pass3");
+    monocoque_core::rt::LocalRuntime::new()
+        .unwrap()
+        .block_on(async {
+            let mut handler = StaticPlainHandler::new();
+            handler.add_user("user1", "pass1");
+            handler.add_user("user2", "pass2");
+            handler.add_user("user3", "pass3");
 
-        // All users should authenticate successfully with correct passwords
-        for (user, pass) in [("user1", "pass1"), ("user2", "pass2"), ("user3", "pass3")] {
+            // All users should authenticate successfully with correct passwords
+            for (user, pass) in [("user1", "pass1"), ("user2", "pass2"), ("user3", "pass3")] {
+                let result = handler
+                    .authenticate(user, pass, "global", "127.0.0.1")
+                    .await;
+                assert!(result.is_ok(), "User {user} should authenticate");
+            }
+
+            // Cross-authentication should fail
             let result = handler
-                .authenticate(user, pass, "global", "127.0.0.1")
+                .authenticate("user1", "pass2", "global", "127.0.0.1")
                 .await;
-            assert!(result.is_ok(), "User {user} should authenticate");
-        }
-
-        // Cross-authentication should fail
-        let result = handler
-            .authenticate("user1", "pass2", "global", "127.0.0.1")
-            .await;
-        assert!(result.is_err(), "Wrong password should fail");
-    });
+            assert!(result.is_err(), "Wrong password should fail");
+        });
 }

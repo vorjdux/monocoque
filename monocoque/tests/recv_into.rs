@@ -6,8 +6,8 @@
 //! reports a closed connection.
 
 use bytes::Bytes;
-use compio::net::TcpListener;
 use monocoque::SocketOptions;
+use monocoque::rt::TcpListener;
 use monocoque::zmq::{PullSocket, PushSocket};
 use std::sync::mpsc;
 use std::thread;
@@ -19,7 +19,7 @@ fn test_recv_into_reads_single_and_multipart_then_eof() {
 
     // PUSH side: bind, announce the port, send a few messages, then close.
     let sender = thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
                 let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -44,7 +44,7 @@ fn test_recv_into_reads_single_and_multipart_then_eof() {
     let addr = addr_rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     let count = thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
                 let mut pull = PullSocket::connect(addr).await.unwrap();
@@ -91,7 +91,7 @@ fn test_try_recv_into_drains_a_coalesced_burst() {
     let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
 
     let sender = thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
                 let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -116,7 +116,7 @@ fn test_try_recv_into_drains_a_coalesced_burst() {
     let addr = addr_rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     let got = thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
                 let mut pull = PullSocket::connect(addr).await.unwrap();
@@ -149,7 +149,7 @@ fn test_try_recv_into_drains_a_coalesced_burst() {
 /// timeout.
 async fn recv_into_until_closed(pull: &mut PullSocket, buf: &mut Vec<Bytes>) -> bool {
     loop {
-        let got = compio::time::timeout(Duration::from_secs(5), pull.recv_into(buf))
+        let got = monocoque::rt::timeout(Duration::from_secs(5), pull.recv_into(buf))
             .await
             .unwrap_or_else(|_| panic!("recv_into timed out waiting for EOF"))
             .expect("recv_into error");

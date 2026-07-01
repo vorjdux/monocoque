@@ -1512,7 +1512,6 @@ where
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-#[cfg(feature = "runtime-compio")]
 mod tests {
     use super::*;
     use compio_buf::{BufResult, IoBuf, IoBufMut};
@@ -1765,13 +1764,25 @@ mod tests {
         assert_eq!(request.credentials[0].len(), CURVE_KEY_SIZE);
     }
 
-    #[compio::test]
-    async fn test_send_zmtp_error_retries_short_writes() {
+    #[test]
+    fn test_send_zmtp_error_retries_short_writes() {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(test_send_zmtp_error_retries_short_writes_impl())
+    }
+
+    async fn test_send_zmtp_error_retries_short_writes_impl() {
         assert_zmtp_error_survives_partial_writes([2, 3]).await;
     }
 
-    #[compio::test]
-    async fn test_send_zmtp_error_retries_short_body_writes() {
+    #[test]
+    fn test_send_zmtp_error_retries_short_body_writes() {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(test_send_zmtp_error_retries_short_body_writes_impl())
+    }
+
+    async fn test_send_zmtp_error_retries_short_body_writes_impl() {
         assert_zmtp_error_survives_partial_writes([9, 2]).await;
     }
 

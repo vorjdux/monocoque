@@ -25,7 +25,7 @@ fn test_stream_connection_notification() {
     let (notif_tx, notif_rx) = mpsc::channel::<Vec<Bytes>>();
 
     thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
                 let mut srv = StreamSocket::bind("127.0.0.1:0").await.unwrap();
@@ -66,7 +66,7 @@ fn test_stream_recv_raw_data() {
     let (msg_tx, msg_rx) = mpsc::channel::<Vec<Bytes>>();
 
     thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
                 let mut srv = StreamSocket::bind("127.0.0.1:0").await.unwrap();
@@ -106,7 +106,7 @@ fn test_stream_send_raw_data() {
     let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
 
     thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
                 let mut srv = StreamSocket::bind("127.0.0.1:0").await.unwrap();
@@ -154,7 +154,7 @@ fn test_stream_echo() {
 
     // Echo server thread.
     thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
                 let mut srv = StreamSocket::bind("127.0.0.1:0").await.unwrap();
@@ -205,7 +205,7 @@ fn test_stream_multi_peer_unique_routing_ids() {
     let (ids_tx, ids_rx) = mpsc::channel::<Vec<Bytes>>();
 
     thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
                 let mut srv = StreamSocket::bind("127.0.0.1:0").await.unwrap();
@@ -246,7 +246,7 @@ fn test_stream_disconnect_removes_peer() {
     let (result_tx, result_rx) = mpsc::channel::<bool>();
 
     thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
                 let mut srv = StreamSocket::bind("127.0.0.1:0").await.unwrap();

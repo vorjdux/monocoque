@@ -657,7 +657,6 @@ impl ProxySocket for SubSocket {
 }
 
 #[cfg(test)]
-#[cfg(feature = "runtime-compio")]
 mod tests {
     use super::*;
 

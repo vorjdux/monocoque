@@ -449,12 +449,17 @@ pub fn create_plain_zap_request(
 }
 
 #[cfg(test)]
-#[cfg(feature = "runtime-compio")]
 mod tests {
     use super::*;
 
-    #[compio::test]
-    async fn test_static_plain_handler() {
+    #[test]
+    fn test_static_plain_handler() {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(test_static_plain_handler_impl())
+    }
+
+    async fn test_static_plain_handler_impl() {
         let mut handler = StaticPlainHandler::new();
         handler.add_user("admin", "secret123");
         handler.add_user("guest", "guest123");

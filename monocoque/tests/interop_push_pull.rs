@@ -4,7 +4,7 @@
 //! monocoque on the other, verifying wire-level compatibility.
 
 use bytes::Bytes;
-use compio::net::{TcpListener, TcpStream};
+use monocoque::rt::{TcpListener, TcpStream};
 use monocoque::zmq::{PullSocket, PushSocket};
 use std::sync::mpsc;
 use std::thread;
@@ -47,7 +47,7 @@ fn test_monocoque_push_to_libzmq_pull() {
     // monocoque PUSH client  -  join to capture panics/errors
     let push_thread = thread::spawn(move || {
         let t0 = Instant::now();
-        let r = compio::runtime::Runtime::new()
+        let r = monocoque::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
                 let mut push = PushSocket::<TcpStream>::connect(addr).await?;
@@ -83,7 +83,7 @@ fn test_libzmq_push_to_monocoque_pull() {
 
     // monocoque PULL server
     thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
                 let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

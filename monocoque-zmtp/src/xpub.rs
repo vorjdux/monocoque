@@ -77,9 +77,8 @@ impl XPubSubscriber {
 /// use monocoque_zmtp::xpub::XPubSocket;
 /// use bytes::Bytes;
 ///
-/// #[compio::main]
-/// async fn main() -> std::io::Result<()> {
-///     let mut xpub = XPubSocket::bind("127.0.0.1:5555").await?;
+/// # async fn example() -> std::io::Result<()> {
+/// let mut xpub = XPubSocket::bind("127.0.0.1:5555").await?;
 ///     
 ///     loop {
 ///         // Receive subscription events from subscribers
@@ -90,7 +89,7 @@ impl XPubSubscriber {
 ///         // Broadcast messages to matching subscribers
 ///         xpub.send(vec![Bytes::from("topic"), Bytes::from("data")]).await?;
 ///     }
-/// }
+/// # }
 /// ```
 pub struct XPubSocket {
     listener: TcpListener,
@@ -667,13 +666,18 @@ impl crate::Socket for XPubSocket {
 }
 
 #[cfg(test)]
-#[cfg(feature = "runtime-compio")]
 mod tests {
     use super::*;
     use crate::publisher::PubSocket as InternalPub;
 
-    #[compio::test]
-    async fn test_xpub_bind() {
+    #[test]
+    fn test_xpub_bind() {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(test_xpub_bind_impl())
+    }
+
+    async fn test_xpub_bind_impl() {
         let xpub = XPubSocket::bind("127.0.0.1:0").await.unwrap();
         assert_eq!(xpub.subscriber_count(), 0);
         let addr = xpub.local_addr().unwrap();
@@ -692,8 +696,14 @@ mod tests {
     }
 
     /// `send_subscription` errors when manual mode is off.
-    #[compio::test]
-    async fn test_send_subscription_requires_manual_mode() {
+    #[test]
+    fn test_send_subscription_requires_manual_mode() {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(test_send_subscription_requires_manual_mode_impl())
+    }
+
+    async fn test_send_subscription_requires_manual_mode_impl() {
         let mut xpub = XPubSocket::bind("127.0.0.1:0").await.unwrap();
         // manual mode is off by default
         let err = xpub
@@ -704,8 +714,14 @@ mod tests {
     }
 
     /// `send_subscription` errors when no upstream is connected.
-    #[compio::test]
-    async fn test_send_subscription_requires_upstream() {
+    #[test]
+    fn test_send_subscription_requires_upstream() {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(test_send_subscription_requires_upstream_impl())
+    }
+
+    async fn test_send_subscription_requires_upstream_impl() {
         let mut xpub = XPubSocket::bind("127.0.0.1:0").await.unwrap();
         xpub.set_manual(true);
         let err = xpub
@@ -722,8 +738,14 @@ mod tests {
     /// indirectly: after forwarding Subscribe("weather"), publishing a "weather" message
     /// reaches the upstream connection (the XSubSocket), confirming the PUB socket
     /// started delivering matching messages.
-    #[compio::test]
-    async fn test_connect_upstream_and_forward_subscription() {
+    #[test]
+    fn test_connect_upstream_and_forward_subscription() {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(test_connect_upstream_and_forward_subscription_impl())
+    }
+
+    async fn test_connect_upstream_and_forward_subscription_impl() {
         use monocoque_core::rt::TcpListener;
 
         // Bind a PubSocket listener (the upstream data source).
@@ -731,7 +753,7 @@ mod tests {
         let pub_addr = pub_listener.local_addr().unwrap();
 
         // Spawn PubSocket: accept the XSubSocket upstream connection, then broadcast.
-        let pub_task = compio::runtime::spawn(async move {
+        let pub_task = monocoque_core::rt::spawn(async move {
             let mut pub_sock = InternalPub::new();
             // Accept the connection that connect_upstream() will make.
             pub_sock.accept_subscriber(&pub_listener).await.unwrap();
@@ -757,7 +779,7 @@ mod tests {
             .unwrap();
 
         // Wait for the PubSocket to broadcast.
-        pub_task.await;
+        monocoque_core::rt::join(pub_task).await;
 
         // The upstream XSubSocket should have received the "weather" message.
         let msg = xpub

@@ -346,7 +346,6 @@ where
 }
 
 #[cfg(test)]
-#[cfg(feature = "runtime-compio")]
 mod tests {
     use super::*;
 
@@ -355,45 +354,47 @@ mod tests {
         use bytes::Bytes;
         use monocoque_core::rt::TcpListener;
 
-        compio::runtime::Runtime::new().unwrap().block_on(async {
-            // Create a pair of connected sockets
-            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let addr = listener.local_addr().unwrap();
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(async {
+                // Create a pair of connected sockets
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let addr = listener.local_addr().unwrap();
 
-            // Spawn client that will connect and send request
-            let client_task = compio::runtime::spawn(async move {
-                monocoque_core::rt::sleep(std::time::Duration::from_millis(10)).await;
-                let stream = monocoque_core::rt::TcpStream::connect(addr).await.unwrap();
-                let mut req = crate::req::ReqSocket::new(stream).await.unwrap();
+                // Spawn client that will connect and send request
+                let client_task = monocoque_core::rt::spawn(async move {
+                    monocoque_core::rt::sleep(std::time::Duration::from_millis(10)).await;
+                    let stream = monocoque_core::rt::TcpStream::connect(addr).await.unwrap();
+                    let mut req = crate::req::ReqSocket::new(stream).await.unwrap();
 
-                // Send request
-                req.send(vec![Bytes::from("test")]).await.unwrap();
+                    // Send request
+                    req.send(vec![Bytes::from("test")]).await.unwrap();
 
-                // Wait for and verify reply
-                let reply = req.recv().await.unwrap();
-                assert!(reply.is_some());
+                    // Wait for and verify reply
+                    let reply = req.recv().await.unwrap();
+                    assert!(reply.is_some());
 
-                req
+                    req
+                });
+
+                let (server_stream, _) = listener.accept().await.unwrap();
+                let mut rep = RepSocket::new(server_stream).await.unwrap();
+
+                // Initial state
+                assert_eq!(rep.state(), RepState::AwaitingRequest);
+
+                // Receive should transition to ReadyToReply
+                let msg = rep.recv().await.unwrap();
+                assert!(msg.is_some());
+                assert_eq!(rep.state(), RepState::ReadyToReply);
+
+                // Send reply should transition back to AwaitingRequest
+                rep.send(msg.unwrap()).await.unwrap();
+                assert_eq!(rep.state(), RepState::AwaitingRequest);
+
+                // Wait for client
+                monocoque_core::rt::join(client_task).await;
             });
-
-            let (server_stream, _) = listener.accept().await.unwrap();
-            let mut rep = RepSocket::new(server_stream).await.unwrap();
-
-            // Initial state
-            assert_eq!(rep.state(), RepState::AwaitingRequest);
-
-            // Receive should transition to ReadyToReply
-            let msg = rep.recv().await.unwrap();
-            assert!(msg.is_some());
-            assert_eq!(rep.state(), RepState::ReadyToReply);
-
-            // Send reply should transition back to AwaitingRequest
-            rep.send(msg.unwrap()).await.unwrap();
-            assert_eq!(rep.state(), RepState::AwaitingRequest);
-
-            // Wait for client
-            client_task.await;
-        });
     }
 }
 

@@ -123,7 +123,6 @@ impl std::fmt::Debug for InprocStream {
 }
 
 #[cfg(test)]
-#[cfg(feature = "runtime-compio")]
 mod tests {
     use super::*;
     use monocoque_core::inproc::{bind_inproc, connect_inproc};
@@ -142,7 +141,7 @@ mod tests {
         // Send data into stream1's receiver before reading (channel buffers it)
         tx2.send(vec![Bytes::from_static(b"hello")]).unwrap();
 
-        let rt = compio::runtime::Runtime::new()?;
+        let rt = monocoque_core::rt::LocalRuntime::new()?;
         let (n, buf) = rt.block_on(async {
             let buf = vec![0u8; 10];
             let BufResult(result, buf) = AsyncRead::read(&mut stream1, buf).await;

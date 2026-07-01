@@ -1030,7 +1030,6 @@ where
 }
 
 #[cfg(test)]
-#[cfg(feature = "runtime-compio")]
 mod tests {
     use super::*;
     use compio_buf::{BufResult, IoBuf, IoBufMut};
@@ -1536,18 +1535,36 @@ mod tests {
         assert_eq!(ttl_max, u16::MAX);
     }
 
-    #[compio::test]
-    async fn test_write_from_buf_retries_short_writes_before_disarming() {
+    #[test]
+    fn test_write_from_buf_retries_short_writes_before_disarming() {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(test_write_from_buf_retries_short_writes_before_disarming_impl())
+    }
+
+    async fn test_write_from_buf_retries_short_writes_before_disarming_impl() {
         assert_short_writes_complete(WritePath::WriteFromBuf, [2, 2]).await;
     }
 
-    #[compio::test]
-    async fn test_flush_send_buffer_retries_short_writes_before_disarming() {
+    #[test]
+    fn test_flush_send_buffer_retries_short_writes_before_disarming() {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(test_flush_send_buffer_retries_short_writes_before_disarming_impl())
+    }
+
+    async fn test_flush_send_buffer_retries_short_writes_before_disarming_impl() {
         assert_short_writes_complete(WritePath::FlushSendBuffer, [2, 2]).await;
     }
 
-    #[compio::test]
-    async fn test_write_from_buf_write_zero_poisons_and_disconnects() {
+    #[test]
+    fn test_write_from_buf_write_zero_poisons_and_disconnects() {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(test_write_from_buf_write_zero_poisons_and_disconnects_impl())
+    }
+
+    async fn test_write_from_buf_write_zero_poisons_and_disconnects_impl() {
         assert_write_failure_after_progress(
             WritePath::WriteFromBuf,
             [WriteStep::Bytes(2), WriteStep::Bytes(0)],
@@ -1557,8 +1574,14 @@ mod tests {
         .await;
     }
 
-    #[compio::test]
-    async fn test_flush_send_buffer_write_zero_poisons_and_disconnects() {
+    #[test]
+    fn test_flush_send_buffer_write_zero_poisons_and_disconnects() {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(test_flush_send_buffer_write_zero_poisons_and_disconnects_impl())
+    }
+
+    async fn test_flush_send_buffer_write_zero_poisons_and_disconnects_impl() {
         assert_write_failure_after_progress(
             WritePath::FlushSendBuffer,
             [WriteStep::Bytes(2), WriteStep::Bytes(0)],
@@ -1568,8 +1591,14 @@ mod tests {
         .await;
     }
 
-    #[compio::test]
-    async fn test_write_from_buf_write_error_after_progress_poisons_and_disconnects() {
+    #[test]
+    fn test_write_from_buf_write_error_after_progress_poisons_and_disconnects() {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(test_write_from_buf_write_error_after_progress_poisons_and_disconnects_impl())
+    }
+
+    async fn test_write_from_buf_write_error_after_progress_poisons_and_disconnects_impl() {
         assert_write_failure_after_progress(
             WritePath::WriteFromBuf,
             [
@@ -1582,8 +1611,14 @@ mod tests {
         .await;
     }
 
-    #[compio::test]
-    async fn test_flush_send_buffer_write_error_after_progress_poisons_and_disconnects() {
+    #[test]
+    fn test_flush_send_buffer_write_error_after_progress_poisons_and_disconnects() {
+        monocoque_core::rt::LocalRuntime::new().unwrap().block_on(
+            test_flush_send_buffer_write_error_after_progress_poisons_and_disconnects_impl(),
+        )
+    }
+
+    async fn test_flush_send_buffer_write_error_after_progress_poisons_and_disconnects_impl() {
         assert_write_failure_after_progress(
             WritePath::FlushSendBuffer,
             [
@@ -1596,8 +1631,14 @@ mod tests {
         .await;
     }
 
-    #[compio::test]
-    async fn test_write_from_buf_interrupted_write_retries_without_poisoning() {
+    #[test]
+    fn test_write_from_buf_interrupted_write_retries_without_poisoning() {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(test_write_from_buf_interrupted_write_retries_without_poisoning_impl())
+    }
+
+    async fn test_write_from_buf_interrupted_write_retries_without_poisoning_impl() {
         assert_write_success(
             WritePath::WriteFromBuf,
             [
@@ -1609,8 +1650,14 @@ mod tests {
         .await;
     }
 
-    #[compio::test]
-    async fn test_flush_send_buffer_interrupted_write_retries_without_poisoning() {
+    #[test]
+    fn test_flush_send_buffer_interrupted_write_retries_without_poisoning() {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(test_flush_send_buffer_interrupted_write_retries_without_poisoning_impl())
+    }
+
+    async fn test_flush_send_buffer_interrupted_write_retries_without_poisoning_impl() {
         assert_write_success(
             WritePath::FlushSendBuffer,
             [
@@ -1622,18 +1669,36 @@ mod tests {
         .await;
     }
 
-    #[compio::test]
-    async fn test_scripted_write_from_buf_short_write_sequences_match_socket_state() {
+    #[test]
+    fn test_scripted_write_from_buf_short_write_sequences_match_socket_state() {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(test_scripted_write_from_buf_short_write_sequences_match_socket_state_impl())
+    }
+
+    async fn test_scripted_write_from_buf_short_write_sequences_match_socket_state_impl() {
         assert_scripted_write_cases(WritePath::WriteFromBuf, short_write_scripts(4)).await;
     }
 
-    #[compio::test]
-    async fn test_scripted_flush_send_buffer_short_write_sequences_match_socket_state() {
+    #[test]
+    fn test_scripted_flush_send_buffer_short_write_sequences_match_socket_state() {
+        monocoque_core::rt::LocalRuntime::new().unwrap().block_on(
+            test_scripted_flush_send_buffer_short_write_sequences_match_socket_state_impl(),
+        )
+    }
+
+    async fn test_scripted_flush_send_buffer_short_write_sequences_match_socket_state_impl() {
         assert_scripted_write_cases(WritePath::FlushSendBuffer, short_write_scripts(4)).await;
     }
 
-    #[compio::test]
-    async fn test_nonblocking_write_from_buf_keeps_buffer_and_health() {
+    #[test]
+    fn test_nonblocking_write_from_buf_keeps_buffer_and_health() {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(test_nonblocking_write_from_buf_keeps_buffer_and_health_impl())
+    }
+
+    async fn test_nonblocking_write_from_buf_keeps_buffer_and_health_impl() {
         assert_pre_io_error_preserves_buffer(
             WritePath::WriteFromBuf,
             nonblocking_options(),
@@ -1643,8 +1708,14 @@ mod tests {
         .await;
     }
 
-    #[compio::test]
-    async fn test_write_from_buf_not_connected_does_not_poison() {
+    #[test]
+    fn test_write_from_buf_not_connected_does_not_poison() {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(test_write_from_buf_not_connected_does_not_poison_impl())
+    }
+
+    async fn test_write_from_buf_not_connected_does_not_poison_impl() {
         assert_pre_io_error_preserves_buffer(
             WritePath::WriteFromBuf,
             SocketOptions::default(),
@@ -1654,8 +1725,14 @@ mod tests {
         .await;
     }
 
-    #[compio::test]
-    async fn test_write_from_buf_not_connected_takes_precedence_over_nonblocking() {
+    #[test]
+    fn test_write_from_buf_not_connected_takes_precedence_over_nonblocking() {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(test_write_from_buf_not_connected_takes_precedence_over_nonblocking_impl())
+    }
+
+    async fn test_write_from_buf_not_connected_takes_precedence_over_nonblocking_impl() {
         assert_pre_io_error_preserves_buffer(
             WritePath::WriteFromBuf,
             nonblocking_options(),
@@ -1665,8 +1742,14 @@ mod tests {
         .await;
     }
 
-    #[compio::test]
-    async fn test_nonblocking_flush_keeps_buffer_and_health() {
+    #[test]
+    fn test_nonblocking_flush_keeps_buffer_and_health() {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(test_nonblocking_flush_keeps_buffer_and_health_impl())
+    }
+
+    async fn test_nonblocking_flush_keeps_buffer_and_health_impl() {
         assert_pre_io_error_preserves_buffer(
             WritePath::FlushSendBuffer,
             nonblocking_options(),
@@ -1676,8 +1759,14 @@ mod tests {
         .await;
     }
 
-    #[compio::test]
-    async fn test_flush_send_buffer_not_connected_keeps_buffer_and_health() {
+    #[test]
+    fn test_flush_send_buffer_not_connected_keeps_buffer_and_health() {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(test_flush_send_buffer_not_connected_keeps_buffer_and_health_impl())
+    }
+
+    async fn test_flush_send_buffer_not_connected_keeps_buffer_and_health_impl() {
         assert_pre_io_error_preserves_buffer(
             WritePath::FlushSendBuffer,
             SocketOptions::default(),
@@ -1687,8 +1776,14 @@ mod tests {
         .await;
     }
 
-    #[compio::test]
-    async fn test_flush_send_buffer_not_connected_takes_precedence_over_nonblocking() {
+    #[test]
+    fn test_flush_send_buffer_not_connected_takes_precedence_over_nonblocking() {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(test_flush_send_buffer_not_connected_takes_precedence_over_nonblocking_impl())
+    }
+
+    async fn test_flush_send_buffer_not_connected_takes_precedence_over_nonblocking_impl() {
         assert_pre_io_error_preserves_buffer(
             WritePath::FlushSendBuffer,
             nonblocking_options(),
