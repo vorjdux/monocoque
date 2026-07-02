@@ -365,8 +365,10 @@ A single `PushSocket` or `PullSocket` owns one connection. For pool topologies,
 Two notes from measuring these:
 
 - The `PullFanIn` sink runs all its per-connection readers on **one** runtime and
-  batches each kernel-read burst across the merge channel as a single item. That
-  keeps it at the single-core decode ceiling (it matches single-stream PULL).
+  forwards each kernel-read burst across the merge channel in bounded-size chunks.
+  That keeps it at the single-core decode ceiling (it matches single-stream PULL)
+  while capping how many messages queue when the sink lags, so peak memory stays
+  bounded instead of growing with worker count.
   Spreading the readers across threads was measured and is a net loss at small
   messages: at ~10M msg/s the cost is dominated by cross-core cache and atomic
   `Bytes` refcount traffic, not decode. Threads only help large, decode-heavy

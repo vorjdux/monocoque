@@ -325,13 +325,17 @@ required-features = ["zmq"]
 name = "recv_into"
 required-features = ["zmq"]
 
+[[test]]
+name = "fanin_rss_bound"
+required-features = ["zmq"]
+
 [lints]
 workspace = true
 
 [dependencies]
 # Internal implementation crates (not exposed)
-monocoque-core = { version = "0.1.6", path = "../monocoque-core", package = "monocoque-rs-core", default-features = false }
-monocoque-zmtp = { version = "0.1.6", path = "../monocoque-zmtp", package = "monocoque-rs-zmtp", optional = true, default-features = false }
+monocoque-core = { version = "0.1.7", path = "../monocoque-core", package = "monocoque-rs-core", default-features = false }
+monocoque-zmtp = { version = "0.1.7", path = "../monocoque-zmtp", package = "monocoque-rs-zmtp", optional = true, default-features = false }
 
 # Re-export dependencies for user convenience
 bytes.workspace = true

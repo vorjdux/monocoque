@@ -979,6 +979,13 @@ impl SocketBase<TcpStream> {
             }
         };
 
+        // Re-apply TCP tuning to the fresh socket. The original connect set
+        // TCP_NODELAY (and keepalive), but a reconnect is a brand-new fd that
+        // starts with kernel defaults (Nagle on), so without this the socket
+        // would silently run with Nagle enabled after any reconnect. This is a
+        // one-time setsockopt at reconnect, off the send/recv hot path.
+        crate::utils::configure_tcp_stream(&new_stream, &self.options, "RECONNECT")?;
+
         // Perform handshake  -  preserve routing identity from options
         let hr = perform_handshake_with_options(
             &mut new_stream,

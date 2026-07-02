@@ -17,13 +17,16 @@
 //! the messages actually arrived in.
 //!
 //! The handoff is batched. A reader drains every message decoded from one kernel
-//! read with [`PullSocket::recv_batch`] and forwards the whole batch as a single
-//! channel item; the sink pops from a local buffer that it only refills from the
-//! channel when empty. That amortizes the cross-task channel hop and the
-//! per-message `.await` over a whole batch, which is what the sink would
-//! otherwise pay per message. The batch size follows what the kernel delivers per
-//! read, so coalescing senders produce large batches and eager senders fall back
-//! to small ones without a separate code path.
+//! read with [`PullSocket::recv_batch`] and forwards it in chunks of at most
+//! `MAX_ITEM_MESSAGES` as channel items; the sink pops from a local buffer that it
+//! only refills from the channel when empty. That amortizes the cross-task channel
+//! hop and the per-message `.await` over a whole chunk, which is what the sink
+//! would otherwise pay per message. The chunk cap keeps a single kernel read from
+//! becoming one unbounded channel item: because a frozen message pins its whole
+//! 64 KiB slab page, an unbounded item let the queue retain an unbounded number of
+//! pages when the sink lagged the readers, so peak memory grew with payload size
+//! and worker count. Capping the messages per item makes the bounded channel a
+//! real bound on in-flight messages (and pinned pages) regardless of payload.
 //!
 //! The readers and the consumer share one runtime on purpose. A per-connection
 //! thread (one runtime each) was measured and is a net loss for the small-message
@@ -43,10 +46,23 @@ use std::io;
 
 use super::PullSocket;
 
-/// One channel item is a whole batch of messages drained from a single kernel
-/// read. This bounds how many *batches* may queue before reader tasks wait for
-/// the sink to catch up, capping memory without throttling a sink that keeps up.
-const CHANNEL_CAPACITY: usize = 1024;
+/// Maximum number of messages a reader forwards in a single channel item.
+///
+/// `recv_batch` returns a whole kernel read, which at small payloads is hundreds
+/// of messages. Forwarding that as one item made the queue's memory bound depend
+/// on payload size: the channel bounds *item count*, so with unbounded item size
+/// the in-flight message count (and, because each frozen message pins its whole
+/// 64 KiB slab page, the retained pages) grew without limit when the sink lagged
+/// behind the readers. Chunking to a fixed message count keeps items large enough
+/// to amortize the cross-task channel hop while making [`CHANNEL_CAPACITY`] a real
+/// bound on queued messages regardless of payload size or worker count.
+const MAX_ITEM_MESSAGES: usize = 128;
+
+/// How many chunked items may queue before reader tasks wait for the sink to
+/// catch up. Combined with [`MAX_ITEM_MESSAGES`] this caps in-flight messages at
+/// roughly `CHANNEL_CAPACITY * MAX_ITEM_MESSAGES`, independent of payload size, so
+/// peak memory no longer scales with how far the readers outrun the sink.
+const CHANNEL_CAPACITY: usize = 64;
 
 /// A batch of complete multipart messages handed across the merge channel in one
 /// hop.
@@ -201,8 +217,20 @@ async fn read_into_channel(mut pull: PullSocket<TcpStream>, tx: Sender<Batch>) {
     loop {
         match pull.recv_batch().await {
             Ok(Some(batch)) => {
-                if tx.send_async(batch).await.is_err() {
-                    return;
+                // Forward in chunks of at most MAX_ITEM_MESSAGES, preserving
+                // arrival order. A read that decoded fewer messages than the cap
+                // (the common case) goes out as a single item with no extra
+                // allocation. Larger reads are split so no single item can pin an
+                // unbounded number of slab pages in the channel.
+                let mut it = batch.into_iter();
+                loop {
+                    let chunk: Batch = it.by_ref().take(MAX_ITEM_MESSAGES).collect();
+                    if chunk.is_empty() {
+                        break;
+                    }
+                    if tx.send_async(chunk).await.is_err() {
+                        return;
+                    }
                 }
             }
             // Connection closed or errored: this worker has nothing more to give.

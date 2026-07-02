@@ -284,3 +284,79 @@ impl PushSocket<TcpStream> {
 }
 
 crate::impl_socket_trait!(PushSocket<S>, SocketType::Push);
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use monocoque_core::options::SocketOptions;
+    use monocoque_core::rt::{LocalRuntime, TcpListener};
+    use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+    use std::sync::mpsc;
+    use std::thread;
+
+    /// Read `TCP_NODELAY` from a live fd without taking ownership of it.
+    fn fd_nodelay(fd: RawFd) -> bool {
+        let sock = unsafe { socket2::Socket::from_raw_fd(fd) };
+        let nd = sock.nodelay().expect("query TCP_NODELAY");
+        std::mem::forget(sock); // borrowed fd - do not close it
+        nd
+    }
+
+    /// A reconnect opens a brand-new fd that starts at the kernel default
+    /// (Nagle on), so the socket must re-apply `TCP_NODELAY`; otherwise latency
+    /// silently degrades after any automatic reconnect. This drives a real
+    /// connect followed by a forced reconnect and checks the live socket fd.
+    #[test]
+    fn tcp_nodelay_survives_reconnect() {
+        let (port_tx, port_rx) = mpsc::channel::<u16>();
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+
+        // Server accepts twice - the initial connection and the forced
+        // reconnect - completing the ZMTP handshake each time with a real PULL
+        // peer, and holds both open until the client has inspected its socket.
+        let server = thread::spawn(move || {
+            let rt = LocalRuntime::new().unwrap();
+            rt.block_on(async move {
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                port_tx.send(listener.local_addr().unwrap().port()).unwrap();
+
+                let (s1, _) = listener.accept().await.unwrap();
+                let _peer1 = crate::pull::PullSocket::new(s1).await.unwrap();
+
+                let (s2, _) = listener.accept().await.unwrap();
+                let _peer2 = crate::pull::PullSocket::new(s2).await.unwrap();
+
+                done_rx.recv().unwrap();
+            });
+        });
+
+        let port = port_rx.recv().unwrap();
+        let client = thread::spawn(move || {
+            let rt = LocalRuntime::new().unwrap();
+            rt.block_on(async move {
+                let mut push =
+                    PushSocket::connect_with_options(("127.0.0.1", port), SocketOptions::default())
+                        .await
+                        .unwrap();
+
+                // The initial connection sets NODELAY (existing behavior).
+                let fd0 = push.base.stream.as_ref().unwrap().as_raw_fd();
+                assert!(fd_nodelay(fd0), "initial connect must set TCP_NODELAY");
+
+                // Force a reconnect: a fresh fd that defaults to Nagle-on.
+                push.try_reconnect().await.unwrap();
+
+                let fd1 = push.base.stream.as_ref().unwrap().as_raw_fd();
+                assert!(
+                    fd_nodelay(fd1),
+                    "TCP_NODELAY must be re-applied on the reconnected socket",
+                );
+
+                done_tx.send(()).unwrap();
+            });
+        });
+
+        client.join().unwrap();
+        server.join().unwrap();
+    }
+}
