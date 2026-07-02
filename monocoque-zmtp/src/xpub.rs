@@ -158,6 +158,11 @@ impl XPubSocket {
             Ok((mut stream, addr)) => {
                 debug!("[XPUB] New subscriber from {}", addr);
 
+                // Enable TCP_NODELAY (and keepalive) on the accepted subscriber,
+                // matching PUB's accept path. One-time setsockopt at accept, not
+                // in the publish hot path.
+                crate::utils::configure_tcp_stream(&stream, &self.options, "XPUB")?;
+
                 // Perform ZMTP handshake
                 let handshake_result = perform_handshake_with_options(
                     &mut stream,
@@ -669,6 +674,55 @@ impl crate::Socket for XPubSocket {
 mod tests {
     use super::*;
     use crate::publisher::PubSocket as InternalPub;
+
+    /// XPUB must set TCP_NODELAY on accepted subscriber connections, matching
+    /// PUB. Connects a real XSUB peer, then reads TCP_NODELAY off the stored
+    /// subscriber's socket fd. One-time setsockopt at accept - off the hot path.
+    #[cfg(unix)]
+    #[test]
+    fn xpub_accept_sets_tcp_nodelay() {
+        use monocoque_core::rt::LocalRuntime;
+        use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+        use std::sync::mpsc;
+        use std::thread;
+
+        fn fd_nodelay(fd: RawFd) -> bool {
+            let sock = unsafe { socket2::Socket::from_raw_fd(fd) };
+            let nd = sock.nodelay().expect("query TCP_NODELAY");
+            std::mem::forget(sock); // borrowed fd - do not close it
+            nd
+        }
+
+        let (port_tx, port_rx) = mpsc::channel::<u16>();
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+
+        // XSUB client: connect once the port is known, then hold the connection.
+        let client = thread::spawn(move || {
+            let rt = LocalRuntime::new().unwrap();
+            rt.block_on(async move {
+                let port = port_rx.recv().unwrap();
+                let _xsub = crate::xsub::XSubSocket::connect(&format!("127.0.0.1:{port}"))
+                    .await
+                    .unwrap();
+                done_rx.recv().unwrap();
+            });
+        });
+
+        let rt = LocalRuntime::new().unwrap();
+        let nodelay = rt.block_on(async move {
+            let mut xpub = XPubSocket::bind("127.0.0.1:0").await.unwrap();
+            port_tx.send(xpub.local_addr().unwrap().port()).unwrap();
+            xpub.accept().await.unwrap();
+            let sub = xpub.subscribers.values().next().expect("one subscriber");
+            fd_nodelay(sub.stream.as_raw_fd())
+        });
+        done_tx.send(()).unwrap();
+        client.join().unwrap();
+        assert!(
+            nodelay,
+            "XPUB accept must set TCP_NODELAY on subscriber sockets",
+        );
+    }
 
     #[test]
     fn test_xpub_bind() {

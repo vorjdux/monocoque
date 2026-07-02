@@ -210,9 +210,13 @@ is the one kept.
 
 Fan-in merges four sources into one sink. The sink's bottleneck is the per-message
 cross-task hop into its merge channel plus one `.await` per message, all on one
-runtime. `PullFanIn` removes most of that by batching: each reader forwards a whole
-kernel-read batch as one channel item and the sink drains a local buffer, so
-`recv_batch` pays one channel hop and one `.await` per batch instead of per message.
+runtime. `PullFanIn` removes most of that by batching: each reader forwards its
+kernel-read batch in bounded-size chunks and the sink drains a local buffer, so
+`recv_batch` pays about one channel hop and one `.await` per chunk instead of per
+message. The per-chunk cap also bounds how many messages (and the 64 KB slab pages
+they pin) can queue while the sink lags its readers, so peak memory stays flat
+instead of growing with worker count. Throughput is unchanged by the cap: the
+coalesced 64 B sink stays around 11 M msg/s.
 
 Fan-in, coalescing senders (large kernel-read batches):
 

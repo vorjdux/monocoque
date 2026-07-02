@@ -361,6 +361,10 @@ impl XSubSocket<TcpStream> {
         let stream = TcpStream::connect(addr).await?;
         let peer_addr = stream.peer_addr()?;
 
+        // Enable TCP_NODELAY (and keepalive) on the outbound connection, matching
+        // SUB's connect path. One-time setsockopt at connect, off the hot path.
+        crate::utils::configure_tcp_stream(&stream, &options, "XSUB")?;
+
         let mut stream = stream;
         let handshake_result = crate::handshake::perform_handshake_with_options(
             &mut stream,
@@ -474,6 +478,61 @@ impl XSubSocket<TcpStream> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// XSUB's outbound TCP connection must have TCP_NODELAY set, matching SUB.
+    /// Drives a real connect against an XPUB peer and reads TCP_NODELAY off the
+    /// live XSUB socket fd. One-time setsockopt at connect - off the hot path.
+    #[cfg(unix)]
+    #[test]
+    fn xsub_connect_sets_tcp_nodelay() {
+        use monocoque_core::rt::LocalRuntime;
+        use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+        use std::sync::mpsc;
+        use std::thread;
+
+        fn fd_nodelay(fd: RawFd) -> bool {
+            let sock = unsafe { socket2::Socket::from_raw_fd(fd) };
+            let nd = sock.nodelay().expect("query TCP_NODELAY");
+            std::mem::forget(sock); // borrowed fd - do not close it
+            nd
+        }
+
+        let (port_tx, port_rx) = mpsc::channel::<u16>();
+        let (nd_tx, nd_rx) = mpsc::channel::<bool>();
+        let (done_tx, done_rx) = mpsc::channel::<()>();
+
+        // XPUB peer: bind, announce the port, accept the XSUB, hold it open.
+        let server = thread::spawn(move || {
+            let rt = LocalRuntime::new().unwrap();
+            rt.block_on(async move {
+                let mut xpub = crate::xpub::XPubSocket::bind("127.0.0.1:0").await.unwrap();
+                port_tx.send(xpub.local_addr().unwrap().port()).unwrap();
+                xpub.accept().await.unwrap();
+                done_rx.recv().unwrap();
+            });
+        });
+
+        let port = port_rx.recv().unwrap();
+        let client = thread::spawn(move || {
+            let rt = LocalRuntime::new().unwrap();
+            rt.block_on(async move {
+                let xsub = XSubSocket::connect(&format!("127.0.0.1:{port}"))
+                    .await
+                    .unwrap();
+                let fd = xsub.base.stream.as_ref().unwrap().as_raw_fd();
+                nd_tx.send(fd_nodelay(fd)).unwrap();
+                done_tx.send(()).unwrap();
+            });
+        });
+
+        let nodelay = nd_rx.recv().unwrap();
+        client.join().unwrap();
+        server.join().unwrap();
+        assert!(
+            nodelay,
+            "XSUB connect must set TCP_NODELAY on the outbound socket",
+        );
+    }
 
     #[test]
     fn test_subscription_tracking() {

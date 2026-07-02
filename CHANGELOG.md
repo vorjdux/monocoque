@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.1.7 - 2026-07-02
+
+### 🐛 Bug Fixes
+
+#### Bounded `PullFanIn` peak memory under sink lag
+
+`PullFanIn` merges many PUSH workers into one sink through a bounded channel. The
+channel bounded the number of queued *batches*, but each batch was a whole kernel
+read of unbounded message count, so the number of in-flight messages was not
+actually bounded. Because a frozen message pins its whole 64 KiB slab page, a sink
+that fell behind its readers retained a growing set of pages: peak RSS reached
+about 66 MB at 32 workers with 64 B payloads, roughly ten times a single
+`PullSocket` draining the same message rate, and worst at the smallest payload.
+
+Readers now forward each kernel read in fixed-size chunks (`MAX_ITEM_MESSAGES`) and
+the channel capacity was lowered to match, so queued messages (and the pages they
+pin) are bounded independent of payload size or worker count. Peak RSS at 32
+workers / 64 B drops from about 66 MB to about 15 MB, and throughput is unchanged
+to slightly better. Public API and message ordering are unchanged.
+
+#### `TCP_NODELAY` re-applied after reconnect and on XPUB/XSUB connections
+
+`TCP_NODELAY` was set at connect time but three paths created a socket without it:
+automatic reconnection (`SocketBase::try_reconnect`), XPUB accepting a subscriber,
+and XSUB connecting upstream. A reconnected socket therefore ran with Nagle's
+algorithm on until the process restarted, silently raising latency on exactly the
+sockets built for it. All three paths now apply the same TCP tuning as the initial
+connect. This is a one-time `setsockopt` at connection setup and does not touch the
+send or receive hot path.
+
+### 🧪 Testing
+
+- Added `fanin_rss_bound`, a peak-RSS regression guard that fails if `PullFanIn`
+  grows past a fixed bound at 32 workers / 64 B, the cell where the page-pinning
+  was worst. It catches a reintroduction of the unbounded queue that arrival-only
+  tests cannot see.
+- Added fd-level guards that read `TCP_NODELAY` off the live socket after a forced
+  reconnect and on XPUB-accepted and XSUB-connected sockets. Each was confirmed to
+  fail with its fix reverted.
+
 ## 0.1.6 - 2026-07-01
 
 ### ✨ Features
