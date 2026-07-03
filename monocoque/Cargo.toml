@@ -13,6 +13,13 @@ readme = "../README.md"
 keywords = ["zeromq", "zmq", "messaging", "io_uring", "async"]
 categories = ["network-programming", "asynchronous"]
 
+# docs.rs builds a crate with its default features only. The whole ZeroMQ API
+# lives behind the opt-in `zmq` feature, so the default build renders an almost
+# empty page. Build the docs with `zmq` (on top of the default runtime-compio
+# backend) so the socket types show up.
+[package.metadata.docs.rs]
+features = ["zmq"]
+
 [lib]
 name = "monocoque"
 
@@ -334,8 +341,8 @@ workspace = true
 
 [dependencies]
 # Internal implementation crates (not exposed)
-monocoque-core = { version = "0.1.7", path = "../monocoque-core", package = "monocoque-rs-core", default-features = false }
-monocoque-zmtp = { version = "0.1.7", path = "../monocoque-zmtp", package = "monocoque-rs-zmtp", optional = true, default-features = false }
+monocoque-core = { version = "0.1.8", path = "../monocoque-core", package = "monocoque-rs-core", default-features = false }
+monocoque-zmtp = { version = "0.1.8", path = "../monocoque-zmtp", package = "monocoque-rs-zmtp", optional = true, default-features = false }
 
 # Re-export dependencies for user convenience
 bytes.workspace = true

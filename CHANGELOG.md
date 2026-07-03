@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.8 - 2026-07-03
+
+### 📚 Documentation
+
+#### Fix the empty docs.rs page
+
+The rendered API on docs.rs was almost empty. The entire ZeroMQ surface
+(`monocoque::zmq` and every socket type) lives behind the opt-in `zmq` feature,
+and docs.rs builds a crate with its default features only, so none of it showed
+up. Added `[package.metadata.docs.rs]` with `features = ["zmq"]` so the docs build
+with the ZeroMQ API on top of the default runtime backend. No code or public API
+changed; this is a packaging fix and takes effect once the release is published.
+
 ## 0.1.7 - 2026-07-02
 
 ### 🐛 Bug Fixes
