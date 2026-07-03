@@ -49,11 +49,13 @@ impl Drop for Page {
 /// - No aliasing mutable access occurs after freeze.
 struct PageOwner {
     page: Arc<Page>,
+    offset: usize,
+    len: usize,
 }
 
 impl AsRef<[u8]> for PageOwner {
     fn as_ref(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.page.ptr.as_ptr(), self.page.size) }
+        unsafe { std::slice::from_raw_parts(self.page.ptr.as_ptr().add(self.offset), self.len) }
     }
 }
 
@@ -128,11 +130,11 @@ impl SlabMut {
 
         debug_assert!(offset + self.len <= self.page.size);
 
-        let owner = PageOwner { page: self.page };
-
-        // Create a Bytes covering the whole page, then slice.
-        let full = Bytes::from_owner(owner);
-        full.slice(offset..offset + self.len)
+        Bytes::from_owner(PageOwner {
+            page: self.page,
+            offset,
+            len: self.len,
+        })
     }
 }
 
