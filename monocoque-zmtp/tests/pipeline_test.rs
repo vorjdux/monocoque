@@ -67,6 +67,62 @@ fn test_push_pull_basic() {
     assert_eq!(msg, vec![Bytes::from("hello pipeline")]);
 }
 
+#[test]
+fn test_push_pull_send_one_plain_and_coalesced() {
+    use monocoque_core::options::SocketOptions;
+
+    for coalesced in [false, true] {
+        let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
+        let (msg_tx, msg_rx) = mpsc::channel::<Vec<Bytes>>();
+
+        let server = thread::spawn(move || {
+            monocoque_core::rt::LocalRuntime::new()
+                .unwrap()
+                .block_on(async move {
+                    let listener = monocoque_core::rt::TcpListener::bind("127.0.0.1:0")
+                        .await
+                        .unwrap();
+                    addr_tx.send(listener.local_addr().unwrap()).unwrap();
+
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let options = SocketOptions::default().with_write_coalescing(coalesced);
+                    let mut push = PushSocket::from_tcp_with_options(stream, options)
+                        .await
+                        .unwrap();
+
+                    push.send_one(Bytes::from_static(b"send-one"))
+                        .await
+                        .unwrap();
+                    push.flush().await.unwrap();
+                });
+        });
+
+        let addr = addr_rx.recv().unwrap();
+        let client = thread::spawn(move || {
+            monocoque_core::rt::LocalRuntime::new()
+                .unwrap()
+                .block_on(async move {
+                    let stream = monocoque_core::rt::TcpStream::connect(addr).await.unwrap();
+                    let mut pull = PullSocket::from_tcp(stream).await.unwrap();
+
+                    let msg = monocoque_core::rt::timeout(Duration::from_secs(5), pull.recv())
+                        .await
+                        .expect("recv timed out")
+                        .expect("io error")
+                        .expect("connection closed");
+                    msg_tx.send(msg).unwrap();
+                });
+        });
+
+        client.join().expect("client thread panicked");
+        assert_eq!(
+            msg_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            vec![Bytes::from_static(b"send-one")]
+        );
+        server.join().expect("server thread panicked");
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Test: multiple messages through the pipeline
 // ─────────────────────────────────────────────────────────────────────────────

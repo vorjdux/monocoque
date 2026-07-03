@@ -886,6 +886,30 @@ where
         Ok(())
     }
 
+    /// Encode one data frame into `send_buffer`.
+    ///
+    /// Returns `true` when the coalescing threshold has been reached and the
+    /// caller should flush.
+    pub(crate) fn encode_one_coalesced(&mut self, frame: &Bytes) -> io::Result<bool> {
+        if self.curve_cipher.is_none() {
+            crate::codec::encode_single(frame, &mut self.send_buffer);
+            return Ok(self.send_buffer.len() >= self.options.write_coalesce_threshold);
+        }
+        self.encode_one_curve_coalesced(frame)
+    }
+
+    fn encode_one_curve_coalesced(&mut self, frame: &Bytes) -> io::Result<bool> {
+        let cipher = self
+            .curve_cipher
+            .as_mut()
+            .expect("checked by encode_one_coalesced");
+        let body = cipher
+            .encrypt_frame(frame, false)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+        append_zmtp_cmd_frame(&mut self.send_buffer, &body);
+        Ok(self.send_buffer.len() >= self.options.write_coalesce_threshold)
+    }
+
     /// Decode the next frame from the receive buffer, handling CURVE decryption and PING/PONG.
     pub fn process_frame(&mut self) -> io::Result<FrameResult> {
         use crate::security::curve::CurveMessageCipher;

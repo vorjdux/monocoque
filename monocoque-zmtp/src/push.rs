@@ -113,6 +113,36 @@ where
         Ok(())
     }
 
+    /// Send a single-frame message without allocating a one-element `Vec`.
+    ///
+    /// This is equivalent to `send(vec![frame])`, but keeps the hot path for
+    /// single-frame PUSH/PULL pipelines from measuring the caller's multipart
+    /// container allocation.
+    pub async fn send_one(&mut self, frame: Bytes) -> io::Result<()> {
+        trace!("[PUSH] Sending 1 frame");
+
+        if self.base.options.write_coalescing {
+            if self.base.encode_one_coalesced(&frame)? {
+                self.base.flush_send_buffer().await?;
+            }
+        } else {
+            let msg = std::slice::from_ref(&frame);
+            if self.base.should_vectored_write(msg) {
+                self.base.send_vectored(msg).await?;
+            } else {
+                self.base.encode_message_to_write_buf(msg)?;
+                self.base.write_from_buf().await?;
+            }
+        }
+
+        if self.base.check_heartbeat()? {
+            self.base.flush_send_buffer().await?;
+        }
+
+        trace!("[PUSH] Message sent successfully");
+        Ok(())
+    }
+
     /// Flush any messages still buffered by write coalescing.
     ///
     /// Call this after the last `send()` in a burst when `write_coalescing` is

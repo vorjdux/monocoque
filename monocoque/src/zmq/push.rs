@@ -144,6 +144,14 @@ where
         self.inner.send(msg).await
     }
 
+    /// Send a single-frame message without allocating a multipart `Vec`.
+    ///
+    /// Equivalent to `send(vec![frame])`, but avoids the per-message container
+    /// allocation in single-frame hot paths.
+    pub async fn send_one(&mut self, frame: bytes::Bytes) -> io::Result<()> {
+        self.inner.send_one(frame).await
+    }
+
     /// Flush any messages still buffered by write coalescing.
     ///
     /// Required after the last `send()` in a burst when `write_coalescing` is enabled.
