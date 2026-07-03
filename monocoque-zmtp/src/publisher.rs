@@ -293,7 +293,7 @@ async fn subscription_reader(
                                 frame.payload
                             };
 
-                            if let Some(event) = SubscriptionEvent::from_message(&payload) {
+                            if let Some(event) = SubscriptionEvent::from_bytes(payload) {
                                 let mut subs = subscriptions.write();
                                 match event {
                                     SubscriptionEvent::Subscribe(prefix) => {

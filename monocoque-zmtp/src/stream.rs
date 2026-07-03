@@ -82,25 +82,29 @@ async fn peer_reader(
     routing_id: RoutingId,
     mut reader: OwnedReadHalf,
     inbound: Sender<InboundMsg>,
+    read_buffer_size: usize,
 ) {
     use compio_buf::BufResult;
     use compio_io::AsyncRead;
+    use monocoque_core::alloc::IoArena;
 
     // Connection notification
     let _ = inbound
         .send_async(vec![routing_id.clone(), Bytes::new(), Bytes::new()])
         .await;
 
+    let mut arena = IoArena::new();
     loop {
-        let buf = vec![0u8; 8192];
-        let BufResult(result, buf) = reader.read(buf).await;
+        let slab = arena.alloc_mut(read_buffer_size);
+        let BufResult(result, slab) = reader.read(slab).await;
         match result {
             Ok(0) => {
                 debug!("[STREAM] Peer {:?} disconnected (EOF)", routing_id);
                 break;
             }
             Ok(n) => {
-                let data = Bytes::copy_from_slice(&buf[..n]);
+                debug_assert!(n <= read_buffer_size);
+                let data = slab.freeze();
                 trace!("[STREAM] Received {} bytes from peer {:?}", n, routing_id);
                 let msg = vec![routing_id.clone(), Bytes::new(), data];
                 if inbound.send_async(msg).await.is_err() {
@@ -124,7 +128,7 @@ async fn peer_writer(mut writer: OwnedWriteHalf, outbound: Receiver<Bytes>) {
     use compio_io::AsyncWriteExt;
 
     while let Ok(data) = outbound.recv_async().await {
-        let BufResult(res, _) = writer.write_all(data.to_vec()).await;
+        let BufResult(res, _) = writer.write_all(data).await;
         if res.is_err() {
             break;
         }
@@ -217,7 +221,12 @@ impl StreamSocket {
         // Spawn reader.
         let inbound = self.inbound_tx.clone();
         let rid = routing_id.clone();
-        monocoque_core::rt::spawn_detached(peer_reader(rid, read_half, inbound));
+        monocoque_core::rt::spawn_detached(peer_reader(
+            rid,
+            read_half,
+            inbound,
+            self.options.read_buffer_size,
+        ));
 
         // Spawn writer.
         monocoque_core::rt::spawn_detached(peer_writer(write_half, out_rx));

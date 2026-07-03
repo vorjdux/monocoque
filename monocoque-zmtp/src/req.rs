@@ -351,8 +351,10 @@ where
                                     trace!("[REQ] Correlation ID validated successfully");
                                 }
 
-                                // Strip correlation frame and return rest
-                                msg[1..].to_vec()
+                                // Strip correlation frame and return the remaining owned frames.
+                                let mut msg = msg;
+                                msg.remove(0);
+                                msg
                             } else {
                                 msg
                             };

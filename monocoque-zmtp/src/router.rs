@@ -157,7 +157,10 @@ where
                         if !more {
                             let msg: Vec<Bytes> = self.frames.drain(..).collect();
                             trace!("[ROUTER] Received {} frames", msg.len());
-                            let mut frames = vec![self.peer_identity.clone()];
+
+                            // Prepend peer identity to the message
+                            let mut frames = Vec::with_capacity(msg.len() + 1);
+                            frames.push(self.peer_identity.clone());
                             frames.extend(msg);
                             return Ok(Some(frames));
                         }

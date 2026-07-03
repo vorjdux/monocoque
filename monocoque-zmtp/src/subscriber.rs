@@ -107,8 +107,10 @@ where
         trace!("[SUB] Adding subscription: {:?}", prefix);
 
         if !self.subscriptions.contains(&prefix) {
-            self.subscriptions.push(prefix.clone());
+            self.send_sub_event(0x01, &prefix).await?;
+            self.subscriptions.push(prefix);
             self.subscriptions.sort();
+            return Ok(());
         }
 
         self.send_sub_event(0x01, &prefix).await
@@ -139,7 +141,7 @@ where
         let payload = payload.freeze();
 
         // Encrypt if CURVE is active; otherwise plain ZMTP frame.
-        let mut wire = BytesMut::new();
+        let mut wire = BytesMut::with_capacity(payload.len() + 9);
         if let Some(ref mut cipher) = self.base.curve_cipher {
             let body = cipher
                 .encrypt_frame(&payload, false)
@@ -159,8 +161,7 @@ where
             self.base.stream.as_mut().ok_or_else(|| {
                 io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
             })?;
-        let data = wire.to_vec();
-        let BufResult(result, _) = stream.write_all(data).await;
+        let BufResult(result, _) = stream.write_all(wire).await;
         result?;
 
         trace!("[SUB] Subscription event sent successfully");
@@ -380,10 +381,11 @@ impl SubSocket<TcpStream> {
     /// Try to reconnect to the stored endpoint and re-send all active subscriptions.
     pub async fn try_reconnect(&mut self) -> io::Result<()> {
         self.base.try_reconnect(SocketType::Sub).await?;
-        let subs: Vec<bytes::Bytes> = self.subscriptions.clone();
-        for prefix in subs {
-            self.send_sub_event(0x01, &prefix.clone()).await?;
+        let subs = std::mem::take(&mut self.subscriptions);
+        for prefix in &subs {
+            self.send_sub_event(0x01, prefix).await?;
         }
+        self.subscriptions = subs;
         Ok(())
     }
 
