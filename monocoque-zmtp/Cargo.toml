@@ -35,7 +35,7 @@ compio-io.workspace = true
 compio-buf.workspace = true
 compio = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
-monocoque-core = { version = "0.1.7", path = "../monocoque-core", package = "monocoque-rs-core", default-features = false }
+monocoque-core = { version = "0.1.8", path = "../monocoque-core", package = "monocoque-rs-core", default-features = false }
 smallvec.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
