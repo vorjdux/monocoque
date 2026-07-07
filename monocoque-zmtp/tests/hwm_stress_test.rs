@@ -188,14 +188,16 @@ fn test_router_send_buffered_hwm_returns_would_block() {
                 .await
                 .unwrap();
 
+                let identity = router.peer_identity().clone();
+
                 for _ in 0..HWM {
                     router
-                        .send_buffered(vec![Bytes::from("x")])
+                        .send_buffered(vec![identity.clone(), Bytes::from("x")])
                         .expect("should succeed below HWM");
                 }
 
                 let err = router
-                    .send_buffered(vec![Bytes::from("overflow")])
+                    .send_buffered(vec![identity, Bytes::from("overflow")])
                     .expect_err("expected WouldBlock at HWM");
                 result_tx.send(err.kind()).unwrap();
             });

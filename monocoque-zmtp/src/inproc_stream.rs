@@ -70,11 +70,15 @@ impl AsyncRead for InprocStream {
 
         match self.rx.recv_async().await {
             Ok(msg_frames) => {
-                for frame in msg_frames {
+                let mut frames = msg_frames.into_iter();
+                while let Some(frame) = frames.next() {
                     let remaining = buf_cap - total;
                     let to_copy = frame.len().min(remaining);
                     if to_copy == 0 {
                         self.read_buf.extend_from_slice(&frame);
+                        for pending in frames {
+                            self.read_buf.extend_from_slice(&pending);
+                        }
                         break;
                     }
                     unsafe {
@@ -83,6 +87,9 @@ impl AsyncRead for InprocStream {
                     total += to_copy;
                     if to_copy < frame.len() {
                         self.read_buf.extend_from_slice(&frame[to_copy..]);
+                        for pending in frames {
+                            self.read_buf.extend_from_slice(&pending);
+                        }
                         break;
                     }
                 }
@@ -174,8 +181,8 @@ mod tests {
 
     #[test]
     fn test_inproc_stream_preserves_partial_read_remainder() -> io::Result<()> {
-        use compio::buf::BufResult;
-        use compio::io::AsyncRead;
+        use compio_buf::BufResult;
+        use compio_io::AsyncRead;
 
         let endpoint = "inproc://test-stream-partial-read";
         let (tx1, rx1) = bind_inproc(endpoint)?;
@@ -185,7 +192,7 @@ mod tests {
         tx2.send(vec![Bytes::from_static(b"hello")]).unwrap();
         tx2.send(vec![Bytes::from_static(b"next")]).unwrap();
 
-        let rt = compio::runtime::Runtime::new()?;
+        let rt = monocoque_core::rt::LocalRuntime::new()?;
         let ((first_n, first_buf), (second_n, second_buf)) = rt.block_on(async {
             let first_buf = vec![0u8; 2];
             let BufResult(first_result, first_buf) = AsyncRead::read(&mut stream1, first_buf).await;

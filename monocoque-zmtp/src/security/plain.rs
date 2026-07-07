@@ -48,7 +48,7 @@ use tracing::{debug, warn};
 const PLAIN_HELLO: &[u8] = b"\x05HELLO";
 const PLAIN_WELCOME: &[u8] = b"\x07WELCOME";
 const PLAIN_ERROR: &[u8] = b"\x05ERROR";
-const TRAILING_BYTE_CHECK_TIMEOUT: Duration = Duration::from_millis(1);
+const TRAILING_BYTE_CHECK_TIMEOUT: Duration = Duration::from_millis(10);
 
 /// PLAIN client credentials
 #[derive(Clone)]
@@ -470,25 +470,11 @@ pub fn create_plain_zap_request(
     )
 }
 
-async fn reject_immediately_available_trailing_bytes<S>(stream: &mut S) -> Result<(), ZmtpError>
-where
-    S: AsyncRead + Unpin,
-{
-    let trailing = vec![0u8; 1];
-    match compio::time::timeout(TRAILING_BYTE_CHECK_TIMEOUT, stream.read(trailing)).await {
-        Ok(compio::buf::BufResult(Ok(0), _)) | Err(_) => Ok(()),
-        Ok(compio::buf::BufResult(Ok(_), _)) => {
-            warn!("[PLAIN SERVER] PLAIN HELLO contained trailing bytes");
-            Err(ZmtpError::Protocol)
-        }
-        Ok(compio::buf::BufResult(Err(_), _)) => Err(ZmtpError::Protocol),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[cfg(feature = "runtime-compio")]
     fn plain_hello(username: &[u8], password: &[u8]) -> Vec<u8> {
         let mut hello = Vec::new();
         hello.extend_from_slice(PLAIN_HELLO);
@@ -548,52 +534,54 @@ mod tests {
         assert_eq!(&request.credentials[1][..], b"testpass");
     }
 
-    #[compio::test]
-    async fn plain_server_rejects_hello_with_trailing_credential_bytes() {
-        use compio::buf::BufResult;
-        use compio::net::{TcpListener, TcpStream};
-        use compio::runtime;
+    #[cfg(feature = "runtime-compio")]
+    #[test]
+    fn plain_server_rejects_hello_with_trailing_credential_bytes() {
+        use compio_buf::BufResult;
+        use monocoque_core::rt::{LocalRuntime, TcpListener, TcpStream};
         use monocoque_core::timeout::{read_exact_with_timeout, write_all_with_timeout};
         use std::time::Duration;
 
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server_task = runtime::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut handler = StaticPlainHandler::new();
-            handler.add_user("admin", "secret");
+        LocalRuntime::new().unwrap().block_on(async {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server_task = monocoque_core::rt::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut handler = StaticPlainHandler::new();
+                handler.add_user("admin", "secret");
 
-            plain_server_handshake(
-                &mut stream,
-                &handler,
-                "global",
-                "127.0.0.1:1",
-                Some(Duration::from_secs(1)),
-            )
-            .await
+                plain_server_handshake(
+                    &mut stream,
+                    &handler,
+                    "global",
+                    "127.0.0.1:1",
+                    Some(Duration::from_secs(1)),
+                )
+                .await
+            });
+
+            let mut stream = TcpStream::connect(addr).await.unwrap();
+            let mut hello = plain_hello(b"admin", b"secret");
+            hello.extend_from_slice(b"\x05extra");
+            let BufResult(write_result, _) =
+                write_all_with_timeout(&mut stream, hello, Some(Duration::from_secs(1)))
+                    .await
+                    .unwrap();
+            write_result.unwrap();
+
+            let response = vec![0u8; PLAIN_WELCOME.len()];
+            let BufResult(read_result, response) =
+                read_exact_with_timeout(&mut stream, response, Some(Duration::from_secs(1)))
+                    .await
+                    .unwrap();
+            let _ = read_result;
+
+            let result = server_task.await;
+            assert!(
+                result.is_err() && response.as_slice() != PLAIN_WELCOME,
+                "PLAIN server authenticated a HELLO command with trailing credential bytes"
+            );
         });
-
-        let mut stream = TcpStream::connect(addr).await.unwrap();
-        let mut hello = plain_hello(b"admin", b"secret");
-        hello.extend_from_slice(b"\x05extra");
-        let BufResult(write_result, _) =
-            write_all_with_timeout(&mut stream, hello, Some(Duration::from_secs(1)))
-                .await
-                .unwrap();
-        write_result.unwrap();
-
-        let response = vec![0u8; PLAIN_WELCOME.len()];
-        let BufResult(read_result, response) =
-            read_exact_with_timeout(&mut stream, response, Some(Duration::from_secs(1)))
-                .await
-                .unwrap();
-        let _ = read_result;
-
-        let result = server_task.await;
-        assert!(
-            result.is_err() && response.as_slice() != PLAIN_WELCOME,
-            "PLAIN server authenticated a HELLO command with trailing credential bytes"
-        );
     }
 
     #[test]

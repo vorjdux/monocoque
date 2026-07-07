@@ -133,12 +133,15 @@ impl CurveSecretKey {
     }
 
     /// Compute shared secret via ECDH
-    pub fn diffie_hellman(&self, peer_public: &CurvePublicKey) -> [u8; CURVE_KEY_SIZE] {
+    pub fn diffie_hellman(
+        &self,
+        peer_public: &CurvePublicKey,
+    ) -> Result<[u8; CURVE_KEY_SIZE], CurveError> {
         let shared = *self.0.diffie_hellman(&peer_public.to_x25519()).as_bytes();
         if shared == [0u8; CURVE_KEY_SIZE] {
-            return [0xff; CURVE_KEY_SIZE];
+            return Err(CurveError::ProtocolViolation);
         }
-        shared
+        Ok(shared)
     }
 
     /// Return raw scalar bytes for use with crypto_box primitives
@@ -908,9 +911,18 @@ impl CurveClient {
         let dh1 = self
             .client_short_keypair
             .secret
-            .diffie_hellman(&self.server_public); // c'·S
-        let dh2 = self.client_keypair.secret.diffie_hellman(&s_prime); // C·s'
-        let dh3 = self.client_short_keypair.secret.diffie_hellman(&s_prime); // c'·s'
+            .diffie_hellman(&self.server_public)
+            .map_err(|_| ZmtpError::Protocol)?; // c'·S
+        let dh2 = self
+            .client_keypair
+            .secret
+            .diffie_hellman(&s_prime)
+            .map_err(|_| ZmtpError::Protocol)?; // C·s'
+        let dh3 = self
+            .client_short_keypair
+            .secret
+            .diffie_hellman(&s_prime)
+            .map_err(|_| ZmtpError::Protocol)?; // c'·s'
 
         let key = derive_message_key(&dh1, &dh2, &dh3);
         self.message_box = Some(CurveBox::new(&key));
@@ -1329,9 +1341,21 @@ impl CurveServer {
         let c = self.client_public.ok_or(ZmtpError::Protocol)?;
 
         // Derive message key: SHA-256(c'·S ‖ C·s' ‖ c'·s')
-        let dh1 = self.server_keypair.secret.diffie_hellman(&c_prime); // S·c' = c'·S
-        let dh2 = self.server_short_keypair.secret.diffie_hellman(&c); // s'·C = C·s'
-        let dh3 = self.server_short_keypair.secret.diffie_hellman(&c_prime); // s'·c' = c'·s'
+        let dh1 = self
+            .server_keypair
+            .secret
+            .diffie_hellman(&c_prime)
+            .map_err(|_| ZmtpError::Protocol)?; // S·c' = c'·S
+        let dh2 = self
+            .server_short_keypair
+            .secret
+            .diffie_hellman(&c)
+            .map_err(|_| ZmtpError::Protocol)?; // s'·C = C·s'
+        let dh3 = self
+            .server_short_keypair
+            .secret
+            .diffie_hellman(&c_prime)
+            .map_err(|_| ZmtpError::Protocol)?; // s'·c' = c'·s'
         let key = derive_message_key(&dh1, &dh2, &dh3);
         self.message_box = Some(CurveBox::new(&key));
 
@@ -1608,8 +1632,8 @@ mod tests {
         let alice = CurveKeyPair::generate();
         let bob = CurveKeyPair::generate();
 
-        let alice_shared = alice.secret.diffie_hellman(&bob.public);
-        let bob_shared = bob.secret.diffie_hellman(&alice.public);
+        let alice_shared = alice.secret.diffie_hellman(&bob.public).unwrap();
+        let bob_shared = bob.secret.diffie_hellman(&alice.public).unwrap();
 
         assert_eq!(alice_shared, bob_shared);
     }
@@ -1619,11 +1643,12 @@ mod tests {
         let secret = CurveSecretKey::generate();
         let low_order_public = CurvePublicKey::from_bytes([0u8; CURVE_KEY_SIZE]);
 
-        let shared = secret.diffie_hellman(&low_order_public);
-
-        assert_ne!(
-            shared, [0u8; CURVE_KEY_SIZE],
-            "CURVE accepted a non-contributory X25519 peer key and produced an all-zero shared secret"
+        assert!(
+            matches!(
+                secret.diffie_hellman(&low_order_public),
+                Err(CurveError::ProtocolViolation)
+            ),
+            "CURVE accepted a non-contributory X25519 peer key"
         );
     }
 
@@ -1676,15 +1701,33 @@ mod tests {
         let server_short = CurveKeyPair::generate();
 
         // Client side
-        let dh1c = client_short.secret.diffie_hellman(&server_long.public);
-        let dh2c = client_long.secret.diffie_hellman(&server_short.public);
-        let dh3c = client_short.secret.diffie_hellman(&server_short.public);
+        let dh1c = client_short
+            .secret
+            .diffie_hellman(&server_long.public)
+            .unwrap();
+        let dh2c = client_long
+            .secret
+            .diffie_hellman(&server_short.public)
+            .unwrap();
+        let dh3c = client_short
+            .secret
+            .diffie_hellman(&server_short.public)
+            .unwrap();
         let client_key = derive_message_key(&dh1c, &dh2c, &dh3c);
 
         // Server side
-        let dh1s = server_long.secret.diffie_hellman(&client_short.public);
-        let dh2s = server_short.secret.diffie_hellman(&client_long.public);
-        let dh3s = server_short.secret.diffie_hellman(&client_short.public);
+        let dh1s = server_long
+            .secret
+            .diffie_hellman(&client_short.public)
+            .unwrap();
+        let dh2s = server_short
+            .secret
+            .diffie_hellman(&client_long.public)
+            .unwrap();
+        let dh3s = server_short
+            .secret
+            .diffie_hellman(&client_short.public)
+            .unwrap();
         let server_key = derive_message_key(&dh1s, &dh2s, &dh3s);
 
         assert_eq!(

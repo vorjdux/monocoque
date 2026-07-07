@@ -3,8 +3,8 @@
 use crate::codec::ZmtpError;
 use crate::session::SocketType;
 use bytes::Bytes;
-use compio::buf::BufResult;
-use compio::io::AsyncRead;
+use compio_buf::BufResult;
+use compio_io::AsyncRead;
 use monocoque_core::timeout::read_exact_with_timeout;
 use std::time::Duration;
 use tracing::warn;
@@ -41,10 +41,11 @@ where
     S: AsyncRead + Unpin,
 {
     let trailing = vec![0u8; 1];
-    match read_exact_with_timeout(stream, trailing, Some(timeout)).await {
-        Ok(BufResult(Ok(()), _)) => return Err(ZmtpError::Protocol),
-        Ok(BufResult(Err(_), _)) | Err(_) => return Ok(()),
-    }
+    read_exact_with_timeout(stream, trailing, Some(timeout))
+        .await
+        .map_or(Ok(()), |BufResult(result, _)| {
+            result.map_or(Ok(()), |_| Err(ZmtpError::Protocol))
+        })
 }
 
 /// Parse a READY command body and return the socket type and optional identity.
@@ -106,9 +107,18 @@ pub fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), 
 
         match key {
             b"Socket-Type" => {
+                if socket_type.is_some() {
+                    return Err(ZmtpError::Protocol);
+                }
                 socket_type = Some(parse_socket_type(&body[value_start..value_end])?);
             }
             b"Identity" => {
+                if identity.is_some() {
+                    return Err(ZmtpError::Protocol);
+                }
+                if value_len > 255 {
+                    return Err(ZmtpError::Protocol);
+                }
                 identity = Some(body.slice(value_start..value_end));
             }
             _ => {}

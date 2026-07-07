@@ -245,9 +245,6 @@ impl ZapRequest {
         }
         let request_id = String::from_utf8(frames[1].to_vec()).map_err(|_| "Invalid request ID")?;
         let domain = String::from_utf8(frames[2].to_vec()).map_err(|_| "Invalid domain string")?;
-        if domain.is_empty() {
-            return Err("ZAP domain cannot be empty".to_string());
-        }
         let address =
             String::from_utf8(frames[3].to_vec()).map_err(|_| "Invalid address string")?;
         if address.is_empty() {
@@ -521,7 +518,7 @@ mod tests {
     }
 
     #[test]
-    fn zap_request_decode_rejects_empty_domain() {
+    fn zap_request_decode_accepts_empty_domain_as_default() {
         let frames = vec![
             Bytes::from(ZAP_VERSION),
             Bytes::from("123"),
@@ -531,7 +528,8 @@ mod tests {
             Bytes::from("NULL"),
         ];
 
-        assert!(ZapRequest::decode(&frames).is_err());
+        let request = ZapRequest::decode(&frames).unwrap();
+        assert!(request.domain.is_empty());
     }
 
     #[test]

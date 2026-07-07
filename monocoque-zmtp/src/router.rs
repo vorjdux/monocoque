@@ -251,6 +251,30 @@ where
     /// doesn't match the connected peer, the message is dropped (or an error is
     /// returned in mandatory mode).
     pub fn send_buffered(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
+        trace!("[ROUTER] Buffering {} frames", msg.len());
+
+        if msg.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "ROUTER send_buffered: empty message",
+            ));
+        }
+
+        let identity = &msg[0];
+        if *identity != self.peer_identity {
+            if self.router_mandatory {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("ROUTER mandatory: no route for identity {:?}", identity),
+                ));
+            }
+            trace!(
+                "[ROUTER] Dropping buffered message to unknown identity {:?}",
+                identity
+            );
+            return Ok(());
+        }
+
         if self.base.hwm_reached() {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
@@ -261,36 +285,7 @@ where
             ));
         }
 
-        trace!("[ROUTER] Buffering {} frames", msg.len());
-
-        if msg.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "ROUTER send_buffered: empty message",
-            ));
-        }
-
-        let frames_to_send = if self.peer_identity.is_empty() {
-            msg.as_slice()
-        } else {
-            // Check routing identity
-            let identity = &msg[0];
-            if *identity != self.peer_identity {
-                if self.router_mandatory {
-                    return Err(io::Error::new(
-                        io::ErrorKind::NotFound,
-                        format!("ROUTER mandatory: no route for identity {:?}", identity),
-                    ));
-                }
-                trace!(
-                    "[ROUTER] Dropping buffered message to unknown identity {:?}",
-                    identity
-                );
-                self.base.buffered_messages += 1;
-                return Ok(());
-            }
-            &msg[1..]
-        };
+        let frames_to_send = &msg[1..];
         self.base.encode_message_to_send_buf(frames_to_send)?;
         Ok(())
     }
@@ -528,3 +523,77 @@ impl RouterSocket<TcpStream> {
 }
 
 crate::impl_socket_trait!(RouterSocket<S>, SocketType::Router);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use compio_buf::{BufResult, IoBuf, IoBufMut};
+    use compio_io::{AsyncRead, AsyncWrite};
+
+    struct TestStream;
+
+    impl AsyncRead for TestStream {
+        async fn read<B: IoBufMut>(&mut self, buf: B) -> BufResult<usize, B> {
+            BufResult(Ok(0), buf)
+        }
+    }
+
+    impl AsyncWrite for TestStream {
+        async fn write<B: IoBuf>(&mut self, buf: B) -> BufResult<usize, B> {
+            let len = buf.buf_len();
+            BufResult(Ok(len), buf)
+        }
+
+        async fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+
+        async fn shutdown(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn test_router(peer_identity: Bytes, options: SocketOptions) -> RouterSocket<TestStream> {
+        RouterSocket {
+            base: SocketBase::new(TestStream, SocketType::Router, options.clone()),
+            frames: SmallVec::new(),
+            peer_identity,
+            router_mandatory: options.router_mandatory,
+        }
+    }
+
+    #[test]
+    fn buffered_send_drops_unknown_identity_even_when_hwm_reached() {
+        let mut router = test_router(
+            Bytes::from_static(b"known"),
+            SocketOptions::default().with_send_hwm(1),
+        );
+
+        router
+            .send_buffered(vec![
+                Bytes::from_static(b"known"),
+                Bytes::from_static(b"first"),
+            ])
+            .unwrap();
+
+        router
+            .send_buffered(vec![
+                Bytes::from_static(b"unknown"),
+                Bytes::from_static(b"drop"),
+            ])
+            .unwrap();
+
+        assert_eq!(router.base.buffered_messages(), 1);
+    }
+
+    #[test]
+    fn buffered_send_strips_empty_routing_identity() {
+        let mut router = test_router(Bytes::new(), SocketOptions::default());
+
+        router
+            .send_buffered(vec![Bytes::new(), Bytes::from_static(b"payload")])
+            .unwrap();
+
+        assert_eq!(&router.base.send_buffer[..], b"\x00\x07payload");
+    }
+}

@@ -8,8 +8,6 @@ use crate::rt::{UnixListener, UnixStream};
 #[cfg(unix)]
 use std::os::unix::fs::FileTypeExt;
 #[cfg(unix)]
-use std::os::unix::fs::FileTypeExt;
-#[cfg(unix)]
 use std::path::Path;
 
 #[cfg(unix)]
@@ -109,8 +107,14 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
-    #[compio::test]
-    async fn bind_does_not_unlink_existing_regular_file() {
+    #[test]
+    fn bind_does_not_unlink_existing_regular_file() {
+        crate::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(bind_does_not_unlink_existing_regular_file_impl())
+    }
+
+    async fn bind_does_not_unlink_existing_regular_file_impl() {
         let path = std::env::temp_dir().join(format!(
             "monocoque-ipc-regular-file-{}.sock",
             std::process::id()

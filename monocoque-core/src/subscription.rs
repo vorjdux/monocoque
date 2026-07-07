@@ -65,25 +65,14 @@ impl SubscriptionTrie {
     /// Check if a topic matches any subscription
     ///
     /// Returns true if the topic should be delivered.
-    /// O(log N) using `BTreeSet` range lookup.
+    /// Checks only prefixes of the topic, with one `BTreeSet` lookup per prefix.
     #[must_use]
     pub fn matches(&self, topic: &[u8]) -> bool {
         if self.prefixes.is_empty() {
             return false;
         }
 
-        // Check empty prefix first (matches everything)
-        if self.prefixes.contains(&[][..]) {
-            return true;
-        }
-
-        for end in (1..=topic.len()).rev() {
-            if self.prefixes.contains(&topic[..end]) {
-                return true;
-            }
-        }
-
-        false
+        (0..=topic.len()).any(|len| self.prefixes.contains(&topic[..len]))
     }
 
     /// Get all subscriptions as a `Vec<Subscription>`.

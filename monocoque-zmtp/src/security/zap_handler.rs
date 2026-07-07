@@ -308,8 +308,47 @@ pub fn start_default_zap_server<H: PlainAuthHandler + 'static>(
 mod tests {
     use super::*;
     use crate::security::ZapStatus;
+    use crate::security::curve::CurveKeyPair;
     use crate::security::plain::StaticPlainHandler;
     use bytes::Bytes;
+    use monocoque_core::rt::LocalRuntime;
+
+    fn zap_request(mechanism: ZapMechanism, credentials: Vec<Bytes>) -> ZapRequest {
+        ZapRequest {
+            version: "1.0".to_string(),
+            request_id: "request".to_string(),
+            domain: "global".to_string(),
+            address: "127.0.0.1".to_string(),
+            identity: Bytes::new(),
+            mechanism,
+            credentials,
+        }
+    }
+
+    fn plain_request(credentials: Vec<Bytes>) -> ZapRequest {
+        zap_request(ZapMechanism::Plain, credentials)
+    }
+
+    fn curve_request(credentials: Vec<Bytes>) -> ZapRequest {
+        zap_request(ZapMechanism::Curve, credentials)
+    }
+
+    fn default_handler(accept_curve: bool) -> DefaultZapHandler<StaticPlainHandler> {
+        DefaultZapHandler::new(Arc::new(StaticPlainHandler::new()), accept_curve)
+    }
+
+    fn default_plain_handler() -> DefaultZapHandler<StaticPlainHandler> {
+        let mut plain_handler = StaticPlainHandler::new();
+        plain_handler.add_user("admin", "secret");
+        DefaultZapHandler::new(Arc::new(plain_handler), true)
+    }
+
+    fn with_local_runtime<F>(f: F)
+    where
+        F: Future<Output = ()>,
+    {
+        LocalRuntime::new().unwrap().block_on(f);
+    }
 
     #[test]
     fn test_default_zap_handler_null() {
@@ -336,7 +375,7 @@ mod tests {
 
     #[test]
     fn test_default_zap_handler_rejects_unsupported_zap_version() {
-        compio::runtime::Runtime::new().unwrap().block_on(async {
+        with_local_runtime(async {
             let plain_handler = Arc::new(StaticPlainHandler::new());
             let handler = DefaultZapHandler::new(plain_handler, true);
 
@@ -382,7 +421,7 @@ mod tests {
 
     #[test]
     fn test_default_zap_handler_rejects_null_credentials() {
-        compio::runtime::Runtime::new().unwrap().block_on(async {
+        with_local_runtime(async {
             let plain_handler = Arc::new(StaticPlainHandler::new());
             let handler = DefaultZapHandler::new(plain_handler, true);
 
@@ -403,7 +442,7 @@ mod tests {
 
     #[test]
     fn test_default_zap_handler_rejects_plain_extra_credentials() {
-        compio::runtime::Runtime::new().unwrap().block_on(async {
+        with_local_runtime(async {
             let mut plain_handler = StaticPlainHandler::new();
             plain_handler.add_user("admin", "secret");
             let handler = DefaultZapHandler::new(Arc::new(plain_handler), true);
@@ -429,7 +468,7 @@ mod tests {
 
     #[test]
     fn default_zap_handler_rejects_invalid_utf8_plain_credentials() {
-        compio::runtime::Runtime::new().unwrap().block_on(async {
+        with_local_runtime(async {
             let handler = default_plain_handler();
             let request = plain_request(vec![Bytes::from(vec![0xff]), Bytes::from("secret")]);
 
@@ -491,7 +530,7 @@ mod tests {
 
     #[test]
     fn test_default_zap_handler_rejects_curve_extra_credentials() {
-        compio::runtime::Runtime::new().unwrap().block_on(async {
+        with_local_runtime(async {
             let plain_handler = Arc::new(StaticPlainHandler::new());
             let handler = DefaultZapHandler::new(plain_handler, true);
 
@@ -513,7 +552,7 @@ mod tests {
 
     #[test]
     fn default_zap_handler_rejects_curve_request_with_extra_credentials() {
-        compio::runtime::Runtime::new().unwrap().block_on(async {
+        with_local_runtime(async {
             let handler = default_handler(true);
 
             let public_key = CurveKeyPair::generate().public;
