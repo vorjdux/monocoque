@@ -27,7 +27,7 @@
 //! ```
 
 use bytes::Bytes;
-use compio::net::TcpListener;
+use monocoque::rt::{self, LocalRuntime, TcpListener, TcpStream};
 use monocoque::zmq::{RepSocket, ReqSocket, SocketOptions};
 use monocoque_zmtp::security::curve::{CURVE_KEY_SIZE, CurveKeyPair, CurveSecretKey};
 use std::env;
@@ -36,8 +36,11 @@ use tracing::{error, info};
 
 const SERVER_ADDR: &str = "127.0.0.1:5556";
 
-#[compio::main]
-async fn main() {
+fn main() {
+    LocalRuntime::new().unwrap().block_on(async_main())
+}
+
+async fn async_main() {
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
@@ -214,7 +217,7 @@ async fn run_client(server_public_key_hex: &str) {
         .with_send_timeout(Duration::from_secs(5));
 
     // Connect to server
-    let stream = compio::net::TcpStream::connect(SERVER_ADDR)
+    let stream = TcpStream::connect(SERVER_ADDR)
         .await
         .expect("Failed to connect");
 
@@ -242,7 +245,7 @@ async fn run_client(server_public_key_hex: &str) {
             return;
         }
 
-        compio::time::sleep(Duration::from_millis(500)).await;
+        rt::sleep(Duration::from_millis(500)).await;
     }
 
     info!("✅ Client finished successfully");

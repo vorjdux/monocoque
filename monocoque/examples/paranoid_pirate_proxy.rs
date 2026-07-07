@@ -12,6 +12,7 @@
 //! ```
 
 use bytes::Bytes;
+use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::proxy::proxy;
 use monocoque::zmq::{DealerSocket, ReqSocket, RouterSocket};
 use std::time::{Duration, Instant};
@@ -27,7 +28,7 @@ async fn worker(id: u32, crash_after: Option<u32>) -> std::io::Result<()> {
     info!("[Worker-{}] 🔧 Starting", id);
 
     // Small delay to let broker start
-    compio::runtime::time::sleep(Duration::from_millis(300)).await;
+    rt::sleep(Duration::from_millis(300)).await;
 
     let mut socket = DealerSocket::connect("127.0.0.1:5556").await?;
 
@@ -68,7 +69,7 @@ async fn worker(id: u32, crash_after: Option<u32>) -> std::io::Result<()> {
             count += 1;
             info!("[Worker-{}] 📥 Request #{}", id, count);
 
-            compio::runtime::time::sleep(Duration::from_millis(100)).await;
+            rt::sleep(Duration::from_millis(100)).await;
 
             let reply = format!("Processed by worker-{id}");
             let mut response = vec![Bytes::new()];
@@ -79,7 +80,7 @@ async fn worker(id: u32, crash_after: Option<u32>) -> std::io::Result<()> {
             info!("[Worker-{}] 📤 Reply #{}", id, count);
         }
 
-        compio::runtime::time::sleep(Duration::from_millis(10)).await;
+        rt::sleep(Duration::from_millis(10)).await;
     }
 }
 
@@ -89,7 +90,7 @@ async fn client(id: u32, requests: u32) -> std::io::Result<()> {
     info!("[Client-{}] 🔌 Starting", id);
 
     // Wait for broker and workers
-    compio::runtime::time::sleep(Duration::from_secs(2)).await;
+    rt::sleep(Duration::from_secs(2)).await;
 
     let mut socket = ReqSocket::connect("127.0.0.1:5555").await?;
 
@@ -108,7 +109,7 @@ async fn client(id: u32, requests: u32) -> std::io::Result<()> {
             warn!("[Client-{}] ⚠️  No reply", id);
         }
 
-        compio::runtime::time::sleep(Duration::from_millis(900)).await;
+        rt::sleep(Duration::from_millis(900)).await;
     }
 
     info!("[Client-{}] ✅ Done", id);
@@ -140,8 +141,11 @@ async fn broker() -> std::io::Result<()> {
     Ok(())
 }
 
-#[compio::main]
-async fn main() -> std::io::Result<()> {
+fn main() -> std::io::Result<()> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> std::io::Result<()> {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .with_target(false)
@@ -157,41 +161,37 @@ async fn main() -> std::io::Result<()> {
     info!("===============================================\n");
 
     // Start broker (proxy)
-    compio::runtime::spawn(async {
+    rt::spawn_detached(async {
         if let Err(e) = broker().await {
             error!("Broker: {}", e);
         }
-    })
-    .detach();
+    });
 
-    compio::runtime::time::sleep(Duration::from_millis(500)).await;
+    rt::sleep(Duration::from_millis(500)).await;
 
     // Start workers
-    compio::runtime::spawn(async {
+    rt::spawn_detached(async {
         let _ = worker(1, None).await;
-    })
-    .detach();
-    compio::runtime::time::sleep(Duration::from_millis(150)).await;
-    compio::runtime::spawn(async {
+    });
+    rt::sleep(Duration::from_millis(150)).await;
+    rt::spawn_detached(async {
         let _ = worker(2, Some(3)).await;
-    })
-    .detach();
+    });
 
-    compio::runtime::time::sleep(Duration::from_millis(1000)).await;
+    rt::sleep(Duration::from_millis(1000)).await;
 
     // Start client
-    let client_task = compio::runtime::spawn(async { client(1, 6).await });
+    let client_task = rt::spawn(async { client(1, 6).await });
 
     // Spawn recovery worker after 5 seconds
-    compio::runtime::time::sleep(Duration::from_secs(5)).await;
+    rt::sleep(Duration::from_secs(5)).await;
     info!("\n🔄 Recovery worker joining\n");
-    compio::runtime::spawn(async {
+    rt::spawn_detached(async {
         let _ = worker(3, None).await;
-    })
-    .detach();
+    });
 
-    let _ = client_task.await;
-    compio::runtime::time::sleep(Duration::from_secs(3)).await;
+    let _ = rt::join(client_task).await;
+    rt::sleep(Duration::from_secs(3)).await;
 
     info!("\n✅ Demo Complete!");
     info!("\nKey Points:");

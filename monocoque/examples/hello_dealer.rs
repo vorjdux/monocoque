@@ -7,12 +7,15 @@
 ///
 /// Run this after starting a ZMQ ROUTER server on port 5555
 use bytes::Bytes;
-use compio::net::TcpStream;
+use monocoque::rt::{LocalRuntime, TcpStream};
 use monocoque::zmq::DealerSocket;
 use tracing::info;
 
-#[compio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Connecting to tcp://127.0.0.1:5555...");
 
     // Connect to server

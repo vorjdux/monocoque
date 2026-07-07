@@ -10,6 +10,7 @@
 //! ```
 
 use bytes::Bytes;
+use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::ReqSocket;
 use monocoque::{ReconnectState, SocketOptions};
 use std::io;
@@ -53,7 +54,7 @@ async fn connect_with_retry(addr: &str, reconnect: &mut ReconnectState) -> io::R
                     reconnect.attempt(),
                     MAX_RECONNECT_ATTEMPTS
                 );
-                compio::time::sleep(delay).await;
+                rt::sleep(delay).await;
             }
         }
     }
@@ -96,7 +97,7 @@ async fn communication_loop(addr: &str) -> io::Result<()> {
                     error!("Send failed: {}", e);
                     let delay = reconnect_state.next_delay();
                     warn!("Connection lost, reconnecting in {:?}", delay);
-                    compio::time::sleep(delay).await;
+                    rt::sleep(delay).await;
                     break; // Break inner loop to reconnect
                 }
             }
@@ -111,12 +112,12 @@ async fn communication_loop(addr: &str) -> io::Result<()> {
                 warn!("Connection closed by server");
                 let delay = reconnect_state.next_delay();
                 warn!("Reconnecting in {:?}", delay);
-                compio::time::sleep(delay).await;
+                rt::sleep(delay).await;
                 break; // Break inner loop to reconnect
             }
 
             // Wait a bit between requests
-            compio::time::sleep(Duration::from_secs(1)).await;
+            rt::sleep(Duration::from_secs(1)).await;
         }
 
         // Check if we've exceeded max reconnection attempts
@@ -137,7 +138,7 @@ fn main() -> io::Result<()> {
         .init();
 
     // Run the async communication loop
-    compio::runtime::Runtime::new()?.block_on(async {
+    LocalRuntime::new()?.block_on(async {
         let addr = "127.0.0.1:5555";
         info!("Starting client, connecting to {}", addr);
 

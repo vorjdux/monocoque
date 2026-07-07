@@ -29,7 +29,7 @@
 //! For production, you'd track worker queues in the broker and route intelligently.
 
 use bytes::Bytes;
-use compio::runtime::Runtime;
+use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::{DealerSocket, ReqSocket};
 use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
@@ -100,7 +100,7 @@ async fn run_worker(worker_id: u32, crash_after: Option<u32>) -> std::io::Result
                 );
 
                 // Simulate work
-                compio::runtime::time::sleep(Duration::from_millis(100)).await;
+                rt::sleep(Duration::from_millis(100)).await;
 
                 // Send reply (echo back with worker ID)
                 let reply_text = format!("Processed by worker-{worker_id}: {request_data}");
@@ -117,7 +117,7 @@ async fn run_worker(worker_id: u32, crash_after: Option<u32>) -> std::io::Result
         }
 
         // Small yield to prevent CPU spinning
-        compio::runtime::time::sleep(Duration::from_millis(10)).await;
+        rt::sleep(Duration::from_millis(10)).await;
     }
 }
 
@@ -129,7 +129,7 @@ async fn run_client(client_id: u32, num_requests: u32) -> std::io::Result<()> {
     info!("[Client-{}] 🔌 Starting", client_id);
 
     // Wait for broker and workers to be ready
-    compio::runtime::time::sleep(Duration::from_millis(1500)).await;
+    rt::sleep(Duration::from_millis(1500)).await;
 
     let mut socket = ReqSocket::connect("127.0.0.1:5555").await?;
 
@@ -153,7 +153,7 @@ async fn run_client(client_id: u32, num_requests: u32) -> std::io::Result<()> {
         }
 
         // Delay between requests
-        compio::runtime::time::sleep(Duration::from_millis(800)).await;
+        rt::sleep(Duration::from_millis(800)).await;
     }
 
     info!("[Client-{}] ✅ Completed all requests", client_id);
@@ -211,63 +211,59 @@ fn main() -> std::io::Result<()> {
     info!("⚠️  Production brokers would parse READY/HEARTBEAT");
     info!("⚠️  and maintain worker queues.\n");
 
-    Runtime::new()?.block_on(async {
+    LocalRuntime::new()?.block_on(async {
         // Spawn broker
-        compio::runtime::spawn(async {
+        rt::spawn_detached(async {
             if let Err(e) = run_broker().await {
                 error!("Broker error: {}", e);
             }
-        })
-        .detach();
+        });
 
         // Wait for broker to initialize
-        compio::runtime::time::sleep(Duration::from_secs(1)).await;
+        rt::sleep(Duration::from_secs(1)).await;
 
         // Spawn stable worker
-        compio::runtime::spawn(async {
+        rt::spawn_detached(async {
             if let Err(e) = run_worker(1, None).await {
                 error!("Worker 1 error: {}", e);
             }
-        })
-        .detach();
+        });
 
         // Small delay between worker spawns
-        compio::runtime::time::sleep(Duration::from_millis(200)).await;
+        rt::sleep(Duration::from_millis(200)).await;
 
         // Spawn worker that crashes after 3 requests
-        compio::runtime::spawn(async {
+        rt::spawn_detached(async {
             if let Err(_e) = run_worker(2, Some(3)).await {
                 info!("Worker 2 completed/crashed");
             }
-        })
-        .detach();
+        });
 
         // Wait for workers to connect and send READY
-        compio::runtime::time::sleep(Duration::from_secs(2)).await;
+        rt::sleep(Duration::from_secs(2)).await;
 
         // Spawn client making 6 requests
-        let client1 = compio::runtime::spawn(async {
+        let client1 = rt::spawn(async {
             if let Err(e) = run_client(1, 6).await {
                 error!("Client 1 error: {}", e);
             }
         });
 
         // After 5 seconds, spawn recovery worker (after worker 2 crashes)
-        compio::runtime::time::sleep(Duration::from_secs(5)).await;
+        rt::sleep(Duration::from_secs(5)).await;
         info!("\n🔄 Spawning recovery worker...\n");
 
-        compio::runtime::spawn(async {
+        rt::spawn_detached(async {
             if let Err(e) = run_worker(3, None).await {
                 error!("Worker 3 error: {}", e);
             }
-        })
-        .detach();
+        });
 
         // Wait for client to finish all requests
-        let () = client1.await;
+        let () = rt::join(client1).await;
 
         // Give time to see final heartbeats
-        compio::runtime::time::sleep(Duration::from_secs(3)).await;
+        rt::sleep(Duration::from_secs(3)).await;
 
         info!("\n✅ Demo completed successfully!");
         info!("\nPattern Summary:");

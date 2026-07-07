@@ -1,9 +1,13 @@
 /// Simple subscriber client for testing multi-subscriber publisher
+use monocoque::rt::LocalRuntime;
 use monocoque::zmq::SubSocket;
 use tracing::info;
 
-#[compio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .init();

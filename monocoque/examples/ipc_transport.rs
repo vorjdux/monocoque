@@ -13,10 +13,15 @@ fn main() {
 }
 
 #[cfg(unix)]
-#[compio::main]
-async fn main() -> std::io::Result<()> {
-    use compio::buf::BufResult;
-    use compio::io::{AsyncRead, AsyncWriteExt};
+fn main() -> std::io::Result<()> {
+    monocoque::rt::LocalRuntime::new()?.block_on(async_main())
+}
+
+#[cfg(unix)]
+async fn async_main() -> std::io::Result<()> {
+    use compio_buf::BufResult;
+    use compio_io::{AsyncRead, AsyncWriteExt};
+    use monocoque::rt;
     use monocoque::zmq::ipc;
     use std::time::Duration;
 
@@ -35,7 +40,7 @@ async fn main() -> std::io::Result<()> {
     println!("   ✓ Listening on {socket_path}");
 
     // Spawn server task
-    let server_task = compio::runtime::spawn(async move {
+    let server_task = rt::spawn(async move {
         println!("   [Server] Waiting for connection...");
 
         match ipc::accept(&listener).await {
@@ -75,7 +80,7 @@ async fn main() -> std::io::Result<()> {
     });
 
     // Give server time to start
-    compio::time::sleep(Duration::from_millis(50)).await;
+    rt::sleep(Duration::from_millis(50)).await;
 
     // Connect client
     println!("\n2. Connecting IPC client...");
@@ -98,7 +103,7 @@ async fn main() -> std::io::Result<()> {
     println!("   📩 Received: {response}");
 
     // Wait for server to finish
-    server_task.await;
+    rt::join(server_task).await;
 
     // Cleanup
     let _ = std::fs::remove_file(socket_path);

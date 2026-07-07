@@ -3,14 +3,14 @@
 /// - Topic-based filtering per subscriber
 /// - High-performance broadcast with minimal overhead
 use bytes::Bytes;
-use compio::runtime::Runtime;
+use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::prelude::*;
 use std::time::Duration;
 use tracing::{error, info};
 use tracing_subscriber::FmtSubscriber;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    Runtime::new()?.block_on(async_main())
+    LocalRuntime::new()?.block_on(async_main())
 }
 
 #[allow(clippy::future_not_send)]
@@ -30,21 +30,21 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Spawn 3 subscribers with different topic subscriptions
     let port1 = actual_port;
-    let sub1_handle = compio::runtime::spawn(async move {
+    let sub1_handle = rt::spawn(async move {
         if let Err(e) = run_subscriber(port1, "weather", 1).await {
             error!("Subscriber 1 failed: {}", e);
         }
     });
 
     let port2 = actual_port;
-    let sub2_handle = compio::runtime::spawn(async move {
+    let sub2_handle = rt::spawn(async move {
         if let Err(e) = run_subscriber(port2, "news", 2).await {
             error!("Subscriber 2 failed: {}", e);
         }
     });
 
     let port3 = actual_port;
-    let sub3_handle = compio::runtime::spawn(async move {
+    let sub3_handle = rt::spawn(async move {
         if let Err(e) = run_subscriber(port3, "", 3).await {
             error!("Subscriber 3 (all topics) failed: {}", e);
         }
@@ -96,7 +96,11 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     std::thread::sleep(Duration::from_secs(1));
 
     // Wait for all subscribers to complete
-    let _ = futures::join!(sub1_handle, sub2_handle, sub3_handle);
+    let _ = futures::join!(
+        rt::join(sub1_handle),
+        rt::join(sub2_handle),
+        rt::join(sub3_handle)
+    );
 
     info!("=== Test Complete ===");
     Ok(())

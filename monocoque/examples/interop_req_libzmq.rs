@@ -8,6 +8,7 @@
 //! ```
 
 use bytes::Bytes;
+use monocoque::rt::{LocalRuntime, TcpStream};
 use monocoque_zmtp::req::ReqSocket;
 use std::thread;
 use std::time::Duration;
@@ -52,10 +53,10 @@ fn main() {
     thread::sleep(Duration::from_millis(50));
 
     // Run Monocoque REQ client
-    compio::runtime::Runtime::new().unwrap().block_on(async {
+    LocalRuntime::new().unwrap().block_on(async {
         info!("[Monocoque REQ] Connecting to tcp://127.0.0.1:5561");
 
-        let stream = compio::net::TcpStream::connect("127.0.0.1:5561")
+        let stream = TcpStream::connect("127.0.0.1:5561")
             .await
             .expect("Failed to connect");
 

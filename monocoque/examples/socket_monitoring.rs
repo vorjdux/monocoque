@@ -3,12 +3,16 @@
 //! This example shows how to create and use a socket monitor to track
 //! connection events like connects, disconnects, binds, etc.
 
+use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::{SocketEvent, SocketMonitor};
 use monocoque_core::endpoint::Endpoint;
 use std::time::Duration;
 
-#[compio::main]
-async fn main() -> std::io::Result<()> {
+fn main() -> std::io::Result<()> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> std::io::Result<()> {
     // Create a monitor channel for tracking socket events
     let monitor = create_example_monitor();
 
@@ -49,13 +53,13 @@ async fn main() -> std::io::Result<()> {
     );
 
     // Monitor events in background task
-    let _monitor_task = compio::runtime::spawn(async move {
+    rt::spawn_detached(async move {
         while let Ok(event) = monitor.recv_async().await {
             println!("📡 Socket Event: {event}");
         }
     });
 
-    compio::time::sleep(Duration::from_millis(100)).await;
+    rt::sleep(Duration::from_millis(100)).await;
 
     println!("\n✅ Socket monitoring example completed");
     Ok(())
@@ -76,16 +80,16 @@ fn create_example_monitor() -> SocketMonitor {
 async fn simulate_socket_lifecycle() {
     println!("Simulating socket lifecycle:");
     println!("  1. Socket created");
-    compio::time::sleep(Duration::from_millis(10)).await;
+    rt::sleep(Duration::from_millis(10)).await;
 
     println!("  2. Binding to address...");
-    compio::time::sleep(Duration::from_millis(10)).await;
+    rt::sleep(Duration::from_millis(10)).await;
 
     println!("  3. Listening for connections...");
-    compio::time::sleep(Duration::from_millis(10)).await;
+    rt::sleep(Duration::from_millis(10)).await;
 
     println!("  4. Connection accepted");
-    compio::time::sleep(Duration::from_millis(10)).await;
+    rt::sleep(Duration::from_millis(10)).await;
 
     println!("  5. Connection closed");
 }

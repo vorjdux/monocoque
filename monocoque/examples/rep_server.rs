@@ -3,11 +3,15 @@
 //! Simple echo server that replies to all requests with "Echo: <message>"
 
 use bytes::Bytes;
+use monocoque::rt::{LocalRuntime, TcpListener};
 use monocoque_zmtp::rep::RepSocket;
 use std::env;
 
-#[compio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse port from args (default 5555)
     let args: Vec<String> = env::args().collect();
     let port = if args.len() > 2 && args[1] == "--port" {
@@ -18,7 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Bind REP socket
     let addr = format!("127.0.0.1:{port}");
-    let listener = compio::net::TcpListener::bind(&addr).await?;
+    let listener = TcpListener::bind(&addr).await?;
     println!("REP server listening on {addr}");
 
     // Accept connection

@@ -18,10 +18,12 @@
 use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 
-// Identifies which runtime backend this build benchmarks, so compio and tokio
+// Identifies which runtime backend this build benchmarks, so compio, tokio, and smol
 // results land under distinct criterion ids instead of overwriting each other.
 const BENCH_BACKEND: &str = if cfg!(feature = "runtime-tokio") {
     "tokio"
+} else if cfg!(feature = "runtime-smol") {
+    "smol"
 } else {
     "compio"
 };

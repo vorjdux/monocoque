@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### ✨ Features
+
+#### Optional smol runtime backend
+
+Monocoque now offers a third runtime backend, `smol` (async-executor + async-io),
+behind the `runtime-smol` feature, alongside the default compio (io_uring) and
+tokio backends. It runs the same socket stack and exposes the same public API,
+driven by a single-threaded smol `LocalExecutor`. The read path bridges smol's
+readiness-based I/O to the compio owned-buffer traits with no extra copy and no
+zero-fill. All examples, tests, and the runtime_backends demo run on it.
+
 ## 0.1.8 - 2026-07-03
 
 ### 📚 Documentation
@@ -670,7 +683,7 @@ monocoque/
 -   **XPUB/XSUB Status**: Core infrastructure complete, full message routing deferred to proxy implementation
 
 ---
-### �️ Phase 5: Reliability & Resilience - Production Hardening (2026-01-19)
+### Phase 5: Reliability & Resilience - Production Hardening (2026-01-19)
 
 **Summary**: Completed Phase 5 implementation with automatic reconnection, HWM enforcement, cancellation safety, and comprehensive integration testing. All core reliability features are production-ready with 100% test coverage.
 
@@ -789,7 +802,7 @@ monocoque/
 -   Reconnection for RouterSocket (architectural challenge)
 -   IPC reconnection support (Unix domain sockets)
 
-### �🔄 API Consistency: Unified SocketOptions Ergonomics (2026-01-19)
+### 🔄 API Consistency: Unified SocketOptions Ergonomics (2026-01-19)
 
 **Summary**: Unified Unix domain socket API across all socket types to use `SocketOptions` consistently. Replaced debug output flooding with structured tracing. Fixed benchmark compilation and runtime issues.
 
@@ -941,7 +954,7 @@ Now supporting all 9 core ZMQ socket types:
 -   This affects examples with complex task spawning patterns
 -   Basic examples (`multi_pub_minimal`, `multi_pub_test`) work correctly
 
-### �🚀 Phase 1 Complete: High-Performance API + Benchmarking (2026-01-14)
+### 🚀 Phase 1 Complete: High-Performance API + Benchmarking (2026-01-14)
 
 **Summary**: Completed Phase 1 of PERFORMANCE_ROADMAP.md achieving **30% faster latency than libzmq** (21μs vs 31μs) and **2M+ msg/sec throughput** with explicit batching API. Made TCP_NODELAY the safe default for all TCP connections through API redesign.
 

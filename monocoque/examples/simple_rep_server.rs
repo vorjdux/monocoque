@@ -3,11 +3,14 @@
 //! This is a standalone example using monocoque-zmtp directly for testing.
 
 use bytes::Bytes;
-use compio::net::TcpListener;
+use monocoque::rt::{LocalRuntime, TcpListener};
 use std::env;
 
-#[compio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     // Enable debug logging.
     // SAFETY: set as the very first thing in `main`, before any other thread is
     // spawned, so there is no concurrent access to the process environment.

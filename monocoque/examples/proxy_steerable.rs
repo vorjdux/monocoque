@@ -16,6 +16,7 @@
 //! Run this example and use another terminal to send control commands.
 
 use bytes::Bytes;
+use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::proxy::proxy_steerable;
 use monocoque::zmq::{DealerSocket, ReqSocket, RouterSocket};
 use monocoque_zmtp::pair::PairSocket;
@@ -28,7 +29,7 @@ async fn worker(id: u32) -> std::io::Result<()> {
     info!("[Worker-{}] Starting", id);
 
     // Small delay to let broker start
-    compio::runtime::time::sleep(Duration::from_millis(500)).await;
+    rt::sleep(Duration::from_millis(500)).await;
 
     let mut socket = DealerSocket::connect("127.0.0.1:5556").await?;
 
@@ -48,7 +49,7 @@ async fn worker(id: u32) -> std::io::Result<()> {
             }
 
             // Simulate work
-            compio::runtime::time::sleep(Duration::from_millis(100)).await;
+            rt::sleep(Duration::from_millis(100)).await;
 
             // Send reply
             let reply = format!("Processed by worker-{id}");
@@ -59,7 +60,7 @@ async fn worker(id: u32) -> std::io::Result<()> {
             socket.send(response).await?;
         }
 
-        compio::runtime::time::sleep(Duration::from_millis(10)).await;
+        rt::sleep(Duration::from_millis(10)).await;
     }
 }
 
@@ -69,7 +70,7 @@ async fn client(id: u32, requests: u32) -> std::io::Result<()> {
     info!("[Client-{}] Starting", id);
 
     // Wait for broker and workers
-    compio::runtime::time::sleep(Duration::from_secs(1)).await;
+    rt::sleep(Duration::from_secs(1)).await;
 
     let mut socket = ReqSocket::connect("127.0.0.1:5555").await?;
 
@@ -89,7 +90,7 @@ async fn client(id: u32, requests: u32) -> std::io::Result<()> {
             }
         }
 
-        compio::runtime::time::sleep(Duration::from_millis(500)).await;
+        rt::sleep(Duration::from_millis(500)).await;
     }
 
     info!("[Client-{}] Done", id);
@@ -132,32 +133,32 @@ async fn controller() -> std::io::Result<()> {
     info!("[Controller] Starting");
 
     // Wait for broker to start
-    compio::runtime::time::sleep(Duration::from_millis(800)).await;
+    rt::sleep(Duration::from_millis(800)).await;
 
     let mut control = PairSocket::connect("127.0.0.1:5557").await?;
 
     // Let some messages flow
-    compio::runtime::time::sleep(Duration::from_secs(3)).await;
+    rt::sleep(Duration::from_secs(3)).await;
 
     // Pause proxy
     info!("\n[Controller] 🛑 Sending PAUSE command\n");
     control.send(vec![Bytes::from("PAUSE")]).await?;
 
     // Wait while paused
-    compio::runtime::time::sleep(Duration::from_secs(2)).await;
+    rt::sleep(Duration::from_secs(2)).await;
 
     // Resume proxy
     info!("\n[Controller] ▶️  Sending RESUME command\n");
     control.send(vec![Bytes::from("RESUME")]).await?;
 
     // Let more messages flow
-    compio::runtime::time::sleep(Duration::from_secs(3)).await;
+    rt::sleep(Duration::from_secs(3)).await;
 
     // Get statistics
     info!("\n[Controller] 📊 Sending STATISTICS command\n");
     control.send(vec![Bytes::from("STATISTICS")]).await?;
 
-    compio::runtime::time::sleep(Duration::from_secs(1)).await;
+    rt::sleep(Duration::from_secs(1)).await;
 
     // Terminate proxy
     info!("\n[Controller] 🛑 Sending TERMINATE command\n");
@@ -166,8 +167,11 @@ async fn controller() -> std::io::Result<()> {
     Ok(())
 }
 
-#[compio::main]
-async fn main() -> std::io::Result<()> {
+fn main() -> std::io::Result<()> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> std::io::Result<()> {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .with_target(false)
@@ -182,40 +186,36 @@ async fn main() -> std::io::Result<()> {
     info!("========================\n");
 
     // Start broker (steerable proxy)
-    compio::runtime::spawn(async {
+    rt::spawn_detached(async {
         if let Err(e) = broker().await {
             error!("Broker: {}", e);
         }
-    })
-    .detach();
+    });
 
-    compio::runtime::time::sleep(Duration::from_millis(500)).await;
+    rt::sleep(Duration::from_millis(500)).await;
 
     // Start workers
-    compio::runtime::spawn(async {
+    rt::spawn_detached(async {
         let _ = worker(1).await;
-    })
-    .detach();
-    compio::runtime::spawn(async {
+    });
+    rt::spawn_detached(async {
         let _ = worker(2).await;
-    })
-    .detach();
+    });
 
-    compio::runtime::time::sleep(Duration::from_millis(500)).await;
+    rt::sleep(Duration::from_millis(500)).await;
 
     // Start client (sends 10 requests)
-    compio::runtime::spawn(async {
+    rt::spawn_detached(async {
         let _ = client(1, 10).await;
-    })
-    .detach();
+    });
 
     // Start controller (sends commands to proxy)
-    let controller_task = compio::runtime::spawn(async { controller().await });
+    let controller_task = rt::spawn(async { controller().await });
 
     // Wait for controller to finish
-    let _ = controller_task.await;
+    let _ = rt::join(controller_task).await;
 
-    compio::runtime::time::sleep(Duration::from_secs(1)).await;
+    rt::sleep(Duration::from_secs(1)).await;
 
     info!("\n✅ Demo Complete!");
     info!("\nKey Points:");

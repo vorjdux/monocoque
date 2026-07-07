@@ -6,8 +6,13 @@
 // Note: This example requires implementing RecvSocket and SendSocket traits
 // for the socket types. This is a demonstration of the API design.
 
-#[compio::main]
-async fn main() -> std::io::Result<()> {
+use monocoque::rt::LocalRuntime;
+
+fn main() -> std::io::Result<()> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> std::io::Result<()> {
     println!("Stream/Sink Adapter Example");
     println!("============================\n");
 
@@ -53,7 +58,7 @@ async fn main() -> std::io::Result<()> {
 
     println!("Note: Full implementation requires implementing RecvSocket and");
     println!("SendSocket traits for each socket type with proper async/await");
-    println!("support using compio runtime.");
+    println!("support using the async runtime.");
 
     Ok(())
 }

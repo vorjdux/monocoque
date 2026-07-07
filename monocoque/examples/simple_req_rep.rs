@@ -29,8 +29,8 @@ fn main() {
 
     // Spawn REP server in background thread
     let server_handle = thread::spawn(move || {
-        compio::runtime::Runtime::new().unwrap().block_on(async {
-            let listener = compio::net::TcpListener::bind("127.0.0.1:0")
+        monocoque::rt::LocalRuntime::new().unwrap().block_on(async {
+            let listener = monocoque::rt::TcpListener::bind("127.0.0.1:0")
                 .await
                 .expect("Failed to bind");
             let local_addr = listener.local_addr().expect("Failed to get local addr");
@@ -71,7 +71,7 @@ fn main() {
     let server_addr = addr.lock().unwrap().clone();
 
     // Run REQ client in main thread
-    compio::runtime::Runtime::new().unwrap().block_on(async {
+    monocoque::rt::LocalRuntime::new().unwrap().block_on(async {
         info!("[REQ] Connecting to tcp://{}", server_addr);
 
         let mut socket = ReqSocket::connect(&server_addr)

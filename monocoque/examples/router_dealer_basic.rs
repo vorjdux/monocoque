@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use compio::net::{TcpListener, TcpStream};
+use monocoque::rt::{self, LocalRuntime, TcpListener, TcpStream};
 /// Basic ROUTER-DEALER Example
 ///
 /// Demonstrates a working request-response pattern where:
@@ -13,8 +13,11 @@ use monocoque::zmq::{DealerSocket, RouterSocket};
 use std::time::Duration;
 use tracing::info;
 
-#[compio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
@@ -34,16 +37,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr_clone = addr.clone();
 
     // Start ROUTER (server)
-    let router_task = compio::runtime::spawn(async move { router_server(&addr).await });
+    let router_task = rt::spawn(async move { router_server(&addr).await });
 
     // Give server time to bind
-    compio::time::sleep(Duration::from_millis(100)).await;
+    rt::sleep(Duration::from_millis(100)).await;
 
     // Start DEALER (client)
-    let dealer_task = compio::runtime::spawn(async move { dealer_client(&addr_clone).await });
+    let dealer_task = rt::spawn(async move { dealer_client(&addr_clone).await });
 
     // Wait for both to complete concurrently
-    let (router_result, dealer_result) = futures::join!(router_task, dealer_task);
+    let (router_result, dealer_result) =
+        futures::join!(rt::join(router_task), rt::join(dealer_task));
 
     router_result?;
     dealer_result?;

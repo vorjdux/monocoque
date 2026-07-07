@@ -1,7 +1,8 @@
 //! # Monocoque
 //!
 //! A high-performance, multi-protocol messaging runtime. It runs on `io_uring`
-//! (via `compio`) by default, with an optional tokio backend for portability.
+//! (via `compio`) by default, with optional tokio and smol backends for
+//! portability.
 //!
 //! ## Architecture
 //!

@@ -42,7 +42,7 @@
 //! ## Features
 //!
 //! - **Zero-copy**: Messages use `Bytes` for efficient sharing
-//! - **Runtime backends**: high-performance async I/O via `compio` (io_uring) or tokio
+//! - **Runtime backends**: high-performance async I/O via `compio` (io_uring), tokio, or smol
 
 // Pedantic lints configuration
 #![allow(clippy::module_name_repetitions)]
@@ -51,7 +51,7 @@
 #![allow(clippy::missing_panics_doc)] // Most panics are in unreachable paths or debug code
 #![allow(clippy::missing_const_for_fn)] // Const fn optimization not always beneficial
 #![allow(clippy::multiple_crate_versions)] // Transitive dependency management
-#![allow(clippy::future_not_send)] // Intentional: tied to compio runtime
+#![allow(clippy::future_not_send)] // Intentional: tied to the thread-per-core runtime model
 #![allow(clippy::missing_fields_in_debug)] // Debug impls are simplified for brevity
 #![allow(clippy::should_implement_trait)] // Custom method names are intentional
 #![allow(clippy::doc_lazy_continuation)] // Doc formatting false positives

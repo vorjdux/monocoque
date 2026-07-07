@@ -6,7 +6,7 @@ A five-minute guide to sending your first message with Monocoque.
 
 - **~5x lower latency** than libzmq (43-58 µs vs ~270 µs REQ/REP round-trip)
 - **Up to 13.6 M msg/sec throughput** with write coalescing
-- **Two runtimes** - io_uring via compio (default) or epoll via tokio, same API
+- **Three runtimes** - io_uring via compio (default), or epoll via tokio, or async-io via smol, same API
 - **Pure Rust** - no C dependencies, full async/await
 - **Memory safe** - unsafe is confined to the slab allocator and runtime facade
 
@@ -28,9 +28,9 @@ The examples below use the default backend (io_uring via compio) and its
 
 ## Choosing a runtime
 
-Monocoque ships two interchangeable runtime backends, selected by a Cargo
-feature. The protocol, codec and API are identical on both; only the runtime
-primitives differ.
+Monocoque ships three interchangeable runtime backends, selected by a Cargo
+feature. The protocol, codec and API are identical on all of them; only the
+runtime primitives differ.
 
 - **`runtime-compio`** (default): native io_uring on Linux. Its edge shows on
   real network I/O and high connection counts.
@@ -39,6 +39,10 @@ primitives differ.
   single-flow loopback microbenchmarks it is actually a touch faster than compio
   (see [performance.md](performance.md)); pick by your real workload, not the
   microbenchmark.
+- **`runtime-smol`**: smol (async-executor + async-io). Another portable,
+  non-io_uring option, useful where io_uring is unavailable or when you already
+  build on the smol stack. It drives sockets on a single-threaded smol
+  `LocalExecutor`.
 
 ```toml
 # tokio backend
@@ -46,6 +50,13 @@ primitives differ.
 monocoque-rs = { version = "0.1", default-features = false, features = ["runtime-tokio", "zmq"] }
 bytes = "1"
 tokio = { version = "1", features = ["rt", "macros"] }
+```
+
+```toml
+# smol backend
+[dependencies]
+monocoque-rs = { version = "0.1", default-features = false, features = ["runtime-smol", "zmq"] }
+bytes = "1"
 ```
 
 The tokio backend follows the same thread-per-core model as compio, so run it on

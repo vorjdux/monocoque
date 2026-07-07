@@ -4,7 +4,7 @@
 
 # Monocoque
 
-> _A Rust-native ZeroMQ-compatible messaging runtime, io_uring by default with an optional tokio backend_
+> _A Rust-native ZeroMQ-compatible messaging runtime, io_uring by default with optional tokio and smol backends_
 
 [![CI](https://github.com/vorjdux/monocoque/actions/workflows/ci.yml/badge.svg)](https://github.com/vorjdux/monocoque/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/monocoque-rs.svg)](https://crates.io/crates/monocoque-rs)
@@ -15,7 +15,7 @@
 
 ---
 
-Monocoque is a ZeroMQ-compatible messaging library written in Rust. It implements ZMTP 3.1 from scratch over a small runtime facade: io_uring by default (via `compio`), with an optional tokio backend for portability. Either way it interoperates with any existing libzmq peer while staying entirely within Rust's memory model.
+Monocoque is a ZeroMQ-compatible messaging library written in Rust. It implements ZMTP 3.1 from scratch over a small runtime facade: io_uring by default (via `compio`), with optional tokio and smol backends for portability. Whichever you pick, it interoperates with any existing libzmq peer while staying entirely within Rust's memory model.
 
 The name comes from Formula 1 engineering, where the monocoque chassis achieves structural strength through form rather than bolt-on reinforcement. Same idea here: performance through correct architecture, not unsafe shortcuts.
 
@@ -41,37 +41,42 @@ The name comes from Formula 1 engineering, where the monocoque chassis achieves 
 
 Benchmarked against rust-zmq (FFI bindings to libzmq). Separate OS threads for
 sender and receiver, real loopback TCP, Intel Core i7-1355U (12 threads),
-Linux 6.17, release build. Both runtime backends run the identical suite; the
-rust-zmq control was stable across both runs, so the difference between them is a
-real measurement.
+Linux 6.17, release build. The three runtime backends run the identical suite.
+compio and tokio are the established throughput figures; the rust-zmq column was
+re-measured with a corrected live-connection timer, and smol was added on the same
+scale.
 
 **PUSH/PULL throughput with write coalescing** (`with_write_coalescing(true)`):
 
-| Message size | compio | tokio | rust-zmq |
-|---|---|---|---|
-| 64 B | 9.2 M msg/s | **13.6 M msg/s** | 1.33 M msg/s |
-| 256 B | 5.6 M msg/s | **9.8 M msg/s** | 1.09 M msg/s |
-| 1 KB | 2.4 M msg/s | **5.3 M msg/s** | 656 K msg/s |
-| 4 KB | 841 K msg/s | **1.74 M msg/s** | 328 K msg/s |
-| 16 KB | 268 K msg/s | **473 K msg/s** | 117 K msg/s |
+| Message size | compio | tokio | smol | rust-zmq |
+|---|---|---|---|---|
+| 64 B | 9.2 M msg/s | **13.6 M msg/s** | 10.1 M msg/s | 4.73 M msg/s |
+| 256 B | 5.6 M msg/s | **9.8 M msg/s** | 6.9 M msg/s | 2.66 M msg/s |
+| 1 KB | 2.4 M msg/s | **5.3 M msg/s** | 3.0 M msg/s | 1.04 M msg/s |
+| 4 KB | 841 K msg/s | **1.74 M msg/s** | 1.05 M msg/s | 394 K msg/s |
+| 16 KB | 268 K msg/s | **473 K msg/s** | 342 K msg/s | 120 K msg/s |
 
-Both backends beat libzmq by a wide margin once coalescing batches the writes
-(~7× on compio, ~10× on tokio at 64 B). On these single-flow loopback
-microbenchmarks the tokio/epoll backend is the faster of the two: a one-connection
-ping-pong does not exercise io_uring's strengths (batched submission, registered
-buffers, many concurrent connections) and just pays its per-op submission
-overhead. compio (io_uring) is the default and is where the wins land for real
-network I/O and high connection counts. Measure on your own workload.
+All three backends beat libzmq once coalescing batches the writes: ~1.9x (compio),
+~2.9x (tokio), ~2.1x (smol) at 64 B, and ~2-4x across the size range. On these
+single-flow loopback microbenchmarks the epoll backends (tokio, smol) are the
+faster: a one-connection ping-pong does not exercise io_uring's strengths (batched
+submission, registered buffers, many concurrent connections) and just pays its
+per-op submission overhead. compio (io_uring) is the default and is where the wins
+land for real network I/O and high connection counts. Measure on your own workload.
 
-Default (eager) mode sends each message immediately and suits latency-sensitive
-work. For **large** frames eager mode automatically uses a vectored write
+Default (eager) mode sends each message immediately, one syscall per `send()`, and
+is the mode for latency-sensitive work where you want each message on the wire now
+rather than batched. On a bulk one-way firehose libzmq's internal batching leads
+at small sizes; steady-state REQ/REP latency, though, is ~2.7-3.5x lower on every
+monocoque backend (~10 µs vs libzmq's ~35 µs). Turn on coalescing for
+small-message throughput. For **large** frames eager mode automatically uses a vectored write
 (`writev`) so the body is never copied into the send buffer; the threshold
 (`vectored_write_threshold`, default 32 KB) is tunable per workload. IPC (Unix
-domain sockets) is ~2.1× (compio) to ~3× (tokio) faster than TCP loopback for
+domain sockets) is ~2.1x (compio) to ~3x (tokio) faster than TCP loopback for
 same-host throughput.
 
-**PUB/SUB leads libzmq on both axes**: single-subscriber fan-out runs ~3.1× (compio)
-to ~3.3× (tokio) faster, and topic filtering at 10% match is a near tie. See
+**PUB/SUB leads libzmq on both axes**: single-subscriber fan-out runs ~2.9x (compio),
+~3.5x (tokio), ~3.0x (smol) faster, and topic filtering at 10% match is a near tie. See
 [docs/performance.md](docs/performance.md) for the full breakdown including
 latency numbers, per-backend tables, the vectored-write crossover measurements,
 PUB/SUB pattern results, and tuning guidance.
@@ -82,7 +87,7 @@ PUB/SUB pattern results, and tuning guidance.
 [dependencies]
 monocoque-rs = { version = "0.1", features = ["zmq"] }
 # Drives the default io_uring backend and provides the #[compio::main] macro.
-# To run on tokio instead, see "Runtime backends" below.
+# To run on tokio or smol instead, see "Runtime backends" below.
 compio = { version = "0.10", features = ["runtime", "macros"] }
 ```
 
@@ -140,7 +145,7 @@ dealer.flush().await?;
 
 Monocoque runs on `io_uring` through compio by default, but the socket stack is
 written against a small runtime facade, so it can drive the same code on tokio
-instead. Pick one backend at compile time:
+or smol instead. Pick one backend at compile time:
 
 ```toml
 # Default: native io_uring via compio
@@ -148,12 +153,17 @@ monocoque-rs = { version = "0.1", features = ["zmq"] }
 
 # Or run on tokio
 monocoque-rs = { version = "0.1", default-features = false, features = ["runtime-tokio", "zmq"] }
+
+# Or run on smol
+monocoque-rs = { version = "0.1", default-features = false, features = ["runtime-smol", "zmq"] }
 ```
 
-The two backends are mutually exclusive. The protocol layer, frame codec and
-buffer model are identical on both: only the connect/spawn/timer primitives
-differ. The tokio backend follows compio's thread-per-core model, so run it on a
-current-thread runtime inside a `LocalSet`.
+The three backends are mutually exclusive. The protocol layer, frame codec and
+buffer model are identical across all of them: only the connect/spawn/timer
+primitives differ. The tokio and smol backends follow compio's thread-per-core
+model, so run tokio on a current-thread runtime inside a `LocalSet` (smol uses a
+single-threaded `LocalExecutor`; the backend-agnostic `LocalRuntime` below sets
+up the right one for you).
 
 ```rust
 let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
@@ -183,6 +193,7 @@ The `runtime_backends` example is the same program run both ways:
 ```bash
 cargo run --example runtime_backends --features zmq                                   # compio
 cargo run --example runtime_backends --no-default-features --features runtime-tokio,zmq  # tokio
+cargo run --example runtime_backends --no-default-features --features runtime-smol,zmq   # smol
 ```
 
 ## Safety
@@ -208,9 +219,11 @@ cargo build --release --workspace
 cargo test --workspace --features zmq
 cargo bench --features zmq       # runs the benchmark suite
 
-# The same tests and benchmarks also run on the tokio backend
+# The same tests and benchmarks also run on the tokio and smol backends
 cargo test --workspace --no-default-features --features runtime-tokio,zmq
 cargo bench --no-default-features --features runtime-tokio,zmq
+cargo test --workspace --no-default-features --features runtime-smol,zmq
+cargo bench --no-default-features --features runtime-smol,zmq
 ```
 
 Interop testing against libzmq: see [docs/INTEROP_TESTING.md](docs/INTEROP_TESTING.md).
@@ -231,4 +244,4 @@ MIT - see [LICENSE](LICENSE).
 
 ---
 
-Built with: `compio` (default backend) or `tokio` (optional backend), `bytes`, `flume`, `smallvec`
+Built with: `compio` (default backend), `tokio` or `smol` (optional backends), `bytes`, `flume`, `smallvec`

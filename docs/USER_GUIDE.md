@@ -10,10 +10,12 @@ compio = { version = "0.10", features = ["runtime", "macros"] }
 ```
 
 All socket operations are async. On the default backend you run them on a compio
-runtime; annotate your entry point with `#[compio::main]`. To run on tokio
-instead, build with `default-features = false, features = ["runtime-tokio", "zmq"]`
-and drive the sockets from a current-thread tokio runtime inside a `LocalSet`.
-See [Getting Started](GETTING_STARTED.md#choosing-a-runtime) for both setups.
+runtime; annotate your entry point with `#[compio::main]`. Two portable backends
+are available instead: build with `default-features = false, features =
+["runtime-tokio", "zmq"]` to drive the sockets from a current-thread tokio runtime
+inside a `LocalSet`, or with `default-features = false, features = ["runtime-smol",
+"zmq"]` to drive them on a single-threaded smol executor. See
+[Getting Started](GETTING_STARTED.md#choosing-a-runtime) for each setup.
 
 ---
 

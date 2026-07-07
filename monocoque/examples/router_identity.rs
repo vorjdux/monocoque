@@ -6,21 +6,25 @@
 //! - Use `router_mandatory` mode for error handling
 
 use bytes::Bytes;
+use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::{DealerSocket, RouterSocket};
 use monocoque_core::options::SocketOptions;
 use std::time::Duration;
 
-#[compio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== ROUTER Identity Management Demo ===\n");
 
     // Start server in background
-    let _server_task = compio::runtime::spawn(async {
+    rt::spawn_detached(async {
         run_server().await.expect("Server failed");
     });
 
     // Give server time to bind
-    compio::time::sleep(Duration::from_millis(100)).await;
+    rt::sleep(Duration::from_millis(100)).await;
 
     // Create workers with custom identities
     println!("[Client] Creating workers with custom identities...");
@@ -48,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("[Worker 2] Sending registration...");
     worker2.send(vec![Bytes::from("READY")]).await?;
 
-    compio::time::sleep(Duration::from_millis(50)).await;
+    rt::sleep(Duration::from_millis(50)).await;
 
     // Workers receive and process tasks
     println!("\n[Worker 1] Waiting for tasks...");
@@ -68,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Cleanup
-    compio::time::sleep(Duration::from_millis(100)).await;
+    rt::sleep(Duration::from_millis(100)).await;
 
     println!("\n=== Demo Complete ===");
     Ok(())
@@ -147,7 +151,7 @@ async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
     println!("[Server] Tasks dispatched\n");
 
     // Keep server alive briefly
-    compio::time::sleep(Duration::from_millis(500)).await;
+    rt::sleep(Duration::from_millis(500)).await;
 
     Ok(())
 }

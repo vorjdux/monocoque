@@ -1,10 +1,14 @@
 /// Debug example to measure handshake timing
+use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::{PubSocket, SubSocket};
 use std::time::Instant;
 use tracing::info;
 
-#[compio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
         .init();
@@ -18,7 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Publisher bound in {:?}", start.elapsed());
 
     // Start subscriber in background
-    let sub_handle = compio::runtime::spawn(async move {
+    let sub_handle = rt::spawn(async move {
         let start = Instant::now();
         info!("[SUB] Starting connect...");
 
@@ -34,7 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Small delay
-    compio::time::sleep(std::time::Duration::from_millis(50)).await;
+    rt::sleep(std::time::Duration::from_millis(50)).await;
 
     // Accept subscriber
     let accept_start = Instant::now();
@@ -46,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Wait for subscriber
-    let result = sub_handle.await;
+    let result = rt::join(sub_handle).await;
     match result {
         Ok(_) => info!("Subscriber connected successfully"),
         Err(e) => info!("Subscriber error: {}", e),

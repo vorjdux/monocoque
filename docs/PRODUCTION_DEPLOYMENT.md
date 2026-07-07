@@ -100,7 +100,7 @@ async fn connect_with_retry(addr: &str) -> io::Result<ReqSocket> {
         match TcpStream::connect(addr).await {
             Ok(stream) => return ReqSocket::new(stream).await,
             Err(e) => match backoff.next_backoff() {
-                Some(d) => tokio::time::sleep(d).await,
+                Some(d) => monocoque::rt::sleep(d).await,
                 None => return Err(e),
             },
         }
@@ -111,9 +111,9 @@ async fn connect_with_retry(addr: &str) -> io::Result<ReqSocket> {
 ### Send/Receive Timeouts
 
 ```rust
-use tokio::time::timeout;
+use monocoque::rt::timeout;
 
-timeout(Duration::from_secs(5), socket.send(msg))
+monocoque::rt::timeout(Duration::from_secs(5), socket.send(msg))
     .await
     .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "send timeout"))??;
 ```

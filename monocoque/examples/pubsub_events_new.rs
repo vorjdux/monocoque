@@ -9,13 +9,17 @@
 /// - SUB socket subscribes to specific topics
 /// - Topics are prefix-matched (e.g., "trade." matches "trade.BTC", "trade.ETH")
 use bytes::Bytes;
+use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::{PubSocket, SubSocket};
 use std::thread;
 use std::time::Duration;
 use tracing::{error, info};
 
-#[compio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .init();
@@ -27,10 +31,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("[Publisher] Bound to 127.0.0.1:5558");
 
     // Start subscriber in background
-    compio::runtime::spawn(async {
+    rt::spawn_detached(async {
         run_subscriber().await.ok();
-    })
-    .detach();
+    });
 
     // Give subscriber time to connect
     thread::sleep(Duration::from_millis(500));

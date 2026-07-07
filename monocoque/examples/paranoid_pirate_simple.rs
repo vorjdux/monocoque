@@ -8,6 +8,7 @@
 //! Simplified for single-threaded compio runtime.
 
 use bytes::Bytes;
+use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::{DealerSocket, ReqSocket};
 use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
@@ -58,14 +59,14 @@ async fn worker(id: u32, crash_after: Option<u32>) -> std::io::Result<()> {
                 );
             }
 
-            compio::runtime::time::sleep(Duration::from_millis(100)).await;
+            rt::sleep(Duration::from_millis(100)).await;
 
             let reply = format!("Worker-{id} processed request #{count}");
             socket.send(vec![Bytes::from(reply)]).await?;
             info!("[Worker-{}] 📤 Reply #{}", id, count);
         }
 
-        compio::runtime::time::sleep(Duration::from_millis(10)).await;
+        rt::sleep(Duration::from_millis(10)).await;
     }
 }
 
@@ -74,7 +75,7 @@ async fn worker(id: u32, crash_after: Option<u32>) -> std::io::Result<()> {
 async fn client(id: u32, requests: u32) -> std::io::Result<()> {
     info!("[Client-{}] 🔌 Starting", id);
 
-    compio::runtime::time::sleep(Duration::from_millis(1500)).await;
+    rt::sleep(Duration::from_millis(1500)).await;
 
     let mut socket = ReqSocket::connect("127.0.0.1:5555").await?;
 
@@ -96,7 +97,7 @@ async fn client(id: u32, requests: u32) -> std::io::Result<()> {
             warn!("[Client-{}] ⚠️  No reply", id);
         }
 
-        compio::runtime::time::sleep(Duration::from_millis(800)).await;
+        rt::sleep(Duration::from_millis(800)).await;
     }
 
     info!("[Client-{}] ✅ Done", id);
@@ -132,8 +133,11 @@ async fn broker() -> std::io::Result<()> {
     }
 }
 
-#[compio::main]
-async fn main() -> std::io::Result<()> {
+fn main() -> std::io::Result<()> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> std::io::Result<()> {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .with_target(false)
@@ -143,41 +147,37 @@ async fn main() -> std::io::Result<()> {
     info!("==========================================\n");
 
     // Broker
-    compio::runtime::spawn(async {
+    rt::spawn_detached(async {
         if let Err(e) = broker().await {
             error!("Broker: {}", e);
         }
-    })
-    .detach();
+    });
 
-    compio::runtime::time::sleep(Duration::from_millis(500)).await;
+    rt::sleep(Duration::from_millis(500)).await;
 
     // Workers
-    compio::runtime::spawn(async {
+    rt::spawn_detached(async {
         let _ = worker(1, None).await;
-    })
-    .detach();
-    compio::runtime::time::sleep(Duration::from_millis(100)).await;
-    compio::runtime::spawn(async {
+    });
+    rt::sleep(Duration::from_millis(100)).await;
+    rt::spawn_detached(async {
         let _ = worker(2, Some(3)).await;
-    })
-    .detach();
+    });
 
-    compio::runtime::time::sleep(Duration::from_secs(1)).await;
+    rt::sleep(Duration::from_secs(1)).await;
 
     // Client
-    let c = compio::runtime::spawn(async { client(1, 6).await });
+    let c = rt::spawn(async { client(1, 6).await });
 
     // Recovery worker
-    compio::runtime::time::sleep(Duration::from_secs(4)).await;
+    rt::sleep(Duration::from_secs(4)).await;
     info!("\n🔄 Spawning recovery worker\n");
-    compio::runtime::spawn(async {
+    rt::spawn_detached(async {
         let _ = worker(3, None).await;
-    })
-    .detach();
+    });
 
-    let _ = c.await;
-    compio::runtime::time::sleep(Duration::from_secs(2)).await;
+    let _ = rt::join(c).await;
+    rt::sleep(Duration::from_secs(2)).await;
 
     info!("\n✅ Demo Complete!");
     info!("Pattern: Workers send READY/HEARTBEAT, broker forwards messages");

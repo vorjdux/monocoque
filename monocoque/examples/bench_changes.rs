@@ -12,7 +12,7 @@
 //! effect is what matters.
 
 use bytes::Bytes;
-use compio::net::TcpListener;
+use monocoque::rt::TcpListener;
 use monocoque::zmq::{PubSocket, PullSocket, PushSocket, SocketOptions, SubSocket};
 use std::sync::mpsc;
 use std::thread;
@@ -33,7 +33,7 @@ fn push_pull(
     let (elapsed_tx, elapsed_rx) = mpsc::channel::<Duration>();
 
     let pull = thread::spawn(move || {
-        let rt = compio::runtime::Runtime::new().unwrap();
+        let rt = monocoque::rt::LocalRuntime::new().unwrap();
         rt.block_on(async move {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             port_tx.send(listener.local_addr().unwrap().port()).unwrap();
@@ -68,7 +68,7 @@ fn push_pull(
     let port = port_rx.recv().unwrap();
 
     let push = thread::spawn(move || {
-        let rt = compio::runtime::Runtime::new().unwrap();
+        let rt = monocoque::rt::LocalRuntime::new().unwrap();
         rt.block_on(async move {
             let opts = SocketOptions::default().with_vectored_write_threshold(if vectored {
                 8192
@@ -119,7 +119,7 @@ fn pub_sub(size: usize, target: usize) -> f64 {
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
 
     let pub_thread = thread::spawn(move || {
-        let rt = compio::runtime::Runtime::new().unwrap();
+        let rt = monocoque::rt::LocalRuntime::new().unwrap();
         rt.block_on(async move {
             let mut publisher = PubSocket::bind("127.0.0.1:0").await.unwrap();
             addr_tx
@@ -142,7 +142,7 @@ fn pub_sub(size: usize, target: usize) -> f64 {
 
     let port = addr_rx.recv().unwrap();
     let sub_thread = thread::spawn(move || {
-        let rt = compio::runtime::Runtime::new().unwrap();
+        let rt = monocoque::rt::LocalRuntime::new().unwrap();
         rt.block_on(async move {
             let mut sub = SubSocket::connect(&format!("tcp://127.0.0.1:{port}"))
                 .await

@@ -15,16 +15,19 @@
 //! Run with: `cargo run --example pipeline_worker_pool`
 
 use bytes::Bytes;
-use compio::net::TcpListener;
+use monocoque::rt::{self, LocalRuntime, TcpListener};
 use monocoque::zmq::{PullFanIn, PullSocket, PushFanOut, PushSocket};
 use std::time::Instant;
 
 const TASKS: usize = 100;
 const WORKERS: usize = 4;
 
-#[compio::main]
+fn main() -> std::io::Result<()> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
 #[allow(clippy::cast_precision_loss)]
-async fn main() -> std::io::Result<()> {
+async fn async_main() -> std::io::Result<()> {
     // Bind both listeners up front so the workers can connect to either one
     // before we start accepting the pool.
     let vent_listener = TcpListener::bind("127.0.0.1:5557").await?;
@@ -32,7 +35,7 @@ async fn main() -> std::io::Result<()> {
 
     // ── Workers: PULL from the ventilator, PUSH results to the sink ───────
     for i in 0..WORKERS {
-        compio::runtime::spawn(async move {
+        rt::spawn_detached(async move {
             let mut work_rx = PullSocket::connect("127.0.0.1:5557").await.unwrap();
             let mut result_tx = PushSocket::connect("127.0.0.1:5558").await.unwrap();
             println!("Worker {i} ready");
@@ -41,8 +44,7 @@ async fn main() -> std::io::Result<()> {
                 let result = format!("worker-{i} done: {task}");
                 result_tx.send(vec![Bytes::from(result)]).await.unwrap();
             }
-        })
-        .detach();
+        });
     }
 
     // ── Accept the pool on both ends ──────────────────────────────────────

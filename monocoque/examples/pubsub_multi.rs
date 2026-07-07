@@ -15,6 +15,7 @@
 /// - SUB2 receives only finance news
 /// - SUB3 receives all news (tech + finance)
 use bytes::Bytes;
+use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::prelude::*;
 use std::time::Duration;
 use tracing::{error, info};
@@ -143,8 +144,11 @@ async fn subscriber_task(
     Ok(())
 }
 
-#[compio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -157,26 +161,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Using port {}", port);
 
     // Start publisher first (binding to port)
-    let pub_handle = compio::runtime::spawn(async move { publisher_task(port).await });
+    let pub_handle = rt::spawn(async move { publisher_task(port).await });
 
     // Small delay to ensure publisher is bound
     std::thread::sleep(Duration::from_millis(50));
 
     // Now spawn subscriber tasks (they will connect quickly)
-    let sub1_handle =
-        compio::runtime::spawn(async move { subscriber_task("SUB1", port, "news.tech", 5).await });
+    let sub1_handle = rt::spawn(async move { subscriber_task("SUB1", port, "news.tech", 5).await });
 
     let sub2_handle =
-        compio::runtime::spawn(
-            async move { subscriber_task("SUB2", port, "news.finance", 5).await },
-        );
+        rt::spawn(async move { subscriber_task("SUB2", port, "news.finance", 5).await });
 
     // Wait for publisher to complete
-    let pub_result = pub_handle.await;
+    let pub_result = rt::join(pub_handle).await;
 
     // Wait for subscribers to complete
-    let sub1_result = sub1_handle.await;
-    let sub2_result = sub2_handle.await;
+    let sub1_result = rt::join(sub1_handle).await;
+    let sub2_result = rt::join(sub2_handle).await;
 
     // Report results
     info!("=== Results ===");

@@ -23,6 +23,9 @@ bytes = "1.11.1"
 compio-io = "0.2"
 compio-buf = { version = "0.3", features = ["bytes"] }
 compio = { version = "0.10", default-features = false, features = ["runtime", "macros", "time", "io-uring"] }
+# smol drives the same socket stack on a lightweight async-executor + async-io
+# stack. Only the `runtime-smol` feature pulls it in. See each crate's [features].
+smol = "2"
 flume = "0.11"
 futures = "0.3"
 async-trait = "0.1"

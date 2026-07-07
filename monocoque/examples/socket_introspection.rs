@@ -12,11 +12,15 @@
 //! ```
 
 use bytes::Bytes;
+use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::{DealerSocket, SocketOptions};
 use std::time::Duration;
 
-#[compio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Socket Introspection Demo ===\n");
 
     // 1. Socket Type Introspection
@@ -26,7 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("[Dealer] Type name: {}", dealer.socket_type().as_str());
 
     // Wait a bit
-    compio::time::sleep(Duration::from_millis(100)).await;
+    rt::sleep(Duration::from_millis(100)).await;
 
     // 2. Endpoint Introspection
     println!("\n## Endpoint Introspection");
