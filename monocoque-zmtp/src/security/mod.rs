@@ -4,6 +4,7 @@
 
 pub mod curve;
 pub mod plain;
+pub mod protocol;
 pub mod zap;
 /// ZAP client for sending authentication requests.
 pub mod zap_client;

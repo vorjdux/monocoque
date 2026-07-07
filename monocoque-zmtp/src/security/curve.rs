@@ -133,8 +133,15 @@ impl CurveSecretKey {
     }
 
     /// Compute shared secret via ECDH
-    pub fn diffie_hellman(&self, peer_public: &CurvePublicKey) -> [u8; CURVE_KEY_SIZE] {
-        *self.0.diffie_hellman(&peer_public.to_x25519()).as_bytes()
+    pub fn diffie_hellman(
+        &self,
+        peer_public: &CurvePublicKey,
+    ) -> Result<[u8; CURVE_KEY_SIZE], CurveError> {
+        let shared = *self.0.diffie_hellman(&peer_public.to_x25519()).as_bytes();
+        if shared == [0u8; CURVE_KEY_SIZE] {
+            return Err(CurveError::ProtocolViolation);
+        }
+        Ok(shared)
     }
 
     /// Return raw scalar bytes for use with crypto_box primitives
@@ -431,8 +438,14 @@ fn decode_zmtp_props(mut data: &[u8]) -> Result<(Option<Bytes>, Option<Bytes>), 
         data = &data[vlen..];
 
         if key.eq_ignore_ascii_case(b"Socket-Type") {
+            if socket_type.is_some() {
+                return Err(ZmtpError::Protocol);
+            }
             socket_type = Some(value);
         } else if key.eq_ignore_ascii_case(b"Identity") {
+            if identity.is_some() {
+                return Err(ZmtpError::Protocol);
+            }
             if vlen > 255 {
                 warn!("[CURVE] Identity property exceeds 255 bytes ({})", vlen);
                 return Err(ZmtpError::Protocol);
@@ -898,9 +911,18 @@ impl CurveClient {
         let dh1 = self
             .client_short_keypair
             .secret
-            .diffie_hellman(&self.server_public); // c'·S
-        let dh2 = self.client_keypair.secret.diffie_hellman(&s_prime); // C·s'
-        let dh3 = self.client_short_keypair.secret.diffie_hellman(&s_prime); // c'·s'
+            .diffie_hellman(&self.server_public)
+            .map_err(|_| ZmtpError::Protocol)?; // c'·S
+        let dh2 = self
+            .client_keypair
+            .secret
+            .diffie_hellman(&s_prime)
+            .map_err(|_| ZmtpError::Protocol)?; // C·s'
+        let dh3 = self
+            .client_short_keypair
+            .secret
+            .diffie_hellman(&s_prime)
+            .map_err(|_| ZmtpError::Protocol)?; // c'·s'
 
         let key = derive_message_key(&dh1, &dh2, &dh3);
         self.message_box = Some(CurveBox::new(&key));
@@ -1319,9 +1341,21 @@ impl CurveServer {
         let c = self.client_public.ok_or(ZmtpError::Protocol)?;
 
         // Derive message key: SHA-256(c'·S ‖ C·s' ‖ c'·s')
-        let dh1 = self.server_keypair.secret.diffie_hellman(&c_prime); // S·c' = c'·S
-        let dh2 = self.server_short_keypair.secret.diffie_hellman(&c); // s'·C = C·s'
-        let dh3 = self.server_short_keypair.secret.diffie_hellman(&c_prime); // s'·c' = c'·s'
+        let dh1 = self
+            .server_keypair
+            .secret
+            .diffie_hellman(&c_prime)
+            .map_err(|_| ZmtpError::Protocol)?; // S·c' = c'·S
+        let dh2 = self
+            .server_short_keypair
+            .secret
+            .diffie_hellman(&c)
+            .map_err(|_| ZmtpError::Protocol)?; // s'·C = C·s'
+        let dh3 = self
+            .server_short_keypair
+            .secret
+            .diffie_hellman(&c_prime)
+            .map_err(|_| ZmtpError::Protocol)?; // s'·c' = c'·s'
         let key = derive_message_key(&dh1, &dh2, &dh3);
         self.message_box = Some(CurveBox::new(&key));
 
@@ -1598,10 +1632,24 @@ mod tests {
         let alice = CurveKeyPair::generate();
         let bob = CurveKeyPair::generate();
 
-        let alice_shared = alice.secret.diffie_hellman(&bob.public);
-        let bob_shared = bob.secret.diffie_hellman(&alice.public);
+        let alice_shared = alice.secret.diffie_hellman(&bob.public).unwrap();
+        let bob_shared = bob.secret.diffie_hellman(&alice.public).unwrap();
 
         assert_eq!(alice_shared, bob_shared);
+    }
+
+    #[test]
+    fn diffie_hellman_rejects_non_contributory_peer_public_key() {
+        let secret = CurveSecretKey::generate();
+        let low_order_public = CurvePublicKey::from_bytes([0u8; CURVE_KEY_SIZE]);
+
+        assert!(
+            matches!(
+                secret.diffie_hellman(&low_order_public),
+                Err(CurveError::ProtocolViolation)
+            ),
+            "CURVE accepted a non-contributory X25519 peer key"
+        );
     }
 
     #[test]
@@ -1653,20 +1701,61 @@ mod tests {
         let server_short = CurveKeyPair::generate();
 
         // Client side
-        let dh1c = client_short.secret.diffie_hellman(&server_long.public);
-        let dh2c = client_long.secret.diffie_hellman(&server_short.public);
-        let dh3c = client_short.secret.diffie_hellman(&server_short.public);
+        let dh1c = client_short
+            .secret
+            .diffie_hellman(&server_long.public)
+            .unwrap();
+        let dh2c = client_long
+            .secret
+            .diffie_hellman(&server_short.public)
+            .unwrap();
+        let dh3c = client_short
+            .secret
+            .diffie_hellman(&server_short.public)
+            .unwrap();
         let client_key = derive_message_key(&dh1c, &dh2c, &dh3c);
 
         // Server side
-        let dh1s = server_long.secret.diffie_hellman(&client_short.public);
-        let dh2s = server_short.secret.diffie_hellman(&client_long.public);
-        let dh3s = server_short.secret.diffie_hellman(&client_short.public);
+        let dh1s = server_long
+            .secret
+            .diffie_hellman(&client_short.public)
+            .unwrap();
+        let dh2s = server_short
+            .secret
+            .diffie_hellman(&client_long.public)
+            .unwrap();
+        let dh3s = server_short
+            .secret
+            .diffie_hellman(&client_short.public)
+            .unwrap();
         let server_key = derive_message_key(&dh1s, &dh2s, &dh3s);
 
         assert_eq!(
             client_key, server_key,
             "both sides must derive the same message key"
+        );
+    }
+
+    #[test]
+    fn curve_box_uses_message_counter_bytes_in_aead_nonce() {
+        let shared_secret = [42u8; CURVE_KEY_SIZE];
+        let box_ = CurveBox::new(&shared_secret);
+        let plaintext = b"same plaintext";
+
+        let mut nonce_one = [0u8; CURVE_NONCE_SIZE];
+        nonce_one[..16].copy_from_slice(b"CurveZMQMESSAGEC");
+        nonce_one[16..].copy_from_slice(&1u64.to_be_bytes());
+
+        let mut nonce_two = [0u8; CURVE_NONCE_SIZE];
+        nonce_two[..16].copy_from_slice(b"CurveZMQMESSAGEC");
+        nonce_two[16..].copy_from_slice(&2u64.to_be_bytes());
+
+        let ciphertext_one = box_.encrypt(plaintext, &nonce_one).unwrap();
+        let ciphertext_two = box_.encrypt(plaintext, &nonce_two).unwrap();
+
+        assert_ne!(
+            ciphertext_one, ciphertext_two,
+            "CURVE encryption ignored the message counter bytes and reused the AEAD nonce"
         );
     }
 
@@ -1800,5 +1889,30 @@ mod tests {
         let (st, id) = decode_zmtp_props(&encoded).unwrap();
         assert_eq!(st.unwrap().as_ref(), b"ROUTER");
         assert!(id.is_none());
+    }
+
+    #[test]
+    fn decode_zmtp_props_rejects_duplicate_socket_type_property() {
+        let mut encoded = Vec::new();
+        push_prop(&mut encoded, b"Socket-Type", b"DEALER");
+        push_prop(&mut encoded, b"Socket-Type", b"ROUTER");
+
+        assert!(matches!(
+            decode_zmtp_props(&encoded),
+            Err(ZmtpError::Protocol)
+        ));
+    }
+
+    #[test]
+    fn decode_zmtp_props_rejects_duplicate_identity_property() {
+        let mut encoded = Vec::new();
+        push_prop(&mut encoded, b"Socket-Type", b"DEALER");
+        push_prop(&mut encoded, b"Identity", b"trusted");
+        push_prop(&mut encoded, b"Identity", b"shadow");
+
+        assert!(matches!(
+            decode_zmtp_props(&encoded),
+            Err(ZmtpError::Protocol)
+        ));
     }
 }

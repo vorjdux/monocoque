@@ -36,9 +36,11 @@
 //! ```
 
 use crate::codec::ZmtpError;
+use crate::security::protocol::reject_immediately_available_trailing_bytes;
 use crate::security::zap::{ZapMechanism, ZapRequest, ZapStatus};
 use bytes::{Bytes, BytesMut};
 use compio_io::{AsyncRead, AsyncWrite};
+use std::fmt;
 use std::time::Duration;
 use tracing::{debug, warn};
 
@@ -46,14 +48,24 @@ use tracing::{debug, warn};
 const PLAIN_HELLO: &[u8] = b"\x05HELLO";
 const PLAIN_WELCOME: &[u8] = b"\x07WELCOME";
 const PLAIN_ERROR: &[u8] = b"\x05ERROR";
+const TRAILING_BYTE_CHECK_TIMEOUT: Duration = Duration::from_millis(10);
 
 /// PLAIN client credentials
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct PlainCredentials {
     /// Plaintext username.
     pub username: String,
     /// Plaintext password.
     pub password: String,
+}
+
+impl fmt::Debug for PlainCredentials {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PlainCredentials")
+            .field("username", &self.username)
+            .field("password", &"<redacted>")
+            .finish()
+    }
 }
 
 impl PlainCredentials {
@@ -96,9 +108,17 @@ pub trait PlainAuthHandler {
 ///
 /// Validates against a static HashMap of username → password.
 /// For production use, implement PlainAuthHandler with database lookup.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct StaticPlainHandler {
     credentials: std::collections::HashMap<String, String>,
+}
+
+impl fmt::Debug for StaticPlainHandler {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StaticPlainHandler")
+            .field("credential_count", &self.credentials.len())
+            .finish()
+    }
 }
 
 impl StaticPlainHandler {
@@ -286,6 +306,7 @@ where
     let BufResult(result, password_buf) = buf_result;
     result?;
     let password = String::from_utf8(password_buf).map_err(|_| ZmtpError::Protocol)?;
+    reject_immediately_available_trailing_bytes(stream, TRAILING_BYTE_CHECK_TIMEOUT).await?;
 
     debug!("[PLAIN SERVER] Received credentials for user: {}", username);
 
@@ -381,6 +402,7 @@ where
     let BufResult(result, password_buf) = buf_result;
     result?;
     let password = String::from_utf8(password_buf).map_err(|_| ZmtpError::Protocol)?;
+    reject_immediately_available_trailing_bytes(stream, TRAILING_BYTE_CHECK_TIMEOUT).await?;
 
     debug!(
         "[PLAIN SERVER ZAP] Received credentials for user: {}, sending ZAP request",
@@ -452,6 +474,17 @@ pub fn create_plain_zap_request(
 mod tests {
     use super::*;
 
+    #[cfg(feature = "runtime-compio")]
+    fn plain_hello(username: &[u8], password: &[u8]) -> Vec<u8> {
+        let mut hello = Vec::new();
+        hello.extend_from_slice(PLAIN_HELLO);
+        hello.push(username.len() as u8);
+        hello.extend_from_slice(username);
+        hello.push(password.len() as u8);
+        hello.extend_from_slice(password);
+        hello
+    }
+
     #[test]
     fn test_static_plain_handler() {
         monocoque_core::rt::LocalRuntime::new()
@@ -499,5 +532,68 @@ mod tests {
         assert_eq!(request.credentials.len(), 2);
         assert_eq!(&request.credentials[0][..], b"testuser");
         assert_eq!(&request.credentials[1][..], b"testpass");
+    }
+
+    #[cfg(feature = "runtime-compio")]
+    #[test]
+    fn plain_server_rejects_hello_with_trailing_credential_bytes() {
+        use compio_buf::BufResult;
+        use monocoque_core::rt::{LocalRuntime, TcpListener, TcpStream};
+        use monocoque_core::timeout::{read_exact_with_timeout, write_all_with_timeout};
+        use std::time::Duration;
+
+        LocalRuntime::new().unwrap().block_on(async {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server_task = monocoque_core::rt::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut handler = StaticPlainHandler::new();
+                handler.add_user("admin", "secret");
+
+                plain_server_handshake(
+                    &mut stream,
+                    &handler,
+                    "global",
+                    "127.0.0.1:1",
+                    Some(Duration::from_secs(1)),
+                )
+                .await
+            });
+
+            let mut stream = TcpStream::connect(addr).await.unwrap();
+            let mut hello = plain_hello(b"admin", b"secret");
+            hello.extend_from_slice(b"\x05extra");
+            let BufResult(write_result, _) =
+                write_all_with_timeout(&mut stream, hello, Some(Duration::from_secs(1)))
+                    .await
+                    .unwrap();
+            write_result.unwrap();
+
+            let response = vec![0u8; PLAIN_WELCOME.len()];
+            let BufResult(read_result, response) =
+                read_exact_with_timeout(&mut stream, response, Some(Duration::from_secs(1)))
+                    .await
+                    .unwrap();
+            let _ = read_result;
+
+            let result = server_task.await;
+            assert!(
+                result.is_err() && response.as_slice() != PLAIN_WELCOME,
+                "PLAIN server authenticated a HELLO command with trailing credential bytes"
+            );
+        });
+    }
+
+    #[test]
+    fn debug_output_redacts_static_plain_handler_passwords() {
+        let mut handler = StaticPlainHandler::new();
+        handler.add_user("alice", "handler-password");
+
+        let debug = format!("{handler:?}");
+
+        assert!(
+            !debug.contains("handler-password"),
+            "StaticPlainHandler Debug output exposes stored PLAIN passwords"
+        );
     }
 }

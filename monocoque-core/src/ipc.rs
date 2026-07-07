@@ -6,6 +6,8 @@
 #[cfg(unix)]
 use crate::rt::{UnixListener, UnixStream};
 #[cfg(unix)]
+use std::os::unix::fs::FileTypeExt;
+#[cfg(unix)]
 use std::path::Path;
 
 #[cfg(unix)]
@@ -41,10 +43,17 @@ pub async fn connect<P: AsRef<Path>>(path: P) -> std::io::Result<UnixStream> {
 /// # }
 /// ```
 pub async fn bind<P: AsRef<Path>>(path: P) -> std::io::Result<UnixListener> {
-    // Remove existing socket file if it exists
     let path_ref = path.as_ref();
     if path_ref.exists() {
-        std::fs::remove_file(path_ref)?;
+        let metadata = std::fs::symlink_metadata(path_ref)?;
+        if metadata.file_type().is_socket() {
+            std::fs::remove_file(path_ref)?;
+        } else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "IPC bind path exists and is not a Unix socket",
+            ));
+        }
     }
 
     UnixListener::bind(path).await
@@ -95,6 +104,35 @@ mod tests {
         // Cleanup
         drop(client);
         drop(server);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn bind_does_not_unlink_existing_regular_file() {
+        crate::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(bind_does_not_unlink_existing_regular_file_impl())
+    }
+
+    async fn bind_does_not_unlink_existing_regular_file_impl() {
+        let path = std::env::temp_dir().join(format!(
+            "monocoque-ipc-regular-file-{}.sock",
+            std::process::id()
+        ));
+
+        std::fs::write(&path, b"do not delete").unwrap();
+
+        let result = bind(&path).await;
+
+        assert!(
+            result.is_err(),
+            "binding over an existing regular file should fail instead of unlinking it"
+        );
+        assert!(
+            path.exists(),
+            "ipc::bind unlinked an existing regular file before binding"
+        );
+
         let _ = std::fs::remove_file(path);
     }
 }

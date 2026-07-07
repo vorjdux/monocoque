@@ -68,12 +68,12 @@ pub fn build_pong_frame() -> Bytes {
 
 /// Return `true` if the decoded command payload begins with the PING name.
 pub fn is_ping_payload(payload: &[u8]) -> bool {
-    payload.starts_with(PING_CMD)
+    payload.starts_with(PING_CMD) && payload.len().saturating_sub(PING_CMD.len()) <= 18
 }
 
 /// Return `true` if the decoded command payload begins with the PONG name.
 pub fn is_pong_payload(payload: &[u8]) -> bool {
-    payload.starts_with(PONG_CMD)
+    payload.starts_with(PONG_CMD) && payload.len().saturating_sub(PONG_CMD.len()) <= 16
 }
 
 /// Base socket infrastructure shared by all ZMQ socket types.
@@ -298,10 +298,16 @@ where
         self.send_buffer.len()
     }
 
+    /// Update live socket options and keep derived decoder state in sync.
+    pub(crate) fn set_options(&mut self, options: SocketOptions) {
+        self.decoder.set_max_body_len(options.max_msg_size);
+        self.options = options;
+    }
+
     /// Check if send HWM has been reached.
     #[inline]
     pub const fn hwm_reached(&self) -> bool {
-        self.buffered_messages >= self.options.send_hwm
+        self.options.send_hwm != 0 && self.buffered_messages >= self.options.send_hwm
     }
 
     /// Get the endpoint this socket is connected/bound to, if any.
@@ -499,7 +505,7 @@ where
 
         // Read from stream
         use compio_buf::BufResult;
-        let slab = self.arena.alloc_mut(self.options.read_buffer_size);
+        let slab = self.arena.alloc_mut(self.options.read_buffer_size());
 
         // Get stream reference only for I/O
         let stream = self
@@ -1501,11 +1507,21 @@ mod tests {
     }
 
     #[test]
+    fn test_is_ping_payload_rejects_context_over_16_octets() {
+        assert!(!is_ping_payload(b"\x04PING\x00\x0A12345678901234567"));
+    }
+
+    #[test]
     fn test_is_pong_payload() {
         assert!(is_pong_payload(b"\x04PONG"));
         assert!(!is_pong_payload(b"\x04PING\x00\x0A"));
         assert!(!is_pong_payload(b"\x05READY"));
         assert!(!is_pong_payload(b""));
+    }
+
+    #[test]
+    fn test_is_pong_payload_rejects_context_over_16_octets() {
+        assert!(!is_pong_payload(b"\x04PONG12345678901234567"));
     }
 
     // ── Heartbeat state helpers ───────────────────────────────────────────────

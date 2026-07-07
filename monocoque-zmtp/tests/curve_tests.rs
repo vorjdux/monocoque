@@ -31,8 +31,8 @@ fn test_curve_diffie_hellman_agreement() {
     let bob = CurveKeyPair::generate();
 
     // Both compute shared secret
-    let alice_shared = alice.secret.diffie_hellman(&bob.public);
-    let bob_shared = bob.secret.diffie_hellman(&alice.public);
+    let alice_shared = alice.secret.diffie_hellman(&bob.public).unwrap();
+    let bob_shared = bob.secret.diffie_hellman(&alice.public).unwrap();
 
     // Shared secrets must match (DH property)
     assert_eq!(alice_shared, bob_shared);
@@ -45,8 +45,8 @@ fn test_curve_diffie_hellman_different_peers() {
     let bob = CurveKeyPair::generate();
     let charlie = CurveKeyPair::generate();
 
-    let alice_bob = alice.secret.diffie_hellman(&bob.public);
-    let alice_charlie = alice.secret.diffie_hellman(&charlie.public);
+    let alice_bob = alice.secret.diffie_hellman(&bob.public).unwrap();
+    let alice_charlie = alice.secret.diffie_hellman(&charlie.public).unwrap();
 
     // Different peer = different shared secret
     assert_ne!(alice_bob, alice_charlie);
@@ -111,8 +111,8 @@ fn test_curve_box_encrypt_decrypt() {
     let keypair2 = CurveKeyPair::generate();
 
     // Compute shared secrets (both sides compute same secret)
-    let shared1 = keypair1.secret.diffie_hellman(&keypair2.public);
-    let shared2 = keypair2.secret.diffie_hellman(&keypair1.public);
+    let shared1 = keypair1.secret.diffie_hellman(&keypair2.public).unwrap();
+    let shared2 = keypair2.secret.diffie_hellman(&keypair1.public).unwrap();
 
     assert_eq!(shared1, shared2);
 }

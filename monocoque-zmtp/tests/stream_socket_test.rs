@@ -144,6 +144,59 @@ fn test_stream_send_raw_data() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Test: STREAM send_hwm must bound per-peer outbound queues
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// STREAM peers should not be able to enqueue unbounded raw data when the
+/// configured `send_hwm` is small. Once the queue reaches HWM, `send()` must
+/// return `WouldBlock`.
+#[test]
+fn test_stream_send_respects_send_hwm() {
+    const HWM: usize = 5;
+
+    let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
+    let (result_tx, result_rx) = mpsc::channel::<std::io::ErrorKind>();
+
+    thread::spawn(move || {
+        compio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let mut srv = StreamSocket::bind("127.0.0.1:0").await.unwrap();
+                srv.options_mut().send_hwm = HWM;
+                addr_tx.send(srv.local_addr().unwrap()).unwrap();
+
+                let routing_id = srv.accept_raw().await.unwrap();
+
+                for _ in 0..HWM {
+                    srv.send(vec![routing_id.clone(), Bytes::new(), Bytes::from("x")])
+                        .await
+                        .unwrap();
+                }
+
+                let err = srv
+                    .send(vec![routing_id, Bytes::new(), Bytes::from("overflow")])
+                    .await
+                    .expect_err("expected WouldBlock at HWM");
+                result_tx.send(err.kind()).unwrap();
+            });
+    });
+
+    let addr = addr_rx.recv().unwrap();
+    let _client = std::net::TcpStream::connect(addr).unwrap();
+
+    let err_kind = result_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("stream server did not finish");
+
+    assert_eq!(
+        err_kind,
+        std::io::ErrorKind::WouldBlock,
+        "expected WouldBlock, got {:?}",
+        err_kind
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Test: echo server  -  bidirectional raw TCP
 // ─────────────────────────────────────────────────────────────────────────────
 

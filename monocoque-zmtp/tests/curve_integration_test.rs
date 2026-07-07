@@ -20,8 +20,8 @@ fn test_curve_keypair_generation() {
     assert_ne!(pair1.public.as_bytes(), pair2.public.as_bytes());
 
     // Secret keys are also different (via diffie-hellman result)
-    let shared1 = pair1.secret.diffie_hellman(&pair2.public);
-    let shared2 = pair2.secret.diffie_hellman(&pair1.public);
+    let shared1 = pair1.secret.diffie_hellman(&pair2.public).unwrap();
+    let shared2 = pair2.secret.diffie_hellman(&pair1.public).unwrap();
     assert_eq!(shared1, shared2); // DH should agree
 }
 

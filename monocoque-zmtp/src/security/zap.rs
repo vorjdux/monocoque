@@ -30,6 +30,7 @@
 
 use bytes::Bytes;
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Monotonic counter used to generate unique ZAP request IDs.
@@ -119,7 +120,7 @@ impl ZapStatus {
 }
 
 /// ZAP authentication request
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ZapRequest {
     /// Version (always "1.0")
     pub version: String,
@@ -137,6 +138,38 @@ pub struct ZapRequest {
     pub credentials: Vec<Bytes>,
 }
 
+impl fmt::Debug for ZapRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ZapRequest")
+            .field("version", &self.version)
+            .field("request_id", &self.request_id)
+            .field("domain", &self.domain)
+            .field("address", &self.address)
+            .field("identity", &self.identity)
+            .field("mechanism", &self.mechanism)
+            .field(
+                "credentials",
+                &ZapRequestCredentialsDebug {
+                    len: self.credentials.len(),
+                },
+            )
+            .finish()
+    }
+}
+
+struct ZapRequestCredentialsDebug {
+    len: usize,
+}
+
+impl fmt::Debug for ZapRequestCredentialsDebug {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.len == 0 {
+            f.write_str("[]")
+        } else {
+            write!(f, "[<{} credential frame(s) redacted>]", self.len)
+        }
+    }
+}
 impl ZapRequest {
     /// Create a new ZAP request with a caller-supplied request ID.
     ///
@@ -207,17 +240,34 @@ impl ZapRequest {
 
         let version =
             String::from_utf8(frames[0].to_vec()).map_err(|_| "Invalid version string")?;
+        if version != ZAP_VERSION {
+            return Err("Unsupported ZAP request version".to_string());
+        }
         let request_id = String::from_utf8(frames[1].to_vec()).map_err(|_| "Invalid request ID")?;
         let domain = String::from_utf8(frames[2].to_vec()).map_err(|_| "Invalid domain string")?;
         let address =
             String::from_utf8(frames[3].to_vec()).map_err(|_| "Invalid address string")?;
+        if address.is_empty() {
+            return Err("ZAP address cannot be empty".to_string());
+        }
         let identity = frames[4].clone();
+        if identity.len() > 255 {
+            return Err("ZAP identity cannot exceed 255 bytes".to_string());
+        }
 
         let mechanism_str =
             String::from_utf8(frames[5].to_vec()).map_err(|_| "Invalid mechanism string")?;
         let mechanism = ZapMechanism::from_str(&mechanism_str).ok_or("Unknown mechanism")?;
 
         let credentials = frames[6..].to_vec();
+        let expected_credentials = match mechanism {
+            ZapMechanism::Null => 0,
+            ZapMechanism::Plain => 2,
+            ZapMechanism::Curve => 1,
+        };
+        if credentials.len() != expected_credentials {
+            return Err("ZAP credential count does not match mechanism".to_string());
+        }
 
         Ok(Self {
             version,
@@ -326,6 +376,9 @@ impl ZapResponse {
 
         let version =
             String::from_utf8(frames[0].to_vec()).map_err(|_| "Invalid version string")?;
+        if version != ZAP_VERSION {
+            return Err("Unsupported ZAP response version".to_string());
+        }
         let request_id = String::from_utf8(frames[1].to_vec()).map_err(|_| "Invalid request ID")?;
 
         let status_str =
@@ -334,6 +387,12 @@ impl ZapResponse {
 
         let status_text =
             String::from_utf8(frames[3].to_vec()).map_err(|_| "Invalid status text")?;
+        if status_text.len() > 255 {
+            return Err("ZAP status text cannot exceed 255 bytes".to_string());
+        }
+        if !frames[4].is_ascii() {
+            return Err("Invalid user ID".to_string());
+        }
         let user_id = String::from_utf8(frames[4].to_vec()).map_err(|_| "Invalid user ID")?;
 
         // Parse metadata (RFC 35 format)
@@ -425,6 +484,116 @@ mod tests {
     }
 
     #[test]
+    fn zap_request_decode_rejects_wrong_protocol_version() {
+        let frames = vec![
+            Bytes::from("0.9"),
+            Bytes::from("123"),
+            Bytes::from("test"),
+            Bytes::from("127.0.0.1:5555"),
+            Bytes::from("client1"),
+            Bytes::from("PLAIN"),
+            Bytes::from("admin"),
+            Bytes::from("password"),
+        ];
+
+        assert!(
+            ZapRequest::decode(&frames).is_err(),
+            "ZAP accepted an authentication request with an unsupported protocol version"
+        );
+    }
+
+    #[test]
+    fn zap_request_decode_rejects_null_credentials() {
+        let frames = vec![
+            Bytes::from(ZAP_VERSION),
+            Bytes::from("123"),
+            Bytes::from("test"),
+            Bytes::from("127.0.0.1"),
+            Bytes::new(),
+            Bytes::from("NULL"),
+            Bytes::from("unexpected"),
+        ];
+
+        assert!(ZapRequest::decode(&frames).is_err());
+    }
+
+    #[test]
+    fn zap_request_decode_accepts_empty_domain_as_default() {
+        let frames = vec![
+            Bytes::from(ZAP_VERSION),
+            Bytes::from("123"),
+            Bytes::new(),
+            Bytes::from("127.0.0.1"),
+            Bytes::new(),
+            Bytes::from("NULL"),
+        ];
+
+        let request = ZapRequest::decode(&frames).unwrap();
+        assert!(request.domain.is_empty());
+    }
+
+    #[test]
+    fn zap_request_decode_rejects_empty_address() {
+        let frames = vec![
+            Bytes::from(ZAP_VERSION),
+            Bytes::from("123"),
+            Bytes::from("test"),
+            Bytes::new(),
+            Bytes::new(),
+            Bytes::from("NULL"),
+        ];
+
+        assert!(ZapRequest::decode(&frames).is_err());
+    }
+
+    #[test]
+    fn zap_request_decode_rejects_overlong_identity() {
+        let frames = vec![
+            Bytes::from(ZAP_VERSION),
+            Bytes::from("123"),
+            Bytes::from("test"),
+            Bytes::from("127.0.0.1"),
+            Bytes::from(vec![0u8; 256]),
+            Bytes::from("NULL"),
+        ];
+
+        assert!(ZapRequest::decode(&frames).is_err());
+    }
+
+    #[test]
+    fn zap_request_decode_rejects_plain_extra_credentials() {
+        let frames = vec![
+            Bytes::from(ZAP_VERSION),
+            Bytes::from("123"),
+            Bytes::from("test"),
+            Bytes::from("127.0.0.1"),
+            Bytes::new(),
+            Bytes::from("PLAIN"),
+            Bytes::from("admin"),
+            Bytes::from("secret"),
+            Bytes::from("shadow"),
+        ];
+
+        assert!(ZapRequest::decode(&frames).is_err());
+    }
+
+    #[test]
+    fn zap_request_decode_rejects_curve_extra_credentials() {
+        let frames = vec![
+            Bytes::from(ZAP_VERSION),
+            Bytes::from("123"),
+            Bytes::from("test"),
+            Bytes::from("127.0.0.1"),
+            Bytes::new(),
+            Bytes::from("CURVE"),
+            Bytes::from(vec![0u8; 32]),
+            Bytes::from("shadow"),
+        ];
+
+        assert!(ZapRequest::decode(&frames).is_err());
+    }
+
+    #[test]
     fn test_zap_response_success() {
         let response = ZapResponse::success("123", "testuser");
         let frames = response.encode();
@@ -444,6 +613,51 @@ mod tests {
         assert_eq!(decoded.status_code, ZapStatus::Failure);
         assert_eq!(decoded.status_text, "Invalid credentials");
         assert!(decoded.user_id.is_empty());
+    }
+
+    #[test]
+    fn zap_response_decode_rejects_wrong_protocol_version() {
+        let frames = vec![
+            Bytes::from("0.9"),
+            Bytes::from("123"),
+            Bytes::from("200"),
+            Bytes::from("OK"),
+            Bytes::from("admin"),
+            Bytes::new(),
+        ];
+
+        assert!(
+            ZapResponse::decode(&frames).is_err(),
+            "ZAP accepted an authentication success response with an unsupported protocol version"
+        );
+    }
+
+    #[test]
+    fn zap_response_decode_rejects_non_ascii_user_id() {
+        let frames = vec![
+            Bytes::from(ZAP_VERSION),
+            Bytes::from("123"),
+            Bytes::from("200"),
+            Bytes::from("OK"),
+            Bytes::from_static(b"jos\xc3\xa9"),
+            Bytes::new(),
+        ];
+
+        assert!(ZapResponse::decode(&frames).is_err());
+    }
+
+    #[test]
+    fn zap_response_decode_rejects_overlong_status_text() {
+        let frames = vec![
+            Bytes::from(ZAP_VERSION),
+            Bytes::from("123"),
+            Bytes::from("200"),
+            Bytes::from("a".repeat(256)),
+            Bytes::from("testuser"),
+            Bytes::new(),
+        ];
+
+        assert!(ZapResponse::decode(&frames).is_err());
     }
 
     #[test]
