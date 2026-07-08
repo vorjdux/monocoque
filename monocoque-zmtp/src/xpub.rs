@@ -21,9 +21,9 @@
 //!                                      XPUB ────────┴──> Forwards subscriptions
 //! ```
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
+use monocoque_core::io::take_read_buffer;
 use monocoque_core::options::SocketOptions;
-use monocoque_core::prelude::IoArena;
 use monocoque_core::rt::{TcpListener, TcpStream};
 use monocoque_core::subscription::{SubscriptionEvent, SubscriptionTrie};
 use smallvec::SmallVec;
@@ -45,6 +45,7 @@ struct XPubSubscriber {
     stream: TcpStream,
     subscriptions: SubscriptionTrie,
     recv_buf: monocoque_core::buffer::SegmentedBuffer,
+    read_buf: BytesMut,
     decoder: crate::codec::ZmtpDecoder,
     curve_cipher: Option<crate::security::curve::CurveMessageCipher>,
 }
@@ -220,6 +221,7 @@ impl XPubSocket {
                         stream,
                         subscriptions: SubscriptionTrie::new(),
                         recv_buf: monocoque_core::buffer::SegmentedBuffer::new(),
+                        read_buf: BytesMut::new(),
                         decoder: self.options.max_msg_size.map_or_else(
                             crate::codec::ZmtpDecoder::new,
                             crate::codec::ZmtpDecoder::with_max_frame_size,
@@ -271,7 +273,6 @@ impl XPubSocket {
         use compio_io::AsyncRead;
         use monocoque_core::rt::timeout;
         use std::time::Duration;
-        let mut arena = IoArena::new();
 
         // Return pending events first
         if !self.pending_events.is_empty() {
@@ -287,15 +288,19 @@ impl XPubSocket {
             self.subscribers.len()
         );
         for sub in self.subscribers.values_mut() {
-            let slab = arena.alloc_mut(256);
+            // SAFETY: `slab` is passed straight to `read`; the data arm below
+            // truncates it to `n` before freezing, and every other arm drops it
+            // without inspecting its contents.
+            let slab = unsafe { take_read_buffer(&mut sub.read_buf, 256) };
 
             // Use a short timeout to avoid blocking
             let read_result = timeout(Duration::from_millis(1), sub.stream.read(slab)).await;
 
             match read_result {
-                Ok(BufResult(Ok(n), slab)) if n > 0 => {
+                Ok(BufResult(Ok(n), mut slab)) if n > 0 => {
                     trace!("[XPUB] Received {} bytes from subscriber {}", n, sub.id);
                     debug_assert!(n <= 256);
+                    slab.truncate(n);
                     sub.recv_buf.push(slab.freeze());
 
                     // Drain all complete ZMTP frames from the buffer

@@ -1,7 +1,6 @@
 //! Monocoque Core
 //!
 //! This crate contains the runtime-agnostic core building blocks:
-//! - Pinned / io_uring-safe allocation (`alloc`)
 //! - Zero-copy segmented buffer (`buffer`)
 //! - Shared owned-buffer I/O helpers for the runtime backends (`io`)
 //! - TCP utilities for high-performance networking (`tcp`)
@@ -33,7 +32,6 @@
 #![allow(clippy::needless_continue)] // Continue statements can improve readability
 #![allow(clippy::manual_let_else)] // Match expressions can be clearer in some contexts
 #![allow(clippy::match_same_arms)]
-pub mod alloc;
 pub mod backpressure;
 pub mod buffer;
 pub mod config;
@@ -65,7 +63,6 @@ pub mod pubsub {
 // Optional: a small prelude to make downstream crates ergonomic.
 // Keep it minimal to avoid API lock-in.
 pub mod prelude {
-    pub use crate::alloc::{IoArena, SlabMut};
     pub use crate::backpressure::{BytePermits, NoOpPermits, Permit, SemaphorePermits};
     pub use crate::buffer::SegmentedBuffer;
     pub use crate::endpoint::Endpoint;

@@ -19,10 +19,48 @@
 //! opts back into `unsafe_code` that the crate otherwise denies.
 #![allow(unsafe_code)]
 
-use compio_buf::{BufResult, IoBufMut, IoVectoredBuf};
+use bytes::BytesMut;
+use compio_buf::{BufResult, IoBufMut, IoVectoredBuf, SetBufInit};
 use smallvec::SmallVec;
 use std::io::{self, IoSlice};
 use std::mem::MaybeUninit;
+
+/// Size of a read scratch slab.
+///
+/// Doubles as the ceiling `read_buffer_size` clamps to and the minimum capacity
+/// [`take_read_buffer`] grows a stash to. Equal to the old arena page size, so
+/// the per-read buffer bound and its resident footprint are unchanged.
+pub const READ_SLAB_SIZE: usize = 64 * 1024;
+
+/// Take a read-sized scratch buffer from the front of `stash`, leaving the
+/// remaining tail in `stash` to hand out on the next call.
+///
+/// This replaces the old bump-pointer read arena: successive reads carve
+/// `read_size` chunks off one `READ_SLAB_SIZE` allocation until it is used up,
+/// then a fresh slab is allocated. Freezing a returned buffer shares that
+/// slab's allocation (via `bytes` refcounting), so a lagging consumer pins the
+/// slab exactly as the arena page did.
+///
+/// # Safety
+///
+/// The returned buffer reports `read_size` initialized bytes that are in fact
+/// uninitialized, so it can be handed to an owned-buffer read without
+/// zero-filling first. The caller must pass it straight to a read and
+/// `truncate` it to the number of bytes actually read before freezing,
+/// inspecting, or otherwise exposing its contents.
+pub unsafe fn take_read_buffer(stash: &mut BytesMut, read_size: usize) -> BytesMut {
+    if stash.capacity() < read_size {
+        *stash = BytesMut::with_capacity(read_size.max(READ_SLAB_SIZE));
+    }
+    if stash.len() < read_size {
+        // SAFETY: `read_size` is within capacity per the check above. The
+        // function's contract requires the caller to overwrite these bytes via
+        // the read and truncate to the real count before exposing them.
+        unsafe { stash.set_buf_init(read_size) };
+    }
+    let tail = stash.split_off(read_size);
+    std::mem::replace(stash, tail)
+}
 
 /// Read into an owned buffer's spare capacity, then declare the bytes written
 /// as initialized.
@@ -87,4 +125,48 @@ where
         .map(|b| IoSlice::new(b.as_slice()))
         .collect();
     f(&slices)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn take_read_buffer_over_slab_size_does_not_panic_or_corrupt() {
+        // Regression (migrated from the old arena): a read_size larger than the
+        // slab size once overflowed the backing page and panicked in freeze()
+        // with "range end out of bounds". take_read_buffer must grow to fit.
+        let mut stash = BytesMut::with_capacity(READ_SLAB_SIZE);
+        let read_size = READ_SLAB_SIZE + 1024;
+        // SAFETY: bookkeeping-only test; we truncate to the full length and
+        // never rely on the (uninitialized) contents.
+        let mut buf = unsafe { take_read_buffer(&mut stash, read_size) };
+        assert_eq!(buf.len(), read_size);
+        buf.truncate(read_size);
+        assert_eq!(buf.freeze().len(), read_size);
+    }
+
+    #[test]
+    fn take_read_buffer_splits_front_and_keeps_tail() {
+        let mut stash = BytesMut::with_capacity(READ_SLAB_SIZE);
+        // SAFETY: bookkeeping-only test; contents are never inspected.
+        let buf = unsafe { take_read_buffer(&mut stash, 256) };
+        assert_eq!(buf.len(), 256);
+        assert_eq!(stash.len(), 0);
+        assert!(stash.capacity() >= READ_SLAB_SIZE - 256);
+    }
+
+    #[test]
+    fn take_read_buffer_reuses_one_slab_across_reads() {
+        // Successive sub-slab reads carve from the same allocation, the way the
+        // bump-pointer arena shared a page: the stash tail shrinks by exactly
+        // read_size each time, with no fresh 64 KiB allocation.
+        let mut stash = BytesMut::with_capacity(READ_SLAB_SIZE);
+        // SAFETY: bookkeeping-only test; contents are never inspected.
+        let _first = unsafe { take_read_buffer(&mut stash, 4096) };
+        assert_eq!(stash.capacity(), READ_SLAB_SIZE - 4096);
+        // SAFETY: bookkeeping-only test.
+        let _second = unsafe { take_read_buffer(&mut stash, 4096) };
+        assert_eq!(stash.capacity(), READ_SLAB_SIZE - 8192);
+    }
 }

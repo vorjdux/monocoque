@@ -50,7 +50,7 @@
 //! # }
 //! ```
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use flume::{Receiver, Sender};
 use monocoque_core::options::SocketOptions;
 use monocoque_core::rt::{OwnedReadHalf, OwnedWriteHalf, TcpListener};
@@ -86,17 +86,21 @@ async fn peer_reader(
 ) {
     use compio_buf::BufResult;
     use compio_io::AsyncRead;
-    use monocoque_core::alloc::IoArena;
+    use monocoque_core::io::take_read_buffer;
 
     // Connection notification
     let _ = inbound
         .send_async(vec![routing_id.clone(), Bytes::new(), Bytes::new()])
         .await;
 
-    let mut arena = IoArena::new();
+    // Lazily grown on the first read, so a connected-but-silent peer holds no
+    // read slab.
+    let mut read_buf = BytesMut::new();
     loop {
-        let slab = arena.alloc_mut(read_buffer_size);
-        let BufResult(result, slab) = reader.read(slab).await;
+        // SAFETY: `buf` is passed straight to `read`; the data path truncates
+        // it to `n` before freezing, and EOF/error drop it without reading it.
+        let buf = unsafe { take_read_buffer(&mut read_buf, read_buffer_size) };
+        let BufResult(result, mut buf) = reader.read(buf).await;
         match result {
             Ok(0) => {
                 debug!("[STREAM] Peer {:?} disconnected (EOF)", routing_id);
@@ -104,7 +108,8 @@ async fn peer_reader(
             }
             Ok(n) => {
                 debug_assert!(n <= read_buffer_size);
-                let data = slab.freeze();
+                buf.truncate(n);
+                let data = buf.freeze();
                 trace!("[STREAM] Received {} bytes from peer {:?}", n, routing_id);
                 let msg = vec![routing_id.clone(), Bytes::new(), data];
                 if inbound.send_async(msg).await.is_err() {
