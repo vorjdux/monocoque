@@ -65,33 +65,14 @@ impl SubscriptionTrie {
     /// Check if a topic matches any subscription
     ///
     /// Returns true if the topic should be delivered.
-    /// O(log N) using `BTreeSet` range lookup.
+    /// Checks only prefixes of the topic, with one `BTreeSet` lookup per prefix.
     #[must_use]
     pub fn matches(&self, topic: &[u8]) -> bool {
         if self.prefixes.is_empty() {
             return false;
         }
 
-        // Check empty prefix first (matches everything)
-        if self.prefixes.contains(&[][..]) {
-            return true;
-        }
-
-        // Find the largest stored prefix <= topic.
-        // Any stored prefix that is a true prefix of `topic` must be <= topic
-        // in lexicographic order, so the best candidate is the largest such key.
-        use std::ops::Bound;
-        if let Some(candidate) = self
-            .prefixes
-            .range::<Vec<u8>, _>((Bound::Unbounded, Bound::Included(&topic.to_vec())))
-            .next_back()
-        {
-            if topic.starts_with(candidate.as_slice()) {
-                return true;
-            }
-        }
-
-        false
+        (0..=topic.len()).any(|len| self.prefixes.contains(&topic[..len]))
     }
 
     /// Get all subscriptions as a `Vec<Subscription>`.
@@ -119,6 +100,16 @@ impl SubscriptionTrie {
     pub fn clear(&mut self) {
         self.prefixes.clear();
     }
+}
+
+/// Check whether a topic matches any subscription prefix.
+///
+/// An empty prefix matches all topics. An empty prefix list matches none.
+#[must_use]
+pub fn topic_matches_prefixes(topic: &[u8], prefixes: &[Bytes]) -> bool {
+    prefixes
+        .iter()
+        .any(|prefix| prefix.is_empty() || topic.starts_with(prefix))
 }
 
 /// Subscription event for XPUB socket
@@ -249,6 +240,15 @@ mod tests {
         assert!(!trie.matches(b"topic"));
         assert!(trie.matches(b"topic."));
         assert!(trie.matches(b"topic.sub"));
+    }
+
+    #[test]
+    fn test_trie_checks_broader_prefix_after_non_matching_candidate() {
+        let mut trie = SubscriptionTrie::new();
+        trie.subscribe(Bytes::from_static(b"a"));
+        trie.subscribe(Bytes::from_static(b"aa~"));
+
+        assert!(trie.matches(b"ab"));
     }
 
     #[test]

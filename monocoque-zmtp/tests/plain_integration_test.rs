@@ -18,13 +18,13 @@ fn test_plain_auth_options_configuration() {
 
     assert!(server_options.plain_server);
     assert!(server_options.plain_username.is_none());
-    assert!(server_options.plain_password.is_none());
+    assert!(server_options.plain_password().is_none());
 
     let client_options = SocketOptions::new().with_plain_credentials("testuser", "testpass");
 
     assert!(!client_options.plain_server);
     assert_eq!(client_options.plain_username, Some("testuser".to_string()));
-    assert_eq!(client_options.plain_password, Some("testpass".to_string()));
+    assert_eq!(client_options.plain_password(), Some("testpass"));
 }
 
 #[test]

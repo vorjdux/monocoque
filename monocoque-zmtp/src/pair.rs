@@ -165,7 +165,7 @@ where
     /// Set socket options (builder-style).
     #[inline]
     pub fn set_options(&mut self, options: SocketOptions) {
-        self.base.options = options;
+        self.base.set_options(options);
     }
 
     /// Get the socket type.

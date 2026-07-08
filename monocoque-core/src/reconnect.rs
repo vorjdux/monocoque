@@ -72,7 +72,10 @@ impl ReconnectState {
 
         // Calculate next interval with exponential backoff
         self.attempt += 1;
-        self.current_interval = self.base_interval * (1_u32 << self.attempt.min(10));
+        self.current_interval = self
+            .base_interval
+            .checked_mul(1_u32 << self.attempt.min(10))
+            .unwrap_or(self.max_interval);
 
         // Cap at max interval
         if self.current_interval > self.max_interval {
@@ -192,6 +195,20 @@ mod tests {
         // Should be capped at max
         assert_eq!(state.next_delay(), Duration::from_millis(500));
         assert_eq!(state.next_delay(), Duration::from_millis(500));
+    }
+
+    #[test]
+    fn test_next_delay_caps_before_duration_overflow() {
+        let options = SocketOptions::default()
+            .with_reconnect_ivl(Duration::MAX)
+            .with_reconnect_ivl_max(Duration::from_secs(1));
+
+        let mut state = ReconnectState::new(&options);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            state.next_delay();
+        }));
+
+        assert!(result.is_ok());
     }
 
     #[test]

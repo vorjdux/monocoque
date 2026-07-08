@@ -33,9 +33,11 @@ fuzz_target!(|data: &[u8]| {
         // Derived public key must also be valid (no panic).
         let _ = derived_public.as_bytes();
 
-        // ECDH with fuzz-supplied key as peer  -  must not panic, only return bytes.
+        // ECDH with fuzz-supplied key as peer  -  must not panic, only return a result.
         let shared = secret_key.diffie_hellman(&public_key);
-        assert_eq!(shared.len(), CURVE_KEY_SIZE);
+        if let Ok(shared) = shared {
+            assert_eq!(shared.len(), CURVE_KEY_SIZE);
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -114,7 +116,17 @@ fuzz_target!(|data: &[u8]| {
         let bob_shared = bob.secret.diffie_hellman(&alice.public);
 
         // ECDH must be commutative.
-        assert_eq!(alice_shared, bob_shared, "ECDH shared secret must be symmetric");
-        assert_eq!(alice_shared.len(), CURVE_KEY_SIZE);
+        match (alice_shared, bob_shared) {
+            (Ok(alice_shared), Ok(bob_shared)) => {
+                assert_eq!(alice_shared, bob_shared, "ECDH shared secret must be symmetric");
+                assert_eq!(alice_shared.len(), CURVE_KEY_SIZE);
+            }
+            (Err(_), Err(_)) => {}
+            (alice_result, bob_result) => {
+                panic!(
+                    "ECDH results diverged between peers: alice={alice_result:?} bob={bob_result:?}"
+                );
+            }
+        }
     }
 });

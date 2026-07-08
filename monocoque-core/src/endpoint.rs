@@ -81,6 +81,9 @@ impl FromStr for Endpoint {
         } else if let Some(path) = s.strip_prefix("ipc://") {
             #[cfg(unix)]
             {
+                if !path.starts_with('/') {
+                    return Err(EndpointError::InvalidScheme(s.to_string()));
+                }
                 Ok(Self::Ipc(PathBuf::from(path)))
             }
             #[cfg(not(unix))]
@@ -154,6 +157,13 @@ mod tests {
         let endpoint = Endpoint::parse("ipc:///tmp/test.sock").unwrap();
         assert!(matches!(endpoint, Endpoint::Ipc(_)));
         assert_eq!(endpoint.to_string(), "ipc:///tmp/test.sock");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_invalid_ipc_relative_path() {
+        let result = Endpoint::parse("ipc://relative.sock");
+        assert!(matches!(result, Err(EndpointError::InvalidScheme(_))));
     }
 
     #[test]

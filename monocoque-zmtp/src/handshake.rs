@@ -158,6 +158,31 @@ where
         );
         return Err(ZmtpError::Protocol);
     }
+    if greeting_buf[9] != 0x7F {
+        warn!(
+            "[HANDSHAKE] ZMTP greeting: expected signature byte 0x7f at offset 9, got 0x{:02x}",
+            greeting_buf[9]
+        );
+        return Err(ZmtpError::Protocol);
+    }
+
+    let peer_major = greeting_buf[10];
+    if mechanism != SecurityMechanism::Null && peer_major != 3 {
+        warn!(
+            "[HANDSHAKE] non-NULL mechanism {:?} cannot negotiate with ZMTP major version {}",
+            mechanism, peer_major
+        );
+        return Err(ZmtpError::Protocol);
+    }
+
+    let peer_mechanism = parse_greeting_mechanism(&greeting_buf[12..32])?;
+    if peer_mechanism != mechanism {
+        warn!(
+            "[HANDSHAKE] security mechanism mismatch: local {:?}, peer {:?}",
+            mechanism, peer_mechanism
+        );
+        return Err(ZmtpError::Protocol);
+    }
 
     // Step 3: Run security-mechanism-specific exchange (between greeting and READY)
     let curve_cipher: Option<crate::security::curve::CurveMessageCipher> = None;
@@ -466,8 +491,21 @@ fn build_greeting_with_mechanism(mechanism: SecurityMechanism, options: &SocketO
     b.freeze()
 }
 
+fn parse_greeting_mechanism(field: &[u8]) -> Result<SecurityMechanism, ZmtpError> {
+    let len = field
+        .iter()
+        .position(|&byte| byte == 0)
+        .unwrap_or(field.len());
+    match &field[..len] {
+        b"NULL" => Ok(SecurityMechanism::Null),
+        b"PLAIN" => Ok(SecurityMechanism::Plain),
+        b"CURVE" => Ok(SecurityMechanism::Curve),
+        _ => Err(ZmtpError::Protocol),
+    }
+}
+
 /// Parse READY command to extract socket type and identity
-fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), ZmtpError> {
+pub(crate) fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), ZmtpError> {
     // READY format:
     // - 1 byte: command name length
     // - N bytes: "READY"
@@ -547,9 +585,15 @@ fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), Zmtp
 
         match key {
             b"Socket-Type" => {
+                if socket_type.is_some() {
+                    return Err(ZmtpError::Protocol);
+                }
                 socket_type = Some(parse_socket_type(&body[value_start..value_end])?);
             }
             b"Identity" => {
+                if identity.is_some() {
+                    return Err(ZmtpError::Protocol);
+                }
                 // ZMQ spec limits identities to 255 bytes.
                 if value_len > 255 {
                     warn!(
@@ -595,5 +639,244 @@ fn parse_socket_type(value: &[u8]) -> Result<SocketType, ZmtpError> {
             );
             Err(ZmtpError::Protocol)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::BytesMut;
+    use compio_buf::BufResult;
+    use monocoque_core::options::SocketOptions;
+    use monocoque_core::rt::{LocalRuntime, TcpListener, TcpStream};
+    use monocoque_core::timeout::{read_exact_with_timeout, write_all_with_timeout};
+
+    const TEST_TIMEOUT: Duration = Duration::from_secs(1);
+
+    fn ready_body(properties: &[(&[u8], &[u8])]) -> Bytes {
+        let mut body = Vec::new();
+        body.extend_from_slice(b"\x05READY");
+
+        for (key, value) in properties {
+            body.push(key.len() as u8);
+            body.extend_from_slice(key);
+            body.extend_from_slice(&(value.len() as u32).to_be_bytes());
+            body.extend_from_slice(value);
+        }
+
+        Bytes::from(body)
+    }
+
+    #[test]
+    fn parse_ready_rejects_duplicate_socket_type_property() {
+        let body = ready_body(&[(b"Socket-Type", b"DEALER"), (b"Socket-Type", b"ROUTER")]);
+
+        assert!(matches!(
+            parse_ready_command(&body),
+            Err(ZmtpError::Protocol)
+        ));
+    }
+
+    #[test]
+    fn parse_ready_rejects_duplicate_identity_property() {
+        let body = ready_body(&[
+            (b"Socket-Type", b"DEALER"),
+            (b"Identity", b"trusted"),
+            (b"Identity", b"shadow"),
+        ]);
+
+        assert!(matches!(
+            parse_ready_command(&body),
+            Err(ZmtpError::Protocol)
+        ));
+    }
+
+    async fn read_client_greeting(stream: &mut TcpStream) {
+        let greeting = [0u8; 64];
+        let BufResult(read_res, _) = read_exact_with_timeout(stream, greeting, Some(TEST_TIMEOUT))
+            .await
+            .unwrap();
+        read_res.unwrap();
+    }
+
+    async fn write_greeting(stream: &mut TcpStream, greeting: Vec<u8>) {
+        let BufResult(write_res, _) = write_all_with_timeout(stream, greeting, Some(TEST_TIMEOUT))
+            .await
+            .unwrap();
+        write_res.unwrap();
+    }
+
+    async fn maybe_read_plain_hello(stream: &mut TcpStream) -> Option<[u8; 6]> {
+        let header = [0u8; 6];
+        let Ok(BufResult(read_res, header)) =
+            read_exact_with_timeout(stream, header, Some(TEST_TIMEOUT)).await
+        else {
+            return None;
+        };
+        read_res.ok()?;
+        Some(header)
+    }
+
+    async fn maybe_complete_ready_exchange(stream: &mut TcpStream) {
+        let header = [0u8; 2];
+        let Ok(BufResult(read_res, header)) =
+            read_exact_with_timeout(stream, header, Some(TEST_TIMEOUT)).await
+        else {
+            return;
+        };
+        if read_res.is_err() {
+            return;
+        }
+
+        let body = vec![0u8; header[1] as usize];
+        let Ok(BufResult(read_res, _)) =
+            read_exact_with_timeout(stream, body, Some(TEST_TIMEOUT)).await
+        else {
+            return;
+        };
+        if read_res.is_err() {
+            return;
+        }
+
+        let ready_body = crate::utils::build_ready("PAIR", None);
+        let ready_frame = crate::utils::encode_frame(crate::utils::FLAG_COMMAND, &ready_body);
+        let Ok(BufResult(write_res, _)) =
+            write_all_with_timeout(stream, ready_frame.to_vec(), Some(TEST_TIMEOUT)).await
+        else {
+            return;
+        };
+        let _ = write_res;
+    }
+
+    #[test]
+    fn ready_parser_rejects_truncated_property_after_socket_type() {
+        let mut body = BytesMut::from(crate::utils::build_ready("PAIR", None).as_ref());
+        body.extend_from_slice(&[8]);
+        body.extend_from_slice(b"Identity");
+        body.extend_from_slice(&5u32.to_be_bytes());
+        body.extend_from_slice(b"a");
+
+        assert!(
+            parse_ready_command(&body.freeze()).is_err(),
+            "READY parser accepted a command with truncated trailing identity metadata"
+        );
+    }
+
+    #[test]
+    fn handshake_rejects_peer_greeting_with_invalid_signature_tail() {
+        LocalRuntime::new().unwrap().block_on(async {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+
+            let peer_task = monocoque_core::rt::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                read_client_greeting(&mut stream).await;
+
+                let mut bad_greeting =
+                    build_greeting_with_mechanism(SecurityMechanism::Null, &SocketOptions::new())
+                        .to_vec();
+                bad_greeting[9] = 0x00;
+                write_greeting(&mut stream, bad_greeting).await;
+                maybe_complete_ready_exchange(&mut stream).await;
+            });
+
+            let mut stream = TcpStream::connect(addr).await.unwrap();
+            let result = perform_handshake_with_options(
+                &mut stream,
+                SocketType::Req,
+                None,
+                Some(TEST_TIMEOUT),
+                &SocketOptions::new(),
+            )
+            .await;
+
+            assert!(
+                result.is_err(),
+                "handshake accepted a peer greeting with an invalid ZMTP signature tail"
+            );
+
+            let _ = peer_task.await;
+        });
+    }
+
+    #[test]
+    fn non_null_handshake_rejects_peer_greeting_with_unsupported_major_version() {
+        LocalRuntime::new().unwrap().block_on(async {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+
+            let peer_task = monocoque_core::rt::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+
+                read_client_greeting(&mut stream).await;
+
+                let mut bad_greeting = build_greeting_with_mechanism(
+                    SecurityMechanism::Plain,
+                    &SocketOptions::new().with_plain_server(true),
+                )
+                .to_vec();
+                bad_greeting[10] = 2;
+                write_greeting(&mut stream, bad_greeting).await;
+
+                assert!(
+                    maybe_read_plain_hello(&mut stream).await.as_ref() != Some(b"\x05HELLO"),
+                    "PLAIN client sent security commands to a ZMTP 2.x peer"
+                );
+            });
+
+            let mut stream = TcpStream::connect(addr).await.unwrap();
+            let options = SocketOptions::new().with_plain_credentials("alice", "secret");
+            let result = perform_handshake_with_options(
+                &mut stream,
+                SocketType::Req,
+                None,
+                Some(TEST_TIMEOUT),
+                &options,
+            )
+            .await;
+
+            assert!(
+                result.is_err(),
+                "non-NULL handshake accepted an unsupported ZMTP major version during security negotiation"
+            );
+
+            let _ = peer_task.await;
+        });
+    }
+
+    #[test]
+    fn plain_client_does_not_send_credentials_to_peer_advertising_null() {
+        LocalRuntime::new().unwrap().block_on(async {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+
+            let peer_task = monocoque_core::rt::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+
+                read_client_greeting(&mut stream).await;
+
+                let peer_greeting =
+                    build_greeting_with_mechanism(SecurityMechanism::Null, &SocketOptions::new());
+                write_greeting(&mut stream, peer_greeting.to_vec()).await;
+
+                assert!(
+                    maybe_read_plain_hello(&mut stream).await.as_ref() != Some(b"\x05HELLO"),
+                    "PLAIN client sent credentials to a peer that advertised NULL security"
+                );
+            });
+
+            let mut stream = TcpStream::connect(addr).await.unwrap();
+            let options = SocketOptions::new().with_plain_credentials("alice", "secret");
+            let _ = perform_handshake_with_options(
+                &mut stream,
+                SocketType::Req,
+                None,
+                Some(TEST_TIMEOUT),
+                &options,
+            )
+            .await;
+
+            let _ = peer_task.await;
+        });
     }
 }
