@@ -85,7 +85,7 @@ PUB/SUB pattern results, and tuning guidance.
 
 ```toml
 [dependencies]
-monocoque-rs = { version = "0.1", features = ["zmq"] }
+monocoque-rs = { version = "0.2", features = ["zmq"] }
 # Drives the default io_uring backend and provides the #[compio::main] macro.
 # To run on tokio or smol instead, see "Runtime backends" below.
 compio = { version = "0.10", features = ["runtime", "macros"] }
@@ -149,13 +149,13 @@ or smol instead. Pick one backend at compile time:
 
 ```toml
 # Default: native io_uring via compio
-monocoque-rs = { version = "0.1", features = ["zmq"] }
+monocoque-rs = { version = "0.2", features = ["zmq"] }
 
 # Or run on tokio
-monocoque-rs = { version = "0.1", default-features = false, features = ["runtime-tokio", "zmq"] }
+monocoque-rs = { version = "0.2", default-features = false, features = ["runtime-tokio", "zmq"] }
 
 # Or run on smol
-monocoque-rs = { version = "0.1", default-features = false, features = ["runtime-smol", "zmq"] }
+monocoque-rs = { version = "0.2", default-features = false, features = ["runtime-smol", "zmq"] }
 ```
 
 The three backends are mutually exclusive. The protocol layer, frame codec and
@@ -198,18 +198,18 @@ cargo run --example runtime_backends --no-default-features --features runtime-sm
 
 ## Safety
 
-`unsafe` is confined to a handful of small, well-contained spots, each marked with `#![allow(unsafe_code)]`:
+`unsafe` is confined to a handful of small, well-contained spots, each behind a documented contract:
 
-- `monocoque-core/src/alloc.rs` - the arena allocator that provides pinned, io_uring-safe buffers.
-- `monocoque-core/src/rt.rs` - the tokio stream adapter, which reads into an owned buffer's spare capacity and declares the read length.
-- `monocoque-core/src/tcp.rs` - TCP socket tuning (nodelay, keepalive) through the raw socket handle.
+- `monocoque-core/src/io.rs` - the owned-buffer read helpers shared by every backend. `fill_read` owns the workspace's single `set_buf_init` call (declaring how many bytes a read initialized in a buffer's spare capacity), and `take_read_buffer` hands out read-sized slabs from a reused `BytesMut`. The socket read paths call `take_read_buffer` in documented `unsafe` blocks.
+- `monocoque-core/src/tcp.rs` (and a few socket-tuning call sites) - TCP socket tuning (nodelay, keepalive) through the raw socket handle.
 - `monocoque-zmtp/src/inproc_stream.rs` - the in-process stream adapter that fills an owned buffer.
 
 Everything else is safe Rust.
 
 Memory invariants:
 - Buffers are never reused while referenced (tracked via `Bytes` refcounts)
-- `SlabMut` -> `Bytes` is a one-way transition; no mutation after freeze
+- A read slab is frozen to `Bytes` in a one-way transition; no mutation after freeze
+- The read slab is allocated lazily on the first read, so an idle socket holds none
 - PUB fanout is refcount-based (`Bytes::clone()`), never copies payloads
 
 ## Development

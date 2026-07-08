@@ -1,8 +1,42 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 - 2026-07-08
+
+This release reworks the I/O core. The owned-buffer read path and the
+read-buffer allocation now live in one `monocoque-core::io` module, the
+hand-rolled read arena is gone, and per-message allocations on the single-frame
+hot path are eliminated. Three CI gates lock the allocation, footprint, and
+instruction-count budgets in place.
+
+### 💥 Breaking Changes
+
+#### Removed the `alloc` module (`IoArena`, `SlabMut`)
+
+`monocoque-core::alloc`, including `IoArena` and `SlabMut`, has been removed,
+along with their `monocoque-core::prelude` re-exports. The read path no longer
+uses a bump-pointer arena; it takes read-sized buffers from a reused `BytesMut`
+slab via `monocoque-core::io::take_read_buffer`. See `docs/MIGRATION.md`. The
+public socket API is unchanged, so most users are unaffected: these were internal
+buffer plumbing types.
 
 ### ✨ Features
+
+#### Consolidated owned-buffer I/O helpers in `core::io`
+
+A new `monocoque-core::io` module holds the helpers every runtime backend shares:
+`fill_read` (which owns the workspace's single `set_buf_init` unsafe behind one
+documented contract), `with_vectored_slices` (the vectored-write slice builder),
+and `take_read_buffer` plus `READ_SLAB_SIZE` (the read-slab bookkeeping that
+replaced the arena). The read slab is grown lazily on the first read, so an idle
+socket holds none. The tokio and smol backends dropped their own
+`#![allow(unsafe_code)]` now that the owned-buffer unsafe lives in one place.
+
+#### Zero-allocation single-frame send
+
+`send_one(frame: Bytes)` on the PUSH path encodes one frame into the reused write
+buffer without the intermediate `Vec` that `send(vec![frame])` allocates on every
+call. Combined with `recv_into`, a PUSH/PULL hot path now allocates nothing per
+message.
 
 #### Optional smol runtime backend
 
@@ -12,6 +46,27 @@ tokio backends. It runs the same socket stack and exposes the same public API,
 driven by a single-threaded smol `LocalExecutor`. The read path bridges smol's
 readiness-based I/O to the compio owned-buffer traits with no extra copy and no
 zero-fill. All examples, tests, and the runtime_backends demo run on it.
+
+### ⚡ Performance
+
+Allocation elision across the framing and socket-role code, plus the read-slab
+rework, cut per-message allocations to zero on the single-frame path and dropped
+peak RSS under fan-in load by roughly a quarter. Small-payload coalesced
+throughput improved 10 to 24 percent across the compio, tokio, and smol backends;
+larger payloads and latency stayed flat within bench noise. The allocation-elision
+work is Mika Cohen's design.
+
+### 🧪 Testing
+
+Three frugality gates guard the budgets going forward:
+
+- `tests/hotpath_alloc.rs` asserts the single-frame `send_one` + `recv_into` path
+  makes no per-message allocation, via a counting global allocator.
+- `tests/socket_footprint_bound.rs` bounds the idle per-socket resident memory
+  across many connected pairs.
+- `benches/instr_hotpath.rs` counts instructions on the IO-free CPU hot path under
+  callgrind and fails a run whose count rises more than 5% over the baseline; a new
+  CI workflow installs valgrind and runs it.
 
 ## 0.1.8 - 2026-07-03
 

@@ -511,8 +511,10 @@ the full benefit; older kernels fall back to thread-pool I/O.
 - **SQPOLL**: Enables kernel-side submission polling, eliminating `io_uring_enter`
   syscalls at the cost of a dedicated CPU core. Useful only for
   sustained > 500 K msg/s workloads.
-- **Fixed buffers**: compio's arena allocator already pins buffers for io_uring
-  registered buffers. No extra work needed.
+- **Fixed buffers**: reads go through a reused per-socket `BytesMut` slab
+  (`core::io::take_read_buffer`), so the read path already avoids a fresh
+  allocation on most reads. Registering those slabs as io_uring fixed buffers is
+  future work; see the roadmap.
 
 ---
 

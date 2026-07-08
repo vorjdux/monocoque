@@ -41,37 +41,62 @@ This is the same model used by:
 
 Unsafe code appears **only** in Phase 0 components:
 
-| Module                 | Purpose                   | Unsafe? |
-| ---------------------- | ------------------------- | ------- |
-| `SlabMut`              | stable, pinned IO buffers | ✅      |
-| `IoArena`              | allocation reuse          | ✅      |
-| `compio::IoBuf*` impls | kernel IO                 | ✅      |
-| ZMTP codec             | framing                   | ❌      |
-| Session logic          | state machine             | ❌      |
-| Router hub             | routing                   | ❌      |
-| PUB/SUB index          | matching                  | ❌      |
+| Module                     | Purpose                        | Unsafe? |
+| -------------------------- | ------------------------------ | ------- |
+| `core::io::fill_read`      | owned-buffer `set_buf_init`    | ✅      |
+| `core::io::take_read_buffer` | carve read slab off the stash | ✅      |
+| `compio::IoBuf*` impls     | kernel IO                      | ✅      |
+| ZMTP codec                 | framing                        | ❌      |
+| Session logic              | state machine                  | ❌      |
+| Router hub                 | routing                        | ❌      |
+| PUB/SUB index              | matching                       | ❌      |
 
 Everything above Phase 0 is **100% safe Rust**.
 
 ---
 
-## 4. The SlabMut Contract (The Most Critical Part)
+## 4. The `core::io` Read-Buffer Contract (The Most Critical Part)
 
-### What SlabMut guarantees
+The read path no longer uses a pinned arena. It uses a reused `BytesMut` slab
+and two small helpers in `monocoque-core/src/io.rs`.
 
-1. Memory address **never moves**
-2. Memory outlives any in-flight IO
-3. Kernel has exclusive access during syscall
-4. Rust regains access only after completion
+### What `fill_read` guarantees
+
+`fill_read` is the one place in the workspace that calls
+`IoBufMut::set_buf_init`. It hands a backend the buffer's uninitialized spare
+capacity (`&mut [MaybeUninit<u8>]`), the backend reads into the front of that
+slice and returns the byte count, and `fill_read` then declares exactly that
+many bytes initialized. Every runtime backend (compio native, tokio adapter,
+smol adapter) routes its read through this single call, so the lone owned-buffer
+`unsafe` lives behind one documented contract instead of a copy per backend. The
+tokio and smol backend files no longer carry their own `#![allow(unsafe_code)]`.
+
+1. Only the bytes the backend actually read are ever declared initialized
+2. The buffer stays owned across the read (no aliasing during the syscall)
+3. The uninitialized tail is never exposed to safe code
+
+### What `take_read_buffer` guarantees
+
+`take_read_buffer` carves a `read_size` buffer off the front of a reused
+`BytesMut` stash, growing a fresh `READ_SLAB_SIZE` (64 KiB) slab when the tail
+runs out. It is `unsafe` because the returned buffer reports `read_size`
+initialized bytes that are in fact uninitialized, so it can go straight to a read
+without zero-filling. The caller must pass it directly to a read and `truncate`
+it to the bytes actually read before freezing. Freezing a returned buffer shares
+that slab's allocation through `bytes` refcounting, so a lagging consumer pins
+the slab exactly as the old arena page did.
+
+The socket read paths (`monocoque-zmtp/src/base.rs`, `stream.rs`, `xpub.rs`)
+call `take_read_buffer` inside documented `unsafe {}` blocks.
 
 ### How this is enforced
 
--   Allocation happens once
--   Memory stored behind `Arc`
--   No `realloc`
--   No `Vec::push`
--   No capacity growth
--   No aliasing mutable references
+-   The read buffer is a reused `BytesMut` slab, allocated lazily on the first
+    read, so an idle socket holds no read buffer
+-   Successive reads carve `read_size` chunks off the current slab until it is
+    used up, then a fresh 64 KiB slab is allocated
+-   Read buffer size is clamped to `READ_SLAB_SIZE`
+-   No aliasing mutable references: the buffer is owned across the read
 
 ### Why this is sound
 
@@ -158,7 +183,7 @@ Every connection has:
 
 -   Its own stream
 -   Its own decoder
--   Its own slab slices
+-   Its own read slab
 -   Its own session state
 
 No shared mutable state across sockets.
@@ -197,7 +222,7 @@ This eliminates an entire class of bugs seen in:
 -   ❌ No `unsafe` in protocol logic
 -   ❌ No `static mut`
 -   ❌ No shared mutable global state
--   ❌ No raw pointer arithmetic outside Slab
+-   ❌ No raw pointer arithmetic outside `core::io`
 -   ❌ No transmute
 -   ❌ No lifetime lies
 
@@ -218,7 +243,7 @@ Monocoque's unsafe footprint is **smaller** than most async runtimes.
 
 ## 12. Formal Safety Summary
 
-**If the Slab invariants hold (they do), then:**
+**If the `core::io` read-buffer invariants hold (they do), then:**
 
 -   No use-after-free
 -   No double-free
