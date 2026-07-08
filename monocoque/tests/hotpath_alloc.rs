@@ -8,7 +8,7 @@
 //! The hot path is designed to allocate nothing per message: `send_one` encodes
 //! into a reused write buffer, and `recv_into`/`try_recv_into` decode into a
 //! caller-owned buffer, reading through a reused slab that only reallocates once
-//! every `READ_SLAB_SIZE`/read_size kernel reads. The residual allocations are
+//! every `READ_SLAB_SIZE`/`read_size` kernel reads. The residual allocations are
 //! that amortized slab growth, which does not scale with message count.
 //!
 //! This gate is what catches a per-message allocation sneaking back into the
@@ -65,7 +65,7 @@ const MEAS: usize = 200_000;
 /// Ceiling for allocations charged to the measured window.
 ///
 /// Measured over 200k messages: smol 438, tokio 449, compio 1469 (compio's
-/// io_uring read path allocates per kernel-read, a per-read cost that does not
+/// `io_uring` read path allocates per kernel-read, a per-read cost that does not
 /// scale with message count; the others reflect the reused slab reallocating
 /// once per `READ_SLAB_SIZE` bytes read). The ceiling is `MEAS / 50` = 4000:
 /// ~2.7x over the worst backend so it will not flap on noise, yet 50x below the

@@ -11,7 +11,7 @@
 //! (why the 96 KiB coalesce window was kept out of this branch), or per-socket
 //! state that grows without bound.
 //!
-//! Measured VmHWM growth for 200 idle pairs (400 sockets):
+//! Measured `VmHWM` growth for 200 idle pairs (400 sockets):
 //!   compio ~4.0 MB, tokio ~4.0 MB, smol ~4.1 MB  → ~20 KiB per pair.
 //! The bound is 96 KiB per pair: comfortably above the measured cost on every
 //! backend (~4.8x headroom), and it would be blown through by a 64 KiB eager

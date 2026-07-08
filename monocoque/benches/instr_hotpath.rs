@@ -12,7 +12,7 @@
 //! instead.
 //!
 //! Run under valgrind (not part of the default `cargo bench`):
-//!   cargo bench --bench instr_hotpath --features zmq
+//! `cargo bench --bench instr_hotpath --features zmq`
 //! Requires `valgrind` and the `iai-callgrind-runner` binary on PATH; CI installs
 //! both. See `.github/workflows/instr-bench.yml`.
 
