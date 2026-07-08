@@ -11,6 +11,7 @@ use compio_buf::{BufResult, IoBuf, IoBufMut, IoVectoredBuf};
 // which the unused-import lint does not attribute back to this import.
 #[allow(unused_imports)]
 use compio_io::{AsyncRead, AsyncWrite};
+use smallvec::SmallVec;
 use smol::Async;
 use socket2::SockRef;
 use std::future::Future;
@@ -90,9 +91,11 @@ where
 {
     let result = stream
         .write_with(|inner| {
-            // Build stdlib `IoSlice`s over the initialized bytes of each
-            // buffer. They borrow `buf`, which is held for the whole call.
-            let slices: Vec<std::io::IoSlice<'_>> = buf
+            // Build stdlib `IoSlice`s over the initialized bytes of each buffer.
+            // They borrow `buf`, which is held for the whole call. A `SmallVec`
+            // keeps the common case (a header plus a handful of frames) off the
+            // heap; it only spills to a `Vec` past 16 buffers.
+            let slices: SmallVec<[std::io::IoSlice<'_>; 16]> = buf
                 .as_dyn_bufs()
                 .map(|b| std::io::IoSlice::new(b.as_slice()))
                 .collect();
