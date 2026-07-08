@@ -3,6 +3,7 @@
 //! This crate contains the runtime-agnostic core building blocks:
 //! - Pinned / io_uring-safe allocation (`alloc`)
 //! - Zero-copy segmented buffer (`buffer`)
+//! - Shared owned-buffer I/O helpers for the runtime backends (`io`)
 //! - TCP utilities for high-performance networking (`tcp`)
 //! - ROUTER hub + peer map (`router`)
 //! - PUB/SUB core (subscription index + hub) (`pubsub`)
@@ -39,6 +40,7 @@ pub mod config;
 pub mod endpoint;
 pub mod error;
 pub mod inproc;
+pub mod io;
 pub mod message;
 pub mod message_builder;
 pub mod monitor;

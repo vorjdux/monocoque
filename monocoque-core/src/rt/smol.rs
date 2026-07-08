@@ -1,17 +1,11 @@
 //! smol backend: a `compio::io` adapter over smol's async-io streams.
 //! Selected by `runtime-smol`. See [`super`](crate::rt).
 
-// The read path declares initialized buffer length after a `recv` (an unsafe
-// owned-buffer operation); the parent module already allows it, repeated here
-// so this file is self-documenting.
-#![allow(unsafe_code)]
-
 use compio_buf::{BufResult, IoBuf, IoBufMut, IoVectoredBuf};
 // `AsyncRead`/`AsyncWrite` are consumed only inside the trait impls below,
 // which the unused-import lint does not attribute back to this import.
 #[allow(unused_imports)]
 use compio_io::{AsyncRead, AsyncWrite};
-use smallvec::SmallVec;
 use smol::Async;
 use socket2::SockRef;
 use std::future::Future;
@@ -42,26 +36,19 @@ fn resolve<A: ToSocketAddrs>(addr: A) -> io::Result<SocketAddr> {
 /// (which would be UB) we wait for readability and let the kernel write
 /// straight into the buffer via `recv`, handing it the buffer's
 /// `&mut [MaybeUninit<u8>]` (sound to form over uninitialized memory).
-async fn read_into<T, B>(stream: &Async<T>, mut buf: B) -> BufResult<usize, B>
+async fn read_into<T, B>(stream: &Async<T>, buf: B) -> BufResult<usize, B>
 where
     B: IoBufMut,
     for<'a> SockRef<'a>: From<&'a T>,
 {
-    let result = stream
-        .read_with(|inner| SockRef::from(inner).recv(buf.as_mut_slice()))
-        .await;
-    match result {
-        Ok(n) => {
-            // SAFETY: `recv` initialized exactly `n` bytes at the start of the
-            // buffer's backing memory; declaring that length initialized
-            // matches what the kernel actually wrote.
-            unsafe {
-                buf.set_buf_init(n);
-            }
-            BufResult(Ok(n), buf)
-        }
-        Err(e) => BufResult(Err(e), buf),
-    }
+    crate::io::fill_read(buf, async move |spare| {
+        // Wait for readability and let the kernel `recv` straight into the
+        // buffer's backing memory, reporting the count it wrote.
+        stream
+            .read_with(|inner| SockRef::from(inner).recv(spare))
+            .await
+    })
+    .await
 }
 
 /// Write the initialized bytes of an owned buffer to a smol sink.
@@ -91,15 +78,10 @@ where
 {
     let result = stream
         .write_with(|inner| {
-            // Build stdlib `IoSlice`s over the initialized bytes of each buffer.
-            // They borrow `buf`, which is held for the whole call. A `SmallVec`
-            // keeps the common case (a header plus a handful of frames) off the
-            // heap; it only spills to a `Vec` past 16 buffers.
-            let slices: SmallVec<[std::io::IoSlice<'_>; 16]> = buf
-                .as_dyn_bufs()
-                .map(|b| std::io::IoSlice::new(b.as_slice()))
-                .collect();
-            SockRef::from(inner).send_vectored(&slices)
+            // The `IoSlice`s borrow `buf`, which is held for the whole call.
+            crate::io::with_vectored_slices(&buf, |slices| {
+                SockRef::from(inner).send_vectored(slices)
+            })
         })
         .await;
     match result {
