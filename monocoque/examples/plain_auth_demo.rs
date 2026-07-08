@@ -24,7 +24,7 @@
 //! ```
 
 use bytes::Bytes;
-use compio::net::TcpListener;
+use monocoque::rt::{self, LocalRuntime, TcpListener};
 use monocoque::zmq::{RepSocket, ReqSocket, SocketOptions};
 use monocoque_zmtp::security::plain::StaticPlainHandler;
 use monocoque_zmtp::security::zap_handler::start_default_zap_server;
@@ -34,8 +34,11 @@ use std::time::Duration;
 
 const SERVER_ADDR: &str = "127.0.0.1:5555";
 
-#[compio::main]
-async fn main() {
+fn main() {
+    LocalRuntime::new().unwrap().block_on(async_main())
+}
+
+async fn async_main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
@@ -136,7 +139,7 @@ async fn run_client(username: &str, password: &str) {
             return;
         }
 
-        compio::time::sleep(Duration::from_millis(500)).await;
+        rt::sleep(Duration::from_millis(500)).await;
     }
 
     println!("Client finished");

@@ -11,7 +11,7 @@ compio = { version = "0.10", features = ["runtime", "macros"] }
 bytes = "1"
 ```
 
-monocoque runs on [compio](https://github.com/compio-rs/compio), a completion-based io_uring runtime, by default. If you are already on tokio, you have two choices: keep the default compio backend and run it on its own thread (the two runtimes do not conflict), or build monocoque with its native tokio backend (`default-features = false, features = ["runtime-tokio", "zmq"]`) and run everything on one tokio runtime. The tokio backend uses a current-thread runtime inside a `LocalSet`.
+monocoque runs on [compio](https://github.com/compio-rs/compio), a completion-based io_uring runtime, by default. If you are already on tokio, you have three choices: keep the default compio backend and run it on its own thread (the two runtimes do not conflict), or build monocoque with its native tokio backend (`default-features = false, features = ["runtime-tokio", "zmq"]`) and run everything on one tokio runtime, or build with the smol backend (`default-features = false, features = ["runtime-smol", "zmq"]`) if you prefer the smol stack. The tokio backend uses a current-thread runtime inside a `LocalSet`; the smol backend uses a single-threaded smol executor.
 
 ## Basic patterns
 

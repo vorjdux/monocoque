@@ -24,11 +24,15 @@
 //! - REQ clients connect to 5555 and send requests
 //! - REP workers connect to 5556 and process requests
 
+use monocoque::rt::LocalRuntime;
 use monocoque::zmq::proxy::proxy;
 use monocoque::zmq::{DealerSocket, RouterSocket};
 
-#[compio::main]
-async fn main() -> std::io::Result<()> {
+fn main() -> std::io::Result<()> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> std::io::Result<()> {
     // Enable logging
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)

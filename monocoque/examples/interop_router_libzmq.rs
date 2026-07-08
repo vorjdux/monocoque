@@ -8,6 +8,7 @@
 //! ```
 
 use bytes::Bytes;
+use monocoque::rt::{self, LocalRuntime, TcpListener};
 use monocoque::zmq::RouterSocket;
 use std::thread;
 use std::time::Duration;
@@ -18,8 +19,8 @@ fn main() {
 
     // Spawn Monocoque ROUTER server in background thread
     let server_handle = thread::spawn(|| {
-        compio::runtime::Runtime::new().unwrap().block_on(async {
-            let listener = compio::net::TcpListener::bind("127.0.0.1:5561")
+        LocalRuntime::new().unwrap().block_on(async {
+            let listener = TcpListener::bind("127.0.0.1:5561")
                 .await
                 .expect("Failed to bind");
             info!("[Monocoque ROUTER] Listening on tcp://127.0.0.1:5561");
@@ -57,7 +58,7 @@ fn main() {
             info!("[Monocoque ROUTER] Sent reply\n");
 
             // Give time for the message to be picked up by the task and written to network
-            compio::time::sleep(Duration::from_millis(200)).await;
+            rt::sleep(Duration::from_millis(200)).await;
 
             drop(router);
         });

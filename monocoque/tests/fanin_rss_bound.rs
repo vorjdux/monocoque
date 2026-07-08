@@ -17,8 +17,9 @@
 //!
 //! Measured VmHWM growth over baseline at 32 workers / 64 B / 400k messages:
 //! buggy (unbounded batch item) ~66 MB, fixed (per-item message cap) ~15 MB.
-//! The bound is set at 40 MB: comfortably above the fixed cost on both backends
-//! (compio ~15 MB, tokio ~13 MB) and well below the ~66 MB the regression cost.
+//! The bound is set at 40 MB: comfortably above the fixed cost on the measured
+//! backends (compio ~15 MB, tokio ~13 MB) and well below the ~66 MB the regression
+//! cost.
 //!
 //! Linux-only: it reads `VmHWM` (peak resident set) from `/proc/self/status`.
 

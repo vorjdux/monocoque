@@ -3,7 +3,7 @@
 //! Tests use `std::net::TcpStream` (blocking) as the "plain TCP client"
 //! so there is no ZMTP involvement on the client side at all.
 //!
-//! Each test runs in its own OS thread with a dedicated compio Runtime to
+//! Each test runs in its own OS thread with a dedicated runtime to
 //! avoid residual-timer crosstalk from prior handshake timeouts.
 
 use bytes::Bytes;
@@ -158,7 +158,7 @@ fn test_stream_send_respects_send_hwm() {
     let (result_tx, result_rx) = mpsc::channel::<std::io::ErrorKind>();
 
     thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
                 let mut srv = StreamSocket::bind("127.0.0.1:0").await.unwrap();

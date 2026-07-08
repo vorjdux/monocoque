@@ -8,6 +8,7 @@
 //! ```
 
 use bytes::Bytes;
+use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::PubSocket;
 use std::thread;
 use std::time::Duration;
@@ -34,7 +35,7 @@ fn main() {
     });
 
     // Run Monocoque PUB server
-    compio::runtime::Runtime::new().unwrap().block_on(async {
+    LocalRuntime::new().unwrap().block_on(async {
         let mut pub_socket = PubSocket::bind("127.0.0.1:5562")
             .await
             .expect("Failed to bind");
@@ -48,7 +49,7 @@ fn main() {
         info!("[Monocoque PUB] Subscriber connected\n");
 
         // Give subscriber time to send subscription
-        compio::time::sleep(Duration::from_millis(100)).await;
+        rt::sleep(Duration::from_millis(100)).await;
 
         // Publish messages
         for i in 1..=3 {
@@ -58,11 +59,11 @@ fn main() {
                 .await
                 .expect("Failed to publish");
             info!("[Monocoque PUB] Published: {:?}", message);
-            compio::time::sleep(Duration::from_millis(10)).await;
+            rt::sleep(Duration::from_millis(10)).await;
         }
 
         // Give subscriber time to receive
-        compio::time::sleep(Duration::from_millis(100)).await;
+        rt::sleep(Duration::from_millis(100)).await;
 
         drop(pub_socket);
     });

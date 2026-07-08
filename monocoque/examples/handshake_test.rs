@@ -1,4 +1,4 @@
-use compio::net::{TcpListener, TcpStream};
+use monocoque::rt::{self, LocalRuntime, TcpListener, TcpStream};
 /// Handshake Test - Validates ZMTP greeting and READY exchange
 ///
 /// This is a minimal test to verify the protocol handshake works before
@@ -7,8 +7,11 @@ use monocoque::zmq::{DealerSocket, RouterSocket};
 use std::time::Duration;
 use tracing::info;
 
-#[compio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
@@ -17,7 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("=== ZMTP Handshake Test ===\n");
 
     // Start server
-    let server_task = compio::runtime::spawn(async {
+    let server_task = rt::spawn(async {
         info!("[SERVER] Binding...");
         let listener = TcpListener::bind("127.0.0.1:5571").await.unwrap();
         info!("[SERVER] Listening on :5571");
@@ -34,7 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Give server time to bind
-    compio::time::sleep(Duration::from_millis(100)).await;
+    rt::sleep(Duration::from_millis(100)).await;
 
     // Start client
     info!("[CLIENT] Connecting...");
@@ -49,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("[CLIENT] Done");
 
     // Wait for server
-    server_task.await;
+    rt::join(server_task).await;
 
     info!("\n✅ Handshake test completed successfully!");
     Ok(())

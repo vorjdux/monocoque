@@ -175,10 +175,12 @@ fn test_router_send_buffered_hwm_returns_would_block() {
 
     // Server: accept and hold open.
     thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
-                let listener = compio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let listener = monocoque_core::rt::TcpListener::bind("127.0.0.1:0")
+                    .await
+                    .unwrap();
                 addr_tx.send(listener.local_addr().unwrap()).unwrap();
                 let (stream, _) = listener.accept().await.unwrap();
                 let mut router = RouterSocket::from_tcp_with_options(
@@ -207,7 +209,7 @@ fn test_router_send_buffered_hwm_returns_would_block() {
 
     // Client: connect and hold the handshake open.
     let client_handle = thread::spawn(move || {
-        compio::runtime::Runtime::new()
+        monocoque_core::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
                 let opts = SocketOptions::default().with_send_hwm(HWM);

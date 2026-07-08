@@ -8,14 +8,17 @@
 /// - Multiple DEALER clients connect and request work
 /// - ROUTER distributes tasks in round-robin fashion
 use bytes::Bytes;
-use compio::net::TcpListener;
+use monocoque::rt::{self, LocalRuntime, TcpListener, TcpStream};
 use monocoque::zmq::RouterSocket;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{error, info};
 
-#[compio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
@@ -34,10 +37,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 info!("Worker connected from {addr}");
 
                 let counter = task_counter.clone();
-                compio::runtime::spawn(async move {
+                rt::spawn_detached(async move {
                     handle_worker(stream, counter).await;
-                })
-                .detach();
+                });
             }
             Err(e) => {
                 error!("Accept error: {e}");
@@ -47,7 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[allow(clippy::future_not_send)]
-async fn handle_worker(stream: compio::net::TcpStream, task_counter: Arc<AtomicU64>) {
+async fn handle_worker(stream: TcpStream, task_counter: Arc<AtomicU64>) {
     let mut socket = RouterSocket::from_tcp(stream).await.unwrap();
 
     // Send tasks to this worker
@@ -80,7 +82,7 @@ async fn handle_worker(stream: compio::net::TcpStream, task_counter: Arc<AtomicU
         }
 
         // Small delay between tasks
-        compio::time::sleep(std::time::Duration::from_millis(100)).await;
+        rt::sleep(std::time::Duration::from_millis(100)).await;
     }
 
     info!("Worker session complete");

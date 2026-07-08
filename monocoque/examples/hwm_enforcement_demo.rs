@@ -6,12 +6,15 @@
 //! Run with: cargo run --package monocoque --features zmq --example `hwm_enforcement_demo`
 
 use bytes::Bytes;
-use compio::net::{TcpListener, TcpStream};
+use monocoque::rt::{self, LocalRuntime, TcpListener, TcpStream};
 use monocoque::zmq::{DealerSocket, RouterSocket, SocketOptions};
 use std::io::ErrorKind;
 
-#[compio::main]
-async fn main() -> std::io::Result<()> {
+fn main() -> std::io::Result<()> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> std::io::Result<()> {
     println!("🔧 HWM Enforcement Demo\n");
 
     // Configure socket with MongoDB-style composable options
@@ -29,7 +32,7 @@ async fn main() -> std::io::Result<()> {
     let addr = listener.local_addr()?;
 
     // Server consumes messages slowly to create backpressure
-    compio::runtime::spawn(async move {
+    rt::spawn_detached(async move {
         if let Ok((stream, _)) = listener.accept().await {
             if let Ok(mut router) = RouterSocket::from_tcp(stream).await {
                 let mut count = 0;
@@ -39,14 +42,13 @@ async fn main() -> std::io::Result<()> {
                         println!("   [SERVER] Received {count} messages");
                     }
                     // Simulate slow processing
-                    compio::time::sleep(std::time::Duration::from_millis(200)).await;
+                    rt::sleep(std::time::Duration::from_millis(200)).await;
                 }
             }
         }
-    })
-    .detach();
+    });
 
-    compio::time::sleep(std::time::Duration::from_millis(50)).await;
+    rt::sleep(std::time::Duration::from_millis(50)).await;
 
     // Connect client
     let client = TcpStream::connect(addr).await?;

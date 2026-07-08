@@ -8,10 +8,14 @@
 //! cargo run --example tcp_and_ipc_demo --features zmq
 //! ```
 
+use monocoque::rt::LocalRuntime;
 use monocoque::zmq::DealerSocket;
 
-#[compio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== TCP and IPC Transport Demo ===\n");
 
     // TCP example

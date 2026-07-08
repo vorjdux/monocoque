@@ -22,12 +22,16 @@
 
 use bytes::Bytes;
 use monocoque::SocketOptions;
+use monocoque::rt::LocalRuntime;
 use monocoque::zmq::ReqSocket;
 use std::io;
 use std::time::Duration;
 
-#[compio::main]
-async fn main() -> io::Result<()> {
+fn main() -> io::Result<()> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> io::Result<()> {
     println!("\n=== PoisonGuard Protection Demo ===\n");
     println!("This demo shows how PoisonGuard automatically prevents stream corruption");
     println!("when async send operations are cancelled by timeouts.\n");

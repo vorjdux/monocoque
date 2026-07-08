@@ -1,11 +1,15 @@
 //! REQ Client for Interop Testing
 
 use bytes::Bytes;
+use monocoque::rt::{LocalRuntime, TcpStream};
 use monocoque_zmtp::req::ReqSocket;
 use std::env;
 
-#[compio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
     let port = if args.len() > 2 && args[1] == "--port" {
         args[2].parse::<u16>()?
@@ -14,7 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let addr = format!("127.0.0.1:{port}");
-    let stream = compio::net::TcpStream::connect(&addr).await?;
+    let stream = TcpStream::connect(&addr).await?;
     let mut socket = ReqSocket::new(stream).await?;
 
     // Send request

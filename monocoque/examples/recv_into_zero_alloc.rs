@@ -10,19 +10,23 @@
 
 use bytes::Bytes;
 use monocoque::SocketOptions;
+use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::{PullSocket, PushSocket};
 use std::time::Instant;
 
 const ADDR: &str = "127.0.0.1:5601";
 const MESSAGES: usize = 200_000;
 
-#[compio::main]
+fn main() -> std::io::Result<()> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
 #[allow(clippy::cast_precision_loss)]
-async fn main() -> std::io::Result<()> {
+async fn async_main() -> std::io::Result<()> {
     // Sender: connect once the listener below is bound, push MESSAGES, then flush.
     // Spawned before `bind`, but on a single-threaded runtime it does not run
     // until the first `.await`, by which point the port is already bound.
-    compio::runtime::spawn(async move {
+    rt::spawn_detached(async move {
         let mut push = PushSocket::connect_with_options(
             ADDR,
             SocketOptions::default().with_write_coalescing(true),
@@ -34,8 +38,7 @@ async fn main() -> std::io::Result<()> {
             push.send(vec![payload.clone()]).await.unwrap();
         }
         push.flush().await.unwrap();
-    })
-    .detach();
+    });
 
     // Receiver: accept the connection, then drain with a single reused buffer.
     let (_listener, mut pull) = PullSocket::bind(ADDR).await?;

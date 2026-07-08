@@ -47,13 +47,17 @@
 //!     print(f'{topic.decode()}: {data.decode()}')
 //! ```
 
+use monocoque::rt::LocalRuntime;
 use monocoque::zmq::prelude::*;
 use std::collections::HashSet;
 use std::io;
 use tracing::{Level, info, warn};
 
-#[compio::main]
-async fn main() -> io::Result<()> {
+fn main() -> io::Result<()> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> io::Result<()> {
     // Initialize logging
     tracing_subscriber::fmt()
         .with_max_level(Level::INFO)

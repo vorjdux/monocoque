@@ -148,7 +148,7 @@ impl ZapHandler for CustomZapHandler {
 }
 
 fn main() {
-    compio::runtime::Runtime::new().unwrap().block_on(async {
+    monocoque::rt::LocalRuntime::new().unwrap().block_on(async {
         println!("=== ZAP Server Demo ===\n");
 
         // Create custom PLAIN handler with user database

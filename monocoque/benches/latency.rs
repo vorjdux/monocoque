@@ -1,22 +1,29 @@
-//! Latency benchmarks: round-trip time in microseconds
+//! Latency benchmarks: steady-state round-trip time in microseconds
 //!
 //! Compares monocoque vs rust-zmq (zmq crate, FFI bindings to libzmq) for latency.
-//! Measures: How fast is a single message round-trip?
+//! Measures: on an already-established connection, how fast is one message
+//! round-trip?
 //!
 //! ## Methodology
 //!
-//! - Server runs on a separate OS thread with its own compio runtime.
-//! - The bench thread owns a persistent compio runtime (created once, outside `iter_batched`).
-//! - Warmup rounds happen inside the setup closure, so they are not measured.
-//! - Each measured iteration: single REQ send + REP echo + REQ recv.
+//! - Server runs on a separate OS thread and echoes exactly `WARMUP_ROUNDS +
+//!   iters` messages, then exits (deterministic, no disconnect detection).
+//! - The connection is established once per `iter_custom` call, outside the timed
+//!   region, followed by `WARMUP_ROUNDS` un-measured round-trips.
+//! - The timed region is `iters` back-to-back REQ/REP round-trips on that same
+//!   persistent connection. Socket teardown and thread join happen AFTER the
+//!   timer stops, so these numbers reflect steady-state RTT, not connection
+//!   setup or teardown. Both monocoque and zmq are measured identically.
 
 use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 
-// Identifies which runtime backend this build benchmarks, so compio and tokio
+// Identifies which runtime backend this build benchmarks, so compio, tokio, and smol
 // results land under distinct criterion ids instead of overwriting each other.
 const BENCH_BACKEND: &str = if cfg!(feature = "runtime-tokio") {
     "tokio"
+} else if cfg!(feature = "runtime-smol") {
+    "smol"
 } else {
     "compio"
 };
@@ -24,15 +31,16 @@ use monocoque::rt::TcpListener;
 use monocoque::zmq::{RepSocket, ReqSocket, SocketOptions};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const MESSAGE_SIZES: &[usize] = &[64, 256, 1024];
-const WARMUP_ROUNDS: usize = 1_000;
+const WARMUP_ROUNDS: usize = 200;
 
-/// Benchmark monocoque REQ/REP latency (single round-trip).
+/// Benchmark monocoque REQ/REP steady-state latency.
 ///
-/// Server binds on its own OS thread. The bench thread connects, does warmup,
-/// then each `iter_batched` iteration measures one round-trip.
+/// Server binds on its own OS thread and echoes exactly `WARMUP_ROUNDS + iters`
+/// messages. The bench thread connects and warms up (not measured), then times
+/// `iters` round-trips on the persistent connection.
 fn monocoque_req_rep_latency(c: &mut Criterion) {
     let mut group = c.benchmark_group(format!("latency/monocoque-{BENCH_BACKEND}/req_rep"));
     group.measurement_time(Duration::from_secs(10));
@@ -48,75 +56,72 @@ fn monocoque_req_rep_latency(c: &mut Criterion) {
             BenchmarkId::new("round_trip", format!("{size}B")),
             &size,
             |b, _| {
-                b.iter_batched(
-                    || {
-                        // SETUP (not measured): spawn server thread, connect, warmup.
-                        let (port_tx, port_rx) = mpsc::channel::<u16>();
+                b.iter_custom(|iters| {
+                    let total = WARMUP_ROUNDS + iters as usize;
 
-                        let server_thread = thread::spawn(move || {
-                            let rt = monocoque::rt::LocalRuntime::new().unwrap();
-                            rt.block_on(async move {
-                                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-                                let port = listener.local_addr().unwrap().port();
-                                port_tx.send(port).unwrap();
+                    // SETUP (not measured): server echoes `total` messages, then exits.
+                    let (port_tx, port_rx) = mpsc::channel::<u16>();
 
-                                let (stream, _) = listener.accept().await.unwrap();
-                                let mut rep = RepSocket::from_tcp_with_options(
-                                    stream,
-                                    SocketOptions::default().with_buffer_sizes(4096, 4096),
-                                )
-                                .await
-                                .unwrap();
+                    let server_thread = thread::spawn(move || {
+                        let rt = monocoque::rt::LocalRuntime::new().unwrap();
+                        rt.block_on(async move {
+                            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                            let port = listener.local_addr().unwrap().port();
+                            port_tx.send(port).unwrap();
 
-                                // Echo WARMUP_ROUNDS + 1 messages, then exit cleanly.
-                                for _ in 0..=WARMUP_ROUNDS {
-                                    if let Ok(Some(msg)) = rep.recv().await {
-                                        if rep.send(msg).await.is_err() {
-                                            break;
-                                        }
-                                    } else {
-                                        break;
-                                    }
-                                }
-                            });
-                        });
-
-                        let port = port_rx.recv().unwrap();
-
-                        let req = rt.block_on(async {
-                            let stream = monocoque::rt::TcpStream::connect(("127.0.0.1", port))
-                                .await
-                                .unwrap();
-                            let mut req = ReqSocket::from_tcp_with_options(
+                            let (stream, _) = listener.accept().await.unwrap();
+                            let mut rep = RepSocket::from_tcp_with_options(
                                 stream,
                                 SocketOptions::default().with_buffer_sizes(4096, 4096),
                             )
                             .await
                             .unwrap();
 
-                            // Warmup: not measured.
-                            for _ in 0..WARMUP_ROUNDS {
-                                req.send(vec![payload.clone()]).await.unwrap();
-                                req.recv().await.unwrap();
+                            for _ in 0..total {
+                                match rep.recv().await {
+                                    Ok(Some(msg)) => {
+                                        if rep.send(msg).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                    _ => break,
+                                }
                             }
-
-                            req
                         });
+                    });
 
-                        (req, server_thread)
-                    },
-                    |(mut req, server_thread)| {
-                        // MEASURED: single round-trip.
-                        let payload = payload.clone();
-                        rt.block_on(async move {
-                            req.send(vec![black_box(payload)]).await.unwrap();
+                    let port = port_rx.recv().unwrap();
+                    let payload = payload.clone();
+
+                    let elapsed = rt.block_on(async move {
+                        let stream = monocoque::rt::TcpStream::connect(("127.0.0.1", port))
+                            .await
+                            .unwrap();
+                        let mut req = ReqSocket::from_tcp_with_options(
+                            stream,
+                            SocketOptions::default().with_buffer_sizes(4096, 4096),
+                        )
+                        .await
+                        .unwrap();
+
+                        // Warmup: not measured.
+                        for _ in 0..WARMUP_ROUNDS {
+                            req.send(vec![payload.clone()]).await.unwrap();
+                            req.recv().await.unwrap();
+                        }
+
+                        // MEASURED: steady-state round-trips on the live connection.
+                        let t0 = Instant::now();
+                        for _ in 0..iters {
+                            req.send(vec![black_box(payload.clone())]).await.unwrap();
                             let _ = req.recv().await.unwrap();
-                            drop(req);
-                        });
-                        server_thread.join().unwrap();
-                    },
-                    criterion::BatchSize::PerIteration,
-                );
+                        }
+                        t0.elapsed()
+                    });
+
+                    server_thread.join().unwrap();
+                    elapsed
+                });
             },
         );
     }
@@ -124,10 +129,11 @@ fn monocoque_req_rep_latency(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark rust-zmq (zmq crate, FFI to libzmq) REQ/REP latency.
+/// Benchmark rust-zmq (zmq crate, FFI to libzmq) REQ/REP steady-state latency.
 ///
-/// Server binds on its own OS thread. Client connects, does warmup, then each
-/// `iter_batched` iteration measures one round-trip.
+/// Same structure as the monocoque path: connect + warmup outside the timer,
+/// then `iters` round-trips on the persistent connection are measured. The
+/// server echoes exactly `WARMUP_ROUNDS + iters` messages, then exits.
 fn zmq_req_rep_latency(c: &mut Criterion) {
     let mut group = c.benchmark_group("latency/rust_zmq/req_rep");
     group.measurement_time(Duration::from_secs(10));
@@ -140,54 +146,54 @@ fn zmq_req_rep_latency(c: &mut Criterion) {
             BenchmarkId::new("round_trip", format!("{size}B")),
             &size,
             |b, _| {
-                b.iter_batched(
-                    || {
-                        // SETUP (not measured): spawn server thread, connect, warmup.
-                        let (endpoint_tx, endpoint_rx) = mpsc::channel::<String>();
+                b.iter_custom(|iters| {
+                    let total = WARMUP_ROUNDS + iters as usize;
 
-                        let server_thread = thread::spawn(move || {
-                            let ctx = zmq::Context::new();
-                            let rep = ctx.socket(zmq::REP).unwrap();
-                            rep.bind("tcp://127.0.0.1:*").unwrap();
-                            let endpoint = rep.get_last_endpoint().unwrap().unwrap();
-                            endpoint_tx.send(endpoint).unwrap();
+                    // SETUP (not measured): server echoes `total` messages, then exits.
+                    let (endpoint_tx, endpoint_rx) = mpsc::channel::<String>();
 
-                            // Echo WARMUP_ROUNDS + 1 messages, then exit.
-                            for _ in 0..=WARMUP_ROUNDS {
-                                match rep.recv_bytes(0) {
-                                    Ok(msg) => {
-                                        if rep.send(&msg, 0).is_err() {
-                                            break;
-                                        }
-                                    }
-                                    Err(_) => break,
-                                }
-                            }
-                        });
-
-                        let endpoint = endpoint_rx.recv().unwrap();
-
+                    let server_thread = thread::spawn(move || {
                         let ctx = zmq::Context::new();
-                        let req = ctx.socket(zmq::REQ).unwrap();
-                        req.connect(&endpoint).unwrap();
+                        let rep = ctx.socket(zmq::REP).unwrap();
+                        rep.bind("tcp://127.0.0.1:*").unwrap();
+                        let endpoint = rep.get_last_endpoint().unwrap().unwrap();
+                        endpoint_tx.send(endpoint).unwrap();
 
-                        // Warmup rounds establish the connection; not measured.
-                        for _ in 0..WARMUP_ROUNDS {
-                            req.send(&payload, 0).unwrap();
-                            let _ = req.recv_bytes(0).unwrap();
+                        for _ in 0..total {
+                            match rep.recv_bytes(0) {
+                                Ok(msg) => {
+                                    if rep.send(&msg, 0).is_err() {
+                                        break;
+                                    }
+                                }
+                                Err(_) => break,
+                            }
                         }
+                    });
 
-                        (req, server_thread)
-                    },
-                    |(req, server_thread)| {
-                        // MEASURED: single round-trip.
+                    let endpoint = endpoint_rx.recv().unwrap();
+
+                    let ctx = zmq::Context::new();
+                    let req = ctx.socket(zmq::REQ).unwrap();
+                    req.connect(&endpoint).unwrap();
+
+                    // Warmup: not measured.
+                    for _ in 0..WARMUP_ROUNDS {
+                        req.send(&payload, 0).unwrap();
+                        let _ = req.recv_bytes(0).unwrap();
+                    }
+
+                    // MEASURED: steady-state round-trips on the live connection.
+                    let t0 = Instant::now();
+                    for _ in 0..iters {
                         req.send(black_box(&payload), 0).unwrap();
                         let _ = req.recv_bytes(0).unwrap();
-                        drop(req);
-                        server_thread.join().unwrap();
-                    },
-                    criterion::BatchSize::PerIteration,
-                );
+                    }
+                    let elapsed = t0.elapsed();
+
+                    server_thread.join().unwrap();
+                    elapsed
+                });
             },
         );
     }

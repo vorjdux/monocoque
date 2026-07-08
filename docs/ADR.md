@@ -6,7 +6,7 @@ Three one-page ADRs for the most consequential design choices in Monocoque.
 
 ## ADR-1: io_uring / compio as the default runtime
 
-**Status**: Accepted (compio is the default); updated 2026-Q2 to add an optional tokio backend  
+**Status**: Accepted (compio is the default); updated 2026-Q2 to add optional tokio and smol backends  
 **Date**: 2025-Q4
 
 ### Context
@@ -17,7 +17,7 @@ Monocoque requires sub-30 μs round-trip latency and >1 M msg/sec throughput whi
 
 Use **compio** as the default async runtime. compio exposes io_uring's submission-queue/completion-queue model through Rust futures, eliminating the `epoll → userspace → syscall` round-trip present in Tokio's reactor.
 
-The socket stack is generic over the `compio::io` `AsyncRead`/`AsyncWrite` traits and never names a runtime directly, so a second backend slots in behind the same abstraction. A tokio backend now ships behind the `runtime-tokio` feature for platforms without io_uring; it follows the same thread-per-core model (current-thread runtime, no work stealing). compio stays the default. io_uring's design win (no context switches, no per-recv syscall) is aimed at real network I/O and high connection counts; on single-flow loopback microbenchmarks the epoll backend can actually edge it, so treat the two as workload-dependent rather than one being strictly faster (see docs/performance.md).
+The socket stack is generic over the `compio::io` `AsyncRead`/`AsyncWrite` traits and never names a runtime directly, so additional backends slot in behind the same abstraction. A tokio backend now ships behind the `runtime-tokio` feature for platforms without io_uring; it follows the same thread-per-core model (current-thread runtime, no work stealing). A third backend, smol (async-executor + async-io), ships behind the `runtime-smol` feature as another portable option, driven by a single-threaded smol `LocalExecutor`. compio stays the default. io_uring's design win (no context switches, no per-recv syscall) is aimed at real network I/O and high connection counts; on single-flow loopback microbenchmarks the epoll backend can actually edge it, so treat the two as workload-dependent rather than one being strictly faster (see docs/performance.md).
 
 ### Consequences
 
@@ -29,7 +29,7 @@ The socket stack is generic over the `compio::io` `AsyncRead`/`AsyncWrite` trait
 | Windows / macOS | ✅ | ❌ (io_uring is Linux-only) |
 | Ecosystem size | Large | Small but growing |
 
-**Trade-off accepted**: the default backend is Linux-only, chosen for io_uring's design advantages on real network I/O. Portability is covered by the tokio backend, which ships today behind the `runtime-tokio` feature (macOS/Windows) and rides the same `AsyncRead + AsyncWrite` abstraction, since the protocol layer is runtime-agnostic.
+**Trade-off accepted**: the default backend is Linux-only, chosen for io_uring's design advantages on real network I/O. Portability is covered by the tokio backend (behind `runtime-tokio`) and the smol backend (behind `runtime-smol`), both of which ship today for macOS/Windows and ride the same `AsyncRead + AsyncWrite` abstraction, since the protocol layer is runtime-agnostic.
 
 ---
 

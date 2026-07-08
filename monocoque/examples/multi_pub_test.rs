@@ -1,12 +1,16 @@
 /// Integrated test - publisher with 3 subscribers
 use bytes::Bytes;
+use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::{PubSocket, SubSocket};
 use std::thread;
 use std::time::Duration;
 use tracing::info;
 
-#[compio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
         .init();
@@ -20,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Spawn 3 subscriber tasks
     for i in 1..=3 {
-        compio::runtime::spawn(async move {
+        rt::spawn_detached(async move {
             // Connect subscriber
             let mut sub = SubSocket::connect("127.0.0.1:5557").await.unwrap();
             sub.subscribe(b"test").await.unwrap();
@@ -37,8 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             info!("[SUB-{}] Completed (received {} messages)", i, count);
-        })
-        .detach();
+        });
     }
 
     // Wait for subscribers to connect and subscribe

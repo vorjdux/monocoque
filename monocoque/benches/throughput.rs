@@ -16,10 +16,12 @@
 use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
-// Identifies which runtime backend this build benchmarks, so compio and tokio
+// Identifies which runtime backend this build benchmarks, so compio, tokio, and smol
 // results land under distinct criterion ids instead of overwriting each other.
 const BENCH_BACKEND: &str = if cfg!(feature = "runtime-tokio") {
     "tokio"
+} else if cfg!(feature = "runtime-smol") {
+    "smol"
 } else {
     "compio"
 };
@@ -299,6 +301,12 @@ fn zmq_push_pull(c: &mut Criterion) {
                         let endpoint = pull.get_last_endpoint().unwrap().unwrap();
                         endpoint_tx.send(endpoint).unwrap();
 
+                        // Receive one warmup message so the timer starts on a
+                        // live connection. This excludes connect/handshake and
+                        // the sender-side startup pause from the measured window,
+                        // matching the monocoque path, which starts its timer
+                        // only after `accept()` + the ZMTP handshake.
+                        pull.recv_bytes(0).unwrap();
                         let t0 = std::time::Instant::now();
                         for _ in 0..BATCH_SIZE {
                             pull.recv_bytes(0).unwrap();
@@ -316,7 +324,9 @@ fn zmq_push_pull(c: &mut Criterion) {
                     let push = ctx.socket(zmq::PUSH).unwrap();
                     push.connect(&endpoint).unwrap();
 
-                    for _ in 0..BATCH_SIZE {
+                    // One extra message warms the PULL connection before its
+                    // timer starts; the remaining BATCH_SIZE are the measured run.
+                    for _ in 0..=BATCH_SIZE {
                         push.send(&payload_clone, 0).unwrap();
                     }
 

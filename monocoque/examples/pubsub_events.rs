@@ -9,13 +9,17 @@
 /// - SUB socket subscribes to specific topics
 /// - Topics are prefix-matched (e.g., "trade." matches "trade.BTC", "trade.ETH")
 use bytes::Bytes;
+use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::{PubSocket, SubSocket};
 use std::sync::mpsc;
 use std::time::Duration;
 use tracing::{error, info};
 
-#[compio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .init();
@@ -34,7 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (ready_tx, ready_rx) = mpsc::channel::<()>();
 
     // Start subscriber in background FIRST (before accept)
-    let subscriber_handle = compio::runtime::spawn(async move {
+    let subscriber_handle = rt::spawn(async move {
         if let Err(e) = run_subscriber(port, ready_tx).await {
             error!("[Subscriber] Error: {e}");
         }
@@ -48,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // We poll non-blocking with short async sleeps so the runtime stays live.
     // This replaces the old hardcoded 2000ms sleep.
     while ready_rx.try_recv() == Err(mpsc::TryRecvError::Empty) {
-        compio::time::sleep(Duration::from_millis(10)).await;
+        rt::sleep(Duration::from_millis(10)).await;
     }
 
     info!("[Publisher] Publishing events...");
@@ -72,7 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("[Publisher] Done publishing");
 
     // Wait for subscriber to finish receiving
-    subscriber_handle.await;
+    rt::join(subscriber_handle).await;
 
     Ok(())
 }

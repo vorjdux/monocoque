@@ -11,38 +11,46 @@ env:
 
 jobs:
   test:
-    name: Test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: Test (${{ matrix.backend.name }})
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      # The runtime backends are mutually exclusive, so each is tested in its own
+      # matrix leg with the same full-workspace command, differing only by the
+      # feature flags that select the backend.
       matrix:
-        os: [ubuntu-latest]
+        backend:
+          - { name: compio, flags: "--features zmq" }
+          - { name: tokio, flags: "--no-default-features --features runtime-tokio,zmq" }
+          - { name: smol, flags: "--no-default-features --features runtime-smol,zmq" }
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # The two runtime backends are mutually exclusive, so they are tested
-      # separately rather than with --all-features.
-      - name: Run tests (compio backend)
-        run: cargo test --workspace --features zmq
-      - name: Run tests (tokio backend)
-        run: |
-          cargo test --workspace --lib --no-default-features --features runtime-tokio,zmq
-          cargo test -p monocoque-rs --test tokio_runtime --no-default-features --features runtime-tokio,zmq
+      - name: Run tests (${{ matrix.backend.name }} backend)
+        run: cargo test --workspace ${{ matrix.backend.flags }}
 
   clippy:
-    name: Clippy
+    name: Clippy (${{ matrix.backend.name }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # Same per-backend split as the test job. Every target (lib, tests,
+      # benches, examples) is backend-agnostic, so all three legs lint the
+      # identical `--all-targets` set, differing only by the backend feature.
+      matrix:
+        backend:
+          - { name: compio, flags: "--all-targets --features zmq" }
+          - { name: tokio, flags: "--all-targets --no-default-features --features runtime-tokio,zmq" }
+          - { name: smol, flags: "--all-targets --no-default-features --features runtime-smol,zmq" }
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Clippy (compio backend)
-        run: cargo clippy --workspace --all-targets --features zmq -- -D warnings
-      - name: Clippy (tokio backend)
-        run: cargo clippy --workspace --lib --benches --no-default-features --features runtime-tokio,zmq -- -D warnings
+      - name: Clippy (${{ matrix.backend.name }} backend)
+        run: cargo clippy --workspace ${{ matrix.backend.flags }} -- -D warnings
 
   fmt:
     name: Rustfmt

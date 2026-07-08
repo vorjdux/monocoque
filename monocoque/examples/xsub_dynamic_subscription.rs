@@ -30,12 +30,16 @@
 //! ```
 
 use bytes::Bytes;
+use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::prelude::*;
 use std::io;
 use tracing::{Level, info};
 
-#[compio::main]
-async fn main() -> io::Result<()> {
+fn main() -> io::Result<()> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> io::Result<()> {
     // Initialize logging
     tracing_subscriber::fmt().with_max_level(Level::INFO).init();
 
@@ -102,7 +106,7 @@ async fn main() -> io::Result<()> {
             }
             None => {
                 // No message available, small delay
-                compio::time::sleep(std::time::Duration::from_millis(100)).await;
+                rt::sleep(std::time::Duration::from_millis(100)).await;
             }
         }
 

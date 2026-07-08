@@ -11,11 +11,15 @@
 //! ```
 
 use bytes::Bytes;
+use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::{DealerSocket, SocketEvent};
 use std::time::Duration;
 
-#[compio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
@@ -31,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Endpoint: tcp://127.0.0.1:5555\n");
 
     // Spawn a task to handle monitoring events
-    let _monitor_task = compio::runtime::spawn(async move {
+    rt::spawn_detached(async move {
         println!("📡 Monitoring task started...\n");
 
         while let Ok(event) = monitor.recv_async().await {
@@ -74,7 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Wait a bit to see events
-    compio::time::sleep(Duration::from_millis(100)).await;
+    rt::sleep(Duration::from_millis(100)).await;
 
     // Try to receive (will likely timeout since no server is running)
     println!("Attempting to receive...");
@@ -88,7 +92,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     drop(socket);
 
     // Wait for monitoring task to process final events
-    compio::time::sleep(Duration::from_millis(100)).await;
+    rt::sleep(Duration::from_millis(100)).await;
 
     println!("\n=== Example Complete ===");
     println!("Note: Connect to an actual server to see full event flow");

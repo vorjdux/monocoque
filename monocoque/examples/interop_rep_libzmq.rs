@@ -8,6 +8,7 @@
 //! ```
 
 use bytes::Bytes;
+use monocoque::rt::{self, LocalRuntime, TcpListener};
 use monocoque_zmtp::rep::RepSocket;
 use std::thread;
 use std::time::Duration;
@@ -18,8 +19,8 @@ fn main() {
 
     // Spawn Monocoque REP server in background thread
     let server_handle = thread::spawn(|| {
-        compio::runtime::Runtime::new().unwrap().block_on(async {
-            let listener = compio::net::TcpListener::bind("127.0.0.1:5562")
+        LocalRuntime::new().unwrap().block_on(async {
+            let listener = TcpListener::bind("127.0.0.1:5562")
                 .await
                 .expect("Failed to bind");
             info!("[Monocoque REP] Listening on tcp://127.0.0.1:5562");
@@ -69,7 +70,7 @@ fn main() {
             }
 
             // Keep connection alive
-            compio::time::sleep(Duration::from_millis(100)).await;
+            rt::sleep(Duration::from_millis(100)).await;
         });
     });
 

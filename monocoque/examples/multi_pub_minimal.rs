@@ -1,12 +1,16 @@
 /// Minimal multi-subscriber PUB test with worker pool
 use bytes::Bytes;
+use monocoque::rt::LocalRuntime;
 use monocoque::zmq::PubSocket;
 use std::thread;
 use std::time::Duration;
 use tracing::info;
 
-#[compio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .init();

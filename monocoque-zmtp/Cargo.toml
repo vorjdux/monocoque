@@ -25,6 +25,8 @@ default = ["runtime-compio"]
 runtime-compio = ["dep:compio", "monocoque-core/runtime-compio"]
 # Drive the same socket stack on tokio instead.
 runtime-tokio = ["dep:tokio", "monocoque-core/runtime-tokio"]
+# Drive the same socket stack on smol instead.
+runtime-smol = ["dep:smol", "monocoque-core/runtime-smol"]
 
 [dependencies]
 bytes.workspace = true
@@ -35,6 +37,7 @@ compio-io.workspace = true
 compio-buf.workspace = true
 compio = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
+smol = { workspace = true, optional = true }
 monocoque-core = { version = "0.1.8", path = "../monocoque-core", package = "monocoque-rs-core", default-features = false }
 smallvec.workspace = true
 tracing.workspace = true

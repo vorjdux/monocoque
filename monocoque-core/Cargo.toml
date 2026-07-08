@@ -6,7 +6,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Protocol-agnostic messaging kernel with pluggable io_uring (compio) or tokio I/O"
+description = "Protocol-agnostic messaging kernel with pluggable io_uring (compio), tokio, or smol I/O"
 keywords = ["messaging", "io_uring", "async", "zeromq", "kernel"]
 categories = ["network-programming", "asynchronous"]
 homepage = "https://github.com/vorjdux/monocoque"
@@ -26,6 +26,8 @@ default = ["runtime-compio"]
 runtime-compio = ["dep:compio"]
 # Drive the same socket stack on tokio instead.
 runtime-tokio = ["dep:tokio"]
+# Drive the same socket stack on smol (async-executor + async-io) instead.
+runtime-smol = ["dep:smol"]
 
 [dependencies]
 async-lock.workspace = true
@@ -45,3 +47,4 @@ socket2.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tokio = { workspace = true, optional = true }
+smol = { workspace = true, optional = true }

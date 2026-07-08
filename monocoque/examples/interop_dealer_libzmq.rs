@@ -8,6 +8,7 @@
 //! ```
 
 use bytes::Bytes;
+use monocoque::rt::{LocalRuntime, TcpStream};
 use monocoque::zmq::DealerSocket;
 use std::thread;
 use std::time::Duration;
@@ -44,10 +45,10 @@ fn main() {
     thread::sleep(Duration::from_millis(50));
 
     // Run Monocoque DEALER client
-    compio::runtime::Runtime::new().unwrap().block_on(async {
+    LocalRuntime::new().unwrap().block_on(async {
         info!("[Monocoque DEALER] Connecting to tcp://127.0.0.1:5560");
 
-        let stream = compio::net::TcpStream::connect("127.0.0.1:5560")
+        let stream = TcpStream::connect("127.0.0.1:5560")
             .await
             .expect("Failed to connect");
 

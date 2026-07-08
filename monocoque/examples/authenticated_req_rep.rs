@@ -9,15 +9,18 @@
 //! - Secure request-reply messaging
 
 use bytes::Bytes;
-use compio::net::TcpListener;
+use monocoque::rt::{self, LocalRuntime, TcpListener};
 use monocoque::zmq::{RepSocket, ReqSocket, SocketOptions};
 use monocoque_zmtp::security::plain::StaticPlainHandler;
 use monocoque_zmtp::security::zap_handler::start_default_zap_server;
 use std::sync::Arc;
 use std::time::Duration;
 
-#[compio::main]
-async fn main() -> std::io::Result<()> {
+fn main() -> std::io::Result<()> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> std::io::Result<()> {
     println!("=== Authenticated REQ/REP Demo ===\n");
 
     let mut plain_handler = StaticPlainHandler::new();
@@ -38,7 +41,7 @@ async fn main() -> std::io::Result<()> {
         .with_recv_timeout(Duration::from_secs(10))
         .with_send_timeout(Duration::from_secs(10));
 
-    let server_task = compio::runtime::spawn(async move {
+    let server_task = rt::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
         let mut server = RepSocket::from_tcp_with_options(stream, server_options)
             .await
@@ -56,7 +59,7 @@ async fn main() -> std::io::Result<()> {
         println!("[SERVER] Done");
     });
 
-    compio::time::sleep(Duration::from_millis(50)).await;
+    rt::sleep(Duration::from_millis(50)).await;
 
     let alice_options = SocketOptions::new()
         .with_plain_credentials("alice", "password123")
@@ -85,7 +88,7 @@ async fn main() -> std::io::Result<()> {
         println!("[BOB] Received: {}", String::from_utf8_lossy(&response[0]));
     }
 
-    server_task.await;
+    rt::join(server_task).await;
     println!("\nDemo completed!");
     Ok(())
 }

@@ -109,8 +109,9 @@ mode) and no message is queued. Either:
 
 2. **io_uring not active** (default compio backend): On kernels < 5.11, compio
    falls back to thread-pool I/O. Check `uname -r` and update the kernel if
-   possible, or build with the tokio backend (`runtime-tokio`) on platforms
-   without io_uring.
+   possible, or build with a portable backend on platforms without io_uring:
+   the tokio backend (`runtime-tokio`) or the smol backend (`runtime-smol`) are
+   equally valid choices.
 
 3. **HWM too low**: If HWM is small, sends block frequently. Increase or set to 0.
 
