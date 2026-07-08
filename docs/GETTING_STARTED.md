@@ -5,7 +5,7 @@ A five-minute guide to sending your first message with Monocoque.
 **Performance Highlights:**
 
 - **~5x lower latency** than libzmq (43-58 µs vs ~270 µs REQ/REP round-trip)
-- **Up to 13.6 M msg/sec throughput** with write coalescing
+- **Up to 17.1 M msg/sec throughput** with write coalescing
 - **Three runtimes** - io_uring via compio (default), or epoll via tokio, or async-io via smol, same API
 - **Pure Rust** - no C dependencies, full async/await
 - **Memory safe** - unsafe is confined to the owned-buffer read helpers (`core::io`) and the raw-socket tuning facade

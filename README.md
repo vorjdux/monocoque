@@ -41,23 +41,22 @@ The name comes from Formula 1 engineering, where the monocoque chassis achieves 
 
 Benchmarked against rust-zmq (FFI bindings to libzmq). Separate OS threads for
 sender and receiver, real loopback TCP, Intel Core i7-1355U (12 threads),
-Linux 6.17, release build. The three runtime backends run the identical suite.
-compio and tokio are the established throughput figures; the rust-zmq column was
-re-measured with a corrected live-connection timer, and smol was added on the same
-scale.
+Linux 6.17, release build. The three runtime backends run the identical suite,
+and all figures below were re-measured together for the 0.2 release; the rust-zmq
+column uses the same live-connection timer.
 
 **PUSH/PULL throughput with write coalescing** (`with_write_coalescing(true)`):
 
 | Message size | compio | tokio | smol | rust-zmq |
 |---|---|---|---|---|
-| 64 B | 9.2 M msg/s | **13.6 M msg/s** | 10.1 M msg/s | 4.73 M msg/s |
-| 256 B | 5.6 M msg/s | **9.8 M msg/s** | 6.9 M msg/s | 2.66 M msg/s |
-| 1 KB | 2.4 M msg/s | **5.3 M msg/s** | 3.0 M msg/s | 1.04 M msg/s |
-| 4 KB | 841 K msg/s | **1.74 M msg/s** | 1.05 M msg/s | 394 K msg/s |
-| 16 KB | 268 K msg/s | **473 K msg/s** | 342 K msg/s | 120 K msg/s |
+| 64 B | 11.8 M msg/s | **17.1 M msg/s** | 13.2 M msg/s | 4.58 M msg/s |
+| 256 B | 6.4 M msg/s | **12.0 M msg/s** | 8.5 M msg/s | 2.60 M msg/s |
+| 1 KB | 2.5 M msg/s | **4.6 M msg/s** | 3.3 M msg/s | 1.01 M msg/s |
+| 4 KB | 821 K msg/s | **1.60 M msg/s** | 1.10 M msg/s | 383 K msg/s |
+| 16 KB | 274 K msg/s | **462 K msg/s** | 331 K msg/s | 130 K msg/s |
 
-All three backends beat libzmq once coalescing batches the writes: ~1.9x (compio),
-~2.9x (tokio), ~2.1x (smol) at 64 B, and ~2-4x across the size range. On these
+All three backends beat libzmq once coalescing batches the writes: ~2.6x (compio),
+~3.7x (tokio), ~2.9x (smol) at 64 B, and ~2-4x across the size range. On these
 single-flow loopback microbenchmarks the epoll backends (tokio, smol) are the
 faster: a one-connection ping-pong does not exercise io_uring's strengths (batched
 submission, registered buffers, many concurrent connections) and just pays its
@@ -75,8 +74,8 @@ small-message throughput. For **large** frames eager mode automatically uses a v
 domain sockets) is ~2.1x (compio) to ~3x (tokio) faster than TCP loopback for
 same-host throughput.
 
-**PUB/SUB leads libzmq on both axes**: single-subscriber fan-out runs ~2.9x (compio),
-~3.5x (tokio), ~3.0x (smol) faster, and topic filtering at 10% match is a near tie. See
+**PUB/SUB leads libzmq on both axes**: single-subscriber fan-out runs ~3.0x (compio),
+~3.5x (tokio), ~3.2x (smol) faster, and topic filtering at 10% match is a near tie. See
 [docs/performance.md](docs/performance.md) for the full breakdown including
 latency numbers, per-backend tables, the vectored-write crossover measurements,
 PUB/SUB pattern results, and tuning guidance.

@@ -52,9 +52,9 @@ zero-fill. All examples, tests, and the runtime_backends demo run on it.
 Allocation elision across the framing and socket-role code, plus the read-slab
 rework, cut per-message allocations to zero on the single-frame path and dropped
 peak RSS under fan-in load by roughly a quarter. Small-payload coalesced
-throughput improved 10 to 24 percent across the compio, tokio, and smol backends;
-larger payloads and latency stayed flat within bench noise. The allocation-elision
-work is Mika Cohen's design.
+throughput improved by roughly 10 to 30 percent across the compio, tokio, and
+smol backends; larger payloads and latency stayed flat within bench noise. The
+allocation-elision work is Mika Cohen's design.
 
 ### 🧪 Testing
 
