@@ -1,0 +1,37 @@
+name: Instruction Counts
+
+# Runs the IO-free hot-path instruction-count bench (benches/instr_hotpath.rs)
+# under callgrind. Deterministic instruction counts catch small CPU regressions
+# that the noisy wall-clock benches cannot. The bench fails the job if any
+# benchmark's instruction count (Ir) rises more than 5% above the baseline
+# persisted in the cached target dir.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Pin the runner to the same version as the iai-callgrind library dependency.
+  IAI_CALLGRIND_VERSION: 0.16.1
+
+jobs:
+  instr-hotpath:
+    name: Hot-path instruction counts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Persists target/ across runs so callgrind has a baseline to compare a PR
+      # against (keyed on the workflow + lockfile).
+      - uses: Swatinem/rust-cache@v2
+      - name: Install valgrind
+        run: sudo apt-get update && sudo apt-get install -y valgrind
+      - name: Install iai-callgrind-runner
+        run: cargo install iai-callgrind-runner --version "${IAI_CALLGRIND_VERSION}" --locked
+      # The hot path is runtime-agnostic (codec, buffer, vectored-slice builder),
+      # so one backend leg suffices; use the default (compio) plus zmq.
+      - name: Run hot-path instruction-count bench
+        run: cargo bench --bench instr_hotpath --features zmq

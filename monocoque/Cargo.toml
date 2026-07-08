@@ -46,6 +46,11 @@ harness = false
 required-features = ["zmq"]
 
 [[bench]]
+name = "instr_hotpath"
+harness = false
+required-features = ["zmq"]
+
+[[bench]]
 name = "fanout_fanin"
 harness = false
 required-features = ["zmq"]
@@ -361,6 +366,7 @@ flume = { workspace = true, optional = true }
 zmq.workspace = true
 futures.workspace = true
 criterion.workspace = true
+iai-callgrind.workspace = true
 tokio.workspace = true
 num_cpus.workspace = true
 portpicker.workspace = true

@@ -61,6 +61,7 @@ num_cpus = "1.16"
 # Testing
 zmq = "0.10"
 criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
+iai-callgrind = "0.16"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
 portpicker = "0.1"
 hex = "0.4"
@@ -75,6 +76,14 @@ codegen-units = 1
 lto = "fat"
 panic = "abort"
 strip = "symbols"
+
+# The bench profile inherits from release, whose `strip = "symbols"` / `debug = 0`
+# would hide the symbols iai-callgrind needs to locate benchmark entry points
+# under callgrind (benches/instr_hotpath.rs). Restore them for bench builds only;
+# this does not affect the release artifacts or the criterion wall-clock benches.
+[profile.bench]
+debug = true
+strip = false
 
 [workspace.lints.clippy]
 module_name_repetitions = "allow"
