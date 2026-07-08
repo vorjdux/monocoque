@@ -45,7 +45,7 @@ The goal is to **outperform libzmq**, while:
 
 -   Payloads are always `Bytes`
 -   Fanout uses `Bytes::clone()` (refcount bump, no memcpy)
--   Slabs/pages live until the last consumer drops
+-   The read slab lives until the last consumer drops (`bytes` refcounting)
 
 ### 2.4 Runtime Independence
 
@@ -58,7 +58,7 @@ The goal is to **outperform libzmq**, while:
 -   Protocols are **opt-in** via Cargo features
 -   No default features (explicit dependencies only)
 -   `monocoque-core` is 100% protocol-agnostic
--   Example: `monocoque = { version = "0.1", features = ["zmq"] }`
+-   Example: `monocoque-rs = { version = "0.2", features = ["zmq"] }`
 
 This ensures:
 
@@ -88,7 +88,7 @@ This ensures:
                  │
                  ▼
 ┌──────────────────────────────────────────┐
-│        IO Arena / Slab (unsafe)           │
+│        core::io read slab (unsafe)         │
 │        + Buffer Management                 │
 │        + Transport Utilities               │
 │        io_uring via compio                 │
@@ -119,10 +119,8 @@ This ensures:
 
 ```
 monocoque-core/
-├── alloc/          ← ONLY unsafe module
-│   ├── arena.rs
-│   ├── slab.rs
-│   └── invariants.md
+├── io.rs           ← read-slab helpers (unsafe: fill_read, take_read_buffer)
+├── tcp.rs          ← transport glue (unsafe)
 ├── router/
 ├── pubsub/
 └── tests/
@@ -159,8 +157,8 @@ The foundational layers of Monocoque are complete:
 
 **Phase 0 - Memory Allocator & IO Kernel** ✅
 
--   Slab/Arena allocator with refcounting
--   Zero-copy buffer management (`SlabMut` → `Bytes`)
+-   `core::io` read-slab helpers with `bytes` refcounting
+-   Zero-copy buffer management (reused `BytesMut` slab -> `Bytes`)
 -   `SegmentedBuffer` for efficient receive buffering
 -   `io_uring` integration via compio
 
@@ -202,7 +200,7 @@ The foundational layers of Monocoque are complete:
 ┌──────────────┼──────────────────────┐
 │              │                      │
 │  Protocol    │  Core Utilities      │
-│  (handshake, │  (alloc, buffer,     │
+│  (handshake, │  (io, buffer,        │
 │   codec)     │   endpoint, config)  │
 │              │                      │
 └──────────────┴──────────────────────┘

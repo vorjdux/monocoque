@@ -21,7 +21,8 @@
 //!                                      XPUB ────────┴──> Forwards subscriptions
 //! ```
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
+use monocoque_core::io::take_read_buffer;
 use monocoque_core::options::SocketOptions;
 use monocoque_core::rt::{TcpListener, TcpStream};
 use monocoque_core::subscription::{SubscriptionEvent, SubscriptionTrie};
@@ -44,6 +45,7 @@ struct XPubSubscriber {
     stream: TcpStream,
     subscriptions: SubscriptionTrie,
     recv_buf: monocoque_core::buffer::SegmentedBuffer,
+    read_buf: BytesMut,
     decoder: crate::codec::ZmtpDecoder,
     curve_cipher: Option<crate::security::curve::CurveMessageCipher>,
 }
@@ -219,6 +221,7 @@ impl XPubSocket {
                         stream,
                         subscriptions: SubscriptionTrie::new(),
                         recv_buf: monocoque_core::buffer::SegmentedBuffer::new(),
+                        read_buf: BytesMut::new(),
                         decoder: self.options.max_msg_size.map_or_else(
                             crate::codec::ZmtpDecoder::new,
                             crate::codec::ZmtpDecoder::with_max_frame_size,
@@ -285,15 +288,20 @@ impl XPubSocket {
             self.subscribers.len()
         );
         for sub in self.subscribers.values_mut() {
-            let buf = vec![0u8; 256];
+            // SAFETY: `slab` is passed straight to `read`; the data arm below
+            // truncates it to `n` before freezing, and every other arm drops it
+            // without inspecting its contents.
+            let slab = unsafe { take_read_buffer(&mut sub.read_buf, 256) };
 
             // Use a short timeout to avoid blocking
-            let read_result = timeout(Duration::from_millis(1), sub.stream.read(buf)).await;
+            let read_result = timeout(Duration::from_millis(1), sub.stream.read(slab)).await;
 
             match read_result {
-                Ok(BufResult(Ok(n), buf)) if n > 0 => {
+                Ok(BufResult(Ok(n), mut slab)) if n > 0 => {
                     trace!("[XPUB] Received {} bytes from subscriber {}", n, sub.id);
-                    sub.recv_buf.push(bytes::Bytes::from(buf[..n].to_vec()));
+                    debug_assert!(n <= 256);
+                    slab.truncate(n);
+                    sub.recv_buf.push(slab.freeze());
 
                     // Drain all complete ZMTP frames from the buffer
                     loop {
@@ -330,7 +338,7 @@ impl XPubSocket {
                                 } else {
                                     frame.payload
                                 };
-                                if let Some(event) = SubscriptionEvent::from_message(&payload) {
+                                if let Some(event) = SubscriptionEvent::from_bytes(payload) {
                                     trace!(
                                         "[XPUB] Subscription event from subscriber {}: {:?}",
                                         sub.id, event
@@ -492,7 +500,11 @@ impl XPubSocket {
             } else {
                 plain_wire
                     .get_or_insert_with(|| {
-                        let mut buf = BytesMut::new();
+                        let wire_capacity: usize = msg
+                            .iter()
+                            .map(|part| part.len() + if part.len() >= 256 { 9 } else { 2 })
+                            .sum();
+                        let mut buf = BytesMut::with_capacity(wire_capacity);
                         crate::codec::encode_multipart(&msg, &mut buf);
                         buf.freeze()
                     })

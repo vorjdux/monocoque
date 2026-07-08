@@ -1,11 +1,6 @@
 //! tokio backend: a thin adapter implementing the `compio::io` traits over
 //! tokio streams. Selected by `runtime-tokio`. See [`super`](crate::rt).
 
-// The adapter declares initialized buffer length after a read (an unsafe
-// owned-buffer operation); the parent module already allows it, repeated here
-// so this file is self-documenting.
-#![allow(unsafe_code)]
-
 use compio_buf::{BufResult, IoBuf, IoBufMut};
 // `AsyncRead` is consumed only inside the macro-generated impls below, which
 // the unused-import lint does not attribute back to this import.
@@ -116,27 +111,19 @@ impl LocalRuntime {
 /// backing memory (no intermediate copy) and the count read is reported back
 /// through `set_buf_init`. `ReadBuf::uninit` keeps this sound over arena
 /// pages whose capacity is not yet initialized.
-async fn read_into<R, B>(reader: &mut R, mut buf: B) -> BufResult<usize, B>
+async fn read_into<R, B>(reader: &mut R, buf: B) -> BufResult<usize, B>
 where
     R: tokio::io::AsyncRead + Unpin,
     B: IoBufMut,
 {
-    let spare = buf.as_mut_slice();
-    let mut read_buf = ReadBuf::uninit(spare);
-    let result = poll_fn(|cx| Pin::new(&mut *reader).poll_read(cx, &mut read_buf)).await;
-    match result {
-        Ok(()) => {
-            let n = read_buf.filled().len();
-            // SAFETY: tokio initialized exactly `n` bytes in the buffer's
-            // backing memory via `ReadBuf`; declaring that length initialized
-            // matches what was actually written.
-            unsafe {
-                buf.set_buf_init(n);
-            }
-            BufResult(Ok(n), buf)
-        }
-        Err(e) => BufResult(Err(e), buf),
-    }
+    crate::io::fill_read(buf, async move |spare| {
+        // `ReadBuf::uninit` reads straight into the buffer's backing memory
+        // (no intermediate copy) and reports the count via `filled`.
+        let mut read_buf = ReadBuf::uninit(spare);
+        poll_fn(|cx| Pin::new(&mut *reader).poll_read(cx, &mut read_buf)).await?;
+        Ok(read_buf.filled().len())
+    })
+    .await
 }
 
 /// Write the initialized bytes of an owned buffer to a tokio sink.

@@ -22,7 +22,7 @@ use crate::codec::ZmtpError;
 use crate::security::curve::CurveHandshakeResult;
 use crate::session::SocketType;
 use crate::utils::{FLAG_COMMAND, build_ready, encode_frame};
-use bytes::{Bytes, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use compio_buf::BufResult;
 use compio_io::{AsyncRead, AsyncWrite};
 use monocoque_core::options::SocketOptions;
@@ -475,7 +475,7 @@ fn build_greeting_with_mechanism(mechanism: SecurityMechanism, options: &SocketO
     let mech_name = mechanism.as_greeting_bytes();
     b.extend_from_slice(mech_name);
     let padding = 20usize.saturating_sub(mech_name.len());
-    b.extend_from_slice(&vec![0u8; padding]);
+    b.put_bytes(0, padding);
 
     // As-server flag (byte 32): 1 if this side acts as CURVE/PLAIN server
     let as_server = match mechanism {

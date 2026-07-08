@@ -13,9 +13,9 @@
 
 use bytes::{BufMut, Bytes, BytesMut};
 use compio_io::{AsyncRead, AsyncWrite, AsyncWriteExt};
-use monocoque_core::alloc::IoArena;
 use monocoque_core::buffer::SegmentedBuffer;
 use monocoque_core::endpoint::Endpoint;
+use monocoque_core::io::take_read_buffer;
 use monocoque_core::options::SocketOptions;
 use monocoque_core::poison::PoisonGuard;
 use monocoque_core::reconnect::ReconnectState;
@@ -109,11 +109,11 @@ where
     /// ZMTP frame decoder
     pub(crate) decoder: ZmtpDecoder,
 
-    /// Arena allocator for zero-copy I/O
-    pub(crate) arena: IoArena,
-
     /// Segmented read buffer for incoming data
     pub(crate) recv: SegmentedBuffer,
+
+    /// Reusable read slab; `take_read_buffer` carves each read off its tail.
+    pub(crate) read_buf: BytesMut,
 
     /// Reusable write buffer for outgoing data
     pub(crate) write_buf: BytesMut,
@@ -216,8 +216,10 @@ where
             endpoint: None,
             reconnect: None,
             decoder,
-            arena: IoArena::new(),
             recv: SegmentedBuffer::new(),
+            // Lazily allocated on the first read (matches the old arena, which
+            // allocated no page until first use), so an idle socket holds none.
+            read_buf: BytesMut::new(),
             write_buf: BytesMut::with_capacity(write_capacity),
             iov: Vec::new(),
             send_buffer: BytesMut::with_capacity(write_capacity),
@@ -257,8 +259,10 @@ where
             endpoint: Some(endpoint),
             reconnect: Some(ReconnectState::new(&options)),
             decoder,
-            arena: IoArena::new(),
             recv: SegmentedBuffer::new(),
+            // Lazily allocated on the first read (matches the old arena, which
+            // allocated no page until first use), so an idle socket holds none.
+            read_buf: BytesMut::new(),
             write_buf: BytesMut::with_capacity(write_capacity),
             iov: Vec::new(),
             send_buffer: BytesMut::with_capacity(write_capacity),
@@ -505,7 +509,19 @@ where
 
         // Read from stream
         use compio_buf::BufResult;
-        let slab = self.arena.alloc_mut(self.options.read_buffer_size());
+
+        // Reject the non-blocking / zero-timeout case before taking a buffer.
+        if matches!(self.options.recv_timeout, Some(dur) if dur.is_zero()) {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "Socket is in non-blocking mode and no data is available",
+            ));
+        }
+
+        // SAFETY: `buf` is passed straight to `read` below; on every path that
+        // exposes bytes it is first truncated to `n`, and the error/EOF paths
+        // drop it without inspecting its contents.
+        let buf = unsafe { take_read_buffer(&mut self.read_buf, self.options.read_buffer_size()) };
 
         // Get stream reference only for I/O
         let stream = self
@@ -514,17 +530,11 @@ where
             .expect("BUG: stream must be Some  -  checked is_none() above");
 
         // Apply recv timeout
-        let BufResult(result, slab) = match self.options.recv_timeout {
-            None => AsyncRead::read(stream, slab).await,
-            Some(dur) if dur.is_zero() => {
-                return Err(io::Error::new(
-                    io::ErrorKind::WouldBlock,
-                    "Socket is in non-blocking mode and no data is available",
-                ));
-            }
+        let BufResult(result, mut buf) = match self.options.recv_timeout {
+            None => AsyncRead::read(stream, buf).await,
             Some(dur) => {
                 use monocoque_core::rt::timeout;
-                match timeout(dur, AsyncRead::read(stream, slab)).await {
+                match timeout(dur, AsyncRead::read(stream, buf)).await {
                     Ok(result) => result,
                     Err(_) => {
                         return Err(io::Error::new(
@@ -545,8 +555,9 @@ where
             return Ok(0);
         }
 
-        // Push bytes into recv buffer
-        self.recv.push(slab.freeze());
+        // Push bytes into recv buffer (trim to what was actually read).
+        buf.truncate(n);
+        self.recv.push(buf.freeze());
 
         // Update heartbeat idle timer: data was received so we are not idle
         self.note_recv();
@@ -884,6 +895,30 @@ where
             self.flush_send_buffer().await?;
         }
         Ok(())
+    }
+
+    /// Encode one data frame into `send_buffer`.
+    ///
+    /// Returns `true` when the coalescing threshold has been reached and the
+    /// caller should flush.
+    pub(crate) fn encode_one_coalesced(&mut self, frame: &Bytes) -> io::Result<bool> {
+        if self.curve_cipher.is_none() {
+            crate::codec::encode_single(frame, &mut self.send_buffer);
+            return Ok(self.send_buffer.len() >= self.options.write_coalesce_threshold);
+        }
+        self.encode_one_curve_coalesced(frame)
+    }
+
+    fn encode_one_curve_coalesced(&mut self, frame: &Bytes) -> io::Result<bool> {
+        let cipher = self
+            .curve_cipher
+            .as_mut()
+            .expect("checked by encode_one_coalesced");
+        let body = cipher
+            .encrypt_frame(frame, false)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+        append_zmtp_cmd_frame(&mut self.send_buffer, &body);
+        Ok(self.send_buffer.len() >= self.options.write_coalesce_threshold)
     }
 
     /// Decode the next frame from the receive buffer, handling CURVE decryption and PING/PONG.

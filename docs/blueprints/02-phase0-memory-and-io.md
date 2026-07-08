@@ -6,8 +6,8 @@
 
 Phase 0 provides the foundation for safe, zero-copy I/O operations in Monocoque:
 
--   `IoArena` and `SlabMut` for efficient buffer allocation
--   `IoBytes` for zero-copy writes
+-   `core::io` read-slab helpers (`take_read_buffer`, `fill_read`) for efficient buffer allocation
+-   Direct `Bytes` writes (compio's `bytes` feature) for zero-copy sends
 -   `SegmentedBuffer` for receive buffering
 -   Direct stream I/O pattern in all sockets
 
@@ -15,65 +15,58 @@ Phase 0 provides the foundation for safe, zero-copy I/O operations in Monocoque:
 
 ## 1. Memory Management
 
-### IoArena
+### Read slab (`core::io`)
 
-Thread-local buffer pool that provides 4KB slabs for network operations:
+The read path uses a reused `BytesMut` slab, not a pinned arena. A socket keeps
+a single `BytesMut` field, grown lazily on the first read, and `take_read_buffer`
+carves each read off it:
 
 ```rust
-pub struct IoArena {
-    pool: Vec<BytesMut>,
-    capacity: usize,
-}
+pub const READ_SLAB_SIZE: usize = 64 * 1024;
 
-impl IoArena {
-    pub fn alloc(&mut self) -> SlabMut {
-        // Returns 4KB buffer, either from pool or newly allocated
-    }
-}
+/// Carve a `read_size` buffer off the front of a reused stash, growing a fresh
+/// `READ_SLAB_SIZE` slab when the tail runs out.
+pub unsafe fn take_read_buffer(stash: &mut BytesMut, read_size: usize) -> BytesMut;
 ```
 
 **Key Properties:**
 
--   Fixed 4KB slabs (matches typical MTU)
--   Reuses buffers without syscalls
--   No synchronization needed (thread-local)
+-   Read buffer size is clamped to `READ_SLAB_SIZE` (64 KiB)
+-   Successive reads carve `read_size` chunks off one slab until it is used up,
+    then a fresh 64 KiB slab is allocated
+-   Allocated lazily, so an idle socket holds no read buffer
+-   A frozen buffer shares the slab allocation via `bytes` refcounting, so a
+    lagging consumer pins the slab exactly as the old arena page did
 
-### SlabMut
+### fill_read (`core::io`)
 
-Wrapper around `BytesMut` that enforces ownership discipline:
+The one place in the workspace that calls `IoBufMut::set_buf_init`:
 
 ```rust
-pub struct SlabMut(BytesMut);
-
-impl SlabMut {
-    pub fn freeze(self, len: usize) -> Bytes {
-        // Converts to immutable Bytes at exact length
-    }
-}
+/// Read into an owned buffer's spare capacity, then declare the bytes written
+/// as initialized. Every runtime backend routes its read through here.
+pub async fn fill_read<B, F>(buf: B, read: F) -> BufResult<usize, B>
+where
+    B: IoBufMut,
+    F: AsyncFnOnce(&mut [MaybeUninit<u8>]) -> io::Result<usize>;
 ```
 
 **Safety Invariants:**
 
--   Must be moved to kernel for read operations
--   Returned after read completes
--   Converted to `Bytes` after freezing
+-   The buffer is moved into the read, then returned (ownership-passing)
+-   `set_buf_init(n)` declares exactly the byte count the read reported
+-   Callers `truncate` to the bytes actually read before freezing to `Bytes`
 
-### IoBytes
+### Zero-copy writes
 
-Zero-copy wrapper for write operations:
-
-```rust
-pub struct IoBytes(Bytes);
-
-impl IoBuf for IoBytes {
-    // Kernel reads from this buffer during writes
-}
-```
+There is no write wrapper type. Compio's `bytes` feature implements `IoBuf` for
+`Bytes` directly, so an encoded buffer is frozen to `Bytes` and passed straight
+to `write_all`:
 
 **Purpose:**
 
--   Satisfies compio's ownership requirements
--   Allows kernel to access buffer during async write
+-   Satisfies compio's ownership requirements with no wrapper
+-   Lets the kernel read the buffer during the async write
 -   No intermediate copies
 
 ### SegmentedBuffer
@@ -116,7 +109,7 @@ where
 {
     stream: S,
     decoder: ZmtpDecoder,
-    arena: IoArena,
+    read_buf: BytesMut, // reused read slab, grown lazily on first read
     recv: SegmentedBuffer,
     write_buf: BytesMut,
 }
@@ -132,11 +125,12 @@ pub async fn recv(&mut self) -> io::Result<Option<Vec<Bytes>>> {
             return Ok(Some(msg));
         }
 
-        // Need more data - read from stream
-        let slab = self.arena.alloc();
-        let (n, slab) = self.stream.read(slab).await;
-        let bytes = slab.freeze(n?);
-        self.recv.extend(bytes);
+        // Need more data - carve a read buffer off the reused slab
+        let buf = unsafe { take_read_buffer(&mut self.read_buf, read_size) };
+        let (n, mut buf) = self.stream.read(buf).await;
+        let n = n?;
+        buf.truncate(n);
+        self.recv.extend(buf.freeze());
     }
 }
 ```
@@ -144,9 +138,9 @@ pub async fn recv(&mut self) -> io::Result<Option<Vec<Bytes>>> {
 **Flow:**
 
 1. Try to decode from buffered data
-2. If need more, allocate slab from arena
-3. Read from stream (kernel writes to slab)
-4. Freeze slab to `Bytes`
+2. If need more, carve a read buffer off the reused slab (`take_read_buffer`)
+3. Read from stream (kernel writes into the buffer via `fill_read`)
+4. Truncate to the bytes read, then freeze to `Bytes`
 5. Add to receive buffer
 6. Repeat until complete message decoded
 
@@ -157,8 +151,8 @@ pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
     self.write_buf.clear();
     encode_multipart(&mut self.write_buf, &msg);
 
-    let iobytes = IoBytes::new(self.write_buf.clone().freeze());
-    self.stream.write_all(iobytes).await?;
+    let buf = self.write_buf.split().freeze();
+    self.stream.write_all(buf).await?;
     Ok(())
 }
 ```
@@ -166,7 +160,7 @@ pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
 **Flow:**
 
 1. Encode message frames to buffer
-2. Wrap in `IoBytes` for ownership transfer
+2. Freeze to `Bytes` for ownership transfer (compio's `bytes` feature)
 3. Write to stream (kernel reads from buffer)
 4. Await completion
 
@@ -183,7 +177,7 @@ pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
 ### Performance
 
 -   Zero-copy from kernel to `Bytes`
--   Buffer reuse via `IoArena`
+-   Buffer reuse via the reused read slab (`take_read_buffer`)
 -   No allocator pressure
 
 ### Safety
@@ -239,7 +233,7 @@ With this foundation, higher layers can:
 3. **Focus on protocol logic**
 
     - Don't worry about kernel interaction
-    - Arena handles buffer lifecycle
+    - `core::io` handles buffer lifecycle
 
 4. **Maintain performance**
     - No hidden allocations
@@ -251,8 +245,8 @@ With this foundation, higher layers can:
 
 ✅ All components complete and tested:
 
--   `IoArena` and `SlabMut` allocator
--   `IoBytes` zero-copy wrapper
+-   `core::io` read-slab helpers (`take_read_buffer`, `fill_read`)
+-   Direct `Bytes` zero-copy writes (compio's `bytes` feature)
 -   `SegmentedBuffer` receive buffering
 -   Direct I/O in all 6 socket types
 -   Integration tests validating correctness

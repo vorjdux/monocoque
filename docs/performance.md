@@ -27,12 +27,9 @@ epoll plus a plain `write` stays leaner. io_uring's advantage shows up on real
 network I/O and high connection counts, which these benches do not cover.
 Benchmark on your own workload before picking a backend.
 
-The compio and tokio throughput figures are the established measurements on this
-box; their bench timing was always fair. The rust-zmq throughput column was
-re-measured with a corrected timer (see below), and smol was added from a fresh
-run on the same scale (the compio control reproduced its documented numbers, so
-smol sits on the same axis). Latency is a fresh steady-state run for all four
-columns.
+All four columns were re-measured together for the 0.2 release on this box, on
+the same corrected live-connection timer (see below). Latency is a fresh
+steady-state run for all four columns.
 
 Throughput timer lives on the receiver side and starts on a **live** connection
 for both monocoque and rust-zmq: the receiver takes one warmup message before the
@@ -56,21 +53,21 @@ Eager mode (one syscall per message):
 
 | Message size | compio | tokio | smol | rust-zmq |
 |---|---|---|---|---|
-| 64 B | 339 K msg/s | 520 K msg/s | 412 K msg/s | 4.73 M msg/s |
-| 256 B | 344 K msg/s | 514 K msg/s | 403 K msg/s | 2.66 M msg/s |
-| 1 KB | 318 K msg/s | 410 K msg/s | 383 K msg/s | 1.04 M msg/s |
-| 4 KB | 292 K msg/s | 417 K msg/s | 346 K msg/s | 394 K msg/s |
-| 16 KB | 266 K msg/s | 317 K msg/s | 282 K msg/s | 120 K msg/s |
+| 64 B | 350 K msg/s | 493 K msg/s | 427 K msg/s | 4.58 M msg/s |
+| 256 B | 347 K msg/s | 502 K msg/s | 417 K msg/s | 2.60 M msg/s |
+| 1 KB | 321 K msg/s | 466 K msg/s | 383 K msg/s | 1.01 M msg/s |
+| 4 KB | 277 K msg/s | 405 K msg/s | 295 K msg/s | 383 K msg/s |
+| 16 KB | 258 K msg/s | 309 K msg/s | 296 K msg/s | 130 K msg/s |
 
 Write coalescing (batched into 64 KB writes):
 
 | Message size | compio | tokio | smol | rust-zmq |
 |---|---|---|---|---|
-| 64 B | 9.2 M msg/s | **13.6 M msg/s** | 10.1 M msg/s | 4.73 M msg/s |
-| 256 B | 5.6 M msg/s | **9.8 M msg/s** | 6.9 M msg/s | 2.66 M msg/s |
-| 1 KB | 2.4 M msg/s | **5.3 M msg/s** | 3.0 M msg/s | 1.04 M msg/s |
-| 4 KB | 841 K msg/s | **1.74 M msg/s** | 1.05 M msg/s | 394 K msg/s |
-| 16 KB | 268 K msg/s | **473 K msg/s** | 342 K msg/s | 120 K msg/s |
+| 64 B | 11.8 M msg/s | **17.1 M msg/s** | 13.2 M msg/s | 4.58 M msg/s |
+| 256 B | 6.4 M msg/s | **12.0 M msg/s** | 8.5 M msg/s | 2.60 M msg/s |
+| 1 KB | 2.5 M msg/s | **4.6 M msg/s** | 3.3 M msg/s | 1.01 M msg/s |
+| 4 KB | 821 K msg/s | **1.60 M msg/s** | 1.10 M msg/s | 383 K msg/s |
+| 16 KB | 274 K msg/s | **462 K msg/s** | 331 K msg/s | 130 K msg/s |
 
 Eager mode is a **latency** tool, not a throughput one. Each `send()` puts that
 message on the wire immediately with its own syscall, so you control exactly when
@@ -82,11 +79,11 @@ read these numbers as "what happens if you eager-send a bulk stream," not as a
 verdict on the mode.
 
 On that firehose, libzmq's internal IO-thread batching dominates at small message
-sizes: at 64 B it moves 4.73 M msg/s versus monocoque's 339-520 K (~9-14x),
+sizes: at 64 B it moves 4.58 M msg/s versus monocoque's 350-493 K (~9-13x),
 because eager pays one kernel write per `send()` while libzmq amortizes many
 messages per syscall. The gap closes as messages grow: around 4 KB the two are
-near parity (libzmq 394 K vs monocoque 292-417 K), and by 16 KB monocoque eager
-(266-317 K) is ~2.2-2.6x *faster* than libzmq (120 K), where the larger payload
+near parity (libzmq 383 K vs monocoque 277-405 K), and by 16 KB monocoque eager
+(258-309 K) is ~2.0-2.4x *faster* than libzmq (130 K), where the larger payload
 amortizes the per-message syscall and vectored writes (`writev`, below) skip the
 userspace copy. The takeaway: if you are streaming small messages in bulk, turn on
 write coalescing; reach for eager when per-message delivery latency and control
@@ -94,8 +91,8 @@ matter more than aggregate rate.
 
 Write coalescing batches ~970 x 64 B messages (or ~240 x 256 B) into one
 `write_all()` call, eliminating the per-message kernel boundary crossing. Coalesced,
-all three backends beat libzmq by ~2-4x across the range: at 64 B ~1.9x (compio),
-~2.9x (tokio), ~2.1x (smol), and ~2.2x, ~3.9x, ~2.9x at 16 KB. The epoll backends
+all three backends beat libzmq by ~2-4x across the range: at 64 B ~2.6x (compio),
+~3.7x (tokio), ~2.9x (smol), and ~2.1x, ~3.6x, ~2.5x at 16 KB. The epoll backends
 (tokio, smol) lead compio on these single-flow loopback runs, with smol landing
 between compio and tokio. monocoque's coalescing is explicit rather than a
 scheduling side effect, and achieves a higher batch ratio with zero intermediate
@@ -116,11 +113,11 @@ control over batch boundaries:
 
 | Message size | compio | tokio | smol |
 |---|---|---|---|
-| 64 B | 2.49 M msg/s (152 MiB/s) | 2.70 M msg/s (165 MiB/s) | 2.02 M msg/s (123 MiB/s) |
-| 256 B | 1.98 M msg/s (482 MiB/s) | 2.22 M msg/s (542 MiB/s) | 1.69 M msg/s (412 MiB/s) |
-| 1 KB | 1.13 M msg/s (1.08 GiB/s) | 1.52 M msg/s (1.45 GiB/s) | 1.14 M msg/s (1.09 GiB/s) |
-| 4 KB | 341 K msg/s (1.30 GiB/s) | 582 K msg/s (2.22 GiB/s) | 412 K msg/s (1.57 GiB/s) |
-| 16 KB | 87 K msg/s (1.32 GiB/s) | 105 K msg/s (1.60 GiB/s) | 96 K msg/s (1.46 GiB/s) |
+| 64 B | 2.79 M msg/s (170 MiB/s) | 3.04 M msg/s (185 MiB/s) | 2.18 M msg/s (133 MiB/s) |
+| 256 B | 2.17 M msg/s (530 MiB/s) | 2.43 M msg/s (593 MiB/s) | 1.81 M msg/s (442 MiB/s) |
+| 1 KB | 1.15 M msg/s (1.09 GiB/s) | 1.59 M msg/s (1.51 GiB/s) | 1.24 M msg/s (1.18 GiB/s) |
+| 4 KB | 338 K msg/s (1.29 GiB/s) | 612 K msg/s (2.33 GiB/s) | 473 K msg/s (1.80 GiB/s) |
+| 16 KB | 92 K msg/s (1.40 GiB/s) | 122 K msg/s (1.85 GiB/s) | 112 K msg/s (1.70 GiB/s) |
 
 ---
 
@@ -134,13 +131,13 @@ monocoque and zmq are measured identically.
 
 | Message size | compio | tokio | smol | rust-zmq |
 |---|---|---|---|---|
-| 64 B | 10.6 µs | 10.2 µs | 13.1 µs | 34.1 µs |
-| 256 B | 10.1 µs | 9.6 µs | 13.0 µs | 35.4 µs |
-| 1 KB | 10.5 µs | 9.7 µs | 12.3 µs | 35.1 µs |
+| 64 B | 10.0 µs | 10.5 µs | 12.9 µs | 35.2 µs |
+| 256 B | 10.2 µs | 9.7 µs | 12.2 µs | 35.0 µs |
+| 1 KB | 11.0 µs | 10.0 µs | 12.6 µs | 35.4 µs |
 
 All three backends are ~2.7-3.5x lower round-trip latency than libzmq's ~35 µs:
-tokio is lowest (~9.8 µs), compio ~10.5 µs, and smol ~12.8 µs (async-io's
-readiness wakeup costs it a couple of microseconds over the other two). The
+tokio and compio are lowest (~10 µs), and smol ~12.6 µs (async-io's readiness
+wakeup costs it a couple of microseconds over the other two). The
 advantage over libzmq comes from the shorter userspace path on a single flow:
 monocoque does the I/O inline on the same thread, with no handoff to a separate
 IO thread on the send and recv path the way libzmq does. tokio edges compio
@@ -159,12 +156,12 @@ share kernel buffers without copying.
 
 | Transport | 64 B | 256 B | 1 KB |
 |---|---|---|---|
-| compio TCP | 66 µs | 61 µs | 61 µs |
-| compio IPC | 67 µs | 68 µs | 70 µs |
-| tokio TCP | 45 µs | 47 µs | 51 µs |
-| tokio IPC | 59 µs | 57 µs | 56 µs |
-| smol TCP | 88 µs | 85 µs | 87 µs |
-| smol IPC | 80 µs | 79 µs | 80 µs |
+| compio TCP | 57 µs | 58 µs | 61 µs |
+| compio IPC | 67 µs | 71 µs | 68 µs |
+| tokio TCP | 51 µs | 52 µs | 55 µs |
+| tokio IPC | 58 µs | 57 µs | 59 µs |
+| smol TCP | 79 µs | 79 µs | 84 µs |
+| smol IPC | 85 µs | 82 µs | 85 µs |
 
 On the latency axis IPC and TCP land within each other's noise band on all three
 backends. Unlike the steady-state latency table above, this bench still includes
@@ -176,12 +173,12 @@ does not show up here. The IPC advantage is on throughput, below.
 
 | Transport | 64 B | 256 B | 1 KB |
 |---|---|---|---|
-| compio TCP | 351 K msg/s | 347 K msg/s | 322 K msg/s |
-| compio IPC | 735 K msg/s | 717 K msg/s | 683 K msg/s |
-| tokio TCP | 518 K msg/s | 513 K msg/s | 486 K msg/s |
-| tokio IPC | 1.54 M msg/s | 1.47 M msg/s | 1.54 M msg/s |
-| smol TCP | 443 K msg/s | 413 K msg/s | 233 K msg/s |
-| smol IPC | 1.49 M msg/s | 1.34 M msg/s | 1.19 M msg/s |
+| compio TCP | 349 K msg/s | 349 K msg/s | 321 K msg/s |
+| compio IPC | 717 K msg/s | 715 K msg/s | 686 K msg/s |
+| tokio TCP | 519 K msg/s | 510 K msg/s | 486 K msg/s |
+| tokio IPC | 1.69 M msg/s | 1.47 M msg/s | 1.44 M msg/s |
+| smol TCP | 417 K msg/s | 418 K msg/s | 382 K msg/s |
+| smol IPC | 1.40 M msg/s | 1.30 M msg/s | 1.13 M msg/s |
 
 IPC throughput is ~2.1x TCP loopback on compio and ~3x on the epoll backends
 (tokio, smol), because Unix sockets have lower per-syscall overhead and no TCP
@@ -198,26 +195,25 @@ under test (monocoque vs rust-zmq).
 
 | | Latency per message | Throughput | vs zmq |
 |---|---|---|---|
-| monocoque (compio) | 40 µs | 2.49 M msg/s | **2.9x faster** |
+| monocoque (compio) | 39 µs | 2.57 M msg/s | **3.0x faster** |
 | monocoque (tokio) | 33 µs | 3.04 M msg/s | **3.5x faster** |
-| monocoque (smol) | 38 µs | 2.61 M msg/s | **3.0x faster** |
+| monocoque (smol) | 36 µs | 2.78 M msg/s | **3.2x faster** |
 | rust-zmq | 115 µs | 871 K msg/s | |
 
 **Topic filtering** (10% of messages match the subscription):
 
 | | Latency per message | Throughput |
 |---|---|---|
-| monocoque (compio) | 5.1 µs | 19.7 M msg/s |
-| monocoque (tokio) | 5.6 µs | 18.0 M msg/s |
-| monocoque (smol) | 4.8 µs | 20.8 M msg/s |
-| rust-zmq | 5.8 µs | 17.1 M msg/s |
+| monocoque (compio) | 4.9 µs | 20.6 M msg/s |
+| monocoque (tokio) | 4.9 µs | 20.3 M msg/s |
+| monocoque (smol) | 5.6 µs | 17.8 M msg/s |
+| rust-zmq | 5.9 µs | 16.9 M msg/s |
 
-On fan-out all three backends lead libzmq by ~3x (2.9x compio, 3.5x tokio, 3.0x
+On fan-out all three backends lead libzmq by ~3x (3.0x compio, 3.5x tokio, 3.2x
 smol) and are within noise of each other. Topic filtering is a near tie with
 libzmq: the numbers move run to run (this is a tight microbenchmark where a few
-hundred nanoseconds of filter cost dominates, and in this environment the tokio
-samples were the noisiest), so treat it as parity rather than a decisive win
-either way.
+hundred nanoseconds of filter cost dominates), so treat it as parity rather than
+a decisive win either way.
 
 ---
 
@@ -391,9 +387,10 @@ while pull.recv_into(&mut buf).await? {
 }
 ```
 
-On the coalesced PUSH/PULL throughput bench this lifts 64 B from 9.2 M to 11.3 M
-msg/s on compio (about 1.23x) and from 13.6 M to 15.7 M on tokio, plus ~13% at
-256 B; the gain tapers as messages grow and the path becomes bandwidth-bound. `recv()` and `try_recv()` are unchanged for callers
+On the coalesced PUSH/PULL throughput bench this lifts 64 B from 11.8 M to 13.2 M
+msg/s on compio (about 1.12x) and from 17.1 M to 18.7 M on tokio, plus a few
+percent at 256 B; the gain tapers as messages grow and the path becomes
+bandwidth-bound. `recv()` and `try_recv()` are unchanged for callers
 that want an owned `Vec`. A runnable example lives at
 `examples/recv_into_zero_alloc.rs`.
 
@@ -511,8 +508,10 @@ the full benefit; older kernels fall back to thread-pool I/O.
 - **SQPOLL**: Enables kernel-side submission polling, eliminating `io_uring_enter`
   syscalls at the cost of a dedicated CPU core. Useful only for
   sustained > 500 K msg/s workloads.
-- **Fixed buffers**: compio's arena allocator already pins buffers for io_uring
-  registered buffers. No extra work needed.
+- **Fixed buffers**: reads go through a reused per-socket `BytesMut` slab
+  (`core::io::take_read_buffer`), so the read path already avoids a fresh
+  allocation on most reads. Registering those slabs as io_uring fixed buffers is
+  future work; see the roadmap.
 
 ---
 

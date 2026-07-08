@@ -776,10 +776,10 @@ impl SocketOptions {
         self.curve_secretkey.as_ref()
     }
 
-    /// Get the configured read buffer size after applying the page-size cap.
+    /// Get the configured read buffer size after applying the read-slab cap.
     pub const fn read_buffer_size(&self) -> usize {
-        if self.read_buffer_size > crate::alloc::PAGE_SIZE {
-            crate::alloc::PAGE_SIZE
+        if self.read_buffer_size > crate::io::READ_SLAB_SIZE {
+            crate::io::READ_SLAB_SIZE
         } else {
             self.read_buffer_size
         }
@@ -823,8 +823,8 @@ impl SocketOptions {
     /// let opts = SocketOptions::new().with_read_buffer_size(16384);
     /// ```
     pub const fn with_read_buffer_size(mut self, size: usize) -> Self {
-        self.read_buffer_size = if size > crate::alloc::PAGE_SIZE {
-            crate::alloc::PAGE_SIZE
+        self.read_buffer_size = if size > crate::io::READ_SLAB_SIZE {
+            crate::io::READ_SLAB_SIZE
         } else {
             size
         };
@@ -848,8 +848,8 @@ impl SocketOptions {
     /// let opts = SocketOptions::new().with_buffer_sizes(4096, 4096);
     /// ```
     pub const fn with_buffer_sizes(mut self, read_size: usize, write_size: usize) -> Self {
-        self.read_buffer_size = if read_size > crate::alloc::PAGE_SIZE {
-            crate::alloc::PAGE_SIZE
+        self.read_buffer_size = if read_size > crate::io::READ_SLAB_SIZE {
+            crate::io::READ_SLAB_SIZE
         } else {
             read_size
         };
@@ -1408,12 +1408,12 @@ mod tests {
     }
 
     #[test]
-    fn read_buffer_size_cannot_exceed_arena_page_size() {
-        let opts = SocketOptions::new().with_read_buffer_size(crate::alloc::PAGE_SIZE + 1);
+    fn read_buffer_size_cannot_exceed_read_slab_size() {
+        let opts = SocketOptions::new().with_read_buffer_size(crate::io::READ_SLAB_SIZE + 1);
 
         assert!(
-            opts.read_buffer_size <= crate::alloc::PAGE_SIZE,
-            "SocketOptions allowed a read buffer size larger than the arena page"
+            opts.read_buffer_size <= crate::io::READ_SLAB_SIZE,
+            "SocketOptions allowed a read buffer size larger than the read slab"
         );
     }
 

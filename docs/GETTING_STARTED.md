@@ -5,10 +5,10 @@ A five-minute guide to sending your first message with Monocoque.
 **Performance Highlights:**
 
 - **~5x lower latency** than libzmq (43-58 µs vs ~270 µs REQ/REP round-trip)
-- **Up to 13.6 M msg/sec throughput** with write coalescing
+- **Up to 17.1 M msg/sec throughput** with write coalescing
 - **Three runtimes** - io_uring via compio (default), or epoll via tokio, or async-io via smol, same API
 - **Pure Rust** - no C dependencies, full async/await
-- **Memory safe** - unsafe is confined to the slab allocator and runtime facade
+- **Memory safe** - unsafe is confined to the owned-buffer read helpers (`core::io`) and the raw-socket tuning facade
 
 ---
 
@@ -16,7 +16,7 @@ A five-minute guide to sending your first message with Monocoque.
 
 ```toml
 [dependencies]
-monocoque-rs = { version = "0.1", features = ["zmq"] }
+monocoque-rs = { version = "0.2", features = ["zmq"] }
 bytes    = "1"
 compio   = { version = "0.10", features = ["runtime", "macros"] }
 ```
@@ -47,7 +47,7 @@ runtime primitives differ.
 ```toml
 # tokio backend
 [dependencies]
-monocoque-rs = { version = "0.1", default-features = false, features = ["runtime-tokio", "zmq"] }
+monocoque-rs = { version = "0.2", default-features = false, features = ["runtime-tokio", "zmq"] }
 bytes = "1"
 tokio = { version = "1", features = ["rt", "macros"] }
 ```
@@ -55,7 +55,7 @@ tokio = { version = "1", features = ["rt", "macros"] }
 ```toml
 # smol backend
 [dependencies]
-monocoque-rs = { version = "0.1", default-features = false, features = ["runtime-smol", "zmq"] }
+monocoque-rs = { version = "0.2", default-features = false, features = ["runtime-smol", "zmq"] }
 bytes = "1"
 ```
 

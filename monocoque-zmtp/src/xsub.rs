@@ -135,11 +135,9 @@ where
         let prefix = prefix.into();
         trace!("[XSUB] Subscribing to: {:?}", prefix);
 
-        self.subscriptions.subscribe(prefix.clone());
-
-        // Send subscription message upstream
-        let event = SubscriptionEvent::Subscribe(prefix);
-        self.send_subscription_event(event).await?;
+        // Send subscription message upstream first, then record the prefix locally.
+        self.send_subscription_event_prefix(0x01, &prefix).await?;
+        self.subscriptions.subscribe(prefix);
 
         Ok(())
     }
@@ -167,8 +165,7 @@ where
 
         // Send unsubscribe message if verbose mode enabled
         if self.base.options.xsub_verbose_unsubs {
-            let event = SubscriptionEvent::Unsubscribe(prefix);
-            self.send_subscription_event(event).await?;
+            self.send_subscription_event_prefix(0x00, &prefix).await?;
         }
 
         Ok(())
@@ -191,19 +188,31 @@ where
     /// # }
     /// ```
     pub async fn send_subscription_event(&mut self, event: SubscriptionEvent) -> io::Result<()> {
+        let (cmd, prefix) = match &event {
+            SubscriptionEvent::Subscribe(prefix) => (0x01, prefix.as_ref()),
+            SubscriptionEvent::Unsubscribe(prefix) => (0x00, prefix.as_ref()),
+        };
+
+        self.send_subscription_event_prefix(cmd, prefix).await
+    }
+
+    async fn send_subscription_event_prefix(&mut self, cmd: u8, prefix: &[u8]) -> io::Result<()> {
         use bytes::BytesMut;
         use compio_buf::BufResult;
         use compio_io::AsyncWriteExt;
 
-        let raw = event.to_message();
         trace!(
-            "[XSUB] Sending subscription event ({} bytes): {:?}",
-            raw.len(),
-            raw
+            "[XSUB] Sending subscription event ({} bytes)",
+            1 + prefix.len()
         );
 
+        let mut raw = BytesMut::with_capacity(1 + prefix.len());
+        raw.extend_from_slice(&[cmd]);
+        raw.extend_from_slice(prefix);
+        let raw = raw.freeze();
+
         // Encrypt if CURVE is active; otherwise plain ZMTP frame.
-        let mut wire = BytesMut::new();
+        let mut wire = BytesMut::with_capacity(raw.len() + 9);
         if let Some(ref mut cipher) = self.base.curve_cipher {
             let body = cipher
                 .encrypt_frame(&raw, false)
@@ -219,8 +228,7 @@ where
                 io::Error::new(io::ErrorKind::NotConnected, "Socket not connected")
             })?;
 
-        let data = wire.to_vec();
-        let BufResult(result, _) = stream.write_all(data).await;
+        let BufResult(result, _) = stream.write_all(wire).await;
         result?;
 
         trace!("[XSUB] Subscription event sent successfully");

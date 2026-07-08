@@ -32,9 +32,11 @@ Everything else remains safe.
 
 **Only these files may contain `unsafe`:**
 
--   `monocoque-core/src/alloc/slab.rs`
--   `monocoque-core/src/alloc/arena.rs`
--   `monocoque-core/src/alloc/invariants.md` (documentation only)
+-   `monocoque-core/src/io.rs` (read-buffer helpers: `fill_read`, `take_read_buffer`)
+-   `monocoque-core/src/tcp.rs` (transport glue)
+
+Each opts back into `unsafe_code` that the crate otherwise denies, and each
+keeps its `unsafe` behind a safe API.
 
 All other crates/modules:
 
@@ -46,54 +48,54 @@ must be safe Rust only.
 
 ---
 
-## 3. SlabMut: The Buffer Contract
+## 3. The Read-Buffer Contract
 
 ### 3.1 Intended Semantics
 
-`SlabMut` is a **mutable, kernel-safe buffer** that:
+The read path uses a reused `BytesMut` slab rather than a pinned arena. Two
+helpers in `monocoque-core/src/io.rs` carry the whole contract:
 
--   points to a stable allocation
--   can be written into by `io_uring`
--   later "freezes" into `Bytes` for zero-copy usage
+-   `take_read_buffer` carves a read-sized buffer off the front of the slab
+-   `fill_read` reads into that buffer's spare capacity and declares the bytes
+    it read initialized
+
+The buffer is owned by the read for the duration of the syscall, then
+"freezes" into `Bytes` for zero-copy usage.
 
 Conceptually:
 
 ```
-SlabMut (mutable, kernel-owned during IO)
+BytesMut slab (reused, grown lazily to READ_SLAB_SIZE)
     |
-    | freeze(n)
+    | take_read_buffer(stash, read_size)
     v
-Bytes (immutable, shareable, refcounted)
+BytesMut buffer (owned, moved into the read via fill_read)
     |
-    | IoBytes::new(bytes)
+    | truncate(n) + freeze()
     v
-IoBytes (IoBuf wrapper for compio writes)
+Bytes (immutable, shareable, refcounted; shares the slab allocation)
 ```
 
 ### 3.2 Key Types (Implemented)
 
--   `SlabPage`: owns the allocation (refcounted)
--   `SlabMut`: a view into a page (mutable, implements `IoBufMut`)
--   `Bytes`: immutable view after IO completes
--   `IoBytes`: zero-copy wrapper for `Bytes` implementing `IoBuf` (write path)
+-   `READ_SLAB_SIZE`: the 64 KiB read-buffer ceiling and minimum slab capacity
+-   `take_read_buffer`: carves the next read buffer off the reused slab, growing
+    a fresh `READ_SLAB_SIZE` slab when the tail runs out
+-   `fill_read`: the one call site of `IoBufMut::set_buf_init`, shared by every
+    runtime backend
+-   `Bytes`: immutable view after the read completes, sharing the slab's
+    allocation via `bytes` refcounting
 
-This design specifically ensures **ecosystem-compatibility with `bytes`** while satisfying `io_uring` pointer stability.
+This design specifically ensures **ecosystem-compatibility with `bytes`** while
+satisfying `io_uring` pointer stability. Because the read buffer is grown lazily
+on the first read, an idle socket holds no read buffer at all.
 
-### 3.3 IoBytes: Zero-Copy Write Wrapper
+### 3.3 Zero-Copy Writes
 
-**Status**: ✅ Implemented in `monocoque-core/src/alloc.rs`
-
-The `IoBytes` wrapper solves a critical integration point:
-
-```rust
-pub struct IoBytes(Bytes);
-
-unsafe impl IoBuf for IoBytes {
-    fn as_buf_ptr(&self) -> *const u8 { self.0.as_ptr() }
-    fn buf_len(&self) -> usize { self.0.len() }
-    fn buf_capacity(&self) -> usize { self.0.len() }
-}
-```
+The write path no longer needs a wrapper type. Compio's `bytes` feature
+implements `IoBuf` for `Bytes` directly, so an encoded frame buffer is frozen to
+`Bytes` and handed straight to `write_all` (or, on the vectored path, exposed as
+borrowed `IoSlice`s by `core::io::with_vectored_slices`).
 
 **Why this is safe**:
 
@@ -102,7 +104,7 @@ unsafe impl IoBuf for IoBytes {
 -   No mutable aliasing possible
 -   Kernel only reads during write operations
 
-This eliminates the `.to_vec()` memcpy that would otherwise occur on every write.
+This keeps the write path free of any `.to_vec()` memcpy.
 
 ---
 
@@ -114,14 +116,16 @@ This eliminates the `.to_vec()` memcpy that would otherwise occur on every write
 
 Guaranteed by:
 
--   backing allocation stored in an owning object (`Arc<SlabPage>` or equivalent)
--   `SlabMut` only ever stores a `NonNull<u8>` pointing into that allocation
--   the allocation is never reallocated/moved (no Vec growth, no Box swap)
+-   the read buffer is a `BytesMut` carved off a reused slab; its allocation is
+    not reallocated or moved while the read is in flight
+-   ownership-passing hands the whole buffer to the read, so nothing resizes it
+    mid-syscall
+-   a fresh slab is only grown between reads, never during one
 
 **Forbidden:**
 
--   storing data in a `Vec<u8>` that might reallocate
--   exposing a mutable slice that allows resizing
+-   growing the buffer (capacity change) while a read is in flight
+-   exposing a mutable slice that allows resizing during IO
 
 ### Invariant B - Exclusive Mutable Access
 
@@ -129,8 +133,9 @@ Guaranteed by:
 
 Guaranteed by:
 
--   ownership-passing: `SlabMut` is moved into async IO call
--   not cloneable
+-   ownership-passing: the read buffer from `take_read_buffer` is moved into the
+    read via `fill_read`
+-   `fill_read` scopes the spare-capacity borrow to the read itself
 -   `IoBufMut` exposes pointer/len but does not allow aliasing
 
 ### Invariant C - Correct Initialization Tracking
@@ -139,8 +144,10 @@ Guaranteed by:
 
 Guaranteed by:
 
--   `SetBufInit` implementation (or equivalent internal tracking)
--   `freeze(n)` only exposes `n` initialized bytes in returned `Bytes`
+-   `fill_read` is the single caller of `IoBufMut::set_buf_init`, and declares
+    exactly the byte count the read reported
+-   callers `truncate` the buffer to the bytes actually read before freezing, so
+    the returned `Bytes` covers only the initialized region
 
 ### Invariant D - No Mutation After Freeze
 
@@ -149,8 +156,9 @@ Guaranteed by:
 Guaranteed by:
 
 -   `Bytes` only provides shared immutable access
--   `SlabMut` is consumed by `freeze`
--   the underlying page is not reused until refcount drops (or reuse is gated)
+-   the `BytesMut` buffer is consumed by `freeze`
+-   the slab's allocation is not reused until its `bytes` refcount drops, so a
+    lagging consumer pins the slab
 
 ---
 
@@ -187,21 +195,24 @@ The implementation must ensure:
 
 ### Footgun 2 - Dangling Pointer via Owner Drop
 
--   Fixed by `Arc` owner captured inside `SlabMut`
--   Owner lives until `Bytes` drops
+-   Fixed by `bytes` refcounting: a frozen buffer shares the slab allocation
+-   The slab lives until the last `Bytes` view drops
 
 ### Footgun 3 - Exposing Uninitialized Memory
 
--   Fixed by strict `SetBufInit` + `freeze(n)` bounded view
+-   Fixed by `fill_read`'s single `set_buf_init` (exact read count) plus caller
+    `truncate` before freeze
 
 ### Footgun 4 - Mutable Alias (UB)
 
--   Fixed by move-only `SlabMut` and ownership-passing IO API
+-   Fixed by moving the owned `BytesMut` buffer into `fill_read` and the
+    ownership-passing IO API
 
 ### Footgun 5 - Reuse While Still Referenced (Use-after-free)
 
--   Fixed by refcount behavior of `Bytes` owner or arena "graveyard"
--   Reuse only allowed when strong count indicates no outstanding views
+-   Fixed by `bytes` refcounting on the slab allocation
+-   A fresh slab is grown only when the current one has no room left, and a
+    frozen buffer keeps its slab alive as long as any view outstands
 
 ---
 

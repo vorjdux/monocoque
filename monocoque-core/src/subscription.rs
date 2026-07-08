@@ -3,7 +3,7 @@
 //! This provides a more efficient subscription matching mechanism than linear
 //! scanning, especially for large numbers of subscriptions.
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use std::collections::BTreeSet;
 
 /// A subscription entry with topic prefix
@@ -139,6 +139,21 @@ impl SubscriptionEvent {
         }
     }
 
+    /// Create a subscription event from an owned payload without copying the prefix.
+    #[must_use]
+    pub fn from_bytes(msg: Bytes) -> Option<Self> {
+        if msg.is_empty() {
+            return None;
+        }
+
+        let prefix = msg.slice(1..);
+        match msg[0] {
+            0x01 => Some(Self::Subscribe(prefix)),
+            0x00 => Some(Self::Unsubscribe(prefix)),
+            _ => None,
+        }
+    }
+
     /// Encode this event as a ZMTP subscription message
     #[must_use]
     pub fn to_message(&self) -> Bytes {
@@ -147,10 +162,10 @@ impl SubscriptionEvent {
             Self::Unsubscribe(p) => (0x00u8, p),
         };
 
-        let mut msg = Vec::with_capacity(1 + prefix.len());
-        msg.push(cmd);
+        let mut msg = BytesMut::with_capacity(1 + prefix.len());
+        msg.extend_from_slice(&[cmd]);
         msg.extend_from_slice(prefix);
-        Bytes::from(msg)
+        msg.freeze()
     }
 
     /// Get the topic prefix

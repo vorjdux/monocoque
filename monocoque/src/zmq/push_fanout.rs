@@ -154,6 +154,38 @@ impl PushFanOut {
         ))
     }
 
+    /// Send one single-frame message to the next worker in round-robin order.
+    ///
+    /// Equivalent to `send(vec![frame])`, but avoids the per-message multipart
+    /// container allocation in single-frame hot paths.
+    pub async fn send_one(&mut self, frame: bytes::Bytes) -> io::Result<()> {
+        while !self.workers.is_empty() {
+            let idx = self.next % self.workers.len();
+            if !self.workers[idx].is_connected() {
+                self.workers.remove(idx);
+                self.next = idx;
+                continue;
+            }
+
+            return match self.workers[idx].send_one(frame).await {
+                Ok(()) => {
+                    self.next = idx + 1;
+                    Ok(())
+                }
+                Err(e) => {
+                    self.workers.remove(idx);
+                    self.next = idx;
+                    Err(e)
+                }
+            };
+        }
+
+        Err(io::Error::new(
+            io::ErrorKind::NotConnected,
+            "PushFanOut has no live workers",
+        ))
+    }
+
     /// Flush every worker's write-coalescing buffer.
     ///
     /// Call this after the last `send` in a burst when the workers were created

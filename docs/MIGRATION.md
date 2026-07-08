@@ -10,7 +10,7 @@ Remove `zmq` from your `Cargo.toml` and add:
 
 ```toml
 [dependencies]
-monocoque-rs = "0.1"
+monocoque-rs = "0.2"
 bytes = "1.0"
 compio = { version = "0.10", features = ["runtime", "macros"] }
 ```
@@ -102,3 +102,24 @@ Everything else - DEALER/ROUTER, PUB/SUB, PUSH/PULL, PAIR, XPUB/XSUB, PLAIN/CURV
 - Convert socket option setters to `SocketOptions` builder
 - Strip `tcp://` prefix from addresses (use bare `host:port`)
 - Replace `zmq_poll()` with `futures::select!`
+
+---
+
+## Upgrading from monocoque 0.1
+
+The 0.2 release is source-compatible for anyone using the socket API (`PushSocket`,
+`PullSocket`, `recv`, `recv_into`, `send`, and friends). Two things changed under
+the hood that only matter if you reached into internal buffer plumbing:
+
+- **`IoArena` and `SlabMut` are gone**, along with the `monocoque_core::alloc`
+  module and their `monocoque_core::prelude` re-exports. The read path now takes
+  buffers from a reused `BytesMut` slab via `monocoque_core::io::take_read_buffer`.
+  If you referenced these types (very rare outside the crate itself), switch to the
+  `core::io` helpers or a plain `BytesMut`.
+- **New zero-allocation send.** `send_one(frame: Bytes)` sends a single frame
+  without allocating the `Vec` that `send(vec![frame])` needs. Optional, but for a
+  hot single-frame PUSH path it removes the last per-message allocation when paired
+  with `recv_into`.
+
+Everything else, including all socket options and the three runtime backends, is
+unchanged.
