@@ -374,7 +374,7 @@ flume = { workspace = true, optional = true }
 zmq.workspace = true
 futures.workspace = true
 criterion.workspace = true
-iai-callgrind.workspace = true
+gungraun.workspace = true
 tokio.workspace = true
 num_cpus.workspace = true
 portpicker.workspace = true

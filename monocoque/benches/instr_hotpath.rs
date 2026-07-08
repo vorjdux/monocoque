@@ -13,11 +13,11 @@
 //!
 //! Run under valgrind (not part of the default `cargo bench`):
 //! `cargo bench --bench instr_hotpath --features zmq`
-//! Requires `valgrind` and the `iai-callgrind-runner` binary on PATH; CI installs
+//! Requires `valgrind` and the `gungraun-runner` binary on PATH; CI installs
 //! both. See `.github/workflows/instr-bench.yml`.
 
 use bytes::{Bytes, BytesMut};
-use iai_callgrind::{
+use gungraun::{
     Callgrind, EventKind, LibraryBenchmarkConfig, library_benchmark, library_benchmark_group, main,
 };
 use monocoque_core::buffer::SegmentedBuffer;

@@ -14,8 +14,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # Pin the runner to the same version as the iai-callgrind library dependency.
-  IAI_CALLGRIND_VERSION: 0.16.1
+  # Pin the runner to the same version as the gungraun library dependency.
+  GUNGRAUN_VERSION: 0.19.3
 
 jobs:
   instr-hotpath:
@@ -29,8 +29,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install valgrind
         run: sudo apt-get update && sudo apt-get install -y valgrind
-      - name: Install iai-callgrind-runner
-        run: cargo install iai-callgrind-runner --version "${IAI_CALLGRIND_VERSION}" --locked
+      - name: Install gungraun-runner
+        run: cargo install gungraun-runner --version "${GUNGRAUN_VERSION}" --locked
       # The hot path is runtime-agnostic (codec, buffer, vectored-slice builder),
       # so one backend leg suffices; use the default (compio) plus zmq.
       - name: Run hot-path instruction-count bench
