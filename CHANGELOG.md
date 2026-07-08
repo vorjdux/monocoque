@@ -47,6 +47,28 @@ driven by a single-threaded smol `LocalExecutor`. The read path bridges smol's
 readiness-based I/O to the compio owned-buffer traits with no extra copy and no
 zero-fill. All examples, tests, and the runtime_backends demo run on it.
 
+### 🔒 Security
+
+ZMTP and authentication hardening across the handshake, codec, and security
+mechanisms (Mika Cohen's `curve-hardening-rebased` work), with test coverage for
+each path:
+
+- **Handshake/greeting**: reject unsupported non-NULL ZMTP versions, reject
+  security-mechanism mismatches, and validate the greeting signature tail.
+- **CURVE**: derive AEAD nonces from the message counters, reject
+  non-contributory (all-zero) shared secrets, reject CURVE-mode plaintext frames,
+  and reject malformed CURVE ZAP credential frames.
+- **PLAIN**: reject malformed PLAIN command boundaries and invalid UTF-8 in PLAIN
+  ZAP credentials.
+- **Frame decoding**: keep the reserved-bits, oversized-frame, and command-frame
+  guards on the decode path (preserved through the segmented-buffer and
+  frame-encoding rework in this release).
+- **Debug redaction**: authentication secrets and security-relevant socket
+  options are redacted from `Debug` output so keys and passwords do not leak into
+  logs.
+- **Resource bounds**: bound transport queues and frame sizes, harden the receive
+  paths, and avoid unlinking non-socket paths when binding an IPC endpoint.
+
 ### ⚡ Performance
 
 Allocation elision across the framing and socket-role code, plus the read-slab
