@@ -65,10 +65,10 @@ pub unsafe fn take_read_buffer(stash: &mut BytesMut, read_size: usize) -> BytesM
 /// Read into an owned buffer's spare capacity, then declare the bytes written
 /// as initialized.
 ///
-/// This is the one place in the workspace that calls
-/// [`IoBufMut::set_buf_init`]. Every runtime backend routes its read path
-/// through here, so the single owned-buffer `unsafe` block lives behind one
-/// documented contract instead of a copy per adapter.
+/// This is the one place in the workspace that calls `set_buf_init` (from
+/// compio's `SetBufInit`). Every runtime backend routes its read path through
+/// here, so the single owned-buffer `unsafe` block lives behind one documented
+/// contract instead of a copy per adapter.
 ///
 /// `read` is an async closure handed the buffer's uninitialized spare capacity
 /// as `&mut [MaybeUninit<u8>]`; it performs the actual read into the front of
