@@ -64,7 +64,7 @@ pub enum ReqState {
 /// High-performance REQ socket using direct stream I/O.
 ///
 /// This implementation uses compio's native owned-buffer API with
-/// zero-copy arena allocation for maximum performance.
+/// zero-copy owned buffers for maximum performance.
 ///
 /// # State Machine
 ///

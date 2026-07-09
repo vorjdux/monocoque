@@ -85,7 +85,7 @@ pub fn is_pong_payload(payload: &[u8]) -> bool {
 /// # Fields
 ///
 /// - **Connection state**: `stream`, `endpoint`, `reconnect`
-/// - **Buffers**: `recv`, `send_buffer`, `write_buf`, `arena`
+/// - **Buffers**: `recv`, `send_buffer`, `write_buf`, `read_buf`
 /// - **Protocol**: `decoder`, `is_poisoned`
 /// - **Configuration**: `config`, `options`
 ///

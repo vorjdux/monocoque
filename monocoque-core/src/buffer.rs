@@ -12,7 +12,7 @@ use std::collections::VecDeque;
 ///
 /// - Protocol decoders reading frames from streaming data
 /// - Minimizing memcpy overhead for small messages (< 8KB)
-/// - Preserving arena-allocated buffer segments through the pipeline
+/// - Preserving zero-copy buffer segments through the pipeline
 ///
 /// # Tradeoffs
 ///
