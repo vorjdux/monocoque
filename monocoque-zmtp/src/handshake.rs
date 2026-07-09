@@ -16,7 +16,7 @@
 //! 3. Handshake happens once per connection (not in hot path)
 //! 4. Total allocation overhead: ~93 bytes one-time per connection
 //!
-//! After handshake completes, the main data path uses arena allocator for zero-copy IO.
+//! After handshake completes, the main data path uses the `core::io` read slab for zero-copy IO.
 
 use crate::codec::ZmtpError;
 use crate::security::curve::CurveHandshakeResult;

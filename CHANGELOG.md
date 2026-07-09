@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.2.1 - 2026-07-09
+
+### 📚 Documentation
+
+Align the rendered API docs with the 0.2 release. The crate-level docs and
+several item docs still described the pre-0.2 buffer model, so the docs.rs page
+was stale:
+
+- Bump the install-snippet version from 0.1 to 0.2 in the crate docs.
+- The `monocoque-core` layer is described as the runtime facade, owned-buffer
+  I/O helpers, and zero-copy buffers rather than "lock-free allocators", and the
+  unsafe surface points at `io.rs` and `tcp.rs` instead of the removed `alloc`
+  module.
+- Retire remaining "arena" wording in the buffer, config, options, tokio
+  adapter, and ZMTP handshake/base/req docs, which now describe the reused read
+  slab and owned buffers.
+
+No code or public API changed; this is a docs-only release so docs.rs renders
+the corrected documentation.
+
 ## 0.2.0 - 2026-07-08
 
 This release reworks the I/O core. The owned-buffer read path and the

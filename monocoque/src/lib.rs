@@ -8,7 +8,7 @@
 //!
 //! Monocoque is structured as a **messaging kernel** with clean layering:
 //!
-//! - **`monocoque-core`**: Lock-free allocators, runtime facade, SPSC queues
+//! - **`monocoque-core`**: runtime facade, owned-buffer I/O helpers, zero-copy buffers
 //! - **Protocol crates**: Pure state machines (sans-IO)
 //! - **`monocoque`**: Public API surface (this crate)
 //!
@@ -20,7 +20,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! monocoque-rs = { version = "0.1", features = ["zmq"] }
+//! monocoque-rs = { version = "0.2", features = ["zmq"] }
 //! ```
 //!
 //! ## Quick Start
@@ -75,7 +75,8 @@
 //!
 //! ## Safety
 //!
-//! - `unsafe` code is isolated to `monocoque-core/src/alloc/` (slab allocator)
+//! - `unsafe` code is isolated to the owned-buffer read helpers in
+//!   `monocoque-core/src/io.rs` and the raw-socket tuning in `tcp.rs`
 //! - All protocol and routing layers are 100% safe Rust
 //! - Formal invariants documented in `docs/blueprints/06-safety-model-and-unsafe-audit.md`
 

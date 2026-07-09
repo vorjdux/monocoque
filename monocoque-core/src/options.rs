@@ -30,7 +30,7 @@ use std::{fmt, time::Duration};
 pub struct SocketOptions {
     /// Read buffer size (bytes)
     ///
-    /// Size of arena-allocated buffer for receiving data.
+    /// Size of the read-slab buffer for receiving data.
     /// - Default: 8192 (8KB) - balanced for most workloads
     /// - Small (4KB): Low-latency with small messages (< 1KB)
     /// - Large (16KB): High-throughput with large messages (> 8KB)

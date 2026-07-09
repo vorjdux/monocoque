@@ -109,8 +109,8 @@ impl LocalRuntime {
 ///
 /// Mirrors compio's owned-buffer read contract: bytes land in the buffer's
 /// backing memory (no intermediate copy) and the count read is reported back
-/// through `set_buf_init`. `ReadBuf::uninit` keeps this sound over arena
-/// pages whose capacity is not yet initialized.
+/// through `set_buf_init`. `ReadBuf::uninit` keeps this sound over the read
+/// slab's spare capacity, which is not yet initialized.
 async fn read_into<R, B>(reader: &mut R, buf: B) -> BufResult<usize, B>
 where
     R: tokio::io::AsyncRead + Unpin,

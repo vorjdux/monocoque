@@ -5,7 +5,7 @@
 
 /// Default read buffer size (8KB)
 ///
-/// Used for arena-allocated read buffers. Tune based on expected message sizes:
+/// Used for the reused read-slab buffers. Tune based on expected message sizes:
 /// - Small messages (< 1KB): 4096 bytes sufficient
 /// - Medium messages (1-8KB): 8192 bytes (default)
 /// - Large messages (> 8KB): 16384 or 32768 bytes
@@ -45,7 +45,7 @@ pub const STAGING_BUF_INITIAL_CAP: usize = 256;
 /// Socket buffer configuration
 #[derive(Debug, Clone, Copy)]
 pub struct BufferConfig {
-    /// Read buffer size (arena allocation)
+    /// Read buffer size (read-slab capacity)
     pub read_buf_size: usize,
     /// Write buffer size (`BytesMut` capacity)
     pub write_buf_size: usize,
