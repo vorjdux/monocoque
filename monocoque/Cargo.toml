@@ -354,8 +354,8 @@ workspace = true
 
 [dependencies]
 # Internal implementation crates (not exposed)
-monocoque-core = { version = "0.2.0", path = "../monocoque-core", package = "monocoque-rs-core", default-features = false }
-monocoque-zmtp = { version = "0.2.0", path = "../monocoque-zmtp", package = "monocoque-rs-zmtp", optional = true, default-features = false }
+monocoque-core = { version = "0.2.1", path = "../monocoque-core", package = "monocoque-rs-core", default-features = false }
+monocoque-zmtp = { version = "0.2.1", path = "../monocoque-zmtp", package = "monocoque-rs-zmtp", optional = true, default-features = false }
 
 # Re-export dependencies for user convenience
 bytes.workspace = true
