@@ -59,12 +59,32 @@ pub type SocketMonitor = flume::Receiver<SocketEvent>;
 /// This is exposed publicly to allow socket implementations to emit events.
 pub type SocketEventSender = flume::Sender<SocketEvent>;
 
+/// Bound on the number of undrained monitor events held in the channel.
+///
+/// Lifecycle events (connect/disconnect/bind/accept) are low volume, but the
+/// channel was previously unbounded, so an application that never drained its
+/// monitor would let it grow without limit. Bounding it caps that footprint;
+/// [`emit`] drops events (rather than blocking the socket path) once full.
+pub const MONITOR_CHANNEL_CAP: usize = 256;
+
 /// Creates a new monitoring channel pair.
+///
+/// The channel is bounded by [`MONITOR_CHANNEL_CAP`]. Emit events with [`emit`],
+/// which never blocks the caller.
 ///
 /// This is exposed publicly to allow socket implementations to create monitors.
 #[must_use]
 pub fn create_monitor() -> (SocketEventSender, SocketMonitor) {
-    flume::unbounded()
+    flume::bounded(MONITOR_CHANNEL_CAP)
+}
+
+/// Emit a monitor event without ever blocking the socket path.
+///
+/// Uses a non-blocking send: if the monitor is full (the application is not
+/// draining it) or the receiver has been dropped, the event is discarded rather
+/// than stalling the socket operation that produced it.
+pub fn emit(sender: &SocketEventSender, event: SocketEvent) {
+    let _ = sender.try_send(event);
 }
 
 #[cfg(test)]
@@ -83,11 +103,25 @@ mod tests {
     fn test_monitor_channel() {
         let (sender, receiver) = create_monitor();
         let addr: SocketAddr = "127.0.0.1:5555".parse().unwrap();
-        sender
-            .send(SocketEvent::Connected(Endpoint::Tcp(addr)))
-            .unwrap();
+        emit(&sender, SocketEvent::Connected(Endpoint::Tcp(addr)));
 
         let event = receiver.recv().unwrap();
         assert!(matches!(event, SocketEvent::Connected(_)));
+    }
+
+    #[test]
+    fn emit_is_bounded_and_never_blocks_when_undrained() {
+        // Fill well past the cap without ever draining the receiver. emit must
+        // not block or grow the channel beyond MONITOR_CHANNEL_CAP.
+        let (sender, receiver) = create_monitor();
+        let addr: SocketAddr = "127.0.0.1:5555".parse().unwrap();
+        for _ in 0..(MONITOR_CHANNEL_CAP * 4) {
+            emit(&sender, SocketEvent::Connected(Endpoint::Tcp(addr)));
+        }
+        assert_eq!(
+            receiver.len(),
+            MONITOR_CHANNEL_CAP,
+            "monitor channel must stay bounded at its cap when undrained"
+        );
     }
 }

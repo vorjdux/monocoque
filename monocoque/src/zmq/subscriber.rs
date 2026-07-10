@@ -211,7 +211,7 @@ where
     /// Helper to emit monitoring events (if monitoring is enabled).
     fn emit_event(&self, event: SocketEvent) {
         if let Some(monitor) = &self.monitor {
-            let _ = monitor.send(event);
+            monocoque_core::monitor::emit(monitor, event);
         }
     }
 
