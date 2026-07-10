@@ -832,11 +832,43 @@ where
         Ok(())
     }
 
-    /// Close the socket gracefully by shutting down the underlying stream.
+    /// Close the socket gracefully, honoring LINGER for any buffered send data.
     ///
-    /// Sends a TCP FIN (or equivalent) to the peer and drops the connection.
-    /// After this call `is_connected()` returns `false`.
+    /// Coalesced-but-unflushed data in `send_buffer` is drained according to the
+    /// `linger` option before the stream is shut down:
+    /// - `Some(0)`: discard buffered data immediately.
+    /// - `Some(dur)`: flush within `dur`, then close even if the flush did not
+    ///   complete in time.
+    /// - `None`: flush indefinitely until all buffered data is sent.
+    ///
+    /// Then sends a TCP FIN (or equivalent) and drops the connection. After this
+    /// call `is_connected()` returns `false`.
     pub async fn close(&mut self) -> io::Result<()> {
+        // Drain any coalesced-but-unflushed data per LINGER before shutdown, so
+        // callers relying on close() to flush do not silently lose the tail of a
+        // coalesced burst.
+        if !self.send_buffer.is_empty() && self.stream.is_some() {
+            match self.options.linger {
+                Some(dur) if dur.is_zero() => {
+                    // Linger 0: discard buffered data.
+                    self.send_buffer.clear();
+                    self.buffered_messages = 0;
+                }
+                Some(dur) => {
+                    use monocoque_core::rt::timeout;
+                    // Flush within the linger window; close anyway on timeout.
+                    match timeout(dur, self.flush_send_buffer()).await {
+                        Ok(Ok(())) | Err(_) => {}
+                        Ok(Err(e)) => return Err(e),
+                    }
+                }
+                None => {
+                    // Linger indefinite: block until flushed.
+                    self.flush_send_buffer().await?;
+                }
+            }
+        }
+
         if let Some(ref mut stream) = self.stream {
             stream.shutdown().await?;
         }
