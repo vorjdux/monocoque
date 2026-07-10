@@ -1,0 +1,6 @@
+# cargo-fuzz build and run artifacts (machine-generated, not committed).
+# Corpus is grown by CI / OSS-Fuzz and persisted there, not in git.
+target/
+corpus/
+artifacts/
+coverage/

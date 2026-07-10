@@ -50,3 +50,21 @@ doc = false
 
 [profile.release]
 debug = 1
+
+[[bin]]
+name = "fuzz_greeting"
+path = "fuzz_targets/fuzz_greeting.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_command"
+path = "fuzz_targets/fuzz_command.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_zap_request"
+path = "fuzz_targets/fuzz_zap_request.rs"
+test = false
+doc = false
