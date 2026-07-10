@@ -43,7 +43,9 @@ parking_lot = "0.12"
 socket2 = { version = "0.5", features = ["all"] }
 
 # Logging
-tracing = "0.1"
+# release_max_level_info compiles out trace!/debug! callsites in release builds
+# so the hot send/recv path pays no runtime level check for them.
+tracing = { version = "0.1", features = ["release_max_level_info"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Cryptography
