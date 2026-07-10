@@ -46,7 +46,9 @@ async fn test_static_plain_handler_invalid_password_impl() {
         .authenticate("admin", "wrongpassword", "test", "127.0.0.1")
         .await;
     assert!(result.is_err());
-    assert_eq!(result.unwrap_err(), "Invalid password");
+    // Unified error: wrong password and unknown user are indistinguishable to
+    // prevent username enumeration.
+    assert_eq!(result.unwrap_err(), "Invalid credentials");
 }
 
 #[test]
@@ -64,7 +66,8 @@ async fn test_static_plain_handler_unknown_user_impl() {
         .authenticate("hacker", "anything", "test", "127.0.0.1")
         .await;
     assert!(result.is_err());
-    assert_eq!(result.unwrap_err(), "Unknown user");
+    // Same unified error as the wrong-password case (no username enumeration).
+    assert_eq!(result.unwrap_err(), "Invalid credentials");
 }
 
 #[test]
