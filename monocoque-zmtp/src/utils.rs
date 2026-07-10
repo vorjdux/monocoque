@@ -23,7 +23,7 @@ pub const ACCEPT_FD_EXHAUSTION_BACKOFF: std::time::Duration = std::time::Duratio
 #[must_use]
 pub fn is_fd_exhaustion(err: &io::Error) -> bool {
     // EMFILE = 24, ENFILE = 23 on Linux and the BSDs/macOS.
-    matches!(err.raw_os_error(), Some(23) | Some(24))
+    matches!(err.raw_os_error(), Some(23 | 24))
 }
 
 /// Non-Unix platforms do not surface `EMFILE`/`ENFILE`; never treat an error as

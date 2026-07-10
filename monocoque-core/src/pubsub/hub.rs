@@ -24,7 +24,7 @@ use std::sync::Arc;
 /// Map keyed by peer-reported routing identity.
 ///
 /// The routing id is attacker-controlled, so this uses the per-process
-/// randomly seeded [`RandomState`] (SipHash) to resist hash-flooding. The
+/// randomly seeded [`RandomState`] (`SipHash`) to resist hash-flooding. The
 /// `PeerKey`-keyed maps below stay on the faster default hasher because their
 /// keys are server-assigned monotonic counters, not attacker input.
 type RidMap<V> = StdHashMap<Bytes, V, RandomState>;
@@ -230,7 +230,7 @@ mod tests {
         Bytes::copy_from_slice(s.as_bytes())
     }
 
-    /// Receive the next PeerCmd body Arc within a timeout; None on timeout/close.
+    /// Receive the next `PeerCmd` body Arc within a timeout; None on timeout/close.
     async fn recv_arc(rx: &Receiver<PeerCmd>) -> Option<Arc<Vec<Bytes>>> {
         match crate::rt::timeout(Duration::from_secs(1), rx.recv_async()).await {
             Ok(Ok(PeerCmd::SendBody(parts))) => Some(parts),

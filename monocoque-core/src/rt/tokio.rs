@@ -142,7 +142,7 @@ where
 
 /// Write several owned buffers to a tokio sink in one `writev`.
 ///
-/// compio_io's default `write_vectored` issues one `send` per buffer; this
+/// `compio_io`'s default `write_vectored` issues one `send` per buffer; this
 /// override coalesces them into a single `poll_write_vectored` syscall, matching
 /// the compio and smol backends so a multi-frame send stays one syscall instead
 /// of degrading to 2N (one per header and body).

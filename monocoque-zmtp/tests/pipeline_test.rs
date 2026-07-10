@@ -124,9 +124,9 @@ fn test_push_pull_send_one_plain_and_coalesced() {
 }
 
 /// PUSH buffers a coalesced message and then closes WITHOUT an explicit
-/// flush(). With a non-zero LINGER, close() must drain the coalesced buffer so
+/// `flush()`. With a non-zero LINGER, `close()` must drain the coalesced buffer so
 /// the tail of the burst is not silently dropped. Regression for PUSH close
-/// ignoring LINGER (it previously routed to base.close() which only shut the
+/// ignoring LINGER (it previously routed to `base.close()` which only shut the
 /// stream down).
 #[test]
 fn test_push_close_flushes_coalesced_data_with_linger() {

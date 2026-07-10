@@ -1637,7 +1637,7 @@ mod tests {
     fn test_write_from_buf_retries_short_writes_before_disarming() {
         monocoque_core::rt::LocalRuntime::new()
             .unwrap()
-            .block_on(test_write_from_buf_retries_short_writes_before_disarming_impl())
+            .block_on(test_write_from_buf_retries_short_writes_before_disarming_impl());
     }
 
     async fn test_write_from_buf_retries_short_writes_before_disarming_impl() {
@@ -1648,7 +1648,7 @@ mod tests {
     fn test_flush_send_buffer_retries_short_writes_before_disarming() {
         monocoque_core::rt::LocalRuntime::new()
             .unwrap()
-            .block_on(test_flush_send_buffer_retries_short_writes_before_disarming_impl())
+            .block_on(test_flush_send_buffer_retries_short_writes_before_disarming_impl());
     }
 
     async fn test_flush_send_buffer_retries_short_writes_before_disarming_impl() {
@@ -1659,7 +1659,7 @@ mod tests {
     fn test_write_from_buf_write_zero_poisons_and_disconnects() {
         monocoque_core::rt::LocalRuntime::new()
             .unwrap()
-            .block_on(test_write_from_buf_write_zero_poisons_and_disconnects_impl())
+            .block_on(test_write_from_buf_write_zero_poisons_and_disconnects_impl());
     }
 
     async fn test_write_from_buf_write_zero_poisons_and_disconnects_impl() {
@@ -1676,7 +1676,7 @@ mod tests {
     fn test_flush_send_buffer_write_zero_poisons_and_disconnects() {
         monocoque_core::rt::LocalRuntime::new()
             .unwrap()
-            .block_on(test_flush_send_buffer_write_zero_poisons_and_disconnects_impl())
+            .block_on(test_flush_send_buffer_write_zero_poisons_and_disconnects_impl());
     }
 
     async fn test_flush_send_buffer_write_zero_poisons_and_disconnects_impl() {
@@ -1691,9 +1691,9 @@ mod tests {
 
     #[test]
     fn test_write_from_buf_write_error_after_progress_poisons_and_disconnects() {
-        monocoque_core::rt::LocalRuntime::new()
-            .unwrap()
-            .block_on(test_write_from_buf_write_error_after_progress_poisons_and_disconnects_impl())
+        monocoque_core::rt::LocalRuntime::new().unwrap().block_on(
+            test_write_from_buf_write_error_after_progress_poisons_and_disconnects_impl(),
+        );
     }
 
     async fn test_write_from_buf_write_error_after_progress_poisons_and_disconnects_impl() {
@@ -1713,7 +1713,7 @@ mod tests {
     fn test_flush_send_buffer_write_error_after_progress_poisons_and_disconnects() {
         monocoque_core::rt::LocalRuntime::new().unwrap().block_on(
             test_flush_send_buffer_write_error_after_progress_poisons_and_disconnects_impl(),
-        )
+        );
     }
 
     async fn test_flush_send_buffer_write_error_after_progress_poisons_and_disconnects_impl() {
@@ -1733,7 +1733,7 @@ mod tests {
     fn test_write_from_buf_interrupted_write_retries_without_poisoning() {
         monocoque_core::rt::LocalRuntime::new()
             .unwrap()
-            .block_on(test_write_from_buf_interrupted_write_retries_without_poisoning_impl())
+            .block_on(test_write_from_buf_interrupted_write_retries_without_poisoning_impl());
     }
 
     async fn test_write_from_buf_interrupted_write_retries_without_poisoning_impl() {
@@ -1752,7 +1752,7 @@ mod tests {
     fn test_flush_send_buffer_interrupted_write_retries_without_poisoning() {
         monocoque_core::rt::LocalRuntime::new()
             .unwrap()
-            .block_on(test_flush_send_buffer_interrupted_write_retries_without_poisoning_impl())
+            .block_on(test_flush_send_buffer_interrupted_write_retries_without_poisoning_impl());
     }
 
     async fn test_flush_send_buffer_interrupted_write_retries_without_poisoning_impl() {
@@ -1771,7 +1771,7 @@ mod tests {
     fn test_scripted_write_from_buf_short_write_sequences_match_socket_state() {
         monocoque_core::rt::LocalRuntime::new()
             .unwrap()
-            .block_on(test_scripted_write_from_buf_short_write_sequences_match_socket_state_impl())
+            .block_on(test_scripted_write_from_buf_short_write_sequences_match_socket_state_impl());
     }
 
     async fn test_scripted_write_from_buf_short_write_sequences_match_socket_state_impl() {
@@ -1782,7 +1782,7 @@ mod tests {
     fn test_scripted_flush_send_buffer_short_write_sequences_match_socket_state() {
         monocoque_core::rt::LocalRuntime::new().unwrap().block_on(
             test_scripted_flush_send_buffer_short_write_sequences_match_socket_state_impl(),
-        )
+        );
     }
 
     async fn test_scripted_flush_send_buffer_short_write_sequences_match_socket_state_impl() {
@@ -1793,7 +1793,7 @@ mod tests {
     fn test_nonblocking_write_from_buf_keeps_buffer_and_health() {
         monocoque_core::rt::LocalRuntime::new()
             .unwrap()
-            .block_on(test_nonblocking_write_from_buf_keeps_buffer_and_health_impl())
+            .block_on(test_nonblocking_write_from_buf_keeps_buffer_and_health_impl());
     }
 
     async fn test_nonblocking_write_from_buf_keeps_buffer_and_health_impl() {
@@ -1810,7 +1810,7 @@ mod tests {
     fn test_write_from_buf_not_connected_does_not_poison() {
         monocoque_core::rt::LocalRuntime::new()
             .unwrap()
-            .block_on(test_write_from_buf_not_connected_does_not_poison_impl())
+            .block_on(test_write_from_buf_not_connected_does_not_poison_impl());
     }
 
     async fn test_write_from_buf_not_connected_does_not_poison_impl() {
@@ -1827,7 +1827,7 @@ mod tests {
     fn test_write_from_buf_not_connected_takes_precedence_over_nonblocking() {
         monocoque_core::rt::LocalRuntime::new()
             .unwrap()
-            .block_on(test_write_from_buf_not_connected_takes_precedence_over_nonblocking_impl())
+            .block_on(test_write_from_buf_not_connected_takes_precedence_over_nonblocking_impl());
     }
 
     async fn test_write_from_buf_not_connected_takes_precedence_over_nonblocking_impl() {
@@ -1844,7 +1844,7 @@ mod tests {
     fn test_nonblocking_flush_keeps_buffer_and_health() {
         monocoque_core::rt::LocalRuntime::new()
             .unwrap()
-            .block_on(test_nonblocking_flush_keeps_buffer_and_health_impl())
+            .block_on(test_nonblocking_flush_keeps_buffer_and_health_impl());
     }
 
     async fn test_nonblocking_flush_keeps_buffer_and_health_impl() {
@@ -1861,7 +1861,7 @@ mod tests {
     fn test_flush_send_buffer_not_connected_keeps_buffer_and_health() {
         monocoque_core::rt::LocalRuntime::new()
             .unwrap()
-            .block_on(test_flush_send_buffer_not_connected_keeps_buffer_and_health_impl())
+            .block_on(test_flush_send_buffer_not_connected_keeps_buffer_and_health_impl());
     }
 
     async fn test_flush_send_buffer_not_connected_keeps_buffer_and_health_impl() {
@@ -1876,9 +1876,9 @@ mod tests {
 
     #[test]
     fn test_flush_send_buffer_not_connected_takes_precedence_over_nonblocking() {
-        monocoque_core::rt::LocalRuntime::new()
-            .unwrap()
-            .block_on(test_flush_send_buffer_not_connected_takes_precedence_over_nonblocking_impl())
+        monocoque_core::rt::LocalRuntime::new().unwrap().block_on(
+            test_flush_send_buffer_not_connected_takes_precedence_over_nonblocking_impl(),
+        );
     }
 
     async fn test_flush_send_buffer_not_connected_takes_precedence_over_nonblocking_impl() {

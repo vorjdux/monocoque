@@ -35,7 +35,7 @@ use std::time::Duration;
 const SERVER_ADDR: &str = "127.0.0.1:5555";
 
 fn main() {
-    LocalRuntime::new().unwrap().block_on(async_main())
+    LocalRuntime::new().unwrap().block_on(async_main());
 }
 
 async fn async_main() {

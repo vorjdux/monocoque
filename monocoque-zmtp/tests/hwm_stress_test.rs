@@ -228,8 +228,7 @@ fn test_router_send_buffered_hwm_returns_would_block() {
     assert_eq!(
         err_kind,
         std::io::ErrorKind::WouldBlock,
-        "expected WouldBlock, got {:?}",
-        err_kind
+        "expected WouldBlock, got {err_kind:?}"
     );
 
     client_handle.join().unwrap();

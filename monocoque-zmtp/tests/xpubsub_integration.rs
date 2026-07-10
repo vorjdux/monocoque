@@ -19,7 +19,7 @@ use std::time::Duration;
 fn test_xpub_xsub_subscription_flow() {
     monocoque_core::rt::LocalRuntime::new()
         .unwrap()
-        .block_on(test_xpub_xsub_subscription_flow_impl())
+        .block_on(test_xpub_xsub_subscription_flow_impl());
 }
 
 async fn test_xpub_xsub_subscription_flow_impl() {
@@ -101,7 +101,7 @@ async fn test_xpub_xsub_subscription_flow_impl() {
 fn test_xpub_creation_and_config() {
     monocoque_core::rt::LocalRuntime::new()
         .unwrap()
-        .block_on(test_xpub_creation_and_config_impl())
+        .block_on(test_xpub_creation_and_config_impl());
 }
 
 async fn test_xpub_creation_and_config_impl() {
@@ -124,7 +124,7 @@ async fn test_xpub_creation_and_config_impl() {
 fn test_xsub_subscription_api() {
     monocoque_core::rt::LocalRuntime::new()
         .unwrap()
-        .block_on(test_xsub_subscription_api_impl())
+        .block_on(test_xsub_subscription_api_impl());
 }
 
 async fn test_xsub_subscription_api_impl() {
@@ -155,7 +155,7 @@ async fn test_xsub_subscription_api_impl() {
 fn test_subscription_trie_matching() {
     monocoque_core::rt::LocalRuntime::new()
         .unwrap()
-        .block_on(test_subscription_trie_matching_impl())
+        .block_on(test_subscription_trie_matching_impl());
 }
 
 async fn test_subscription_trie_matching_impl() {
@@ -194,7 +194,7 @@ async fn test_subscription_trie_matching_impl() {
 fn test_xpub_manual_mode() {
     monocoque_core::rt::LocalRuntime::new()
         .unwrap()
-        .block_on(test_xpub_manual_mode_impl())
+        .block_on(test_xpub_manual_mode_impl());
 }
 
 async fn test_xpub_manual_mode_impl() {
@@ -214,7 +214,7 @@ async fn test_xpub_manual_mode_impl() {
 fn test_xpub_welcome_message() {
     monocoque_core::rt::LocalRuntime::new()
         .unwrap()
-        .block_on(test_xpub_welcome_message_impl())
+        .block_on(test_xpub_welcome_message_impl());
 }
 
 async fn test_xpub_welcome_message_impl() {
@@ -232,7 +232,7 @@ async fn test_xpub_welcome_message_impl() {
 fn test_xsub_subscription_tracking() {
     monocoque_core::rt::LocalRuntime::new()
         .unwrap()
-        .block_on(test_xsub_subscription_tracking_impl())
+        .block_on(test_xsub_subscription_tracking_impl());
 }
 
 async fn test_xsub_subscription_tracking_impl() {
@@ -255,7 +255,7 @@ async fn test_xsub_subscription_tracking_impl() {
 fn test_xpub_subscriber_count() {
     monocoque_core::rt::LocalRuntime::new()
         .unwrap()
-        .block_on(test_xpub_subscriber_count_impl())
+        .block_on(test_xpub_subscriber_count_impl());
 }
 
 async fn test_xpub_subscriber_count_impl() {
@@ -286,7 +286,7 @@ fn test_empty_prefix_subscription_matching() {
 fn test_xpub_manual_mode_config() {
     monocoque_core::rt::LocalRuntime::new()
         .unwrap()
-        .block_on(test_xpub_manual_mode_config_impl())
+        .block_on(test_xpub_manual_mode_config_impl());
 }
 
 async fn test_xpub_manual_mode_config_impl() {
@@ -362,7 +362,7 @@ fn test_subscription_trie_overlapping() {
 fn test_xpub_non_verbose() {
     monocoque_core::rt::LocalRuntime::new()
         .unwrap()
-        .block_on(test_xpub_non_verbose_impl())
+        .block_on(test_xpub_non_verbose_impl());
 }
 
 async fn test_xpub_non_verbose_impl() {

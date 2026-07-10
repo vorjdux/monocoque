@@ -1883,7 +1883,7 @@ mod tests {
     fn test_send_zmtp_error_retries_short_writes() {
         monocoque_core::rt::LocalRuntime::new()
             .unwrap()
-            .block_on(test_send_zmtp_error_retries_short_writes_impl())
+            .block_on(test_send_zmtp_error_retries_short_writes_impl());
     }
 
     async fn test_send_zmtp_error_retries_short_writes_impl() {
@@ -1894,7 +1894,7 @@ mod tests {
     fn test_send_zmtp_error_retries_short_body_writes() {
         monocoque_core::rt::LocalRuntime::new()
             .unwrap()
-            .block_on(test_send_zmtp_error_retries_short_body_writes_impl())
+            .block_on(test_send_zmtp_error_retries_short_body_writes_impl());
     }
 
     async fn test_send_zmtp_error_retries_short_body_writes_impl() {

@@ -191,8 +191,7 @@ fn test_stream_send_respects_send_hwm() {
     assert_eq!(
         err_kind,
         std::io::ErrorKind::WouldBlock,
-        "expected WouldBlock, got {:?}",
-        err_kind
+        "expected WouldBlock, got {err_kind:?}"
     );
 }
 
@@ -330,7 +329,7 @@ fn test_stream_disconnect_removes_peer() {
 // Test: close_peer cancels the reader task (no more data after close)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// After close_peer, the peer's reader task must be cancelled, so data the
+/// After `close_peer`, the peer's reader task must be cancelled, so data the
 /// client sends afterwards is NOT read and delivered. Before the fix, the
 /// detached reader kept the read half open and kept reading into the inbound
 /// channel until the remote closed, leaking the task and fd. This asserts the
@@ -375,7 +374,7 @@ fn test_stream_close_peer_cancels_reader() {
                             }
                         }
                         // Channel closed, io error, or timed out: nothing more.
-                        Ok(Ok(None)) | Ok(Err(_)) | Err(_) => break,
+                        Ok(Ok(None) | Err(_)) | Err(_) => break,
                     }
                 }
                 leaked_tx.send(leaked).unwrap();

@@ -499,7 +499,7 @@ mod tests {
     fn test_static_plain_handler() {
         monocoque_core::rt::LocalRuntime::new()
             .unwrap()
-            .block_on(test_static_plain_handler_impl())
+            .block_on(test_static_plain_handler_impl());
     }
 
     async fn test_static_plain_handler_impl() {

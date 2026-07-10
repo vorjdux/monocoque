@@ -20,7 +20,7 @@ use tracing::{error, info, warn};
 
 const READY: &[u8] = b"\x01";
 const HEARTBEAT: &[u8] = b"\x02";
-const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(1000);
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Worker sends heartbeats and processes requests
 #[allow(clippy::future_not_send)]
@@ -178,7 +178,7 @@ async fn async_main() -> std::io::Result<()> {
         let _ = worker(2, Some(3)).await;
     });
 
-    rt::sleep(Duration::from_millis(1000)).await;
+    rt::sleep(Duration::from_secs(1)).await;
 
     // Start client
     let client_task = rt::spawn(async { client(1, 6).await });

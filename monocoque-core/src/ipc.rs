@@ -133,7 +133,7 @@ mod tests {
     fn test_ipc_connect_bind() {
         crate::rt::LocalRuntime::new()
             .unwrap()
-            .block_on(test_ipc_connect_bind_impl())
+            .block_on(test_ipc_connect_bind_impl());
     }
 
     async fn test_ipc_connect_bind_impl() {
@@ -169,7 +169,7 @@ mod tests {
     fn drop_unlinks_socket_file() {
         crate::rt::LocalRuntime::new()
             .unwrap()
-            .block_on(drop_unlinks_socket_file_impl())
+            .block_on(drop_unlinks_socket_file_impl());
     }
 
     async fn drop_unlinks_socket_file_impl() {
@@ -191,7 +191,7 @@ mod tests {
     fn drop_leaves_non_socket_at_path_untouched() {
         crate::rt::LocalRuntime::new()
             .unwrap()
-            .block_on(drop_leaves_non_socket_at_path_untouched_impl())
+            .block_on(drop_leaves_non_socket_at_path_untouched_impl());
     }
 
     async fn drop_leaves_non_socket_at_path_untouched_impl() {
@@ -217,7 +217,7 @@ mod tests {
     fn bind_does_not_unlink_existing_regular_file() {
         crate::rt::LocalRuntime::new()
             .unwrap()
-            .block_on(bind_does_not_unlink_existing_regular_file_impl())
+            .block_on(bind_does_not_unlink_existing_regular_file_impl());
     }
 
     async fn bind_does_not_unlink_existing_regular_file_impl() {

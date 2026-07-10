@@ -44,7 +44,7 @@ where
     read_exact_with_timeout(stream, trailing, Some(timeout))
         .await
         .map_or(Ok(()), |BufResult(result, _)| {
-            result.map_or(Ok(()), |_| Err(ZmtpError::Protocol))
+            result.map_or(Ok(()), |()| Err(ZmtpError::Protocol))
         })
 }
 

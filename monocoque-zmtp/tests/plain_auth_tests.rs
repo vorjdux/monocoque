@@ -8,7 +8,7 @@ use monocoque_zmtp::security::zap::{ZapMechanism, ZapRequest};
 fn test_static_plain_handler_valid_credentials() {
     monocoque_core::rt::LocalRuntime::new()
         .unwrap()
-        .block_on(test_static_plain_handler_valid_credentials_impl())
+        .block_on(test_static_plain_handler_valid_credentials_impl());
 }
 
 async fn test_static_plain_handler_valid_credentials_impl() {
@@ -35,7 +35,7 @@ async fn test_static_plain_handler_valid_credentials_impl() {
 fn test_static_plain_handler_invalid_password() {
     monocoque_core::rt::LocalRuntime::new()
         .unwrap()
-        .block_on(test_static_plain_handler_invalid_password_impl())
+        .block_on(test_static_plain_handler_invalid_password_impl());
 }
 
 async fn test_static_plain_handler_invalid_password_impl() {
@@ -55,7 +55,7 @@ async fn test_static_plain_handler_invalid_password_impl() {
 fn test_static_plain_handler_unknown_user() {
     monocoque_core::rt::LocalRuntime::new()
         .unwrap()
-        .block_on(test_static_plain_handler_unknown_user_impl())
+        .block_on(test_static_plain_handler_unknown_user_impl());
 }
 
 async fn test_static_plain_handler_unknown_user_impl() {

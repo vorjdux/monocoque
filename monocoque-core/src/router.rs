@@ -18,7 +18,7 @@ use std::sync::Arc;
 /// Map keyed by peer-reported routing identity.
 ///
 /// The key is attacker-controlled (a peer announces its own routing id), so
-/// this uses the per-process randomly seeded [`RandomState`] (SipHash) rather
+/// this uses the per-process randomly seeded [`RandomState`] (`SipHash`) rather
 /// than a fixed-seed hasher, to resist hash-flooding.
 type PeerMap<V> = HashMap<Bytes, V, RandomState>;
 
@@ -251,7 +251,7 @@ mod tests {
         Bytes::copy_from_slice(s.as_bytes())
     }
 
-    /// Receive the next PeerCmd body within a timeout; None on timeout/close.
+    /// Receive the next `PeerCmd` body within a timeout; None on timeout/close.
     async fn recv_body(rx: &Receiver<PeerCmd>) -> Option<Vec<Bytes>> {
         match crate::rt::timeout(Duration::from_secs(1), rx.recv_async()).await {
             Ok(Ok(PeerCmd::SendBody(parts))) => Some((*parts).clone()),
@@ -260,7 +260,7 @@ mod tests {
     }
 
     /// True if no message body arrives within a short window. A timeout or a
-    /// closed channel both count as "no body"; only an actual SendBody fails.
+    /// closed channel both count as "no body"; only an actual `SendBody` fails.
     async fn expect_no_body(rx: &Receiver<PeerCmd>) -> bool {
         !matches!(
             crate::rt::timeout(Duration::from_millis(150), rx.recv_async()).await,

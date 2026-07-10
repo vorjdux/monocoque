@@ -15,7 +15,7 @@
 //! that the single sink falls behind the readers and the queue fills. It asserts
 //! peak RSS growth stays under a bound that the buggy code blew through by ~4x.
 //!
-//! Measured VmHWM growth over baseline at 32 workers / 64 B / 400k messages:
+//! Measured `VmHWM` growth over baseline at 32 workers / 64 B / 400k messages:
 //! buggy (unbounded batch item) ~66 MB, fixed (per-item message cap) ~15 MB.
 //! The bound is set at 40 MB: comfortably above the fixed cost on the measured
 //! backends (compio ~15 MB, tokio ~13 MB) and well below the ~66 MB the regression

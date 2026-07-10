@@ -1,4 +1,4 @@
-//! compio backend: native io_uring. Selected by `runtime-compio`.
+//! compio backend: native `io_uring`. Selected by `runtime-compio`.
 //!
 //! See [`super`](crate::rt) for the facade contract this implements.
 

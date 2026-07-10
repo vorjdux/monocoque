@@ -68,7 +68,7 @@ where
 
 /// Write several owned buffers in one `writev`.
 ///
-/// compio_io's default `write_vectored` issues one `send` per buffer; this
+/// `compio_io`'s default `write_vectored` issues one `send` per buffer; this
 /// override coalesces them into a single vectored syscall, matching the
 /// compio backend so the PUB fan-out's batched writes stay one syscall.
 async fn write_vectored_from<T, B>(stream: &Async<T>, buf: B) -> BufResult<usize, B>
@@ -252,6 +252,7 @@ impl TcpStream {
     }
 
     /// Split into owned read and write halves sharing the socket.
+    #[must_use]
     pub fn into_split(self) -> (OwnedReadHalf, OwnedWriteHalf) {
         (
             OwnedReadHalf {
