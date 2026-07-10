@@ -174,7 +174,11 @@ enum WorkerCommand {
     /// Add a new subscriber to this worker
     AddSubscriber {
         id: SubscriberId,
-        stream: TcpStream,
+        // The accepted connection is handed to the worker as an owned fd rather
+        // than a live TcpStream: compio 0.19 streams are thread-per-core
+        // (`!Send`), so the worker re-attaches the fd to its own runtime via
+        // `TcpStream::from_std`. `OwnedFd` is `Send` and carries clean ownership.
+        fd: std::os::fd::OwnedFd,
         subscriptions: SubscriptionState,
         cipher: Option<SubCipher>,
         /// Resolved `max_msg_size` for the subscription reader's decoder.
@@ -366,7 +370,7 @@ fn worker_thread(worker_id: usize, rx: Receiver<WorkerCommand>, sub_count: Arc<A
             match rx.recv_async().await {
                 Ok(WorkerCommand::AddSubscriber {
                     id,
-                    stream,
+                    fd,
                     subscriptions,
                     cipher,
                     max_frame_size,
@@ -376,7 +380,7 @@ fn worker_thread(worker_id: usize, rx: Receiver<WorkerCommand>, sub_count: Arc<A
                         &mut subscribers,
                         worker_id,
                         id,
-                        stream,
+                        fd,
                         subscriptions,
                         cipher,
                         max_frame_size,
@@ -511,7 +515,7 @@ fn worker_thread(worker_id: usize, rx: Receiver<WorkerCommand>, sub_count: Arc<A
                     match deferred {
                         Some(WorkerCommand::AddSubscriber {
                             id,
-                            stream,
+                            fd,
                             subscriptions,
                             cipher,
                             max_frame_size,
@@ -521,7 +525,7 @@ fn worker_thread(worker_id: usize, rx: Receiver<WorkerCommand>, sub_count: Arc<A
                                 &mut subscribers,
                                 worker_id,
                                 id,
-                                stream,
+                                fd,
                                 subscriptions,
                                 cipher,
                                 max_frame_size,
@@ -599,13 +603,27 @@ fn add_subscriber(
     subscribers: &mut HashMap<SubscriberId, WorkerSubscriber>,
     worker_id: usize,
     id: SubscriberId,
-    stream: TcpStream,
+    fd: std::os::fd::OwnedFd,
     subscriptions: SubscriptionState,
     cipher: Option<SubCipher>,
     max_frame_size: Option<usize>,
     union: Arc<SharedSubscriptions>,
 ) {
     debug!("[Worker {}] Adding subscriber {}", worker_id, id);
+
+    // Re-attach the handed-off fd to THIS worker's runtime (compio 0.19 streams
+    // are pinned to the runtime that owns them). from_std attaches to the
+    // current runtime, which is this worker's.
+    let stream = match TcpStream::from_std(std::net::TcpStream::from(fd)) {
+        Ok(s) => s,
+        Err(e) => {
+            warn!(
+                "[Worker {}] Failed to attach subscriber {} fd: {}",
+                worker_id, id, e
+            );
+            return;
+        }
+    };
 
     // Split stream into read half (subscriptions) and write half (broadcasts).
     let (read_half, write_half) = stream.into_split();
@@ -786,12 +804,22 @@ impl PubSocket {
             .curve_cipher
             .map(|c| Arc::new(parking_lot::Mutex::new(c)));
 
-        // Send stream + subscriptions + cipher to worker. The worker will split the stream
-        // into read (subscription reader task) and write (broadcast) halves.
+        // Detach the accepted-and-handshaked connection from this (the accept)
+        // runtime and hand a Send-able owned fd to the worker, which re-attaches
+        // it to its own runtime. `try_clone_to_owned` dups the fd (the dup keeps
+        // the socket alive after we drop our stream); O_NONBLOCK lives on the
+        // shared file description, so the dup stays non-blocking.
+        use std::os::fd::{AsRawFd, BorrowedFd};
+        let fd = unsafe { BorrowedFd::borrow_raw(stream.as_raw_fd()) }.try_clone_to_owned()?;
+        drop(stream);
+
+        // Send the fd + subscriptions + cipher to the worker. The worker splits
+        // the re-attached stream into read (subscription reader) and write
+        // (broadcast) halves.
         self.workers[worker_idx]
             .send_async(WorkerCommand::AddSubscriber {
                 id,
-                stream,
+                fd,
                 subscriptions,
                 cipher,
                 max_frame_size: self.options.max_msg_size,

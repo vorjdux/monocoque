@@ -1184,7 +1184,7 @@ mod tests {
             match self.steps.pop_front() {
                 Some(WriteStep::Bytes(n)) => {
                     let n = n.min(buf.buf_len());
-                    self.log.push(&buf.as_slice()[..n]);
+                    self.log.push(&buf.as_init()[..n]);
                     BufResult(Ok(n), buf)
                 }
                 Some(WriteStep::Error(kind)) => {
@@ -1192,7 +1192,7 @@ mod tests {
                 }
                 None => {
                     let n = buf.buf_len();
-                    self.log.push(buf.as_slice());
+                    self.log.push(buf.as_init());
                     BufResult(Ok(n), buf)
                 }
             }

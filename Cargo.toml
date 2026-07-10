@@ -71,9 +71,9 @@ bytes = "1.11.1"
 # no runtime and no io_uring driver, so they compile under either backend. The
 # full compio umbrella (net/runtime/time/macros/io_uring) is pulled in only by
 # the `runtime-compio` feature. See each crate's [features].
-compio-io = "0.2"
-compio-buf = { version = "0.3", features = ["bytes"] }
-compio = { version = "0.10", default-features = false, features = ["runtime", "macros", "time", "io-uring"] }
+compio-io = "0.10"
+compio-buf = { version = "0.8", features = ["bytes"] }
+compio = { version = "0.19", default-features = false, features = ["runtime", "macros", "time", "io-uring", "net"] }
 # smol drives the same socket stack on a lightweight async-executor + async-io
 # stack. Only the `runtime-smol` feature pulls it in. See each crate's [features].
 smol = "2"

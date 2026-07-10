@@ -1591,7 +1591,7 @@ mod tests {
                 .pop_front()
                 .unwrap_or_else(|| buf.buf_len())
                 .min(buf.buf_len());
-            self.written.extend_from_slice(&buf.as_slice()[..len]);
+            self.written.extend_from_slice(&buf.as_init()[..len]);
             BufResult(Ok(len), buf)
         }
 

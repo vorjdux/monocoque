@@ -58,7 +58,7 @@ where
     for<'a> SockRef<'a>: From<&'a T>,
 {
     let result = stream
-        .write_with(|inner| SockRef::from(inner).send(buf.as_slice()))
+        .write_with(|inner| SockRef::from(inner).send(buf.as_init()))
         .await;
     match result {
         Ok(n) => BufResult(Ok(n), buf),
@@ -238,6 +238,17 @@ impl TcpStream {
         let inner = Async::<std::net::TcpStream>::connect(target).await?;
         Ok(Self {
             inner: Arc::new(inner),
+        })
+    }
+
+    /// Adopt a `std::net::TcpStream`, attaching it to the async reactor.
+    ///
+    /// Mirrors compio's `TcpStream::from_std`; used to re-attach a handed-off fd
+    /// to a worker's runtime (see the publisher fan-out). `Async::new` puts the
+    /// stream into non-blocking mode.
+    pub fn from_std(stream: std::net::TcpStream) -> io::Result<Self> {
+        Ok(Self {
+            inner: Arc::new(Async::new(stream)?),
         })
     }
 

@@ -8,16 +8,19 @@ pub use compio::net::{TcpListener, TcpStream, ToSocketAddrsAsync as ToSocketAddr
 pub use compio::time::{sleep, timeout};
 
 /// Owned read half of a split TCP stream.
-pub type OwnedReadHalf = compio::net::OwnedReadHalf<TcpStream>;
-/// Owned write half of a split TCP stream.
-pub type OwnedWriteHalf = compio::net::OwnedWriteHalf<TcpStream>;
+///
+/// compio 0.19's `TcpStream::into_split` returns two owned `TcpStream`s that
+/// share the underlying fd, so the read and write halves are the same type.
+pub type OwnedReadHalf = TcpStream;
+/// Owned write half of a split TCP stream. See [`OwnedReadHalf`].
+pub type OwnedWriteHalf = TcpStream;
 
 #[cfg(unix)]
 pub use compio::net::{UnixListener, UnixStream};
 
 /// Handle to a spawned task. Kept alive keeps the task running; dropping it
 /// detaches under compio.
-pub type JoinHandle<T> = compio::runtime::Task<T>;
+pub type JoinHandle<T> = compio::runtime::JoinHandle<T>;
 
 /// Spawn a task on the current runtime and return its handle.
 #[inline]
@@ -45,16 +48,20 @@ where
     F: FnOnce() -> T + Send + Sync + 'static,
     T: Send + 'static,
 {
-    compio::runtime::spawn_blocking(f).await
+    compio::runtime::spawn_blocking(f)
+        .await
+        .expect("blocking task panicked")
 }
 
 /// Await a spawned task and return its output.
 ///
-/// Normalizes the difference between backends: compio's task awaits directly
-/// to the output, so this is just the await.
+/// Normalizes the difference between backends: compio's `JoinHandle` now awaits
+/// to `Result<T, JoinError>` (like tokio), so unwrap the join error here.
 #[inline]
 pub async fn join<T>(handle: JoinHandle<T>) -> T {
-    handle.await
+    handle
+        .await
+        .expect("spawned task panicked or was cancelled")
 }
 
 /// A self-contained runtime owned by a single thread.

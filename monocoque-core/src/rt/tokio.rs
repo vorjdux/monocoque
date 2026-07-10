@@ -132,7 +132,7 @@ where
     W: tokio::io::AsyncWrite + Unpin,
     B: IoBuf,
 {
-    let slice = buf.as_slice();
+    let slice = buf.as_init();
     let result = poll_fn(|cx| Pin::new(&mut *writer).poll_write(cx, slice)).await;
     match result {
         Ok(n) => BufResult(Ok(n), buf),
@@ -231,6 +231,18 @@ impl TcpStream {
     pub async fn connect<A: ToSocketAddrs>(addr: A) -> io::Result<Self> {
         let inner = tokio::net::TcpStream::connect(addr).await?;
         Ok(Self { inner })
+    }
+
+    /// Adopt a `std::net::TcpStream`, attaching it to the current runtime.
+    ///
+    /// Mirrors compio's `TcpStream::from_std`; used to re-attach a handed-off
+    /// fd to a worker's runtime (see the publisher fan-out). tokio requires the
+    /// stream to be non-blocking.
+    pub fn from_std(stream: std::net::TcpStream) -> io::Result<Self> {
+        stream.set_nonblocking(true)?;
+        Ok(Self {
+            inner: tokio::net::TcpStream::from_std(stream)?,
+        })
     }
 
     /// Local address this stream is bound to.
