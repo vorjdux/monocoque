@@ -156,7 +156,10 @@ mod tests {
         let mut a = unsafe { take_read_buffer(&mut stash, 8192) };
         a.truncate(10);
         let a_ptr = a.as_ptr();
-        assert_eq!(a_ptr, slab_ptr, "chunk should be carved from the slab front");
+        assert_eq!(
+            a_ptr, slab_ptr,
+            "chunk should be carved from the slab front"
+        );
         let frozen = a.freeze();
         assert_eq!(
             frozen.as_ptr(),

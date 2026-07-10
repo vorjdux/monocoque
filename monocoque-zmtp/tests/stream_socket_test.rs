@@ -363,9 +363,13 @@ fn test_stream_close_peer_cancels_reader() {
                 // never deliver the client's post-close payload.
                 let mut leaked = false;
                 for _ in 0..6 {
-                    match monocoque_core::rt::timeout(Duration::from_millis(150), srv.recv()).await {
+                    match monocoque_core::rt::timeout(Duration::from_millis(150), srv.recv()).await
+                    {
                         Ok(Ok(Some(msg))) => {
-                            if msg.get(2).is_some_and(|d| d.as_ref() == b"after-close-data") {
+                            if msg
+                                .get(2)
+                                .is_some_and(|d| d.as_ref() == b"after-close-data")
+                            {
                                 leaked = true;
                                 break;
                             }

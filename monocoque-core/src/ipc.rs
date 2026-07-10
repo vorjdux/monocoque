@@ -173,10 +173,8 @@ mod tests {
     }
 
     async fn drop_unlinks_socket_file_impl() {
-        let path = std::env::temp_dir().join(format!(
-            "monocoque-ipc-unlink-{}.sock",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("monocoque-ipc-unlink-{}.sock", std::process::id()));
         let _ = std::fs::remove_file(&path);
 
         let listener = bind(&path).await.unwrap();
@@ -199,10 +197,8 @@ mod tests {
     async fn drop_leaves_non_socket_at_path_untouched_impl() {
         // Bind, then race a regular file into the same path before drop. Drop
         // must not delete a node that is no longer our socket.
-        let path = std::env::temp_dir().join(format!(
-            "monocoque-ipc-guard-{}.sock",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("monocoque-ipc-guard-{}.sock", std::process::id()));
         let _ = std::fs::remove_file(&path);
 
         let listener = bind(&path).await.unwrap();

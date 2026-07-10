@@ -300,7 +300,10 @@ mod tests {
             user_tx
                 .send(RouterCmd::SendMessage(vec![b("Z"), b("payload")]))
                 .unwrap();
-            assert!(expect_no_body(&peer_a_rx).await, "unknown id must be dropped");
+            assert!(
+                expect_no_body(&peer_a_rx).await,
+                "unknown id must be dropped"
+            );
 
             drop(hub_tx);
             drop(user_tx);
@@ -333,12 +336,8 @@ mod tests {
             crate::rt::sleep(Duration::from_millis(30)).await;
 
             // Two sends should hit the two peers, one each (round robin).
-            user_tx
-                .send(RouterCmd::SendMessage(vec![b("m1")]))
-                .unwrap();
-            user_tx
-                .send(RouterCmd::SendMessage(vec![b("m2")]))
-                .unwrap();
+            user_tx.send(RouterCmd::SendMessage(vec![b("m1")])).unwrap();
+            user_tx.send(RouterCmd::SendMessage(vec![b("m2")])).unwrap();
 
             let got_a = recv_body(&peer_a_rx).await;
             let got_b = recv_body(&peer_b_rx).await;

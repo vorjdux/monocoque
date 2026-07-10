@@ -183,10 +183,7 @@ macro_rules! impl_compio_io {
                 write_from(&mut self.inner, buf).await
             }
 
-            async fn write_vectored<B: IoVectoredBuf>(
-                &mut self,
-                buf: B,
-            ) -> BufResult<usize, B> {
+            async fn write_vectored<B: IoVectoredBuf>(&mut self, buf: B) -> BufResult<usize, B> {
                 write_vectored_from(&mut self.inner, buf).await
             }
 

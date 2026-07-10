@@ -11,8 +11,7 @@ pub const FLAG_COMMAND: u8 = 0x04;
 /// How long to pause after an `accept` fails with per-process/system file
 /// descriptor exhaustion before returning, so a caller's `loop { accept() }`
 /// cannot livelock and burn a core while no descriptors are available.
-pub const ACCEPT_FD_EXHAUSTION_BACKOFF: std::time::Duration =
-    std::time::Duration::from_millis(10);
+pub const ACCEPT_FD_EXHAUSTION_BACKOFF: std::time::Duration = std::time::Duration::from_millis(10);
 
 /// Returns true if `err` indicates file descriptor exhaustion: `EMFILE` (the
 /// process hit its fd limit) or `ENFILE` (the system-wide table is full).
