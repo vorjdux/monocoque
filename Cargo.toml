@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["monocoque-core", "monocoque-zmtp", "monocoque"]
-exclude = ["monocoque-fuzz"]
+exclude = ["monocoque-fuzz", "monocoque-loom"]
 default-members = ["monocoque"]
 
 [workspace.package]

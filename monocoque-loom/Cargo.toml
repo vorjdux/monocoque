@@ -1,0 +1,16 @@
+[package]
+name = "monocoque-loom"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Standalone crate so `--cfg loom` reaches only loom, not the flume /
+# concurrent-queue / smol dependencies of the real crates (which have their own
+# cfg(loom) paths that break when the flag is forced on globally). The tests
+# here are models of the atomic protocols in monocoque-zmtp's publisher, run
+# with: RUSTFLAGS="--cfg loom" cargo test --manifest-path monocoque-loom/Cargo.toml
+[dependencies]
+loom = "0.7"
+
+[lib]
+path = "src/lib.rs"

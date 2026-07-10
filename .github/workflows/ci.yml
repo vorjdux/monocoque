@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Nightly timer for the heavy verification jobs (fuzz run, ThreadSanitizer)
+  # that are too slow to gate every PR.
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -105,3 +110,79 @@ jobs:
         run: cargo install cargo-fuzz
       - name: Build fuzz targets
         run: cargo fuzz build --fuzz-dir monocoque-fuzz
+
+  miri:
+    name: Miri (unsafe buffer bookkeeping)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+      # Miri proves the owned-buffer unsafe in io.rs (set_buf_init /
+      # take_read_buffer) is sound. The IO-dependent unsafe (tcp from_raw_fd,
+      # the inproc_stream cross-await pointer) needs a real runtime/syscalls and
+      # cannot run under Miri.
+      - name: Miri (io buffer tests)
+        run: "cargo miri test -p monocoque-rs-core --lib io::"
+
+  loom:
+    name: Loom (publisher atomic orderings)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Standalone crate so --cfg loom reaches only loom, not the flume /
+      # concurrent-queue deps of the real crates.
+      - name: Loom model tests
+        run: cargo test --manifest-path monocoque-loom/Cargo.toml
+        env:
+          RUSTFLAGS: "--cfg loom"
+
+  fuzz-run:
+    name: Fuzz Targets (run)
+    # Timed run, too slow for every PR: nightly schedule + manual dispatch only.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+      - name: Run each fuzz target (60s)
+        run: |
+          set -euo pipefail
+          for t in fuzz_decoder fuzz_frame_codec fuzz_security_plain \
+                   fuzz_subscription_trie fuzz_curve_handshake \
+                   fuzz_greeting fuzz_command fuzz_zap_request; do
+            echo "::group::$t"
+            cargo fuzz run --fuzz-dir monocoque-fuzz "$t" -- \
+              -max_total_time=60 -rss_limit_mb=4096
+            echo "::endgroup::"
+          done
+
+  tsan:
+    name: ThreadSanitizer (core handoffs)
+    # Rebuilds std with -Zbuild-std; scheduled + manual dispatch only.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+      # ThreadSanitizer over the core crate's thread/channel handoffs
+      # (byte-backpressure Condvar, flume monitor/hub channels). Run on the
+      # tokio backend because TSan cannot instrument compio's io_uring path.
+      - name: cargo test under ThreadSanitizer
+        run: >
+          cargo test -Zbuild-std --target x86_64-unknown-linux-gnu
+          -p monocoque-rs-core --no-default-features
+          --features runtime-tokio --lib
+        env:
+          RUSTFLAGS: "-Zsanitizer=thread"
+          TSAN_OPTIONS: "halt_on_error=1"
