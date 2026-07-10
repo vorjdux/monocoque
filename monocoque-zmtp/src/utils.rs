@@ -104,6 +104,16 @@ pub fn configure_tcp_stream(
     monocoque_core::tcp::enable_tcp_nodelay(stream)?;
     debug!("[{}] TCP_NODELAY enabled", socket_name);
 
+    // Apply OS-level socket buffer sizes (SO_SNDBUF / SO_RCVBUF) when set.
+    // A value of 0 leaves the kernel default in place.
+    if options.sndbuf > 0 || options.rcvbuf > 0 {
+        monocoque_core::tcp::configure_socket_buffers(stream, options.sndbuf, options.rcvbuf)?;
+        debug!(
+            "[{}] socket buffers set (sndbuf={}, rcvbuf={})",
+            socket_name, options.sndbuf, options.rcvbuf
+        );
+    }
+
     // Configure TCP keepalive if specified
     monocoque_core::tcp::configure_tcp_keepalive(
         stream,
