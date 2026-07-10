@@ -11,7 +11,16 @@
 
 use bytes::Bytes;
 use flume::{Receiver, Sender};
-use hashbrown::HashMap;
+use std::collections::HashMap;
+use std::collections::hash_map::RandomState;
+use std::sync::Arc;
+
+/// Map keyed by peer-reported routing identity.
+///
+/// The key is attacker-controlled (a peer announces its own routing id), so
+/// this uses the per-process randomly seeded [`RandomState`] (SipHash) rather
+/// than a fixed-seed hasher, to resist hash-flooding.
+type PeerMap<V> = HashMap<Bytes, V, RandomState>;
 
 /// Commands sent from application to Router Hub
 #[derive(Debug)]
@@ -25,7 +34,12 @@ pub enum RouterCmd {
 /// Commands sent from Hub -> Peer (body only; hub strips any envelope)
 #[derive(Debug)]
 pub enum PeerCmd {
-    SendBody(Vec<Bytes>),
+    /// Send a message body to the peer.
+    ///
+    /// The frames are shared via `Arc` so a fan-out (PUB/SUB) hands every
+    /// matching peer the same allocation instead of cloning a fresh
+    /// `Vec<Bytes>` per peer.
+    SendBody(Arc<Vec<Bytes>>),
     Close,
 }
 
@@ -57,8 +71,8 @@ pub enum RouterBehavior {
 ///
 /// This runs once per ROUTER socket (listener), and coordinates N peers.
 pub struct RouterHub {
-    // routing table
-    peers: HashMap<Bytes, Sender<PeerCmd>>,
+    // routing table (keyed by attacker-controlled identity; seeded hasher)
+    peers: PeerMap<Sender<PeerCmd>>,
 
     // LB rotation list (routing IDs)
     lb_list: Vec<Bytes>,
@@ -78,7 +92,7 @@ impl RouterHub {
         behavior: RouterBehavior,
     ) -> Self {
         Self {
-            peers: HashMap::new(),
+            peers: PeerMap::default(),
             lb_list: Vec::new(),
             lb_cursor: 0,
             behavior,
@@ -208,7 +222,7 @@ impl RouterHub {
                 }
 
                 if let Some(tx) = self.peers.get(&target_id) {
-                    let _ = tx.send(PeerCmd::SendBody(parts));
+                    let _ = tx.send(PeerCmd::SendBody(Arc::new(parts)));
                 } else {
                     // ZMQ behavior: silently drop if unknown id
                 }
@@ -218,12 +232,162 @@ impl RouterHub {
                 // Expect: [Body...]
                 if let Some(id) = self.pick_rr_peer() {
                     if let Some(tx) = self.peers.get(&id) {
-                        let _ = tx.send(PeerCmd::SendBody(parts));
+                        let _ = tx.send(PeerCmd::SendBody(Arc::new(parts)));
                     }
                 } else {
                     // No peers available: drop for now (backpressure elsewhere)
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn b(s: &str) -> Bytes {
+        Bytes::copy_from_slice(s.as_bytes())
+    }
+
+    /// Receive the next PeerCmd body within a timeout; None on timeout/close.
+    async fn recv_body(rx: &Receiver<PeerCmd>) -> Option<Vec<Bytes>> {
+        match crate::rt::timeout(Duration::from_secs(1), rx.recv_async()).await {
+            Ok(Ok(PeerCmd::SendBody(parts))) => Some((*parts).clone()),
+            _ => None,
+        }
+    }
+
+    /// True if no message body arrives within a short window. A timeout or a
+    /// closed channel both count as "no body"; only an actual SendBody fails.
+    async fn expect_no_body(rx: &Receiver<PeerCmd>) -> bool {
+        !matches!(
+            crate::rt::timeout(Duration::from_millis(150), rx.recv_async()).await,
+            Ok(Ok(PeerCmd::SendBody(_)))
+        )
+    }
+
+    #[test]
+    fn standard_routes_by_id_strips_envelope_and_drops_unknown() {
+        crate::rt::LocalRuntime::new().unwrap().block_on(async {
+            let (hub_tx, hub_rx) = flume::unbounded::<HubEvent>();
+            let (user_tx, user_rx) = flume::unbounded::<RouterCmd>();
+            let hub = RouterHub::new(hub_rx, user_rx, RouterBehavior::Standard);
+            let handle = crate::rt::spawn(hub.run());
+
+            let (peer_a_tx, peer_a_rx) = flume::unbounded::<PeerCmd>();
+            hub_tx
+                .send(HubEvent::PeerUp {
+                    routing_id: b("A"),
+                    tx: peer_a_tx,
+                })
+                .unwrap();
+            // Let the hub register the peer before routing to it.
+            crate::rt::sleep(Duration::from_millis(30)).await;
+
+            // [ID, empty, body] -> peer receives [body] (id + delimiter stripped).
+            user_tx
+                .send(RouterCmd::SendMessage(vec![
+                    b("A"),
+                    Bytes::new(),
+                    b("hello"),
+                ]))
+                .unwrap();
+            assert_eq!(recv_body(&peer_a_rx).await, Some(vec![b("hello")]));
+
+            // Unknown id is silently dropped.
+            user_tx
+                .send(RouterCmd::SendMessage(vec![b("Z"), b("payload")]))
+                .unwrap();
+            assert!(expect_no_body(&peer_a_rx).await, "unknown id must be dropped");
+
+            drop(hub_tx);
+            drop(user_tx);
+            crate::rt::join(handle).await;
+        });
+    }
+
+    #[test]
+    fn load_balancer_round_robins_across_peers() {
+        crate::rt::LocalRuntime::new().unwrap().block_on(async {
+            let (hub_tx, hub_rx) = flume::unbounded::<HubEvent>();
+            let (user_tx, user_rx) = flume::unbounded::<RouterCmd>();
+            let hub = RouterHub::new(hub_rx, user_rx, RouterBehavior::LoadBalancer);
+            let handle = crate::rt::spawn(hub.run());
+
+            let (peer_a_tx, peer_a_rx) = flume::unbounded::<PeerCmd>();
+            let (peer_b_tx, peer_b_rx) = flume::unbounded::<PeerCmd>();
+            hub_tx
+                .send(HubEvent::PeerUp {
+                    routing_id: b("A"),
+                    tx: peer_a_tx,
+                })
+                .unwrap();
+            hub_tx
+                .send(HubEvent::PeerUp {
+                    routing_id: b("B"),
+                    tx: peer_b_tx,
+                })
+                .unwrap();
+            crate::rt::sleep(Duration::from_millis(30)).await;
+
+            // Two sends should hit the two peers, one each (round robin).
+            user_tx
+                .send(RouterCmd::SendMessage(vec![b("m1")]))
+                .unwrap();
+            user_tx
+                .send(RouterCmd::SendMessage(vec![b("m2")]))
+                .unwrap();
+
+            let got_a = recv_body(&peer_a_rx).await;
+            let got_b = recv_body(&peer_b_rx).await;
+            assert!(
+                got_a.is_some() && got_b.is_some(),
+                "each peer should receive exactly one message under round robin"
+            );
+            let mut bodies = vec![got_a.unwrap(), got_b.unwrap()];
+            bodies.sort();
+            assert_eq!(bodies, vec![vec![b("m1")], vec![b("m2")]]);
+
+            drop(hub_tx);
+            drop(user_tx);
+            crate::rt::join(handle).await;
+        });
+    }
+
+    #[test]
+    fn peer_down_stops_delivery() {
+        crate::rt::LocalRuntime::new().unwrap().block_on(async {
+            let (hub_tx, hub_rx) = flume::unbounded::<HubEvent>();
+            let (user_tx, user_rx) = flume::unbounded::<RouterCmd>();
+            let hub = RouterHub::new(hub_rx, user_rx, RouterBehavior::Standard);
+            let handle = crate::rt::spawn(hub.run());
+
+            let (peer_a_tx, peer_a_rx) = flume::unbounded::<PeerCmd>();
+            hub_tx
+                .send(HubEvent::PeerUp {
+                    routing_id: b("A"),
+                    tx: peer_a_tx,
+                })
+                .unwrap();
+            crate::rt::sleep(Duration::from_millis(30)).await;
+            hub_tx
+                .send(HubEvent::PeerDown { routing_id: b("A") })
+                .unwrap();
+            crate::rt::sleep(Duration::from_millis(30)).await;
+
+            user_tx
+                .send(RouterCmd::SendMessage(vec![b("A"), b("late")]))
+                .unwrap();
+            assert!(
+                expect_no_body(&peer_a_rx).await,
+                "a downed peer must not receive messages"
+            );
+
+            drop(hub_tx);
+            drop(user_tx);
+            crate::rt::join(handle).await;
+        });
     }
 }
