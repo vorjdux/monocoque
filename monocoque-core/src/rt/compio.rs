@@ -18,6 +18,16 @@ pub type OwnedWriteHalf = TcpStream;
 #[cfg(unix)]
 pub use compio::net::{UnixListener, UnixStream};
 
+/// Bind a TCP listener with `SO_REUSEPORT` so multiple acceptors can share one
+/// port with in-kernel load balancing. See [`crate::tcp::reuseport_listener`].
+///
+/// # Errors
+///
+/// Returns an error if the socket cannot be created/bound or adopted.
+pub fn bind_reuseport(addr: std::net::SocketAddr) -> std::io::Result<TcpListener> {
+    TcpListener::from_std(crate::tcp::reuseport_listener(addr)?)
+}
+
 /// Handle to a spawned task. Kept alive keeps the task running; dropping it
 /// detaches under compio.
 pub type JoinHandle<T> = compio::runtime::JoinHandle<T>;

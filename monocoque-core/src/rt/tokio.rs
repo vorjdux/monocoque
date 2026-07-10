@@ -275,6 +275,14 @@ impl TcpListener {
         Ok(Self { inner })
     }
 
+    /// Adopt a `std::net::TcpListener`, attaching it to the tokio runtime.
+    pub fn from_std(listener: std::net::TcpListener) -> io::Result<Self> {
+        listener.set_nonblocking(true)?;
+        Ok(Self {
+            inner: tokio::net::TcpListener::from_std(listener)?,
+        })
+    }
+
     /// Accept the next inbound connection.
     pub async fn accept(&self) -> io::Result<(TcpStream, SocketAddr)> {
         let (stream, addr) = self.inner.accept().await?;
@@ -285,6 +293,11 @@ impl TcpListener {
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
         self.inner.local_addr()
     }
+}
+
+/// Bind a TCP listener with `SO_REUSEPORT`. See [`crate::tcp::reuseport_listener`].
+pub fn bind_reuseport(addr: SocketAddr) -> io::Result<TcpListener> {
+    TcpListener::from_std(crate::tcp::reuseport_listener(addr)?)
 }
 
 impl_compio_io!(read TcpStream);
