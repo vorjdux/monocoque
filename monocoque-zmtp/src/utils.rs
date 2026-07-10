@@ -8,6 +8,44 @@ use tracing::debug;
 pub const FLAG_LONG: u8 = 0x02;
 pub const FLAG_COMMAND: u8 = 0x04;
 
+/// How long to pause after an `accept` fails with per-process/system file
+/// descriptor exhaustion before returning, so a caller's `loop { accept() }`
+/// cannot livelock and burn a core while no descriptors are available.
+pub const ACCEPT_FD_EXHAUSTION_BACKOFF: std::time::Duration =
+    std::time::Duration::from_millis(10);
+
+/// Returns true if `err` indicates file descriptor exhaustion: `EMFILE` (the
+/// process hit its fd limit) or `ENFILE` (the system-wide table is full).
+///
+/// These are transient: under fd exhaustion `accept` returns the same error
+/// immediately on every call, so a tight accept loop spins at full CPU (the
+/// classic accept livelock). Callers should back off before retrying.
+#[cfg(unix)]
+#[must_use]
+pub fn is_fd_exhaustion(err: &io::Error) -> bool {
+    // EMFILE = 24, ENFILE = 23 on Linux and the BSDs/macOS.
+    matches!(err.raw_os_error(), Some(23) | Some(24))
+}
+
+/// Non-Unix platforms do not surface `EMFILE`/`ENFILE`; never treat an error as
+/// fd exhaustion.
+#[cfg(not(unix))]
+#[must_use]
+pub fn is_fd_exhaustion(_err: &io::Error) -> bool {
+    false
+}
+
+/// Back off briefly when an accept error is fd exhaustion.
+///
+/// Call this on the error path of an accept loop, passing the error, so that
+/// `EMFILE`/`ENFILE` throttles the loop instead of spinning. No-op for any other
+/// error.
+pub async fn backoff_on_fd_exhaustion(err: &io::Error) {
+    if is_fd_exhaustion(err) {
+        monocoque_core::rt::sleep(ACCEPT_FD_EXHAUSTION_BACKOFF).await;
+    }
+}
+
 /// Encode a complete ZMTP frame (header + body).
 ///
 /// This function is used ONLY for protocol commands (READY, etc.) which are
@@ -134,4 +172,27 @@ pub fn configure_tcp_stream(
     }
 
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fd_exhaustion_errnos_are_recognized() {
+        // EMFILE (24) and ENFILE (23) are fd exhaustion.
+        assert!(is_fd_exhaustion(&io::Error::from_raw_os_error(24)));
+        assert!(is_fd_exhaustion(&io::Error::from_raw_os_error(23)));
+    }
+
+    #[test]
+    fn other_errors_are_not_fd_exhaustion() {
+        assert!(!is_fd_exhaustion(&io::Error::from_raw_os_error(104))); // ECONNRESET
+        assert!(!is_fd_exhaustion(&io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "would block"
+        )));
+        // An error with no OS errno (e.g. a synthetic one) is not fd exhaustion.
+        assert!(!is_fd_exhaustion(&io::Error::other("synthetic")));
+    }
 }

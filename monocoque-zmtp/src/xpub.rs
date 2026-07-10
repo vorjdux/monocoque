@@ -241,7 +241,12 @@ impl XPubSocket {
                 // No pending connections
                 Ok(())
             }
-            Err(e) => Err(e),
+            Err(e) => {
+                // Throttle on fd exhaustion so a caller's accept loop cannot
+                // livelock while no descriptors are available.
+                crate::utils::backoff_on_fd_exhaustion(&e).await;
+                Err(e)
+            }
         }
     }
 

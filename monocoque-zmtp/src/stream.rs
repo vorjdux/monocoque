@@ -239,7 +239,15 @@ impl StreamSocket {
     ///
     /// Returns an error if the `accept()` system call fails.
     pub async fn accept_raw(&mut self) -> io::Result<RoutingId> {
-        let (stream, addr) = self.listener.accept().await?;
+        let (stream, addr) = match self.listener.accept().await {
+            Ok(pair) => pair,
+            Err(e) => {
+                // Throttle on fd exhaustion so a caller's accept loop cannot
+                // livelock while no descriptors are available.
+                crate::utils::backoff_on_fd_exhaustion(&e).await;
+                return Err(e);
+            }
+        };
         crate::utils::configure_tcp_stream(&stream, &self.options, "STREAM")?;
         debug!("[STREAM] Accepted raw connection from {}", addr);
 
