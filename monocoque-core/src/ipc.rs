@@ -8,7 +8,61 @@ use crate::rt::{UnixListener, UnixStream};
 #[cfg(unix)]
 use std::os::unix::fs::FileTypeExt;
 #[cfg(unix)]
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// A bound Unix domain socket listener that unlinks its socket file on drop.
+///
+/// A `UnixListener` does not remove its filesystem node when closed, so every
+/// IPC endpoint would otherwise leave a stale socket behind (libzmq unlinks the
+/// endpoint on close). This wrapper records the bound path and removes it on
+/// [`Drop`], guarding the unlink so it only ever removes a socket node.
+///
+/// It [`Deref`]s to the underlying [`UnixListener`], so it can be used anywhere
+/// a `&UnixListener` is expected (e.g. [`accept`]).
+#[cfg(unix)]
+#[derive(Debug)]
+pub struct IpcListener {
+    listener: UnixListener,
+    path: PathBuf,
+}
+
+#[cfg(unix)]
+impl IpcListener {
+    /// Borrow the underlying listener.
+    #[must_use]
+    pub const fn listener(&self) -> &UnixListener {
+        &self.listener
+    }
+
+    /// The filesystem path this listener is bound to.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+#[cfg(unix)]
+impl std::ops::Deref for IpcListener {
+    type Target = UnixListener;
+
+    fn deref(&self) -> &Self::Target {
+        &self.listener
+    }
+}
+
+#[cfg(unix)]
+impl Drop for IpcListener {
+    fn drop(&mut self) {
+        // Only remove the node if it is still the socket we bound. This avoids
+        // deleting a regular file that raced into the path, and is a no-op if
+        // the socket was already unlinked.
+        if let Ok(metadata) = std::fs::symlink_metadata(&self.path) {
+            if metadata.file_type().is_socket() {
+                let _ = std::fs::remove_file(&self.path);
+            }
+        }
+    }
+}
 
 #[cfg(unix)]
 /// Connect to a Unix domain socket.
@@ -42,7 +96,7 @@ pub async fn connect<P: AsRef<Path>>(path: P) -> std::io::Result<UnixStream> {
 /// # Ok(())
 /// # }
 /// ```
-pub async fn bind<P: AsRef<Path>>(path: P) -> std::io::Result<UnixListener> {
+pub async fn bind<P: AsRef<Path>>(path: P) -> std::io::Result<IpcListener> {
     let path_ref = path.as_ref();
     if path_ref.exists() {
         let metadata = std::fs::symlink_metadata(path_ref)?;
@@ -56,7 +110,11 @@ pub async fn bind<P: AsRef<Path>>(path: P) -> std::io::Result<UnixListener> {
         }
     }
 
-    UnixListener::bind(path).await
+    let listener = UnixListener::bind(path_ref).await?;
+    Ok(IpcListener {
+        listener,
+        path: path_ref.to_path_buf(),
+    })
 }
 
 #[cfg(unix)]
@@ -105,6 +163,58 @@ mod tests {
         drop(client);
         drop(server);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn drop_unlinks_socket_file() {
+        crate::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(drop_unlinks_socket_file_impl())
+    }
+
+    async fn drop_unlinks_socket_file_impl() {
+        let path = std::env::temp_dir().join(format!(
+            "monocoque-ipc-unlink-{}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        let listener = bind(&path).await.unwrap();
+        assert!(path.exists(), "bind should create the socket node");
+
+        drop(listener);
+        assert!(
+            !path.exists(),
+            "dropping IpcListener must unlink the socket file"
+        );
+    }
+
+    #[test]
+    fn drop_leaves_non_socket_at_path_untouched() {
+        crate::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(drop_leaves_non_socket_at_path_untouched_impl())
+    }
+
+    async fn drop_leaves_non_socket_at_path_untouched_impl() {
+        // Bind, then race a regular file into the same path before drop. Drop
+        // must not delete a node that is no longer our socket.
+        let path = std::env::temp_dir().join(format!(
+            "monocoque-ipc-guard-{}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        let listener = bind(&path).await.unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, b"not a socket").unwrap();
+
+        drop(listener);
+        assert!(
+            path.exists(),
+            "Drop must not remove a non-socket node at the bound path"
+        );
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
