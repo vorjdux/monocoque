@@ -30,7 +30,7 @@
 //! - RFC 26: <https://rfc.zeromq.org/spec/26/>
 //! - RFC 23 (ZMTP 3.1): <https://rfc.zeromq.org/spec/23/>
 
-use bytes::{Bytes, BytesMut};
+use bytes::{Buf, Bytes, BytesMut};
 use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
     aead::{Aead, KeyInit, OsRng},
@@ -553,7 +553,12 @@ impl CurveMessageCipher {
             return Err(CurveError::ProtocolViolation);
         }
         let more = (plaintext[0] & 0x01) != 0;
-        Ok((more, Bytes::from(plaintext[1..].to_vec())))
+        // Convert the owned plaintext into `Bytes` (O(1), no copy) and slice off
+        // the 1-byte flags prefix by advancing the view (also O(1)). The prior
+        // `plaintext[1..].to_vec()` re-copied the whole payload per frame.
+        let mut body = Bytes::from(plaintext);
+        body.advance(1);
+        Ok((more, body))
     }
 }
 
@@ -1664,6 +1669,27 @@ mod tests {
         let decrypted = box_.decrypt(&ciphertext, &nonce).unwrap();
 
         assert_eq!(plaintext, decrypted.as_slice());
+    }
+
+    #[test]
+    fn decrypt_frame_round_trip_strips_flag_without_recopy() {
+        // Encrypt on the client, decrypt on the server, for both MORE values.
+        // Guards the zero-copy body slice in decrypt_frame (advance past the
+        // 1-byte flags prefix) against off-by-one / flag-bit regressions.
+        let shared_secret = [42u8; CURVE_KEY_SIZE];
+        let mut client = CurveMessageCipher::new_client(CurveBox::new(&shared_secret), 0, 0);
+        let mut server = CurveMessageCipher::new_server(CurveBox::new(&shared_secret), 0, 0);
+
+        for (payload, more) in [
+            (b"first-frame".as_ref(), true),
+            (b"".as_ref(), false),
+            (b"final-frame-with-body".as_ref(), false),
+        ] {
+            let wire = client.encrypt_frame(payload, more).unwrap();
+            let (got_more, body) = server.decrypt_frame(&wire).unwrap();
+            assert_eq!(got_more, more, "MORE flag mismatch");
+            assert_eq!(body.as_ref(), payload, "payload mismatch after flag strip");
+        }
     }
 
     #[test]
