@@ -193,6 +193,23 @@ pub enum FrameResult {
     NeedMore,
 }
 
+/// Apply equal jitter to a reconnect backoff delay, spreading the actual sleep
+/// uniformly across `[delay/2, delay]`.
+///
+/// Without jitter, a fleet of clients that lost a restarted server would all
+/// wake from the same backoff in lockstep and hammer it in synchronized waves.
+/// Jitter decorrelates them while preserving the backoff's growth.
+fn jittered_backoff(delay: std::time::Duration) -> std::time::Duration {
+    use rand::Rng;
+    if delay.is_zero() {
+        return delay;
+    }
+    // Backoff delays are milliseconds to seconds, so the nanosecond count fits
+    // comfortably in u64.
+    let half_ns = (delay.as_nanos() / 2) as u64;
+    std::time::Duration::from_nanos(half_ns + rand::thread_rng().gen_range(0..=half_ns))
+}
+
 impl<S> SocketBase<S>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -1027,19 +1044,22 @@ impl SocketBase<TcpStream> {
             )
         })?;
 
-        // Apply backoff delay if we have reconnection state.
-        // Use std::thread::sleep rather than monocoque_core::rt::sleep: multiple
-        // handshake timeouts (via monocoque_core::rt::timeout) leave residual timer
-        // state that makes subsequent compio sleeps hang indefinitely.
-        // Blocking sleep is safe here because the socket has no pending I/O.
+        // Apply the backoff delay if we have reconnection state. This is an
+        // async sleep that yields the executor, so a reconnecting socket does
+        // not stall other sockets colocated on the same single-threaded runtime.
+        // (Earlier this had to be a blocking std::thread::sleep because compio
+        // 0.10 left residual timer state after handshake timeouts that hung
+        // rt::sleep; compio 0.19 fixed that, verified by
+        // tests/sleep_after_timeout_probe.rs.)
         if let Some(reconnect) = &mut self.reconnect {
-            let delay = reconnect.next_delay();
+            let base_delay = reconnect.next_delay();
+            let delay = jittered_backoff(base_delay);
             debug!(
                 "[SocketBase] Reconnection attempt {} after {:?}",
                 reconnect.attempt(),
                 delay
             );
-            std::thread::sleep(delay);
+            monocoque_core::rt::sleep(delay).await;
         }
 
         // Attempt connection based on endpoint type
@@ -1124,6 +1144,26 @@ mod tests {
     use std::collections::VecDeque;
     use std::io;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn jittered_backoff_stays_within_half_to_full_range() {
+        use std::time::Duration;
+        // Zero stays zero (no reconnect delay).
+        assert_eq!(jittered_backoff(Duration::ZERO), Duration::ZERO);
+
+        // Otherwise the jittered delay is always in [delay/2, delay]. Sample
+        // enough draws to exercise the range without relying on a fixed seed.
+        let delay = Duration::from_millis(100);
+        for _ in 0..1000 {
+            let j = jittered_backoff(delay);
+            assert!(
+                j >= delay / 2 && j <= delay,
+                "jittered delay {j:?} out of [{:?}, {:?}]",
+                delay / 2,
+                delay
+            );
+        }
+    }
 
     const PAYLOAD: &[u8] = b"abcdef";
 
