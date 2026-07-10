@@ -32,6 +32,17 @@ use std::mem::MaybeUninit;
 /// the per-read buffer bound and its resident footprint are unchanged.
 pub const READ_SLAB_SIZE: usize = 64 * 1024;
 
+/// Frame-size threshold below which a received frame is copied out of the
+/// shared read slab into a right-sized allocation instead of being frozen in
+/// place.
+///
+/// Freezing a small frame shares the whole [`READ_SLAB_SIZE`] slab by refcount,
+/// so a single small frame that stays queued (a slow consumer, a lagging SUB)
+/// pins 64 KiB. Copying frames below this threshold releases the slab
+/// immediately; larger frames stay zero-copy, where the per-byte copy would
+/// outweigh the footprint saving.
+pub const COPY_OUT_THRESHOLD: usize = 4 * 1024;
+
 /// Take a read-sized scratch buffer from the front of `stash`, leaving the
 /// remaining tail in `stash` to hand out on the next call.
 ///
@@ -130,6 +141,45 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn small_frame_copy_releases_the_slab() {
+        use bytes::Bytes;
+
+        // One 64 KiB slab, fully initialized so we can read pointers safely.
+        let mut stash = BytesMut::new();
+        stash.resize(READ_SLAB_SIZE, 0);
+        let slab_ptr = stash.as_ptr();
+
+        // Freezing a small frame in place shares the slab: the frozen Bytes
+        // points into the original 64 KiB allocation, pinning all of it.
+        let mut a = unsafe { take_read_buffer(&mut stash, 8192) };
+        a.truncate(10);
+        let a_ptr = a.as_ptr();
+        assert_eq!(a_ptr, slab_ptr, "chunk should be carved from the slab front");
+        let frozen = a.freeze();
+        assert_eq!(
+            frozen.as_ptr(),
+            slab_ptr,
+            "freeze() shares the slab allocation"
+        );
+
+        // Copying a small frame out yields a fresh, right-sized allocation that
+        // does not reference the slab, so the slab is free once the chunk drops.
+        let mut b = unsafe { take_read_buffer(&mut stash, 8192) };
+        b.truncate(10);
+        let b_ptr = b.as_ptr();
+        let copied = Bytes::copy_from_slice(&b);
+        assert_ne!(
+            copied.as_ptr(),
+            b_ptr,
+            "copy_from_slice must allocate off the slab, not alias it"
+        );
+        assert!(
+            COPY_OUT_THRESHOLD > 10,
+            "10-byte frame must be below the copy-out threshold"
+        );
+    }
 
     #[test]
     fn take_read_buffer_over_slab_size_does_not_panic_or_corrupt() {

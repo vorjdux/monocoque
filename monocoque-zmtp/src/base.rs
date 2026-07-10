@@ -556,8 +556,16 @@ where
         }
 
         // Push bytes into recv buffer (trim to what was actually read).
+        // Small frames are copied out of the shared 64 KiB read slab so a
+        // single lagging frame does not pin the whole slab by refcount (see
+        // io::take_read_buffer / COPY_OUT_THRESHOLD). Larger frames stay
+        // zero-copy via freeze().
         buf.truncate(n);
-        self.recv.push(buf.freeze());
+        if n < monocoque_core::io::COPY_OUT_THRESHOLD {
+            self.recv.push(Bytes::copy_from_slice(&buf));
+        } else {
+            self.recv.push(buf.freeze());
+        }
 
         // Update heartbeat idle timer: data was received so we are not idle
         self.note_recv();
