@@ -87,7 +87,7 @@ async fn peer_reader(
 ) {
     use compio_buf::BufResult;
     use compio_io::AsyncRead;
-    use futures::{FutureExt, select};
+    use futures::{FutureExt, select_biased};
     use monocoque_core::io::take_read_buffer;
 
     // Connection notification. send_async blocks when the inbound channel is at
@@ -107,12 +107,17 @@ async fn peer_reader(
         // Multiplex the read against the shutdown signal so close_peer() or
         // dropping the socket cancels this task promptly, releasing the read fd
         // instead of blocking on read until the remote closes.
-        let BufResult(result, mut buf) = select! {
-            res = reader.read(buf).fuse() => res,
+        //
+        // select_biased! with the shutdown branch first makes cancellation
+        // deterministic: once shutdown is signalled, we stop even if a read has
+        // also become ready, so no further frame is delivered after close_peer.
+        // (An unbiased select could pick the ready read and leak one more frame.)
+        let BufResult(result, mut buf) = select_biased! {
             _ = shutdown.recv_async().fuse() => {
                 debug!("[STREAM] Peer {:?} reader cancelled", routing_id);
                 break;
             }
+            res = reader.read(buf).fuse() => res,
         };
         match result {
             Ok(0) => {
