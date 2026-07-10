@@ -83,12 +83,15 @@ async fn peer_reader(
     mut reader: OwnedReadHalf,
     inbound: Sender<InboundMsg>,
     read_buffer_size: usize,
+    shutdown: Receiver<()>,
 ) {
     use compio_buf::BufResult;
     use compio_io::AsyncRead;
+    use futures::{FutureExt, select};
     use monocoque_core::io::take_read_buffer;
 
-    // Connection notification
+    // Connection notification. send_async blocks when the inbound channel is at
+    // its HWM, which throttles readers into TCP backpressure (finding B).
     let _ = inbound
         .send_async(vec![routing_id.clone(), Bytes::new(), Bytes::new()])
         .await;
@@ -100,7 +103,17 @@ async fn peer_reader(
         // SAFETY: `buf` is passed straight to `read`; the data path truncates
         // it to `n` before freezing, and EOF/error drop it without reading it.
         let buf = unsafe { take_read_buffer(&mut read_buf, read_buffer_size) };
-        let BufResult(result, mut buf) = reader.read(buf).await;
+
+        // Multiplex the read against the shutdown signal so close_peer() or
+        // dropping the socket cancels this task promptly, releasing the read fd
+        // instead of blocking on read until the remote closes.
+        let BufResult(result, mut buf) = select! {
+            res = reader.read(buf).fuse() => res,
+            _ = shutdown.recv_async().fuse() => {
+                debug!("[STREAM] Peer {:?} reader cancelled", routing_id);
+                break;
+            }
+        };
         match result {
             Ok(0) => {
                 debug!("[STREAM] Peer {:?} disconnected (EOF)", routing_id);
@@ -125,6 +138,19 @@ async fn peer_reader(
 
     // Disconnect notification
     let _ = inbound.try_send(vec![routing_id, Bytes::new(), Bytes::new()]);
+}
+
+/// Per-peer routing-table entry.
+///
+/// Holds the outbound sender (feeds the writer task) and a shutdown sender.
+/// Dropping this entry (via [`StreamSocket::close_peer`], `disconnect`, or the
+/// socket itself being dropped) closes both channels: the writer's `recv`
+/// returns `Err` and the reader's shutdown branch fires, so both background
+/// tasks exit and release their TCP halves and fds.
+struct PeerHandle {
+    out_tx: Sender<Bytes>,
+    /// Dropping this cancels the peer's reader task.
+    _shutdown: Sender<()>,
 }
 
 /// Writes raw bytes from the per-peer send channel to the TCP connection.
@@ -161,8 +187,8 @@ pub struct StreamSocket {
     inbound_rx: Receiver<InboundMsg>,
     /// Shared sender half for reader tasks.
     inbound_tx: Sender<InboundMsg>,
-    /// Per-peer outbound channels (routing_id → sender).
-    peers: HashMap<RoutingId, Sender<Bytes>>,
+    /// Per-peer routing table (routing_id → outbound + shutdown handles).
+    peers: HashMap<RoutingId, PeerHandle>,
     /// Monotonically increasing routing-ID counter.
     next_id: Arc<AtomicU64>,
     /// Socket options.
@@ -181,14 +207,22 @@ impl StreamSocket {
     pub async fn bind(addr: impl monocoque_core::rt::ToSocketAddrs) -> io::Result<Self> {
         let listener = TcpListener::bind(addr).await?;
         debug!("[STREAM] Bound to {}", listener.local_addr()?);
-        let (tx, rx) = flume::unbounded();
+        let options = SocketOptions::default();
+        // Bound the inbound channel by recv_hwm so a fast peer against a slow
+        // consumer cannot grow it without bound; readers backpressure into TCP
+        // once it fills (finding B). recv_hwm == 0 means unbounded.
+        let (tx, rx) = if options.recv_hwm == 0 {
+            flume::unbounded()
+        } else {
+            flume::bounded(options.recv_hwm)
+        };
         Ok(Self {
             listener,
             inbound_rx: rx,
             inbound_tx: tx,
             peers: HashMap::new(),
             next_id: Arc::new(AtomicU64::new(1)),
-            options: SocketOptions::default(),
+            options,
         })
     }
 
@@ -221,7 +255,16 @@ impl StreamSocket {
         } else {
             flume::bounded::<Bytes>(self.options.send_hwm)
         };
-        self.peers.insert(routing_id.clone(), out_tx);
+        // Per-peer shutdown channel: dropping out_tx/shutdown_tx (on close_peer,
+        // disconnect, or socket drop) cancels the writer and reader tasks.
+        let (shutdown_tx, shutdown_rx) = flume::bounded::<()>(1);
+        self.peers.insert(
+            routing_id.clone(),
+            PeerHandle {
+                out_tx,
+                _shutdown: shutdown_tx,
+            },
+        );
 
         // Spawn reader.
         let inbound = self.inbound_tx.clone();
@@ -231,6 +274,7 @@ impl StreamSocket {
             read_half,
             inbound,
             self.options.read_buffer_size,
+            shutdown_rx,
         ));
 
         // Spawn writer.
@@ -303,8 +347,8 @@ impl StreamSocket {
         }
 
         match self.peers.get(&routing_id) {
-            Some(tx) => {
-                tx.try_send(data).map_err(|e| match e {
+            Some(peer) => {
+                peer.out_tx.try_send(data).map_err(|e| match e {
                     flume::TrySendError::Full(_) => io::Error::new(
                         io::ErrorKind::WouldBlock,
                         format!("Peer {:?} send queue reached send_hwm", routing_id),
@@ -326,14 +370,28 @@ impl StreamSocket {
         Ok(())
     }
 
-    /// Disconnect a peer explicitly, removing it from the routing table.
+    /// Close a single peer, removing it from the routing table and cancelling
+    /// its background reader and writer tasks.
+    ///
+    /// Dropping the peer's [`PeerHandle`] closes both the outbound and the
+    /// shutdown channels, so the writer exits and the reader's shutdown branch
+    /// fires. Both tasks then release their TCP halves and file descriptors,
+    /// rather than the reader lingering until the remote closes the connection.
     ///
     /// After this call, messages addressed to `routing_id` are silently dropped.
-    /// The background reader task will detect the closed write half and exit.
-    pub fn disconnect(&mut self, routing_id: &Bytes) {
+    /// Returns `true` if a peer was present and removed.
+    pub fn close_peer(&mut self, routing_id: &Bytes) -> bool {
         if self.peers.remove(routing_id).is_some() {
-            debug!("[STREAM] Peer {:?} removed from routing table", routing_id);
+            debug!("[STREAM] Peer {:?} closed and removed", routing_id);
+            true
+        } else {
+            false
         }
+    }
+
+    /// Disconnect a peer explicitly. Alias for [`close_peer`][Self::close_peer].
+    pub fn disconnect(&mut self, routing_id: &Bytes) {
+        self.close_peer(routing_id);
     }
 
     /// Number of currently tracked (connected) peers.
