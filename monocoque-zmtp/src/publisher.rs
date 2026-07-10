@@ -641,6 +641,9 @@ fn add_subscriber(
 pub struct PubSocket {
     /// Worker thread channels (bounded by send_hwm for backpressure)
     workers: Vec<Sender<WorkerCommand>>,
+    /// Join handles for the worker threads, retained so `close()` can await
+    /// their completion instead of detaching them (see [`PubSocket::close`]).
+    worker_handles: Vec<thread::JoinHandle<()>>,
     /// Live subscriber count per worker. `send()` skips workers at zero so a
     /// low-subscriber broadcast does not pay a channel hand-off to every worker.
     worker_sub_counts: Vec<Arc<AtomicUsize>>,
@@ -668,9 +671,22 @@ pub struct PubSocket {
 }
 
 impl PubSocket {
-    /// Create a new PUB socket with default worker count (number of CPU cores).
+    /// Default upper bound on auto-selected worker threads.
+    ///
+    /// Each worker owns its own compio `LocalRuntime` (and therefore its own
+    /// io_uring ring, which consumes locked memory against `RLIMIT_MEMLOCK`).
+    /// On a many-core host one worker per core is mostly waste and can hit the
+    /// memlock ceiling, so the auto-selected count is capped here. Use
+    /// [`PubSocket::with_workers`] to opt into more.
+    pub const DEFAULT_MAX_WORKERS: usize = 16;
+
+    /// Create a new PUB socket with a default worker count.
+    ///
+    /// The count is the number of CPU cores, clamped to the range
+    /// `[2, DEFAULT_MAX_WORKERS]`.
     pub fn new() -> Self {
-        Self::with_workers(num_cpus::get().max(2))
+        let workers = num_cpus::get().clamp(2, Self::DEFAULT_MAX_WORKERS);
+        Self::with_workers(workers)
     }
 
     /// Create with a specific number of worker threads and default options.
@@ -691,22 +707,25 @@ impl PubSocket {
         );
 
         let mut workers = Vec::with_capacity(worker_count);
+        let mut worker_handles = Vec::with_capacity(worker_count);
         let mut worker_sub_counts = Vec::with_capacity(worker_count);
 
         for i in 0..worker_count {
             let (tx, rx) = flume::bounded(hwm);
             let sub_count = Arc::new(AtomicUsize::new(0));
             let worker_count = Arc::clone(&sub_count);
-            thread::Builder::new()
+            let handle = thread::Builder::new()
                 .name(format!("pub-worker-{}", i))
                 .spawn(move || worker_thread(i, rx, worker_count))
                 .expect("Failed to spawn worker thread");
             workers.push(tx);
+            worker_handles.push(handle);
             worker_sub_counts.push(sub_count);
         }
 
         Self {
             workers,
+            worker_handles,
             worker_sub_counts,
             subscription_union: SharedSubscriptions::new(),
             local_union: SubscriptionUnion::default(),
@@ -905,6 +924,37 @@ impl PubSocket {
     #[inline]
     pub const fn subscriber_count(&self) -> usize {
         self.subscriber_count
+    }
+
+    /// Number of worker threads backing this socket.
+    #[inline]
+    pub fn worker_count(&self) -> usize {
+        self.workers.len()
+    }
+
+    /// Gracefully shut down the socket, draining queued broadcasts and awaiting
+    /// worker completion.
+    ///
+    /// Each worker channel is FIFO, so the `Shutdown` command is processed only
+    /// after any broadcasts already queued ahead of it, meaning messages sitting
+    /// in the worker channels are delivered before the worker exits. Joining is
+    /// performed on the blocking pool so the executor is not stalled.
+    ///
+    /// [`Drop`] remains an abrupt fallback: it signals shutdown without waiting.
+    pub async fn close(mut self) -> io::Result<()> {
+        for worker in &self.workers {
+            let _ = worker.send(WorkerCommand::Shutdown);
+        }
+        let handles = std::mem::take(&mut self.worker_handles);
+        if !handles.is_empty() {
+            monocoque_core::rt::spawn_blocking(move || {
+                for handle in handles {
+                    let _ = handle.join();
+                }
+            })
+            .await;
+        }
+        Ok(())
     }
 
     /// Number of messages dropped due to full worker channels (HWM backpressure).
