@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 /// endpoint on close). This wrapper records the bound path and removes it on
 /// [`Drop`], guarding the unlink so it only ever removes a socket node.
 ///
-/// It [`Deref`]s to the underlying [`UnixListener`], so it can be used anywhere
+/// It [`Deref`](std::ops::Deref)s to the underlying [`UnixListener`], so it can be used anywhere
 /// a `&UnixListener` is expected (e.g. [`accept`]).
 #[cfg(unix)]
 #[derive(Debug)]

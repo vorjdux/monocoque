@@ -79,11 +79,12 @@ fn main() -> std::io::Result<()> {
 
 To keep your own code free of any runtime name, use `monocoque::rt::LocalRuntime`,
 which builds the right single-threaded runtime for whichever feature is enabled.
-The `runtime_backends` example is one program that runs unchanged on both:
+The `runtime_backends` example is one program that runs unchanged on all three:
 
 ```bash
 cargo run --example runtime_backends --features zmq                                      # compio
 cargo run --example runtime_backends --no-default-features --features runtime-tokio,zmq  # tokio
+cargo run --example runtime_backends --no-default-features --features runtime-smol,zmq   # smol
 ```
 
 ---

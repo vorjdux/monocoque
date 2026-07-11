@@ -444,9 +444,12 @@ actual broadcast writes. `send()` only queues to that worker and returns; the
 socket write happens later, on the worker.
 
 On the **compio** backend this just works: the accepted socket is a plain file
-descriptor and is usable from any thread. On the **tokio** backend a `TcpStream` is
-bound to the runtime that created it (the accepting runtime), so the worker's
-writes only succeed while that runtime is still alive. In practice this is a
+descriptor and is usable from any thread. The **smol** backend is likewise
+unaffected: `async-io` registers streams with a process-wide global reactor, not
+a per-runtime one, so a handed-off stream stays live regardless of which
+executor accepted it. On the **tokio** backend a `TcpStream` is bound to the
+runtime that created it (the accepting runtime), so the worker's writes only
+succeed while that runtime is still alive. In practice this is a
 non-issue for a normal long-running PUB server, whose accepting runtime stays up
 for the process lifetime. It only bites a **short-lived publisher** that
 broadcasts a burst and then lets its accepting runtime shut down immediately: the

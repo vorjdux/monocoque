@@ -69,7 +69,7 @@
 //! ## Performance
 //!
 //! - **Zero-copy**: Uses `bytes::Bytes` for refcounted message buffers
-//! - **Runtime backends**: native `io_uring` via `compio` (default), or tokio
+//! - **Runtime backends**: native `io_uring` via `compio` (default), or tokio or smol
 //! - **Lock-free**: SPSC queues, no shared mutable state in hot paths
 //! - **Sans-IO**: Protocol logic is pure, testable, and runtime-agnostic
 //!
@@ -106,7 +106,8 @@ pub use monocoque_core::socket_type::SocketType;
 /// Runtime-agnostic networking types (TCP/Unix streams, listeners).
 ///
 /// These resolve to the active backend (compio by default, tokio with the
-/// `runtime-tokio` feature). Socket constructors such as `from_unix_stream`
+/// `runtime-tokio` feature, smol with the `runtime-smol` feature). Socket
+/// constructors such as `from_unix_stream`
 /// accept the types re-exported here, so application code never names a runtime
 /// crate directly.
 pub use monocoque_core::rt;
