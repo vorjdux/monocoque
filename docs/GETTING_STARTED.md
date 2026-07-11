@@ -18,11 +18,12 @@ A five-minute guide to sending your first message with Monocoque.
 [dependencies]
 monocoque-rs = { version = "0.2", features = ["zmq"] }
 bytes    = "1"
-compio   = { version = "0.10", features = ["runtime", "macros"] }
+compio   = { version = "0.19", features = ["runtime", "macros"] }
 ```
 
 The examples below use the default backend (io_uring via compio) and its
-`#[compio::main]` entry point. See the next section if you want to run on tokio.
+`#[compio::main]` entry point. See the next section if you want to run on tokio
+or smol.
 
 ---
 

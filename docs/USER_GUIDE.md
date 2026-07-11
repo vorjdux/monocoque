@@ -6,7 +6,7 @@ Add monocoque to your `Cargo.toml`:
 [dependencies]
 monocoque-rs = "0.2"
 bytes = "1.0"
-compio = { version = "0.10", features = ["runtime", "macros"] }
+compio = { version = "0.19", features = ["runtime", "macros"] }
 ```
 
 All socket operations are async. On the default backend you run them on a compio

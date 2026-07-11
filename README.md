@@ -89,7 +89,7 @@ PUB/SUB pattern results, and tuning guidance.
 monocoque-rs = { version = "0.2", features = ["zmq"] }
 # Drives the default io_uring backend and provides the #[compio::main] macro.
 # To run on tokio or smol instead, see "Runtime backends" below.
-compio = { version = "0.10", features = ["runtime", "macros"] }
+compio = { version = "0.19", features = ["runtime", "macros"] }
 ```
 
 ```rust

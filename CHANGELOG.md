@@ -1,5 +1,103 @@
 # Changelog
 
+## Unreleased
+
+This cycle upgrades the io_uring runtime to compio 0.19, tightens resource
+bounds across the transport and security paths, and adds a verification layer
+(fuzzing, Miri, loom, ThreadSanitizer) in CI. The public socket API is
+unchanged; the one consumer-visible change is the compio dependency bump.
+
+### 💥 Breaking Changes
+
+#### compio 0.10 -> 0.19
+
+The default io_uring backend now builds on compio 0.19 (from 0.10). Projects
+that depend on `compio` directly for the `#[compio::main]` entry point must bump
+their own dependency to `compio = { version = "0.19", features = ["runtime",
+"macros"] }`; compio 0.19 also gates its networking types behind a `net` feature.
+The monocoque socket API and the runtime facade (`monocoque::rt`) are unchanged.
+The upgrade pulls in compio's upstream soundness fixes (the `AsyncStream`
+unsoundness fixed in 0.16.1, `OpCode::cancel` made safe in 0.18) and unblocks the
+features below that need `TcpStream::from_std` / `set_reuseport`.
+
+### ✨ Features
+
+#### SO_REUSEPORT
+
+`SocketOptions::with_reuse_port(true)` binds listeners with `SO_REUSEPORT` so
+several accepting sockets can share one port and the kernel load-balances new
+connections across them. This is the building block for running one accept loop
+per core. Available on the compio backend now that compio 0.19 exposes
+`set_reuseport`.
+
+#### Async, jittered reconnect backoff
+
+Reconnect backoff now awaits an async timer instead of blocking the runtime
+thread with `std::thread::sleep`, and applies equal jitter (a delay uniformly in
+`[d/2, d]`) so a fleet of clients reconnecting after a shared outage spreads its
+retries instead of stampeding in lockstep. The async timer became usable again
+once compio 0.19 fixed the timer state that hung `sleep` after handshake
+timeouts.
+
+#### Bounded queues and graceful shutdown
+
+Several unbounded or ungoverned paths gained explicit limits and clean-shutdown
+behavior: the PUB worker-pool caps its default worker count and closes
+gracefully, `close()` honors LINGER so a PUSH socket flushes buffered data before
+teardown, the STREAM inbound channel is bounded and peer reader tasks are
+cancelled on close, accept loops back off on file-descriptor exhaustion instead
+of spinning, an IPC listener unlinks its socket file on drop, and the steerable
+proxy stays alive across transient per-peer send errors while the monitor event
+channel is bounded. `SO_SNDBUF` / `SO_RCVBUF` from `SocketOptions` are now applied
+to the socket, and the tokio backend implements a real `write_vectored`.
+
+### 🔒 Security
+
+- **PLAIN**: authentication failures no longer distinguish an unknown username
+  from a bad password (closing a username-enumeration channel), and PLAIN
+  passwords are zeroized after use.
+- **CURVE**: the flag byte is stripped from a decrypted frame in place rather
+  than by re-copying the plaintext.
+
+### ⚡ Performance
+
+The compio 0.19 runtime lifted small-payload throughput by roughly 15 to 45
+percent on the compio backend and brought its steady-state REQ/REP latency down
+to about 9 microseconds; the tokio and smol backends stayed within bench noise.
+On top of the runtime upgrade: small frames are copied out of the shared read
+slab so a large frame never pins the slab, byte-backpressure acquisition gained
+an uncontended fast path, and `trace!` / `debug!` calls compile out of release
+builds. README and `docs/performance.md` numbers were re-measured for the compio
+0.19 runtime.
+
+### 🐛 Bug Fixes
+
+- Fixed a busy reconnect loop when `reconnect_ivl_max` is 0 (a zero-delay retry
+  that spun instead of backing off).
+- STREAM reader-task cancellation is now deterministic under smol (biased select
+  so a closed reader cannot read data queued after close).
+
+### 🧪 Testing
+
+A verification layer now guards the wire-facing and unsafe surfaces:
+
+- Fuzz targets for the ZMTP greeting, READY command, and ZAP request parsers,
+  added to the existing decoder/codec/handshake targets, plus a scheduled
+  `fuzz-run` CI job. Continuous fuzzing (OSS-Fuzz / ClusterFuzzLite) is documented
+  as a follow-up in `monocoque-fuzz/README.md`.
+- New CI jobs run Miri over the unsafe modules, loom over the publisher's
+  generation/subscriber-count atomics, and ThreadSanitizer over the concurrency
+  tests.
+- The `inproc_stream` cross-await pointer invariant is documented and tested.
+- clippy pedantic + nursery are enabled workspace-wide with a curated allow-set,
+  and the resulting fallout was fixed across every crate.
+
+### 📚 Documentation
+
+- Documented the fuzz targets and the continuous-fuzzing follow-up.
+- Aligned the backend docs (crate rustdoc, getting-started, performance) so every
+  place that lists compio and tokio also covers the smol backend.
+
 ## 0.2.1 - 2026-07-09
 
 ### 📚 Documentation
