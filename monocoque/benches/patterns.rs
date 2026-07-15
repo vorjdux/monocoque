@@ -269,7 +269,7 @@ fn run_monocoque_topic_filtering(iters: u64) -> Duration {
             thread::sleep(SETTLE);
             let mut i = 0usize;
             while stop_rx.try_recv().is_err() {
-                let topic = if i % 10 == 0 {
+                let topic = if i.is_multiple_of(10) {
                     Bytes::from_static(b"match.topic")
                 } else {
                     Bytes::from_static(b"other.topic")
@@ -343,7 +343,7 @@ fn run_zmq_topic_filtering(iters: u64) -> Duration {
         // Timed phase: oversend the 1-in-10 match pattern at full speed.
         let mut i = 0usize;
         while stop_rx.try_recv().is_err() {
-            let topic: &[u8] = if i % 10 == 0 {
+            let topic: &[u8] = if i.is_multiple_of(10) {
                 b"match.topic"
             } else {
                 b"other.topic"

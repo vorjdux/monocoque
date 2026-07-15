@@ -80,14 +80,14 @@ async fn client(id: u32, requests: u32) -> std::io::Result<()> {
 
         socket.send(vec![Bytes::from(request)]).await?;
 
-        if let Ok(Some(reply)) = socket.recv().await {
-            if let Some(data) = reply.first() {
-                info!(
-                    "[Client-{}] Received: {}",
-                    id,
-                    String::from_utf8_lossy(data)
-                );
-            }
+        if let Ok(Some(reply)) = socket.recv().await
+            && let Some(data) = reply.first()
+        {
+            info!(
+                "[Client-{}] Received: {}",
+                id,
+                String::from_utf8_lossy(data)
+            );
         }
 
         rt::sleep(Duration::from_millis(500)).await;

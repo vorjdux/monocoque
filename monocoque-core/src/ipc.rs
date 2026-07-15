@@ -56,10 +56,10 @@ impl Drop for IpcListener {
         // Only remove the node if it is still the socket we bound. This avoids
         // deleting a regular file that raced into the path, and is a no-op if
         // the socket was already unlinked.
-        if let Ok(metadata) = std::fs::symlink_metadata(&self.path) {
-            if metadata.file_type().is_socket() {
-                let _ = std::fs::remove_file(&self.path);
-            }
+        if let Ok(metadata) = std::fs::symlink_metadata(&self.path)
+            && metadata.file_type().is_socket()
+        {
+            let _ = std::fs::remove_file(&self.path);
         }
     }
 }

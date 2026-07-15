@@ -52,11 +52,11 @@ async fn worker(id: u32, crash_after: Option<u32>) -> std::io::Result<()> {
         }
 
         // Crash check
-        if let Some(crash_at) = crash_after {
-            if count >= crash_at {
-                error!("[Worker-{}] 💥 CRASH!", id);
-                return Ok(());
-            }
+        if let Some(crash_at) = crash_after
+            && count >= crash_at
+        {
+            error!("[Worker-{}] 💥 CRASH!", id);
+            return Ok(());
         }
 
         // Process requests

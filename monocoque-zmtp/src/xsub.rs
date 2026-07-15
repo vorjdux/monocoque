@@ -441,13 +441,13 @@ impl XSubSocket<TcpStream> {
 
         loop {
             if self.base.stream.is_none() {
-                if let Some(limit) = max {
-                    if attempts >= limit {
-                        return Err(io::Error::new(
-                            io::ErrorKind::NotConnected,
-                            format!("Max {} reconnection attempts exceeded", limit),
-                        ));
-                    }
+                if let Some(limit) = max
+                    && attempts >= limit
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotConnected,
+                        format!("Max {} reconnection attempts exceeded", limit),
+                    ));
                 }
                 attempts += 1;
                 trace!(

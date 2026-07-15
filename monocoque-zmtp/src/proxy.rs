@@ -188,10 +188,10 @@ where
                            msg.len());
 
                     // Send copy to capture if present
-                    if let Some(ref mut cap) = capture {
-                        if let Err(e) = cap.send_multipart(msg.clone()).await {
-                            debug!("Capture socket send failed: {}", e);
-                        }
+                    if let Some(ref mut cap) = capture
+                        && let Err(e) = cap.send_multipart(msg.clone()).await
+                    {
+                        debug!("Capture socket send failed: {}", e);
                     }
 
                     // Forward to backend. A transient error (HWM/EAGAIN) drops
@@ -217,10 +217,10 @@ where
                            msg.len());
 
                     // Send copy to capture if present
-                    if let Some(ref mut cap) = capture {
-                        if let Err(e) = cap.send_multipart(msg.clone()).await {
-                            debug!("Capture socket send failed: {}", e);
-                        }
+                    if let Some(ref mut cap) = capture
+                        && let Err(e) = cap.send_multipart(msg.clone()).await
+                    {
+                        debug!("Capture socket send failed: {}", e);
                     }
 
                     // Forward to frontend (transient errors keep the proxy up).
@@ -370,30 +370,29 @@ where
         select! {
             // Check for control commands
             cmd_result = control.recv_multipart().fuse() => {
-                if let Some(cmd_msg) = cmd_result? {
-                    if let Some(cmd_frame) = cmd_msg.first() {
-                        if let Some(cmd) = ProxyCommand::from_bytes(cmd_frame) {
-                            debug!("Proxy control command: {:?}", cmd);
+                if let Some(cmd_msg) = cmd_result?
+                    && let Some(cmd_frame) = cmd_msg.first()
+                    && let Some(cmd) = ProxyCommand::from_bytes(cmd_frame)
+                {
+                    debug!("Proxy control command: {:?}", cmd);
 
-                            match cmd {
-                                ProxyCommand::Pause => {
-                                    debug!("Proxy PAUSED");
-                                    paused = true;
-                                }
-                                ProxyCommand::Resume => {
-                                    debug!("Proxy RESUMED");
-                                    paused = false;
-                                }
-                                ProxyCommand::Terminate => {
-                                    debug!("Proxy TERMINATING (forwarded {} messages)", message_count);
-                                    return Ok(());
-                                }
-                                ProxyCommand::Statistics => {
-                                    debug!("Proxy statistics: {} messages forwarded", message_count);
-                                    let stats = format!("messages_forwarded={}", message_count);
-                                    let _ = control.send_multipart(vec![bytes::Bytes::from(stats)]).await;
-                                }
-                            }
+                    match cmd {
+                        ProxyCommand::Pause => {
+                            debug!("Proxy PAUSED");
+                            paused = true;
+                        }
+                        ProxyCommand::Resume => {
+                            debug!("Proxy RESUMED");
+                            paused = false;
+                        }
+                        ProxyCommand::Terminate => {
+                            debug!("Proxy TERMINATING (forwarded {} messages)", message_count);
+                            return Ok(());
+                        }
+                        ProxyCommand::Statistics => {
+                            debug!("Proxy statistics: {} messages forwarded", message_count);
+                            let stats = format!("messages_forwarded={}", message_count);
+                            let _ = control.send_multipart(vec![bytes::Bytes::from(stats)]).await;
                         }
                     }
                 }
@@ -411,10 +410,10 @@ where
                                msg.len());
 
                         // Send copy to capture if present
-                        if let Some(ref mut cap) = capture {
-                            if let Err(e) = cap.send_multipart(msg.clone()).await {
-                                debug!("Capture socket send failed: {}", e);
-                            }
+                        if let Some(ref mut cap) = capture
+                            && let Err(e) = cap.send_multipart(msg.clone()).await
+                        {
+                            debug!("Capture socket send failed: {}", e);
                         }
 
                         // Forward to backend (transient errors keep the proxy up).
@@ -442,10 +441,10 @@ where
                                msg.len());
 
                         // Send copy to capture if present
-                        if let Some(ref mut cap) = capture {
-                            if let Err(e) = cap.send_multipart(msg.clone()).await {
-                                debug!("Capture socket send failed: {}", e);
-                            }
+                        if let Some(ref mut cap) = capture
+                            && let Err(e) = cap.send_multipart(msg.clone()).await
+                        {
+                            debug!("Capture socket send failed: {}", e);
                         }
 
                         // Forward to frontend (transient errors keep the proxy up).

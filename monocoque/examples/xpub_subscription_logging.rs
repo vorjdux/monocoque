@@ -62,10 +62,10 @@ async fn async_main() -> io::Result<()> {
 
     loop {
         // Accept new subscribers (non-blocking)
-        if let Err(e) = xpub.accept().await {
-            if e.kind() != io::ErrorKind::WouldBlock {
-                eprintln!("Error accepting connection: {e}");
-            }
+        if let Err(e) = xpub.accept().await
+            && e.kind() != io::ErrorKind::WouldBlock
+        {
+            eprintln!("Error accepting connection: {e}");
         }
 
         // Check for subscription events

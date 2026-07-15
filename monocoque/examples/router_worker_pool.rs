@@ -65,10 +65,10 @@ async fn handle_worker(stream: TcpStream, task_counter: Arc<AtomicU64>) {
             Ok(()) => {
                 // Wait for completion response
                 if let Ok(Some(response)) = socket.recv().await {
-                    if let Some(result) = response.last() {
-                        if let Ok(s) = std::str::from_utf8(result) {
-                            info!("Worker completed: {s}");
-                        }
+                    if let Some(result) = response.last()
+                        && let Ok(s) = std::str::from_utf8(result)
+                    {
+                        info!("Worker completed: {s}");
                     }
                 } else {
                     error!("Connection closed");

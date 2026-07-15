@@ -72,10 +72,10 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use compio::net::{TcpListener, TcpStream};
 use monocoque::{
+    SocketOptions,
     zmq::{
         PubSocket, PullFanIn, PullSocket, PushFanOut, PushSocket, RepSocket, ReqSocket, SubSocket,
     },
-    SocketOptions,
 };
 
 #[cfg(unix)]
@@ -313,7 +313,7 @@ async fn run_push(addr: &str, size: usize, coalesce: bool) {
         push.send(vec![payload.clone()]).await.unwrap_or(());
         if coalesce {
             i += 1;
-            if i % 64 == 0 {
+            if i.is_multiple_of(64) {
                 push.flush().await.unwrap_or(());
             }
         }
@@ -389,7 +389,7 @@ async fn run_push_fanout(addr: &str, size: usize, workers: usize) {
     loop {
         fanout.send(vec![payload.clone()]).await.unwrap_or(());
         i += 1;
-        if i % flush_every == 0 {
+        if i.is_multiple_of(flush_every) {
             fanout.flush().await.unwrap_or(());
         }
     }
@@ -408,7 +408,7 @@ async fn run_push_connect(addr: &str, size: usize) {
     loop {
         push.send(vec![payload.clone()]).await.unwrap_or(());
         i += 1;
-        if i % 64 == 0 {
+        if i.is_multiple_of(64) {
             push.flush().await.unwrap_or(());
         }
     }
@@ -462,14 +462,9 @@ async fn run_pull_fanin(addr: &str, size: usize, duration: Duration, workers: us
 async fn run_rep(addr: &str) {
     let (_, stream) = bind_and_accept(addr).await;
     let mut rep = RepSocket::from_tcp(stream).await.expect("rep handshake");
-    loop {
-        match rep.recv().await {
-            Ok(Some(msg)) => {
-                if rep.send(msg).await.is_err() {
-                    break;
-                }
-            }
-            _ => break,
+    while let Ok(Some(msg)) = rep.recv().await {
+        if rep.send(msg).await.is_err() {
+            break;
         }
     }
 }
@@ -599,7 +594,7 @@ async fn run_push_ipc(path: &str, size: usize, coalesce: bool) {
         push.send(vec![payload.clone()]).await.unwrap_or(());
         if coalesce {
             i += 1;
-            if i % 64 == 0 {
+            if i.is_multiple_of(64) {
                 push.flush().await.unwrap_or(());
             }
         }
@@ -661,14 +656,9 @@ async fn run_rep_ipc(path: &str) {
     let mut rep = RepSocket::from_unix_stream(stream)
         .await
         .expect("rep-ipc handshake");
-    loop {
-        match rep.recv().await {
-            Ok(Some(msg)) => {
-                if rep.send(msg).await.is_err() {
-                    break;
-                }
-            }
-            _ => break,
+    while let Ok(Some(msg)) = rep.recv().await {
+        if rep.send(msg).await.is_err() {
+            break;
         }
     }
 }

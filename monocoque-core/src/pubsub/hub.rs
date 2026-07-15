@@ -154,22 +154,21 @@ impl PubSubHub {
             }
 
             PubSubEvent::PeerDown { routing_id, epoch } => {
-                if let Some(&key) = self.rid_to_key.get(&routing_id) {
-                    if let Some((current_epoch, _)) = self.peers.get(&key) {
-                        // Epoch check prevents ghost-peer removal
-                        if *current_epoch == epoch {
-                            self.peers.remove(&key);
-                            self.index.remove_peer_everywhere(key);
-                        }
-                    }
+                if let Some(&key) = self.rid_to_key.get(&routing_id)
+                    && let Some((current_epoch, _)) = self.peers.get(&key)
+                    // Epoch check prevents ghost-peer removal
+                    && *current_epoch == epoch
+                {
+                    self.peers.remove(&key);
+                    self.index.remove_peer_everywhere(key);
                 }
             }
 
             PubSubEvent::Subscribe { routing_id, prefix } => {
-                if let Some(&key) = self.rid_to_key.get(&routing_id) {
-                    if self.peers.contains_key(&key) {
-                        self.index.subscribe(key, prefix);
-                    }
+                if let Some(&key) = self.rid_to_key.get(&routing_id)
+                    && self.peers.contains_key(&key)
+                {
+                    self.index.subscribe(key, prefix);
                 }
             }
 

@@ -15,5 +15,10 @@ publish = false
 [dependencies]
 loom = "0.7"
 
+# `--cfg loom` is passed via RUSTFLAGS, so register it with check-cfg to keep the
+# unexpected_cfgs lint quiet under a strict `-D warnings` clippy run.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
+
 [lib]
 path = "src/lib.rs"

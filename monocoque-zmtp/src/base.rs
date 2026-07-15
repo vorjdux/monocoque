@@ -990,14 +990,14 @@ where
             Some(frame) => {
                 if frame.is_command() {
                     // CURVE MESSAGE decryption
-                    if let Some(ref mut cipher) = self.curve_cipher {
-                        if CurveMessageCipher::is_curve_message(&frame.payload) {
-                            let (more, payload) =
-                                cipher.decrypt_frame(&frame.payload).map_err(|e| {
-                                    io::Error::new(io::ErrorKind::InvalidData, e.to_string())
-                                })?;
-                            return Ok(FrameResult::Data(more, payload));
-                        }
+                    if let Some(ref mut cipher) = self.curve_cipher
+                        && CurveMessageCipher::is_curve_message(&frame.payload)
+                    {
+                        let (more, payload) =
+                            cipher.decrypt_frame(&frame.payload).map_err(|e| {
+                                io::Error::new(io::ErrorKind::InvalidData, e.to_string())
+                            })?;
+                        return Ok(FrameResult::Data(more, payload));
                     }
                     // PING/PONG
                     if is_ping_payload(&frame.payload) {
