@@ -129,7 +129,7 @@ async fn async_main() -> io::Result<()> {
                 }
 
                 // Show stats periodically
-                if subscription_changes % 5 == 0 && subscription_changes > 0 {
+                if subscription_changes.is_multiple_of(5) && subscription_changes > 0 {
                     info!("");
                     info!(
                         "📊 Broker stats: {} subscription changes",

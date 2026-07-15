@@ -58,7 +58,7 @@ where
     for<'a> SockRef<'a>: From<&'a T>,
 {
     let result = stream
-        .write_with(|inner| SockRef::from(inner).send(buf.as_slice()))
+        .write_with(|inner| SockRef::from(inner).send(buf.as_init()))
         .await;
     match result {
         Ok(n) => BufResult(Ok(n), buf),
@@ -241,6 +241,17 @@ impl TcpStream {
         })
     }
 
+    /// Adopt a `std::net::TcpStream`, attaching it to the async reactor.
+    ///
+    /// Mirrors compio's `TcpStream::from_std`; used to re-attach a handed-off fd
+    /// to a worker's runtime (see the publisher fan-out). `Async::new` puts the
+    /// stream into non-blocking mode.
+    pub fn from_std(stream: std::net::TcpStream) -> io::Result<Self> {
+        Ok(Self {
+            inner: Arc::new(Async::new(stream)?),
+        })
+    }
+
     /// Local address this stream is bound to.
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
         self.inner.get_ref().local_addr()
@@ -280,6 +291,13 @@ impl TcpListener {
         Ok(Self { inner })
     }
 
+    /// Adopt a `std::net::TcpListener`, attaching it to the async reactor.
+    pub fn from_std(listener: std::net::TcpListener) -> io::Result<Self> {
+        Ok(Self {
+            inner: Async::new(listener)?,
+        })
+    }
+
     /// Accept the next inbound connection.
     pub async fn accept(&self) -> io::Result<(TcpStream, SocketAddr)> {
         let (stream, addr) = self.inner.accept().await?;
@@ -295,6 +313,11 @@ impl TcpListener {
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
         self.inner.get_ref().local_addr()
     }
+}
+
+/// Bind a TCP listener with `SO_REUSEPORT`. See [`crate::tcp::reuseport_listener`].
+pub fn bind_reuseport(addr: SocketAddr) -> io::Result<TcpListener> {
+    TcpListener::from_std(crate::tcp::reuseport_listener(addr)?)
 }
 
 impl AsyncRead for TcpStream {

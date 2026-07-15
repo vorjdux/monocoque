@@ -252,6 +252,14 @@ pub struct SocketOptions {
     /// - Default: 0 (use OS default)
     pub rcvbuf: i32,
 
+    /// Bind listeners with `SO_REUSEPORT` (Unix only).
+    ///
+    /// When `true`, a socket that creates its own listener binds it with
+    /// `SO_REUSEPORT` so multiple acceptors can share one port with in-kernel
+    /// load balancing (scaling accept for high-connection ROUTER/PULL/XPUB).
+    /// - `false` (default): a single listener per address.
+    pub reuse_port: bool,
+
     /// Multicast TTL (`ZMQ_MULTICAST_HOPS`)
     ///
     /// Time-to-live for multicast packets.
@@ -486,6 +494,7 @@ impl fmt::Debug for SocketOptions {
             .field("recovery_ivl", &self.recovery_ivl)
             .field("sndbuf", &self.sndbuf)
             .field("rcvbuf", &self.rcvbuf)
+            .field("reuse_port", &self.reuse_port)
             .field("multicast_hops", &self.multicast_hops)
             .field("tos", &self.tos)
             .field("multicast_maxtpdu", &self.multicast_maxtpdu)
@@ -556,8 +565,9 @@ impl Default for SocketOptions {
             req_relaxed: false,
             rate: 100, // 100 kbps
             recovery_ivl: Duration::from_secs(10),
-            sndbuf: 0,               // OS default
-            rcvbuf: 0,               // OS default
+            sndbuf: 0, // OS default
+            rcvbuf: 0, // OS default
+            reuse_port: false,
             multicast_hops: 1,       // Local network only
             tos: 0,                  // Normal service
             multicast_maxtpdu: 1500, // Standard MTU
@@ -1013,6 +1023,13 @@ impl SocketOptions {
     /// Set OS receive buffer size (`ZMQ_RCVBUF`).
     pub const fn with_rcvbuf(mut self, size: i32) -> Self {
         self.rcvbuf = size;
+        self
+    }
+
+    /// Bind listeners with `SO_REUSEPORT` (Unix only) so multiple acceptors can
+    /// share one port. See [`SocketOptions::reuse_port`].
+    pub const fn with_reuse_port(mut self, enabled: bool) -> Self {
+        self.reuse_port = enabled;
         self
     }
 

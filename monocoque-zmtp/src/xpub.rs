@@ -135,8 +135,18 @@ impl XPubSocket {
     }
 
     /// Bind with custom socket options.
+    ///
+    /// Honors `options.reuse_port`: when set, the listener is bound with
+    /// `SO_REUSEPORT` so several XPUB acceptors can share one port.
     pub async fn bind_with_options(addr: &str, options: SocketOptions) -> io::Result<Self> {
-        let listener = TcpListener::bind(addr).await?;
+        let listener = if options.reuse_port {
+            let sock_addr = addr
+                .parse()
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid bind address"))?;
+            monocoque_core::rt::bind_reuseport(sock_addr)?
+        } else {
+            TcpListener::bind(addr).await?
+        };
         let local_addr = listener.local_addr()?;
         debug!("[XPUB] Bound to {}", local_addr);
 
@@ -169,7 +179,7 @@ impl XPubSocket {
                 let handshake_result = perform_handshake_with_options(
                     &mut stream,
                     SocketType::Xpub,
-                    None,
+                    self.options.routing_id.as_deref(),
                     Some(self.options.handshake_timeout),
                     &self.options,
                 )

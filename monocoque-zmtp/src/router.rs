@@ -89,7 +89,7 @@ where
         let handshake_result = perform_handshake_with_options(
             &mut stream,
             SocketType::Router,
-            None,
+            options.routing_id.as_deref(),
             Some(options.handshake_timeout),
             &options,
         )

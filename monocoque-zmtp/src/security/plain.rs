@@ -595,7 +595,7 @@ mod tests {
                     .unwrap();
             let _ = read_result;
 
-            let result = server_task.await;
+            let result = monocoque_core::rt::join(server_task).await;
             assert!(
                 result.is_err() && response.as_slice() != PLAIN_WELCOME,
                 "PLAIN server authenticated a HELLO command with trailing credential bytes"

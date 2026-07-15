@@ -33,17 +33,17 @@ async fn async_main() -> std::io::Result<()> {
 
     // Server consumes messages slowly to create backpressure
     rt::spawn_detached(async move {
-        if let Ok((stream, _)) = listener.accept().await {
-            if let Ok(mut router) = RouterSocket::from_tcp(stream).await {
-                let mut count = 0;
-                while let Ok(Some(_)) = router.recv().await {
-                    count += 1;
-                    if count % 5 == 0 {
-                        println!("   [SERVER] Received {count} messages");
-                    }
-                    // Simulate slow processing
-                    rt::sleep(std::time::Duration::from_millis(200)).await;
+        if let Ok((stream, _)) = listener.accept().await
+            && let Ok(mut router) = RouterSocket::from_tcp(stream).await
+        {
+            let mut count = 0;
+            while let Ok(Some(_)) = router.recv().await {
+                count += 1;
+                if count % 5 == 0 {
+                    println!("   [SERVER] Received {count} messages");
                 }
+                // Simulate slow processing
+                rt::sleep(std::time::Duration::from_millis(200)).await;
             }
         }
     });

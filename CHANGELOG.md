@@ -1,5 +1,136 @@
 # Changelog
 
+## 0.3.0 - 2026-07-15
+
+This cycle upgrades the io_uring runtime to compio 0.19, tightens resource
+bounds across the transport and security paths, and adds a verification layer
+(fuzzing, Miri, loom, ThreadSanitizer) in CI. The public socket API is
+unchanged; the one consumer-visible change is the compio dependency bump.
+
+### 💥 Breaking Changes
+
+#### compio 0.10 -> 0.19
+
+The default io_uring backend now builds on compio 0.19 (from 0.10). Projects
+that depend on `compio` directly for the `#[compio::main]` entry point must bump
+their own dependency to `compio = { version = "0.19", features = ["runtime",
+"macros"] }`; compio 0.19 also gates its networking types behind a `net` feature.
+The monocoque socket API and the runtime facade (`monocoque::rt`) are unchanged.
+The upgrade pulls in compio's upstream soundness fixes (the `AsyncStream`
+unsoundness fixed in 0.16.1, `OpCode::cancel` made safe in 0.18) and unblocks the
+features below that need `TcpStream::from_std` / `set_reuseport`.
+
+#### Minimum supported Rust version raised to 1.95
+
+The default compio backend now requires **rustc 1.95** (up from 1.85). Every
+backend depends on the `compio-io`/`compio-buf` trait crates, and `compio-buf`
+uses the `maybe_uninit_slice` std feature (stable in 1.93), so the tokio and smol
+backends build on 1.95 and can compile as far back as 1.93. The default compio
+runtime additionally pulls `compio-driver`/`compio-executor`, which use
+`cfg_select` (stable in 1.95), plus `darling` 0.23 via `compio-macros` (needs
+1.88); 1.95 is the first release where all of them are available. The workspace
+declares a single MSRV of 1.95, matching the default configuration.
+
+### ✨ Features
+
+#### SO_REUSEPORT
+
+`SocketOptions::with_reuse_port(true)` binds listeners with `SO_REUSEPORT` so
+several accepting sockets can share one port and the kernel load-balances new
+connections across them. This is the building block for running one accept loop
+per core. Available on the compio backend now that compio 0.19 exposes
+`set_reuseport`.
+
+#### Async, jittered reconnect backoff
+
+Reconnect backoff now awaits an async timer instead of blocking the runtime
+thread with `std::thread::sleep`, and applies equal jitter (a delay uniformly in
+`[d/2, d]`) so a fleet of clients reconnecting after a shared outage spreads its
+retries instead of stampeding in lockstep. The async timer became usable again
+once compio 0.19 fixed the timer state that hung `sleep` after handshake
+timeouts.
+
+#### Bounded queues and graceful shutdown
+
+Several unbounded or ungoverned paths gained explicit limits and clean-shutdown
+behavior: the PUB worker-pool caps its default worker count and closes
+gracefully, `close()` honors LINGER so a PUSH socket flushes buffered data before
+teardown, the STREAM inbound channel is bounded and peer reader tasks are
+cancelled on close, accept loops back off on file-descriptor exhaustion instead
+of spinning, an IPC listener unlinks its socket file on drop, and the steerable
+proxy stays alive across transient per-peer send errors while the monitor event
+channel is bounded. `SO_SNDBUF` / `SO_RCVBUF` from `SocketOptions` are now applied
+to the socket, and the tokio backend implements a real `write_vectored`.
+
+### 🔒 Security
+
+- **PLAIN**: authentication failures no longer distinguish an unknown username
+  from a bad password (closing a username-enumeration channel), and PLAIN
+  passwords are zeroized after use.
+- **CURVE**: the flag byte is stripped from a decrypted frame in place rather
+  than by re-copying the plaintext.
+
+### ⚡ Performance
+
+The compio 0.19 runtime lifted small-payload throughput by roughly 15 to 45
+percent on the compio backend and brought its steady-state REQ/REP latency down
+to about 9 microseconds; the tokio and smol backends stayed within bench noise.
+On top of the runtime upgrade: small frames are copied out of the shared read
+slab so a large frame never pins the slab, byte-backpressure acquisition gained
+an uncontended fast path, and `trace!` / `debug!` calls compile out of release
+builds. README and `docs/performance.md` numbers were re-measured for the compio
+0.19 runtime.
+
+### 🐛 Bug Fixes
+
+- Fixed a busy reconnect loop when `reconnect_ivl_max` is 0 (a zero-delay retry
+  that spun instead of backing off).
+- STREAM reader-task cancellation is now deterministic under smol (biased select
+  so a closed reader cannot read data queued after close).
+- The routing id set via `with_routing_id` is now sent in the ZMTP READY of the
+  initial connection, not only after a reconnect. Previously a freshly connected
+  DEALER/REQ/etc. was seen by the peer under an auto-generated identity until it
+  reconnected.
+- Repaired the bidirectional inproc reply channel so request/reply endpoints work.
+  `connect_inproc` now receives the server's replies (the reply receiver is
+  registered at bind time). This fixes end-to-end PLAIN authentication, whose ZAP
+  handler on `inproc://zeromq.zap.01` previously failed with "Authentication
+  failed" because the reply never reached the connecting socket. The ZAP server
+  binds through the new `DealerSocket::bind_inproc_bidi`.
+
+### 🧪 Testing
+
+A verification layer now guards the wire-facing and unsafe surfaces:
+
+- Fuzz targets for the ZMTP greeting, READY command, and ZAP request parsers,
+  added to the existing decoder/codec/handshake targets, plus a scheduled
+  `fuzz-run` CI job. Continuous fuzzing (OSS-Fuzz / ClusterFuzzLite) is documented
+  as a follow-up in `monocoque-fuzz/README.md`.
+- New CI jobs run Miri over the unsafe modules, loom over the publisher's
+  generation/subscriber-count atomics, and ThreadSanitizer over the concurrency
+  tests.
+- The `inproc_stream` cross-await pointer invariant is documented and tested.
+- clippy pedantic + nursery are enabled workspace-wide with a curated allow-set,
+  and the resulting fallout was fixed across every crate.
+
+### 📚 Documentation
+
+- Documented the fuzz targets and the continuous-fuzzing follow-up.
+- Aligned the backend docs (crate rustdoc, getting-started, performance) so every
+  place that lists compio and tokio also covers the smol backend.
+- Updated the install snippets across the README and guides to compio 0.19
+  (matching the runtime upgrade) and to the 0.3 crate release, and bumped the two
+  excluded helper crates (the benchmark peer and the fuzz crate) so they build
+  against the upgraded tree.
+- Fixed a private intra-doc link (`close_peer` pointed at the internal
+  `PeerHandle`) so the API docs build under `-D warnings`.
+- Fixed two examples that could not run to completion. `inproc_demo` deadlocked:
+  the endpoint registry keeps a clone of the server sender, so the demo has to
+  unbind the endpoint before joining its server thread, not after. And
+  `socket_introspection` connected a DEALER to a port with no listener; it now
+  stands up an in-process ROUTER peer on an ephemeral port. Both run to
+  completion on compio, tokio, and smol.
+
 ## 0.2.1 - 2026-07-09
 
 ### 📚 Documentation

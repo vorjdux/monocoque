@@ -60,7 +60,7 @@ where
         let handshake_result = perform_handshake_with_options(
             &mut stream,
             SocketType::Sub,
-            None,
+            options.routing_id.as_deref(),
             Some(options.handshake_timeout),
             &options,
         )
@@ -347,7 +347,7 @@ impl SubSocket<TcpStream> {
         let handshake_result = perform_handshake_with_options(
             &mut stream,
             SocketType::Sub,
-            None,
+            options.routing_id.as_deref(),
             Some(options.handshake_timeout),
             &options,
         )
@@ -402,13 +402,13 @@ impl SubSocket<TcpStream> {
 
         loop {
             if self.base.stream.is_none() {
-                if let Some(limit) = max {
-                    if attempts >= limit {
-                        return Err(io::Error::new(
-                            io::ErrorKind::NotConnected,
-                            format!("Max {} reconnection attempts exceeded", limit),
-                        ));
-                    }
+                if let Some(limit) = max
+                    && attempts >= limit
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotConnected,
+                        format!("Max {} reconnection attempts exceeded", limit),
+                    ));
                 }
                 attempts += 1;
                 trace!(

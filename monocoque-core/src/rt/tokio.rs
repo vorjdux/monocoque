@@ -132,7 +132,7 @@ where
     W: tokio::io::AsyncWrite + Unpin,
     B: IoBuf,
 {
-    let slice = buf.as_slice();
+    let slice = buf.as_init();
     let result = poll_fn(|cx| Pin::new(&mut *writer).poll_write(cx, slice)).await;
     match result {
         Ok(n) => BufResult(Ok(n), buf),
@@ -233,6 +233,18 @@ impl TcpStream {
         Ok(Self { inner })
     }
 
+    /// Adopt a `std::net::TcpStream`, attaching it to the current runtime.
+    ///
+    /// Mirrors compio's `TcpStream::from_std`; used to re-attach a handed-off
+    /// fd to a worker's runtime (see the publisher fan-out). tokio requires the
+    /// stream to be non-blocking.
+    pub fn from_std(stream: std::net::TcpStream) -> io::Result<Self> {
+        stream.set_nonblocking(true)?;
+        Ok(Self {
+            inner: tokio::net::TcpStream::from_std(stream)?,
+        })
+    }
+
     /// Local address this stream is bound to.
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
         self.inner.local_addr()
@@ -263,6 +275,14 @@ impl TcpListener {
         Ok(Self { inner })
     }
 
+    /// Adopt a `std::net::TcpListener`, attaching it to the tokio runtime.
+    pub fn from_std(listener: std::net::TcpListener) -> io::Result<Self> {
+        listener.set_nonblocking(true)?;
+        Ok(Self {
+            inner: tokio::net::TcpListener::from_std(listener)?,
+        })
+    }
+
     /// Accept the next inbound connection.
     pub async fn accept(&self) -> io::Result<(TcpStream, SocketAddr)> {
         let (stream, addr) = self.inner.accept().await?;
@@ -273,6 +293,11 @@ impl TcpListener {
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
         self.inner.local_addr()
     }
+}
+
+/// Bind a TCP listener with `SO_REUSEPORT`. See [`crate::tcp::reuseport_listener`].
+pub fn bind_reuseport(addr: SocketAddr) -> io::Result<TcpListener> {
+    TcpListener::from_std(crate::tcp::reuseport_listener(addr)?)
 }
 
 impl_compio_io!(read TcpStream);

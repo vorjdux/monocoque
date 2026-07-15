@@ -94,7 +94,7 @@ where
         let handshake_result = perform_handshake_with_options(
             &mut stream,
             SocketType::Xsub,
-            None,
+            options.routing_id.as_deref(),
             Some(options.handshake_timeout),
             &options,
         )
@@ -377,7 +377,7 @@ impl XSubSocket<TcpStream> {
         let handshake_result = crate::handshake::perform_handshake_with_options(
             &mut stream,
             crate::session::SocketType::Xsub,
-            None,
+            options.routing_id.as_deref(),
             Some(options.handshake_timeout),
             &options,
         )
@@ -441,13 +441,13 @@ impl XSubSocket<TcpStream> {
 
         loop {
             if self.base.stream.is_none() {
-                if let Some(limit) = max {
-                    if attempts >= limit {
-                        return Err(io::Error::new(
-                            io::ErrorKind::NotConnected,
-                            format!("Max {} reconnection attempts exceeded", limit),
-                        ));
-                    }
+                if let Some(limit) = max
+                    && attempts >= limit
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotConnected,
+                        format!("Max {} reconnection attempts exceeded", limit),
+                    ));
                 }
                 attempts += 1;
                 trace!(

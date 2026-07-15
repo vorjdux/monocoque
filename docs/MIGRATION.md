@@ -10,9 +10,9 @@ Remove `zmq` from your `Cargo.toml` and add:
 
 ```toml
 [dependencies]
-monocoque-rs = "0.2"
+monocoque-rs = "0.3"
 bytes = "1.0"
-compio = { version = "0.10", features = ["runtime", "macros"] }
+compio = { version = "0.19", features = ["runtime", "macros"] }
 ```
 
 You no longer need libzmq installed on the system. Monocoque is pure Rust.

@@ -19,12 +19,7 @@ fuzz_target!(|data: &[u8]| {
         let size = u16::from_le_bytes([data[0], data[1]]) as usize;
 
         // Build a payload of `size` bytes sourced from the fuzz input (or zeros).
-        let payload: Vec<u8> = data
-            .iter()
-            .cycle()
-            .take(size)
-            .copied()
-            .collect();
+        let payload: Vec<u8> = data.iter().cycle().take(size).copied().collect();
         let payload = Bytes::from(payload);
 
         // Encode a data frame and verify the output is non-empty when expected.
