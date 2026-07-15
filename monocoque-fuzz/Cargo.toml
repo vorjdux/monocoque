@@ -1,6 +1,6 @@
 [package]
 name = "monocoque-fuzz"
-version = "0.1.5"
+version = "0.3.0"
 edition = "2024"
 # Excluded from the workspace, so it does not inherit the workspace MSRV.
 # Pinned to match: it depends on the published crates, which require 1.95.
