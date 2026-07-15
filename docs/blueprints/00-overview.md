@@ -58,7 +58,7 @@ The goal is to **outperform libzmq**, while:
 -   Protocols are **opt-in** via Cargo features
 -   No default features (explicit dependencies only)
 -   `monocoque-core` is 100% protocol-agnostic
--   Example: `monocoque-rs = { version = "0.2", features = ["zmq"] }`
+-   Example: `monocoque-rs = { version = "0.3", features = ["zmq"] }`
 
 This ensures:
 

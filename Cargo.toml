@@ -5,7 +5,7 @@ exclude = ["monocoque-fuzz", "monocoque-loom"]
 default-members = ["monocoque"]
 
 [workspace.package]
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 license = "MIT"
 authors = ["Matheus Santos <vorj.dux@gmail.com>"]

@@ -16,7 +16,7 @@ A five-minute guide to sending your first message with Monocoque.
 
 ```toml
 [dependencies]
-monocoque-rs = { version = "0.2", features = ["zmq"] }
+monocoque-rs = { version = "0.3", features = ["zmq"] }
 bytes    = "1"
 compio   = { version = "0.19", features = ["runtime", "macros"] }
 ```
@@ -48,7 +48,7 @@ runtime primitives differ.
 ```toml
 # tokio backend
 [dependencies]
-monocoque-rs = { version = "0.2", default-features = false, features = ["runtime-tokio", "zmq"] }
+monocoque-rs = { version = "0.3", default-features = false, features = ["runtime-tokio", "zmq"] }
 bytes = "1"
 tokio = { version = "1", features = ["rt", "macros"] }
 ```
@@ -56,7 +56,7 @@ tokio = { version = "1", features = ["rt", "macros"] }
 ```toml
 # smol backend
 [dependencies]
-monocoque-rs = { version = "0.2", default-features = false, features = ["runtime-smol", "zmq"] }
+monocoque-rs = { version = "0.3", default-features = false, features = ["runtime-smol", "zmq"] }
 bytes = "1"
 ```
 

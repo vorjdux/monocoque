@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 - 2026-07-15
 
 This cycle upgrades the io_uring runtime to compio 0.19, tightens resource
 bounds across the transport and security paths, and adds a verification layer

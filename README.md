@@ -86,7 +86,7 @@ PUB/SUB pattern results, and tuning guidance.
 
 ```toml
 [dependencies]
-monocoque-rs = { version = "0.2", features = ["zmq"] }
+monocoque-rs = { version = "0.3", features = ["zmq"] }
 # Drives the default io_uring backend and provides the #[compio::main] macro.
 # To run on tokio or smol instead, see "Runtime backends" below.
 compio = { version = "0.19", features = ["runtime", "macros"] }
@@ -150,13 +150,13 @@ or smol instead. Pick one backend at compile time:
 
 ```toml
 # Default: native io_uring via compio
-monocoque-rs = { version = "0.2", features = ["zmq"] }
+monocoque-rs = { version = "0.3", features = ["zmq"] }
 
 # Or run on tokio
-monocoque-rs = { version = "0.2", default-features = false, features = ["runtime-tokio", "zmq"] }
+monocoque-rs = { version = "0.3", default-features = false, features = ["runtime-tokio", "zmq"] }
 
 # Or run on smol
-monocoque-rs = { version = "0.2", default-features = false, features = ["runtime-smol", "zmq"] }
+monocoque-rs = { version = "0.3", default-features = false, features = ["runtime-smol", "zmq"] }
 ```
 
 The three backends are mutually exclusive. The protocol layer, frame codec and

@@ -4,7 +4,7 @@ Add monocoque to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-monocoque-rs = "0.2"
+monocoque-rs = "0.3"
 bytes = "1.0"
 compio = { version = "0.19", features = ["runtime", "macros"] }
 ```

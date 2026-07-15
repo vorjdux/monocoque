@@ -20,7 +20,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! monocoque-rs = { version = "0.2", features = ["zmq"] }
+//! monocoque-rs = { version = "0.3", features = ["zmq"] }
 //! ```
 //!
 //! ## Quick Start
