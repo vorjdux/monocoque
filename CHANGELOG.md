@@ -97,6 +97,18 @@ A verification layer now guards the wire-facing and unsafe surfaces:
 - Documented the fuzz targets and the continuous-fuzzing follow-up.
 - Aligned the backend docs (crate rustdoc, getting-started, performance) so every
   place that lists compio and tokio also covers the smol backend.
+- Updated the install snippets across the README and guides to compio 0.19
+  (matching the runtime upgrade) and to the 0.3 crate release, and bumped the two
+  excluded helper crates (the benchmark peer and the fuzz crate) so they build
+  against the upgraded tree.
+- Fixed a private intra-doc link (`close_peer` pointed at the internal
+  `PeerHandle`) so the API docs build under `-D warnings`.
+- Fixed two examples that could not run to completion. `inproc_demo` deadlocked:
+  the endpoint registry keeps a clone of the server sender, so the demo has to
+  unbind the endpoint before joining its server thread, not after. And
+  `socket_introspection` connected a DEALER to a port with no listener; it now
+  stands up an in-process ROUTER peer on an ephemeral port. Both run to
+  completion on compio, tokio, and smol.
 
 ## 0.2.1 - 2026-07-09
 
