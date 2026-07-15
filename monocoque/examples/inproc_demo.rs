@@ -104,12 +104,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     drop(client2);
     drop(client3);
 
-    // Wait for server to finish
-    server_thread.join().unwrap();
-
-    // Unbind the endpoint
+    // Unbind first. bind_inproc stored a clone of the server sender in the
+    // global registry (so connect_inproc could hand it out), so dropping the
+    // local senders above is not enough to close the channel: the registry's
+    // clone keeps the server's recv() blocked. Removing the endpoint drops that
+    // last sender, so the recv() loop ends and the join below returns.
     unbind_inproc("inproc://demo-endpoint")?;
     println!("   ✓ Unbound endpoint");
+
+    // Wait for server to finish now that every sender is gone.
+    server_thread.join().unwrap();
 
     // Verify endpoint list is empty
     let endpoints = list_inproc_endpoints();
