@@ -158,7 +158,7 @@ where
         let handshake_result = perform_handshake_with_options(
             &mut stream,
             SocketType::Req,
-            None,
+            options.routing_id.as_deref(),
             Some(options.handshake_timeout),
             &options,
         )
@@ -552,7 +552,7 @@ impl ReqSocket<TcpStream> {
         let handshake_result = perform_handshake_with_options(
             &mut stream,
             SocketType::Req,
-            None,
+            options.routing_id.as_deref(),
             Some(options.handshake_timeout),
             &options,
         )

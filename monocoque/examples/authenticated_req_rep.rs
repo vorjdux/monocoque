@@ -42,13 +42,16 @@ async fn async_main() -> std::io::Result<()> {
         .with_send_timeout(Duration::from_secs(10));
 
     let server_task = rt::spawn(async move {
-        let (stream, _) = listener.accept().await.unwrap();
-        let mut server = RepSocket::from_tcp_with_options(stream, server_options)
-            .await
-            .unwrap();
-
+        // Each client (alice, then bob) opens its own connection, so accept and
+        // authenticate one REP peer per request rather than looping on a single
+        // connection.
         println!("[SERVER] Waiting for requests...");
         for i in 1..=2 {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut server = RepSocket::from_tcp_with_options(stream, server_options.clone())
+                .await
+                .unwrap();
+
             if let Ok(Some(request)) = server.recv().await {
                 let msg = String::from_utf8_lossy(&request[0]);
                 println!("[SERVER] Request {i}: {msg}");

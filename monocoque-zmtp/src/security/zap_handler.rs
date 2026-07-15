@@ -203,8 +203,11 @@ impl<H: ZapHandler> ZapServer<H> {
     /// }
     /// ```
     pub fn new(handler: Arc<H>) -> io::Result<Self> {
-        // Bind to the standard ZAP endpoint
-        let socket = DealerSocket::bind_inproc("inproc://zeromq.zap.01", SocketOptions::default())?;
+        // Bind to the standard ZAP endpoint. ZAP is request/reply, so the bind
+        // must be bidirectional: the client (ZapClient::connect_inproc) needs a
+        // reply channel to receive the WELCOME/ERROR response.
+        let socket =
+            DealerSocket::bind_inproc_bidi("inproc://zeromq.zap.01", SocketOptions::default())?;
 
         Ok(Self { socket, handler })
     }

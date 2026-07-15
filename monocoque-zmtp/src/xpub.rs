@@ -179,7 +179,7 @@ impl XPubSocket {
                 let handshake_result = perform_handshake_with_options(
                     &mut stream,
                     SocketType::Xpub,
-                    None,
+                    self.options.routing_id.as_deref(),
                     Some(self.options.handshake_timeout),
                     &self.options,
                 )

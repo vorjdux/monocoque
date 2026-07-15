@@ -87,6 +87,16 @@ builds. README and `docs/performance.md` numbers were re-measured for the compio
   that spun instead of backing off).
 - STREAM reader-task cancellation is now deterministic under smol (biased select
   so a closed reader cannot read data queued after close).
+- The routing id set via `with_routing_id` is now sent in the ZMTP READY of the
+  initial connection, not only after a reconnect. Previously a freshly connected
+  DEALER/REQ/etc. was seen by the peer under an auto-generated identity until it
+  reconnected.
+- Repaired the bidirectional inproc reply channel so request/reply endpoints work.
+  `connect_inproc` now receives the server's replies (the reply receiver is
+  registered at bind time). This fixes end-to-end PLAIN authentication, whose ZAP
+  handler on `inproc://zeromq.zap.01` previously failed with "Authentication
+  failed" because the reply never reached the connecting socket. The ZAP server
+  binds through the new `DealerSocket::bind_inproc_bidi`.
 
 ### 🧪 Testing
 

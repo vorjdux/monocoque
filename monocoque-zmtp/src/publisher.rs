@@ -772,7 +772,7 @@ impl PubSocket {
         let handshake_result = perform_handshake_with_options(
             &mut stream,
             SocketType::Pub,
-            None,
+            self.options.routing_id.as_deref(),
             Some(self.options.handshake_timeout),
             &self.options,
         )

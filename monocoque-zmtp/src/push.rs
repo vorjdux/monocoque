@@ -55,7 +55,7 @@ where
         let handshake_result = perform_handshake_with_options(
             &mut stream,
             SocketType::Push,
-            None,
+            options.routing_id.as_deref(),
             Some(options.handshake_timeout),
             &options,
         )
@@ -241,7 +241,7 @@ impl PushSocket<TcpStream> {
         let handshake_result = perform_handshake_with_options(
             &mut stream,
             SocketType::Push,
-            None,
+            options.routing_id.as_deref(),
             Some(options.handshake_timeout),
             &options,
         )

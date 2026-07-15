@@ -97,7 +97,7 @@ where
         let handshake_result = perform_handshake_with_options(
             &mut stream,
             SocketType::Dealer,
-            None,
+            options.routing_id.as_deref(),
             Some(options.handshake_timeout),
             &options,
         )
@@ -590,7 +590,7 @@ impl DealerSocket<TcpStream> {
         let handshake_result = perform_handshake_with_options(
             &mut stream,
             SocketType::Dealer,
-            None,
+            options.routing_id.as_deref(),
             Some(options.handshake_timeout),
             &options,
         )
@@ -841,6 +841,29 @@ impl DealerSocket<InprocStream> {
         debug!("[DEALER] Bound to inproc endpoint: {}", endpoint);
 
         // Create socket from the stream (inproc doesn't need handshake)
+        Ok(Self {
+            base: SocketBase::new(stream, SocketType::Dealer, options),
+            frames: SmallVec::new(),
+        })
+    }
+
+    /// Bind to an inproc endpoint for bidirectional (request/reply) messaging.
+    ///
+    /// Unlike [`bind_inproc`](Self::bind_inproc), which only lets connected peers
+    /// send to the server, this registers a reply channel so a peer that used
+    /// [`connect_inproc`](Self::connect_inproc) can also receive the server's
+    /// replies. This is what request/reply endpoints such as the ZAP handler
+    /// (`inproc://zeromq.zap.01`) need.
+    pub fn bind_inproc_bidi(endpoint: &str, options: SocketOptions) -> io::Result<Self> {
+        use crate::inproc_stream::InprocStream;
+
+        debug!("[DEALER] Binding (bidi) to inproc endpoint: {}", endpoint);
+
+        // bind_inproc_bidi returns (to_client_tx, from_client_rx): the server
+        // sends replies via to_client_tx and reads requests from from_client_rx.
+        let (tx, rx) = monocoque_core::inproc::bind_inproc_bidi(endpoint)?;
+        let stream = InprocStream::new(tx, rx);
+
         Ok(Self {
             base: SocketBase::new(stream, SocketType::Dealer, options),
             frames: SmallVec::new(),

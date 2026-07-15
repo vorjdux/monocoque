@@ -58,7 +58,7 @@ where
         let handshake_result = perform_handshake_with_options(
             &mut stream,
             SocketType::Pull,
-            None,
+            options.routing_id.as_deref(),
             Some(options.handshake_timeout),
             &options,
         )
@@ -352,7 +352,7 @@ impl PullSocket<TcpStream> {
         let handshake_result = perform_handshake_with_options(
             &mut stream,
             SocketType::Pull,
-            None,
+            options.routing_id.as_deref(),
             Some(options.handshake_timeout),
             &options,
         )
