@@ -114,7 +114,11 @@ num_cpus = "1.16"
 # Testing
 zmq = "0.10"
 criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
-gungraun = "0.19"
+# Exact pin: the CI-installed gungraun-runner binary must match this library
+# version, and Cargo.lock is not tracked, so a caret range would silently drift
+# to a newer release than the pinned runner and fail the bench. Keep this in sync
+# with GUNGRAUN_VERSION in .github/workflows/instr-bench.yml.
+gungraun = "=0.19.4"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
 portpicker = "0.1"
 hex = "0.4"
