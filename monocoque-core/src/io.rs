@@ -20,7 +20,7 @@
 #![allow(unsafe_code)]
 
 use bytes::BytesMut;
-use compio_buf::{BufResult, IoBufMut, IoVectoredBuf, SetBufInit};
+use compio_buf::{BufResult, IoBufMut, IoVectoredBuf};
 use smallvec::SmallVec;
 use std::io::{self, IoSlice};
 use std::mem::MaybeUninit;
@@ -67,7 +67,7 @@ pub unsafe fn take_read_buffer(stash: &mut BytesMut, read_size: usize) -> BytesM
         // SAFETY: `read_size` is within capacity per the check above. The
         // function's contract requires the caller to overwrite these bytes via
         // the read and truncate to the real count before exposing them.
-        unsafe { stash.set_buf_init(read_size) };
+        unsafe { stash.set_len(read_size) };
     }
     let tail = stash.split_off(read_size);
     std::mem::replace(stash, tail)
@@ -76,10 +76,10 @@ pub unsafe fn take_read_buffer(stash: &mut BytesMut, read_size: usize) -> BytesM
 /// Read into an owned buffer's spare capacity, then declare the bytes written
 /// as initialized.
 ///
-/// This is the one place in the workspace that calls `set_buf_init` (from
-/// compio's `SetBufInit`). Every runtime backend routes its read path through
-/// here, so the single owned-buffer `unsafe` block lives behind one documented
-/// contract instead of a copy per adapter.
+/// This is the one place in the workspace that calls `set_len` (from compio's
+/// `SetLen`). Every runtime backend routes its read path through here, so the
+/// single owned-buffer `unsafe` block lives behind one documented contract
+/// instead of a copy per adapter.
 ///
 /// `read` is an async closure handed the buffer's uninitialized spare capacity
 /// as `&mut [MaybeUninit<u8>]`; it performs the actual read into the front of
@@ -103,7 +103,7 @@ where
     // Scope the spare-capacity borrow to the read so `buf` is free to mutate
     // again once the count is known.
     let outcome = {
-        let spare = buf.as_mut_slice();
+        let spare = buf.as_uninit();
         read(spare).await
     };
     match outcome {
@@ -112,7 +112,7 @@ where
             // the first `n` bytes of the spare slice it was handed. Declaring
             // that same length initialized matches what was actually written.
             unsafe {
-                buf.set_buf_init(n);
+                buf.set_len(n);
             }
             BufResult(Ok(n), buf)
         }
@@ -131,10 +131,7 @@ pub fn with_vectored_slices<B, R>(buf: &B, f: impl FnOnce(&[IoSlice<'_>]) -> R) 
 where
     B: IoVectoredBuf,
 {
-    let slices: SmallVec<[IoSlice<'_>; 16]> = buf
-        .as_dyn_bufs()
-        .map(|b| IoSlice::new(b.as_slice()))
-        .collect();
+    let slices: SmallVec<[IoSlice<'_>; 16]> = buf.iter_slice().map(IoSlice::new).collect();
     f(&slices)
 }
 

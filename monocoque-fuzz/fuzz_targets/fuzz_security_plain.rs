@@ -3,8 +3,8 @@
 use bytes::Bytes;
 use libfuzzer_sys::fuzz_target;
 use monocoque_zmtp::security::PlainCredentials;
-use monocoque_zmtp::security::zap::{ZapMechanism, ZapRequest, ZapResponse};
 use monocoque_zmtp::security::plain::create_plain_zap_request;
+use monocoque_zmtp::security::zap::{ZapMechanism, ZapRequest, ZapResponse};
 
 fuzz_target!(|data: &[u8]| {
     // --- Fuzz ZapRequest::decode with arbitrary frame data ---
@@ -92,14 +92,8 @@ fuzz_target!(|data: &[u8]| {
         let username = String::from_utf8_lossy(&data[..mid]).into_owned();
         let password = String::from_utf8_lossy(&data[mid..]).into_owned();
 
-        let request = create_plain_zap_request(
-            "rt",
-            "d",
-            "0.0.0.0:0",
-            Bytes::new(),
-            username,
-            password,
-        );
+        let request =
+            create_plain_zap_request("rt", "d", "0.0.0.0:0", Bytes::new(), username, password);
 
         let frames = request.encode();
         // Decode should succeed for a properly encoded request.

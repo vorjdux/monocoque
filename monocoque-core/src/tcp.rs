@@ -67,6 +67,50 @@ pub fn enable_tcp_nodelay<S>(_stream: &S) -> io::Result<()> {
     Ok(())
 }
 
+/// Build a listening `std::net::TcpListener` bound to `addr` with `SO_REUSEPORT`
+/// (and `SO_REUSEADDR`) set before the bind.
+///
+/// `SO_REUSEPORT` must be set on the socket before `bind`, so this constructs
+/// the socket via socket2, sets the option, then binds and listens. Multiple
+/// listeners on the same address can then coexist with in-kernel load balancing
+/// across them, which is the path to scaling accept in high-connection ROUTER,
+/// PULL, and PUB. Each runtime backend adopts the returned std listener via its
+/// own `from_std`.
+///
+/// # Errors
+///
+/// Returns an error if the socket cannot be created, the option set, or the
+/// address bound.
+#[cfg(unix)]
+pub fn reuseport_listener(addr: std::net::SocketAddr) -> io::Result<std::net::TcpListener> {
+    use socket2::{Domain, Protocol, Socket, Type};
+
+    let domain = if addr.is_ipv4() {
+        Domain::IPV4
+    } else {
+        Domain::IPV6
+    };
+    let sock = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
+    sock.set_reuse_address(true)?;
+    sock.set_reuse_port(true)?;
+    sock.bind(&addr.into())?;
+    sock.listen(1024)?;
+    Ok(sock.into())
+}
+
+/// `SO_REUSEPORT` is a Unix (Linux/BSD) socket option; unsupported elsewhere.
+///
+/// # Errors
+///
+/// Always returns `Unsupported` on non-Unix platforms.
+#[cfg(not(unix))]
+pub fn reuseport_listener(_addr: std::net::SocketAddr) -> io::Result<std::net::TcpListener> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "SO_REUSEPORT is only supported on Unix",
+    ))
+}
+
 /// Configure the OS-level socket send/receive buffer sizes (`SO_SNDBUF` /
 /// `SO_RCVBUF`) on a TCP stream.
 ///
@@ -325,6 +369,20 @@ mod tests {
         assert!(
             rcv >= requested as usize,
             "SO_RCVBUF not applied: got {rcv}, requested {requested}"
+        );
+    }
+
+    #[test]
+    fn reuseport_allows_two_listeners_on_same_port() {
+        // Bind one REUSEPORT listener on an OS-assigned port, then bind a second
+        // on the SAME address. Without SO_REUSEPORT the second bind fails with
+        // AddrInUse; with it, both coexist (the kernel load-balances accepts).
+        let l1 = reuseport_listener("127.0.0.1:0".parse().unwrap()).unwrap();
+        let addr = l1.local_addr().unwrap();
+        let l2 = reuseport_listener(addr).expect("second REUSEPORT bind on same port");
+        assert_eq!(
+            l1.local_addr().unwrap().port(),
+            l2.local_addr().unwrap().port()
         );
     }
 

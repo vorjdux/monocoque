@@ -56,7 +56,7 @@ impl AsyncRead for InprocStream {
         //   1. `buf` is owned by this future and held by value across the await
         //      (it is returned in the final `BufResult`); it is never moved or
         //      reallocated between this line and the write-through below.
-        //   2. `as_buf_mut_ptr` returns a pointer to `B`'s backing storage. For
+        //   2. `buf_mut_ptr` returns a pointer to `B`'s backing storage. For
         //      the `IoBufMut` types used here (Vec/BytesMut-backed, heap
         //      allocated), that storage does not move when the `B` handle moves,
         //      so the pointer stays valid across the suspension point.
@@ -64,7 +64,9 @@ impl AsyncRead for InprocStream {
         // break assumption (2); do not use one here without re-taking the
         // pointer after the await. Covered by
         // `read_across_suspension_point_writes_through_stable_pointer`.
-        let buf_ptr = buf.as_buf_mut_ptr();
+        // compio-buf 0.8 returns the spare capacity as `*mut MaybeUninit<u8>`;
+        // cast to `*mut u8` since we write initialized bytes through it.
+        let buf_ptr = buf.buf_mut_ptr().cast::<u8>();
         let mut total = 0usize;
 
         if self.read_pos < self.read_buf.len() {
@@ -72,7 +74,7 @@ impl AsyncRead for InprocStream {
             let to_copy = available.len().min(buf_cap);
             unsafe {
                 std::ptr::copy_nonoverlapping(available.as_ptr(), buf_ptr, to_copy);
-                buf.set_buf_init(to_copy);
+                buf.set_len(to_copy);
             }
             self.read_pos += to_copy;
             if self.read_pos == self.read_buf.len() {
@@ -109,7 +111,7 @@ impl AsyncRead for InprocStream {
                 }
 
                 unsafe {
-                    buf.set_buf_init(total);
+                    buf.set_len(total);
                 }
                 BufResult(Ok(total), buf)
             }
@@ -125,7 +127,7 @@ impl AsyncWrite for InprocStream {
     async fn write<B: IoBuf>(&mut self, buf: B) -> BufResult<usize, B> {
         // For inproc, we send the entire buffer as a single frame
         let len = buf.buf_len();
-        let data = Bytes::copy_from_slice(buf.as_slice());
+        let data = Bytes::copy_from_slice(buf.as_init());
 
         match self.tx.send(vec![data]) {
             Ok(()) => BufResult(Ok(len), buf),

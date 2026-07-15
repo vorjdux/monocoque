@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 /// endpoint on close). This wrapper records the bound path and removes it on
 /// [`Drop`], guarding the unlink so it only ever removes a socket node.
 ///
-/// It [`Deref`]s to the underlying [`UnixListener`], so it can be used anywhere
+/// It [`Deref`](std::ops::Deref)s to the underlying [`UnixListener`], so it can be used anywhere
 /// a `&UnixListener` is expected (e.g. [`accept`]).
 #[cfg(unix)]
 #[derive(Debug)]
@@ -56,10 +56,10 @@ impl Drop for IpcListener {
         // Only remove the node if it is still the socket we bound. This avoids
         // deleting a regular file that raced into the path, and is a no-op if
         // the socket was already unlinked.
-        if let Ok(metadata) = std::fs::symlink_metadata(&self.path) {
-            if metadata.file_type().is_socket() {
-                let _ = std::fs::remove_file(&self.path);
-            }
+        if let Ok(metadata) = std::fs::symlink_metadata(&self.path)
+            && metadata.file_type().is_socket()
+        {
+            let _ = std::fs::remove_file(&self.path);
         }
     }
 }

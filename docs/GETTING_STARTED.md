@@ -16,13 +16,14 @@ A five-minute guide to sending your first message with Monocoque.
 
 ```toml
 [dependencies]
-monocoque-rs = { version = "0.2", features = ["zmq"] }
+monocoque-rs = { version = "0.3", features = ["zmq"] }
 bytes    = "1"
-compio   = { version = "0.10", features = ["runtime", "macros"] }
+compio   = { version = "0.19", features = ["runtime", "macros"] }
 ```
 
 The examples below use the default backend (io_uring via compio) and its
-`#[compio::main]` entry point. See the next section if you want to run on tokio.
+`#[compio::main]` entry point. See the next section if you want to run on tokio
+or smol.
 
 ---
 
@@ -47,7 +48,7 @@ runtime primitives differ.
 ```toml
 # tokio backend
 [dependencies]
-monocoque-rs = { version = "0.2", default-features = false, features = ["runtime-tokio", "zmq"] }
+monocoque-rs = { version = "0.3", default-features = false, features = ["runtime-tokio", "zmq"] }
 bytes = "1"
 tokio = { version = "1", features = ["rt", "macros"] }
 ```
@@ -55,7 +56,7 @@ tokio = { version = "1", features = ["rt", "macros"] }
 ```toml
 # smol backend
 [dependencies]
-monocoque-rs = { version = "0.2", default-features = false, features = ["runtime-smol", "zmq"] }
+monocoque-rs = { version = "0.3", default-features = false, features = ["runtime-smol", "zmq"] }
 bytes = "1"
 ```
 
@@ -79,11 +80,12 @@ fn main() -> std::io::Result<()> {
 
 To keep your own code free of any runtime name, use `monocoque::rt::LocalRuntime`,
 which builds the right single-threaded runtime for whichever feature is enabled.
-The `runtime_backends` example is one program that runs unchanged on both:
+The `runtime_backends` example is one program that runs unchanged on all three:
 
 ```bash
 cargo run --example runtime_backends --features zmq                                      # compio
 cargo run --example runtime_backends --no-default-features --features runtime-tokio,zmq  # tokio
+cargo run --example runtime_backends --no-default-features --features runtime-smol,zmq   # smol
 ```
 
 ---

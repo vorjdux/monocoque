@@ -390,10 +390,10 @@ where
 fn encode_zmtp_props(socket_type: &str, identity: Option<&[u8]>) -> Vec<u8> {
     let mut out = Vec::with_capacity(64);
     push_prop(&mut out, b"Socket-Type", socket_type.as_bytes());
-    if let Some(id) = identity {
-        if !id.is_empty() {
-            push_prop(&mut out, b"Identity", id);
-        }
+    if let Some(id) = identity
+        && !id.is_empty()
+    {
+        push_prop(&mut out, b"Identity", id);
     }
     out
 }
@@ -1591,7 +1591,7 @@ mod tests {
                 .pop_front()
                 .unwrap_or_else(|| buf.buf_len())
                 .min(buf.buf_len());
-            self.written.extend_from_slice(&buf.as_slice()[..len]);
+            self.written.extend_from_slice(&buf.as_init()[..len]);
             BufResult(Ok(len), buf)
         }
 

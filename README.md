@@ -42,20 +42,22 @@ The name comes from Formula 1 engineering, where the monocoque chassis achieves 
 Benchmarked against rust-zmq (FFI bindings to libzmq). Separate OS threads for
 sender and receiver, real loopback TCP, Intel Core i7-1355U (12 threads),
 Linux 6.17, release build. The three runtime backends run the identical suite,
-and all figures below were re-measured together for the 0.2 release; the rust-zmq
-column uses the same live-connection timer.
+and the figures below were re-measured together on the same machine; the compio
+column reflects the compio 0.19 runtime (its throughput and latency stepped up
+noticeably over the earlier runtime). The rust-zmq column uses the same
+live-connection timer.
 
 **PUSH/PULL throughput with write coalescing** (`with_write_coalescing(true)`):
 
 | Message size | compio | tokio | smol | rust-zmq |
 |---|---|---|---|---|
-| 64 B | 11.8 M msg/s | **17.1 M msg/s** | 13.2 M msg/s | 4.58 M msg/s |
-| 256 B | 6.4 M msg/s | **12.0 M msg/s** | 8.5 M msg/s | 2.60 M msg/s |
-| 1 KB | 2.5 M msg/s | **4.6 M msg/s** | 3.3 M msg/s | 1.01 M msg/s |
-| 4 KB | 821 K msg/s | **1.60 M msg/s** | 1.10 M msg/s | 383 K msg/s |
-| 16 KB | 274 K msg/s | **462 K msg/s** | 331 K msg/s | 130 K msg/s |
+| 64 B | 13.6 M msg/s | **17.1 M msg/s** | 13.2 M msg/s | 4.58 M msg/s |
+| 256 B | 8.2 M msg/s | **12.0 M msg/s** | 8.5 M msg/s | 2.60 M msg/s |
+| 1 KB | 3.5 M msg/s | **4.6 M msg/s** | 3.3 M msg/s | 1.01 M msg/s |
+| 4 KB | 1.19 M msg/s | **1.60 M msg/s** | 1.10 M msg/s | 383 K msg/s |
+| 16 KB | 370 K msg/s | **462 K msg/s** | 331 K msg/s | 130 K msg/s |
 
-All three backends beat libzmq once coalescing batches the writes: ~2.6x (compio),
+All three backends beat libzmq once coalescing batches the writes: ~3.0x (compio),
 ~3.7x (tokio), ~2.9x (smol) at 64 B, and ~2-4x across the size range. On these
 single-flow loopback microbenchmarks the epoll backends (tokio, smol) are the
 faster: a one-connection ping-pong does not exercise io_uring's strengths (batched
@@ -66,13 +68,13 @@ land for real network I/O and high connection counts. Measure on your own worklo
 Default (eager) mode sends each message immediately, one syscall per `send()`, and
 is the mode for latency-sensitive work where you want each message on the wire now
 rather than batched. On a bulk one-way firehose libzmq's internal batching leads
-at small sizes; steady-state REQ/REP latency, though, is ~2.7-3.5x lower on every
-monocoque backend (~10 µs vs libzmq's ~35 µs). Turn on coalescing for
-small-message throughput. For **large** frames eager mode automatically uses a vectored write
-(`writev`) so the body is never copied into the send buffer; the threshold
-(`vectored_write_threshold`, default 32 KB) is tunable per workload. IPC (Unix
-domain sockets) is ~2.1x (compio) to ~3x (tokio) faster than TCP loopback for
-same-host throughput.
+at small sizes; steady-state REQ/REP latency, though, is ~2.6-3.9x lower on every
+monocoque backend (~9-14 µs vs libzmq's ~36 µs; compio is the lowest at ~9 µs).
+Turn on coalescing for small-message throughput. For **large** frames eager mode
+automatically uses a vectored write (`writev`) so the body is never copied into
+the send buffer; the threshold (`vectored_write_threshold`, default 32 KB) is
+tunable per workload. IPC (Unix domain sockets) is ~3x faster than TCP loopback
+on every backend for same-host throughput.
 
 **PUB/SUB leads libzmq on both axes**: single-subscriber fan-out runs ~3.0x (compio),
 ~3.5x (tokio), ~3.2x (smol) faster, and topic filtering at 10% match is a near tie. See
@@ -84,10 +86,10 @@ PUB/SUB pattern results, and tuning guidance.
 
 ```toml
 [dependencies]
-monocoque-rs = { version = "0.2", features = ["zmq"] }
+monocoque-rs = { version = "0.3", features = ["zmq"] }
 # Drives the default io_uring backend and provides the #[compio::main] macro.
 # To run on tokio or smol instead, see "Runtime backends" below.
-compio = { version = "0.10", features = ["runtime", "macros"] }
+compio = { version = "0.19", features = ["runtime", "macros"] }
 ```
 
 ```rust
@@ -148,13 +150,13 @@ or smol instead. Pick one backend at compile time:
 
 ```toml
 # Default: native io_uring via compio
-monocoque-rs = { version = "0.2", features = ["zmq"] }
+monocoque-rs = { version = "0.3", features = ["zmq"] }
 
 # Or run on tokio
-monocoque-rs = { version = "0.2", default-features = false, features = ["runtime-tokio", "zmq"] }
+monocoque-rs = { version = "0.3", default-features = false, features = ["runtime-tokio", "zmq"] }
 
 # Or run on smol
-monocoque-rs = { version = "0.2", default-features = false, features = ["runtime-smol", "zmq"] }
+monocoque-rs = { version = "0.3", default-features = false, features = ["runtime-smol", "zmq"] }
 ```
 
 The three backends are mutually exclusive. The protocol layer, frame codec and

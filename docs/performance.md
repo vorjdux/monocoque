@@ -19,11 +19,12 @@ cargo bench --no-default-features --features runtime-smol,zmq    # smol
 ```
 
 **What these numbers do and do not show.** These are single-connection loopback
-microbenchmarks. On this workload the tokio/epoll backend is consistently a bit
-faster than compio/io_uring: a single-flow ping-pong does not exercise io_uring's
-strengths (batched submission, registered buffers, scaling across many concurrent
-connections), so it just pays io_uring's per-operation submission overhead while
-epoll plus a plain `write` stays leaner. io_uring's advantage shows up on real
+microbenchmarks. On this workload the tokio/epoll backend still edges
+compio/io_uring, though the compio 0.19 upgrade narrowed the gap sharply (compio
+now leads smol and is close to tokio): a single-flow ping-pong does not exercise
+io_uring's strengths (batched submission, registered buffers, scaling across many
+concurrent connections), so it just pays io_uring's per-operation submission
+overhead while epoll plus a plain `write` stays leaner. io_uring's advantage shows up on real
 network I/O and high connection counts, which these benches do not cover.
 Benchmark on your own workload before picking a backend.
 
@@ -53,21 +54,21 @@ Eager mode (one syscall per message):
 
 | Message size | compio | tokio | smol | rust-zmq |
 |---|---|---|---|---|
-| 64 B | 350 K msg/s | 493 K msg/s | 427 K msg/s | 4.58 M msg/s |
-| 256 B | 347 K msg/s | 502 K msg/s | 417 K msg/s | 2.60 M msg/s |
-| 1 KB | 321 K msg/s | 466 K msg/s | 383 K msg/s | 1.01 M msg/s |
-| 4 KB | 277 K msg/s | 405 K msg/s | 295 K msg/s | 383 K msg/s |
-| 16 KB | 258 K msg/s | 309 K msg/s | 296 K msg/s | 130 K msg/s |
+| 64 B | 492 K msg/s | 493 K msg/s | 427 K msg/s | 4.58 M msg/s |
+| 256 B | 488 K msg/s | 502 K msg/s | 417 K msg/s | 2.60 M msg/s |
+| 1 KB | 451 K msg/s | 466 K msg/s | 383 K msg/s | 1.01 M msg/s |
+| 4 KB | 378 K msg/s | 405 K msg/s | 295 K msg/s | 383 K msg/s |
+| 16 KB | 357 K msg/s | 309 K msg/s | 296 K msg/s | 130 K msg/s |
 
 Write coalescing (batched into 64 KB writes):
 
 | Message size | compio | tokio | smol | rust-zmq |
 |---|---|---|---|---|
-| 64 B | 11.8 M msg/s | **17.1 M msg/s** | 13.2 M msg/s | 4.58 M msg/s |
-| 256 B | 6.4 M msg/s | **12.0 M msg/s** | 8.5 M msg/s | 2.60 M msg/s |
-| 1 KB | 2.5 M msg/s | **4.6 M msg/s** | 3.3 M msg/s | 1.01 M msg/s |
-| 4 KB | 821 K msg/s | **1.60 M msg/s** | 1.10 M msg/s | 383 K msg/s |
-| 16 KB | 274 K msg/s | **462 K msg/s** | 331 K msg/s | 130 K msg/s |
+| 64 B | 13.6 M msg/s | **17.1 M msg/s** | 13.2 M msg/s | 4.58 M msg/s |
+| 256 B | 8.2 M msg/s | **12.0 M msg/s** | 8.5 M msg/s | 2.60 M msg/s |
+| 1 KB | 3.5 M msg/s | **4.6 M msg/s** | 3.3 M msg/s | 1.01 M msg/s |
+| 4 KB | 1.19 M msg/s | **1.60 M msg/s** | 1.10 M msg/s | 383 K msg/s |
+| 16 KB | 370 K msg/s | **462 K msg/s** | 331 K msg/s | 130 K msg/s |
 
 Eager mode is a **latency** tool, not a throughput one. Each `send()` puts that
 message on the wire immediately with its own syscall, so you control exactly when
@@ -79,11 +80,11 @@ read these numbers as "what happens if you eager-send a bulk stream," not as a
 verdict on the mode.
 
 On that firehose, libzmq's internal IO-thread batching dominates at small message
-sizes: at 64 B it moves 4.58 M msg/s versus monocoque's 350-493 K (~9-13x),
+sizes: at 64 B it moves 4.58 M msg/s versus monocoque's 427-493 K (~9-11x),
 because eager pays one kernel write per `send()` while libzmq amortizes many
 messages per syscall. The gap closes as messages grow: around 4 KB the two are
-near parity (libzmq 383 K vs monocoque 277-405 K), and by 16 KB monocoque eager
-(258-309 K) is ~2.0-2.4x *faster* than libzmq (130 K), where the larger payload
+near parity (libzmq 383 K vs monocoque 295-405 K), and by 16 KB monocoque eager
+(296-357 K) is ~2.3-2.7x *faster* than libzmq (130 K), where the larger payload
 amortizes the per-message syscall and vectored writes (`writev`, below) skip the
 userspace copy. The takeaway: if you are streaming small messages in bulk, turn on
 write coalescing; reach for eager when per-message delivery latency and control
@@ -91,10 +92,11 @@ matter more than aggregate rate.
 
 Write coalescing batches ~970 x 64 B messages (or ~240 x 256 B) into one
 `write_all()` call, eliminating the per-message kernel boundary crossing. Coalesced,
-all three backends beat libzmq by ~2-4x across the range: at 64 B ~2.6x (compio),
-~3.7x (tokio), ~2.9x (smol), and ~2.1x, ~3.6x, ~2.5x at 16 KB. The epoll backends
-(tokio, smol) lead compio on these single-flow loopback runs, with smol landing
-between compio and tokio. monocoque's coalescing is explicit rather than a
+all three backends beat libzmq by ~2-4x across the range: at 64 B ~3.0x (compio),
+~3.7x (tokio), ~2.9x (smol), and ~2.8x, ~3.6x, ~2.5x at 16 KB. tokio's epoll path
+still leads on these single-flow loopback runs, but the compio 0.19 upgrade lifted
+compio above smol (compio is io_uring's per-op submission overhead against epoll's
+readiness model, now much narrower). monocoque's coalescing is explicit rather than a
 scheduling side effect, and achieves a higher batch ratio with zero intermediate
 copies.
 
@@ -131,19 +133,20 @@ monocoque and zmq are measured identically.
 
 | Message size | compio | tokio | smol | rust-zmq |
 |---|---|---|---|---|
-| 64 B | 10.0 µs | 10.5 µs | 12.9 µs | 35.2 µs |
-| 256 B | 10.2 µs | 9.7 µs | 12.2 µs | 35.0 µs |
-| 1 KB | 11.0 µs | 10.0 µs | 12.6 µs | 35.4 µs |
+| 64 B | 9.4 µs | 10.5 µs | 12.9 µs | 35.2 µs |
+| 256 B | 9.2 µs | 9.7 µs | 12.2 µs | 35.0 µs |
+| 1 KB | 9.2 µs | 10.0 µs | 12.6 µs | 35.4 µs |
 
-All three backends are ~2.7-3.5x lower round-trip latency than libzmq's ~35 µs:
-tokio and compio are lowest (~10 µs), and smol ~12.6 µs (async-io's readiness
+All three backends are ~2.7-3.8x lower round-trip latency than libzmq's ~35 µs:
+compio and tokio are lowest (compio ~9.2 µs after the 0.19 upgrade), and smol
+~12.6 µs (async-io's readiness
 wakeup costs it a couple of microseconds over the other two). The
 advantage over libzmq comes from the shorter userspace path on a single flow:
 monocoque does the I/O inline on the same thread, with no handoff to a separate
-IO thread on the send and recv path the way libzmq does. tokio edges compio
-because an epoll wakeup for a single-flow round-trip is a touch shorter than
-submitting and reaping an io_uring completion; on real network I/O and high
-connection counts that trade-off flips.
+IO thread on the send and recv path the way libzmq does. compio and tokio are
+neck and neck on this single-flow round-trip; the compio 0.19 upgrade brought
+io_uring's submit/reap cost down to par with (and often just under) an epoll
+wakeup, and on real network I/O and high connection counts io_uring pulls ahead.
 
 ---
 
@@ -180,9 +183,9 @@ does not show up here. The IPC advantage is on throughput, below.
 | smol TCP | 417 K msg/s | 418 K msg/s | 382 K msg/s |
 | smol IPC | 1.40 M msg/s | 1.30 M msg/s | 1.13 M msg/s |
 
-IPC throughput is ~2.1x TCP loopback on compio and ~3x on the epoll backends
-(tokio, smol), because Unix sockets have lower per-syscall overhead and no TCP
-framing cost, and epoll's leaner per-write path magnifies that gain.
+IPC throughput is ~3x TCP loopback on every backend (compio moved up to ~3.1x
+with the 0.19 upgrade, from ~2.1x), because Unix sockets have lower per-syscall
+overhead and no TCP framing cost.
 
 ---
 
@@ -441,9 +444,12 @@ actual broadcast writes. `send()` only queues to that worker and returns; the
 socket write happens later, on the worker.
 
 On the **compio** backend this just works: the accepted socket is a plain file
-descriptor and is usable from any thread. On the **tokio** backend a `TcpStream` is
-bound to the runtime that created it (the accepting runtime), so the worker's
-writes only succeed while that runtime is still alive. In practice this is a
+descriptor and is usable from any thread. The **smol** backend is likewise
+unaffected: `async-io` registers streams with a process-wide global reactor, not
+a per-runtime one, so a handed-off stream stays live regardless of which
+executor accepted it. On the **tokio** backend a `TcpStream` is bound to the
+runtime that created it (the accepting runtime), so the worker's writes only
+succeed while that runtime is still alive. In practice this is a
 non-issue for a normal long-running PUB server, whose accepting runtime stays up
 for the process lifetime. It only bites a **short-lived publisher** that
 broadcasts a burst and then lets its accepting runtime shut down immediately: the

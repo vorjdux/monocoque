@@ -2,7 +2,7 @@
 
 use libfuzzer_sys::fuzz_target;
 use monocoque_zmtp::security::curve::{
-    CurveClient, CurveKeyPair, CurvePublicKey, CurveSecretKey, CURVE_KEY_SIZE,
+    CURVE_KEY_SIZE, CurveClient, CurveKeyPair, CurvePublicKey, CurveSecretKey,
 };
 
 fuzz_target!(|data: &[u8]| {
@@ -118,7 +118,10 @@ fuzz_target!(|data: &[u8]| {
         // ECDH must be commutative.
         match (alice_shared, bob_shared) {
             (Ok(alice_shared), Ok(bob_shared)) => {
-                assert_eq!(alice_shared, bob_shared, "ECDH shared secret must be symmetric");
+                assert_eq!(
+                    alice_shared, bob_shared,
+                    "ECDH shared secret must be symmetric"
+                );
                 assert_eq!(alice_shared.len(), CURVE_KEY_SIZE);
             }
             (Err(_), Err(_)) => {}

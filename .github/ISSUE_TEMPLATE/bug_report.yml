@@ -71,7 +71,7 @@ body:
     attributes:
       label: Environment
       description: OS and Rust version (rustc --version).
-      placeholder: "Ubuntu 24.04, rustc 1.85.0"
+      placeholder: "Ubuntu 24.04, rustc 1.95.0"
     validations:
       required: true
   - type: textarea

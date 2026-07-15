@@ -345,7 +345,7 @@ fn zmq_push_pull(c: &mut Criterion) {
 criterion_group!(
     name = benches;
     config = Criterion::default()
-        .measurement_time(Duration::from_secs(60))
+        .measurement_time(Duration::from_mins(1))
         .warm_up_time(Duration::from_secs(5))
         .sample_size(10);
     targets =

@@ -30,10 +30,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("[Server] Waiting for messages...");
 
         // Receive handshake (in real implementation, this would exchange channel info)
-        if let Ok(msg) = rx_server.recv() {
-            if msg.len() == 1 && msg[0] == "__PAIR_HANDSHAKE__" {
-                println!("[Server] Pair established");
-            }
+        if let Ok(msg) = rx_server.recv()
+            && msg.len() == 1
+            && msg[0] == "__PAIR_HANDSHAKE__"
+        {
+            println!("[Server] Pair established");
         }
 
         // Simulate bidirectional communication

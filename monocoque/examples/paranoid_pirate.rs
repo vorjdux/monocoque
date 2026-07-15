@@ -73,47 +73,47 @@ async fn run_worker(worker_id: u32, crash_after: Option<u32>) -> std::io::Result
         }
 
         // Simulate crash after N requests
-        if let Some(crash_at) = crash_after {
-            if request_count >= crash_at {
-                error!("[Worker-{}] 💥 CRASH SIMULATION - worker dying", worker_id);
-                return Ok(());
-            }
+        if let Some(crash_at) = crash_after
+            && request_count >= crash_at
+        {
+            error!("[Worker-{}] 💥 CRASH SIMULATION - worker dying", worker_id);
+            return Ok(());
         }
 
         // Receive and process requests (non-blocking)
-        if let Ok(Some(mut msg)) = socket.recv().await {
-            if !msg.is_empty() {
-                // Skip empty delimiter frame if present
-                if msg[0].is_empty() && msg.len() > 1 {
-                    msg.remove(0);
-                }
-
-                request_count += 1;
-                let request_data = msg
-                    .last()
-                    .map(|b| String::from_utf8_lossy(b).to_string())
-                    .unwrap_or_default();
-
-                info!(
-                    "[Worker-{}] 📥 Processing request #{}: {}",
-                    worker_id, request_count, request_data
-                );
-
-                // Simulate work
-                rt::sleep(Duration::from_millis(100)).await;
-
-                // Send reply (echo back with worker ID)
-                let reply_text = format!("Processed by worker-{worker_id}: {request_data}");
-
-                let mut reply = vec![Bytes::new()];
-                // Keep routing info frames
-                reply.extend(msg[..msg.len() - 1].to_vec());
-                // Replace last frame with our reply
-                reply.push(Bytes::from(reply_text));
-
-                socket.send(reply).await?;
-                info!("[Worker-{}] 📤 Sent reply #{}", worker_id, request_count);
+        if let Ok(Some(mut msg)) = socket.recv().await
+            && !msg.is_empty()
+        {
+            // Skip empty delimiter frame if present
+            if msg[0].is_empty() && msg.len() > 1 {
+                msg.remove(0);
             }
+
+            request_count += 1;
+            let request_data = msg
+                .last()
+                .map(|b| String::from_utf8_lossy(b).to_string())
+                .unwrap_or_default();
+
+            info!(
+                "[Worker-{}] 📥 Processing request #{}: {}",
+                worker_id, request_count, request_data
+            );
+
+            // Simulate work
+            rt::sleep(Duration::from_millis(100)).await;
+
+            // Send reply (echo back with worker ID)
+            let reply_text = format!("Processed by worker-{worker_id}: {request_data}");
+
+            let mut reply = vec![Bytes::new()];
+            // Keep routing info frames
+            reply.extend(msg[..msg.len() - 1].to_vec());
+            // Replace last frame with our reply
+            reply.push(Bytes::from(reply_text));
+
+            socket.send(reply).await?;
+            info!("[Worker-{}] 📤 Sent reply #{}", worker_id, request_count);
         }
 
         // Small yield to prevent CPU spinning

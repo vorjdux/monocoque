@@ -133,12 +133,12 @@ impl RouterHub {
         match event {
             HubEvent::PeerUp { routing_id, tx } => {
                 // Strict dedup: if ID exists, remove it from lb_list first to prevent drift.
-                if self.peers.contains_key(&routing_id) {
-                    if let Some(pos) = self.lb_list.iter().position(|x| x == &routing_id) {
-                        self.lb_list.remove(pos);
-                        if self.lb_cursor >= self.lb_list.len() {
-                            self.lb_cursor = 0;
-                        }
+                if self.peers.contains_key(&routing_id)
+                    && let Some(pos) = self.lb_list.iter().position(|x| x == &routing_id)
+                {
+                    self.lb_list.remove(pos);
+                    if self.lb_cursor >= self.lb_list.len() {
+                        self.lb_cursor = 0;
                     }
                 }
 

@@ -12,8 +12,8 @@
 //! ```
 
 use bytes::Bytes;
-use monocoque::rt::{self, LocalRuntime};
-use monocoque::zmq::{DealerSocket, SocketOptions};
+use monocoque::rt::{self, LocalRuntime, TcpListener};
+use monocoque::zmq::{DealerSocket, RouterSocket, SocketOptions};
 use std::time::Duration;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -23,9 +23,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Socket Introspection Demo ===\n");
 
+    // Stand up an in-process ROUTER peer so the DEALER has something to connect
+    // to. Bind on an ephemeral port, then let a background task accept and
+    // complete the ZMTP handshake; it holds the connection open for the rest of
+    // the demo so last_endpoint() reflects a live link.
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?.to_string();
+    let _router_task = rt::spawn(async move {
+        let (stream, _) = listener.accept().await?;
+        let _router = RouterSocket::from_tcp(stream).await?;
+        rt::sleep(Duration::from_secs(2)).await;
+        Ok::<(), Box<dyn std::error::Error>>(())
+    });
+
     // 1. Socket Type Introspection
     println!("## Socket Type Introspection");
-    let mut dealer = DealerSocket::connect("127.0.0.1:5556").await?;
+    let mut dealer = DealerSocket::connect(&addr).await?;
     println!("[Dealer] Socket type: {:?}", dealer.socket_type());
     println!("[Dealer] Type name: {}", dealer.socket_type().as_str());
 

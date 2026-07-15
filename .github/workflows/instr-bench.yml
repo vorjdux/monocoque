@@ -14,8 +14,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # Pin the runner to the same version as the gungraun library dependency.
-  GUNGRAUN_VERSION: 0.19.3
+  # Must match the exact `gungraun` library pin in the workspace Cargo.toml; the
+  # runner binary refuses to run against a newer library version.
+  GUNGRAUN_VERSION: 0.19.4
 
 jobs:
   instr-hotpath:

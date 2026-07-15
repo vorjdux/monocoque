@@ -386,7 +386,7 @@ impl StreamSocket {
     /// Close a single peer, removing it from the routing table and cancelling
     /// its background reader and writer tasks.
     ///
-    /// Dropping the peer's [`PeerHandle`] closes both the outbound and the
+    /// Dropping the peer's internal `PeerHandle` closes both the outbound and the
     /// shutdown channels, so the writer exits and the reader's shutdown branch
     /// fires. Both tasks then release their TCP halves and file descriptors,
     /// rather than the reader lingering until the remote closes the connection.

@@ -27,7 +27,7 @@ There is a PROJECT_STRUCTURE.md with more detail on the directory tree.
 
 ## Getting set up
 
-You need a Rust toolchain at 1.85 or newer, which is the MSRV.
+You need a Rust toolchain at 1.95 or newer, which is the MSRV.
 
 ```
 git clone https://github.com/vorjdux/monocoque
@@ -82,7 +82,7 @@ A pull request needs to pass all of these, so it saves a round trip to run them 
   `cargo clippy --workspace --all-targets --no-default-features --features runtime-tokio,zmq -- -D warnings`, and
   `cargo clippy --workspace --all-targets --no-default-features --features runtime-smol,zmq -- -D warnings`
 - Tests on all three backends (see above)
-- A build on the MSRV (1.85): `cargo build --workspace`
+- A build on the MSRV (1.95): `cargo build --workspace`
 - Docs build with no warnings: `cargo doc --no-deps --workspace`
 - A security audit of dependencies
 - Fuzz targets build on nightly
