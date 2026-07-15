@@ -47,7 +47,7 @@ const MESSAGE_SIZE: usize = 256;
 const WARMUP_MSGS: usize = 200;
 /// Brief settle after the subscription is issued, to cut the initial
 /// slow-joiner drop burst (untimed). Uses `thread::sleep`, not
-/// `monocoque::rt::sleep`, which would block on the stalled io_uring handshake
+/// `monocoque::rt::sleep`, which would block on the stalled `io_uring` handshake
 /// timer left behind by `accept_subscriber`.
 const SETTLE: Duration = Duration::from_millis(50);
 /// Of every `MESSAGE_COUNT` published in the topic-filtering test, this many

@@ -1,7 +1,7 @@
 //! tokio backend: a thin adapter implementing the `compio::io` traits over
 //! tokio streams. Selected by `runtime-tokio`. See [`super`](crate::rt).
 
-use compio_buf::{BufResult, IoBuf, IoBufMut};
+use compio_buf::{BufResult, IoBuf, IoBufMut, IoVectoredBuf};
 // `AsyncRead` is consumed only inside the macro-generated impls below, which
 // the unused-import lint does not attribute back to this import.
 #[allow(unused_imports)]
@@ -140,6 +140,30 @@ where
     }
 }
 
+/// Write several owned buffers to a tokio sink in one `writev`.
+///
+/// `compio_io`'s default `write_vectored` issues one `send` per buffer; this
+/// override coalesces them into a single `poll_write_vectored` syscall, matching
+/// the compio and smol backends so a multi-frame send stays one syscall instead
+/// of degrading to 2N (one per header and body).
+async fn write_vectored_from<W, B>(writer: &mut W, buf: B) -> BufResult<usize, B>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+    B: IoVectoredBuf,
+{
+    // The `IoSlice`s borrow `buf`, which is held for the whole call.
+    let result = poll_fn(|cx| {
+        crate::io::with_vectored_slices(&buf, |slices| {
+            Pin::new(&mut *writer).poll_write_vectored(cx, slices)
+        })
+    })
+    .await;
+    match result {
+        Ok(n) => BufResult(Ok(n), buf),
+        Err(e) => BufResult(Err(e), buf),
+    }
+}
+
 /// Generate a compio-style stream adapter over a tokio I/O type.
 ///
 /// The macro wires up the `compio::io` read/write traits plus the raw-fd
@@ -157,6 +181,10 @@ macro_rules! impl_compio_io {
         impl AsyncWrite for $ty {
             async fn write<B: IoBuf>(&mut self, buf: B) -> BufResult<usize, B> {
                 write_from(&mut self.inner, buf).await
+            }
+
+            async fn write_vectored<B: IoVectoredBuf>(&mut self, buf: B) -> BufResult<usize, B> {
+                write_vectored_from(&mut self.inner, buf).await
             }
 
             async fn flush(&mut self) -> io::Result<()> {

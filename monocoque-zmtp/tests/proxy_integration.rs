@@ -50,7 +50,7 @@ fn test_proxy_command_parsing() {
 fn test_proxy_pair_forward() {
     monocoque_core::rt::LocalRuntime::new()
         .unwrap()
-        .block_on(test_proxy_pair_forward_impl())
+        .block_on(test_proxy_pair_forward_impl());
 }
 
 async fn test_proxy_pair_forward_impl() {
@@ -82,7 +82,7 @@ async fn test_proxy_pair_forward_impl() {
 fn test_proxy_pair_bidirectional() {
     monocoque_core::rt::LocalRuntime::new()
         .unwrap()
-        .block_on(test_proxy_pair_bidirectional_impl())
+        .block_on(test_proxy_pair_bidirectional_impl());
 }
 
 async fn test_proxy_pair_bidirectional_impl() {
@@ -120,7 +120,7 @@ async fn test_proxy_pair_bidirectional_impl() {
 fn test_proxy_capture_socket() {
     monocoque_core::rt::LocalRuntime::new()
         .unwrap()
-        .block_on(test_proxy_capture_socket_impl())
+        .block_on(test_proxy_capture_socket_impl());
 }
 
 async fn test_proxy_capture_socket_impl() {
@@ -158,7 +158,7 @@ async fn test_proxy_capture_socket_impl() {
 fn test_proxy_steerable_terminate() {
     monocoque_core::rt::LocalRuntime::new()
         .unwrap()
-        .block_on(test_proxy_steerable_terminate_impl())
+        .block_on(test_proxy_steerable_terminate_impl());
 }
 
 async fn test_proxy_steerable_terminate_impl() {

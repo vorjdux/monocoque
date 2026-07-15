@@ -132,6 +132,12 @@ pub use xsub::XSubSocket;
 pub use session::{SocketType, ZmtpSession};
 pub use socket_trait::Socket;
 
+// Wire-parser entry points reachable from the fuzz crate (monocoque-fuzz).
+// This is an internal implementation crate, so exposing the greeting and READY
+// command parsers here widens no public-facing (monocoque) API surface.
+pub use greeting::ZmtpGreeting;
+pub use handshake::parse_ready_command;
+
 /// Prelude module for convenient imports
 ///
 /// ```rust

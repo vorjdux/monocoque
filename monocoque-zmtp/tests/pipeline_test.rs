@@ -123,6 +123,70 @@ fn test_push_pull_send_one_plain_and_coalesced() {
     }
 }
 
+/// PUSH buffers a coalesced message and then closes WITHOUT an explicit
+/// `flush()`. With a non-zero LINGER, `close()` must drain the coalesced buffer so
+/// the tail of the burst is not silently dropped. Regression for PUSH close
+/// ignoring LINGER (it previously routed to `base.close()` which only shut the
+/// stream down).
+#[test]
+fn test_push_close_flushes_coalesced_data_with_linger() {
+    use monocoque_core::options::SocketOptions;
+
+    let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
+    let (msg_tx, msg_rx) = mpsc::channel::<Vec<Bytes>>();
+
+    let server = thread::spawn(move || {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(async move {
+                let listener = monocoque_core::rt::TcpListener::bind("127.0.0.1:0")
+                    .await
+                    .unwrap();
+                addr_tx.send(listener.local_addr().unwrap()).unwrap();
+
+                let (stream, _) = listener.accept().await.unwrap();
+                // Coalescing on, non-zero linger so close() flushes.
+                let options = SocketOptions::default()
+                    .with_write_coalescing(true)
+                    .with_linger(Some(Duration::from_secs(5)));
+                let mut push = PushSocket::from_tcp_with_options(stream, options)
+                    .await
+                    .unwrap();
+
+                // Buffer into the coalesce buffer, then close WITHOUT flush().
+                push.send_one(Bytes::from_static(b"tail-of-burst"))
+                    .await
+                    .unwrap();
+                push.close().await.unwrap();
+            });
+    });
+
+    let addr = addr_rx.recv().unwrap();
+    let client = thread::spawn(move || {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(async move {
+                let stream = monocoque_core::rt::TcpStream::connect(addr).await.unwrap();
+                let mut pull = PullSocket::from_tcp(stream).await.unwrap();
+
+                let msg = monocoque_core::rt::timeout(Duration::from_secs(5), pull.recv())
+                    .await
+                    .expect("recv timed out")
+                    .expect("io error")
+                    .expect("connection closed before coalesced data was flushed");
+                msg_tx.send(msg).unwrap();
+            });
+    });
+
+    client.join().expect("client thread panicked");
+    assert_eq!(
+        msg_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+        vec![Bytes::from_static(b"tail-of-burst")],
+        "close() must flush coalesced data when LINGER is non-zero"
+    );
+    server.join().expect("server thread panicked");
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Test: multiple messages through the pipeline
 // ─────────────────────────────────────────────────────────────────────────────

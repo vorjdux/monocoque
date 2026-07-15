@@ -17,7 +17,7 @@ use tracing::{error, info, warn};
 const READY: &[u8] = b"\x01";
 #[allow(dead_code)]
 const HEARTBEAT: &[u8] = b"\x02";
-const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(1000);
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Worker with heartbeat and crash simulation
 #[allow(clippy::future_not_send)]

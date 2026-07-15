@@ -241,7 +241,12 @@ impl XPubSocket {
                 // No pending connections
                 Ok(())
             }
-            Err(e) => Err(e),
+            Err(e) => {
+                // Throttle on fd exhaustion so a caller's accept loop cannot
+                // livelock while no descriptors are available.
+                crate::utils::backoff_on_fd_exhaustion(&e).await;
+                Err(e)
+            }
         }
     }
 
@@ -740,7 +745,7 @@ mod tests {
     fn test_xpub_bind() {
         monocoque_core::rt::LocalRuntime::new()
             .unwrap()
-            .block_on(test_xpub_bind_impl())
+            .block_on(test_xpub_bind_impl());
     }
 
     async fn test_xpub_bind_impl() {
@@ -766,7 +771,7 @@ mod tests {
     fn test_send_subscription_requires_manual_mode() {
         monocoque_core::rt::LocalRuntime::new()
             .unwrap()
-            .block_on(test_send_subscription_requires_manual_mode_impl())
+            .block_on(test_send_subscription_requires_manual_mode_impl());
     }
 
     async fn test_send_subscription_requires_manual_mode_impl() {
@@ -784,7 +789,7 @@ mod tests {
     fn test_send_subscription_requires_upstream() {
         monocoque_core::rt::LocalRuntime::new()
             .unwrap()
-            .block_on(test_send_subscription_requires_upstream_impl())
+            .block_on(test_send_subscription_requires_upstream_impl());
     }
 
     async fn test_send_subscription_requires_upstream_impl() {
@@ -808,7 +813,7 @@ mod tests {
     fn test_connect_upstream_and_forward_subscription() {
         monocoque_core::rt::LocalRuntime::new()
             .unwrap()
-            .block_on(test_connect_upstream_and_forward_subscription_impl())
+            .block_on(test_connect_upstream_and_forward_subscription_impl());
     }
 
     async fn test_connect_upstream_and_forward_subscription_impl() {

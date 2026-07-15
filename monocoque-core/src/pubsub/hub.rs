@@ -17,6 +17,17 @@ use crate::router::PeerCmd;
 use bytes::Bytes;
 use flume::{Receiver, Sender};
 use hashbrown::HashMap;
+use std::collections::HashMap as StdHashMap;
+use std::collections::hash_map::RandomState;
+use std::sync::Arc;
+
+/// Map keyed by peer-reported routing identity.
+///
+/// The routing id is attacker-controlled, so this uses the per-process
+/// randomly seeded [`RandomState`] (`SipHash`) to resist hash-flooding. The
+/// `PeerKey`-keyed maps below stay on the faster default hasher because their
+/// keys are server-assigned monotonic counters, not attacker input.
+type RidMap<V> = StdHashMap<Bytes, V, RandomState>;
 
 /// Commands from application to `PubSub` Hub
 #[derive(Debug)]
@@ -62,8 +73,8 @@ pub struct PubSubHub {
     /// Subscription index (topic -> peers)
     index: SubscriptionIndex,
 
-    /// Stable mapping: `RoutingID` -> `PeerKey`
-    rid_to_key: HashMap<Bytes, PeerKey>,
+    /// Stable mapping: `RoutingID` -> `PeerKey` (attacker-keyed; seeded hasher)
+    rid_to_key: RidMap<PeerKey>,
 
     /// Reverse mapping for cleanup/debug
     key_to_rid: HashMap<PeerKey, Bytes>,
@@ -86,7 +97,7 @@ impl PubSubHub {
     pub fn new(hub_rx: Receiver<PubSubEvent>, user_tx_rx: Receiver<PubSubCmd>) -> Self {
         Self {
             index: SubscriptionIndex::new(),
-            rid_to_key: HashMap::new(),
+            rid_to_key: RidMap::default(),
             key_to_rid: HashMap::new(),
             peers: HashMap::new(),
             next_key: 1, // reserve 0
@@ -198,13 +209,179 @@ impl PubSubHub {
             return;
         }
 
-        // Zero-copy fanout:
-        // - Vec<Bytes> is cloned (cheap)
-        // - Bytes are refcounted
+        // Zero-copy fan-out: share one allocation across all matching peers via
+        // Arc instead of cloning a fresh Vec<Bytes> per peer. Each peer gets an
+        // Arc refcount bump; the frames themselves are never re-copied.
+        let msg = Arc::new(parts);
         for key in keys {
             if let Some((_, tx)) = self.peers.get(&key) {
-                let _ = tx.send(PeerCmd::SendBody(parts.clone()));
+                let _ = tx.send(PeerCmd::SendBody(Arc::clone(&msg)));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn b(s: &str) -> Bytes {
+        Bytes::copy_from_slice(s.as_bytes())
+    }
+
+    /// Receive the next `PeerCmd` body Arc within a timeout; None on timeout/close.
+    async fn recv_arc(rx: &Receiver<PeerCmd>) -> Option<Arc<Vec<Bytes>>> {
+        match crate::rt::timeout(Duration::from_secs(1), rx.recv_async()).await {
+            Ok(Ok(PeerCmd::SendBody(parts))) => Some(parts),
+            _ => None,
+        }
+    }
+
+    /// True if no message body arrives within a short window.
+    async fn expect_no_body(rx: &Receiver<PeerCmd>) -> bool {
+        !matches!(
+            crate::rt::timeout(Duration::from_millis(150), rx.recv_async()).await,
+            Ok(Ok(PeerCmd::SendBody(_)))
+        )
+    }
+
+    #[test]
+    fn publishes_only_to_matching_subscribers() {
+        crate::rt::LocalRuntime::new().unwrap().block_on(async {
+            let (hub_tx, hub_rx) = flume::unbounded::<PubSubEvent>();
+            let (user_tx, user_rx) = flume::unbounded::<PubSubCmd>();
+            let hub = PubSubHub::new(hub_rx, user_rx);
+            let handle = crate::rt::spawn(hub.run());
+
+            let (peer_tx, peer_rx) = flume::unbounded::<PeerCmd>();
+            hub_tx
+                .send(PubSubEvent::PeerUp {
+                    routing_id: b("sub1"),
+                    epoch: 1,
+                    tx: peer_tx,
+                })
+                .unwrap();
+            hub_tx
+                .send(PubSubEvent::Subscribe {
+                    routing_id: b("sub1"),
+                    prefix: b("weather."),
+                })
+                .unwrap();
+            crate::rt::sleep(Duration::from_millis(30)).await;
+
+            // Matching topic is delivered.
+            user_tx
+                .send(PubSubCmd::Publish(vec![b("weather.london"), b("sunny")]))
+                .unwrap();
+            let got = recv_arc(&peer_rx).await.expect("matching topic delivered");
+            assert_eq!(*got, vec![b("weather.london"), b("sunny")]);
+
+            // Non-matching topic is filtered out.
+            user_tx
+                .send(PubSubCmd::Publish(vec![b("stocks.aapl"), b("100")]))
+                .unwrap();
+            assert!(
+                expect_no_body(&peer_rx).await,
+                "non-matching topic must not be delivered"
+            );
+
+            drop(hub_tx);
+            drop(user_tx);
+            crate::rt::join(handle).await;
+        });
+    }
+
+    #[test]
+    fn fanout_shares_one_allocation_across_peers() {
+        crate::rt::LocalRuntime::new().unwrap().block_on(async {
+            let (hub_tx, hub_rx) = flume::unbounded::<PubSubEvent>();
+            let (user_tx, user_rx) = flume::unbounded::<PubSubCmd>();
+            let hub = PubSubHub::new(hub_rx, user_rx);
+            let handle = crate::rt::spawn(hub.run());
+
+            let (p1_tx, p1_rx) = flume::unbounded::<PeerCmd>();
+            let (p2_tx, p2_rx) = flume::unbounded::<PeerCmd>();
+            for (rid, tx) in [(b("s1"), p1_tx), (b("s2"), p2_tx)] {
+                hub_tx
+                    .send(PubSubEvent::PeerUp {
+                        routing_id: rid.clone(),
+                        epoch: 1,
+                        tx,
+                    })
+                    .unwrap();
+                hub_tx
+                    .send(PubSubEvent::Subscribe {
+                        routing_id: rid,
+                        prefix: b(""), // subscribe to all
+                    })
+                    .unwrap();
+            }
+            crate::rt::sleep(Duration::from_millis(30)).await;
+
+            user_tx
+                .send(PubSubCmd::Publish(vec![b("news"), b("hello")]))
+                .unwrap();
+
+            let a = recv_arc(&p1_rx).await.expect("peer 1 delivered");
+            let c = recv_arc(&p2_rx).await.expect("peer 2 delivered");
+            assert_eq!(*a, vec![b("news"), b("hello")]);
+            assert_eq!(*c, vec![b("news"), b("hello")]);
+            // Both peers received the SAME allocation: fan-out shared one Arc
+            // instead of cloning a fresh Vec<Bytes> per peer.
+            assert!(
+                Arc::ptr_eq(&a, &c),
+                "fan-out must share one Arc allocation across peers"
+            );
+
+            drop(hub_tx);
+            drop(user_tx);
+            crate::rt::join(handle).await;
+        });
+    }
+
+    #[test]
+    fn peer_down_with_stale_epoch_is_ignored() {
+        crate::rt::LocalRuntime::new().unwrap().block_on(async {
+            let (hub_tx, hub_rx) = flume::unbounded::<PubSubEvent>();
+            let (user_tx, user_rx) = flume::unbounded::<PubSubCmd>();
+            let hub = PubSubHub::new(hub_rx, user_rx);
+            let handle = crate::rt::spawn(hub.run());
+
+            let (peer_tx, peer_rx) = flume::unbounded::<PeerCmd>();
+            hub_tx
+                .send(PubSubEvent::PeerUp {
+                    routing_id: b("sub1"),
+                    epoch: 2,
+                    tx: peer_tx,
+                })
+                .unwrap();
+            hub_tx
+                .send(PubSubEvent::Subscribe {
+                    routing_id: b("sub1"),
+                    prefix: b(""),
+                })
+                .unwrap();
+            // A PeerDown carrying a stale epoch must NOT evict the live peer.
+            hub_tx
+                .send(PubSubEvent::PeerDown {
+                    routing_id: b("sub1"),
+                    epoch: 1,
+                })
+                .unwrap();
+            crate::rt::sleep(Duration::from_millis(30)).await;
+
+            user_tx
+                .send(PubSubCmd::Publish(vec![b("x"), b("still-here")]))
+                .unwrap();
+            let got = recv_arc(&peer_rx)
+                .await
+                .expect("stale-epoch PeerDown must not evict the peer");
+            assert_eq!(*got, vec![b("x"), b("still-here")]);
+
+            drop(hub_tx);
+            drop(user_tx);
+            crate::rt::join(handle).await;
+        });
     }
 }

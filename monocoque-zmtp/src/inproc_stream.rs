@@ -50,6 +50,20 @@ impl InprocStream {
 impl AsyncRead for InprocStream {
     async fn read<B: IoBufMut>(&mut self, mut buf: B) -> BufResult<usize, B> {
         let buf_cap = buf.buf_capacity();
+        // SAFETY / INVARIANT: `buf_ptr` is captured here and dereferenced again
+        // below AFTER `self.rx.recv_async().await` (the copy at the `recv_async`
+        // arm). This is sound only because:
+        //   1. `buf` is owned by this future and held by value across the await
+        //      (it is returned in the final `BufResult`); it is never moved or
+        //      reallocated between this line and the write-through below.
+        //   2. `as_buf_mut_ptr` returns a pointer to `B`'s backing storage. For
+        //      the `IoBufMut` types used here (Vec/BytesMut-backed, heap
+        //      allocated), that storage does not move when the `B` handle moves,
+        //      so the pointer stays valid across the suspension point.
+        // A future `IoBufMut` that stored its bytes inline in the handle would
+        // break assumption (2); do not use one here without re-taking the
+        // pointer after the await. Covered by
+        // `read_across_suspension_point_writes_through_stable_pointer`.
         let buf_ptr = buf.as_buf_mut_ptr();
         let mut total = 0usize;
 
@@ -175,6 +189,45 @@ mod tests {
         assert_eq!(&buf[..n], b"hello");
 
         // Cleanup global registry
+        monocoque_core::inproc::unbind_inproc(endpoint)?;
+        Ok(())
+    }
+
+    #[test]
+    fn read_across_suspension_point_writes_through_stable_pointer() -> io::Result<()> {
+        use compio_buf::BufResult;
+        use compio_io::AsyncRead;
+        use std::time::Duration;
+
+        // Force the read to actually suspend on recv_async (buffer empty, no
+        // data yet), then deliver data so it resumes and writes through the
+        // pointer captured before the await. Exercises the N11 invariant: the
+        // raw buffer pointer must stay valid across the suspension point. Run
+        // under Miri to check the pointer usage is sound.
+        let endpoint = "inproc://test-stream-suspend";
+        let (tx1, rx1) = bind_inproc(endpoint)?;
+        let tx2 = connect_inproc(endpoint)?;
+
+        let rt = monocoque_core::rt::LocalRuntime::new()?;
+        let (n, buf) = rt.block_on(async move {
+            let mut stream1 = InprocStream::new(tx1, rx1);
+            let handle = monocoque_core::rt::spawn(async move {
+                let buf = vec![0u8; 16];
+                let BufResult(result, buf) = AsyncRead::read(&mut stream1, buf).await;
+                (result, buf)
+            });
+
+            // Let the reader park on recv_async before any data exists.
+            monocoque_core::rt::sleep(Duration::from_millis(20)).await;
+            tx2.send(vec![Bytes::from_static(b"world!")]).unwrap();
+
+            let (result, buf) = monocoque_core::rt::join(handle).await;
+            result.map(|n| (n, buf))
+        })?;
+
+        assert_eq!(n, 6);
+        assert_eq!(&buf[..n], b"world!");
+
         monocoque_core::inproc::unbind_inproc(endpoint)?;
         Ok(())
     }

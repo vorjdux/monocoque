@@ -505,7 +505,7 @@ fn parse_greeting_mechanism(field: &[u8]) -> Result<SecurityMechanism, ZmtpError
 }
 
 /// Parse READY command to extract socket type and identity
-pub(crate) fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), ZmtpError> {
+pub fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), ZmtpError> {
     // READY format:
     // - 1 byte: command name length
     // - N bytes: "READY"
@@ -795,7 +795,7 @@ mod tests {
                 "handshake accepted a peer greeting with an invalid ZMTP signature tail"
             );
 
-            let _ = peer_task.await;
+            monocoque_core::rt::join(peer_task).await;
         });
     }
 
@@ -840,7 +840,7 @@ mod tests {
                 "non-NULL handshake accepted an unsupported ZMTP major version during security negotiation"
             );
 
-            let _ = peer_task.await;
+            monocoque_core::rt::join(peer_task).await;
         });
     }
 
@@ -876,7 +876,7 @@ mod tests {
             )
             .await;
 
-            let _ = peer_task.await;
+            monocoque_core::rt::join(peer_task).await;
         });
     }
 }

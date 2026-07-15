@@ -76,6 +76,20 @@ use crate::subscriber::SubSocket;
 use crate::xpub::XPubSocket;
 use crate::xsub::XSubSocket;
 
+/// Whether a forward-side send error is transient (the frame can be dropped and
+/// the proxy kept running) or fatal (the peer is gone and the loop should stop).
+///
+/// Transient: `WouldBlock` (HWM/EAGAIN), `Interrupted`, `TimedOut`. A single
+/// such hiccup must not tear down the whole proxy. Everything else (broken pipe,
+/// reset, not connected) is treated as fatal and propagates, so a permanently
+/// dead peer cannot spin the loop forwarding-and-dropping forever.
+fn is_transient_send_error(err: &io::Error) -> bool {
+    matches!(
+        err.kind(),
+        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted | io::ErrorKind::TimedOut
+    )
+}
+
 /// Socket types that can participate in a proxy.
 ///
 /// Sockets must implement multipart message send/receive operations
@@ -180,8 +194,17 @@ where
                         }
                     }
 
-                    // Forward to backend
-                    backend.send_multipart(msg).await?;
+                    // Forward to backend. A transient error (HWM/EAGAIN) drops
+                    // this frame but keeps the proxy alive; a fatal error tears
+                    // the loop down.
+                    if let Err(e) = backend.send_multipart(msg).await {
+                        if is_transient_send_error(&e) {
+                            debug!("Proxy: transient send to {}, dropping frame: {}",
+                                   backend.socket_desc(), e);
+                        } else {
+                            return Err(e);
+                        }
+                    }
                 }
             }
 
@@ -200,8 +223,15 @@ where
                         }
                     }
 
-                    // Forward to frontend
-                    frontend.send_multipart(msg).await?;
+                    // Forward to frontend (transient errors keep the proxy up).
+                    if let Err(e) = frontend.send_multipart(msg).await {
+                        if is_transient_send_error(&e) {
+                            debug!("Proxy: transient send to {}, dropping frame: {}",
+                                   frontend.socket_desc(), e);
+                        } else {
+                            return Err(e);
+                        }
+                    }
                 }
             }
         }
@@ -387,9 +417,15 @@ where
                             }
                         }
 
-                        // Forward to backend
-                        backend.send_multipart(msg).await?;
-                        message_count += 1;
+                        // Forward to backend (transient errors keep the proxy up).
+                        match backend.send_multipart(msg).await {
+                            Ok(()) => message_count += 1,
+                            Err(e) if is_transient_send_error(&e) => {
+                                debug!("Proxy: transient send to {}, dropping frame: {}",
+                                       backend.socket_desc(), e);
+                            }
+                            Err(e) => return Err(e),
+                        }
                     }
                 }
             }
@@ -412,9 +448,15 @@ where
                             }
                         }
 
-                        // Forward to frontend
-                        frontend.send_multipart(msg).await?;
-                        message_count += 1;
+                        // Forward to frontend (transient errors keep the proxy up).
+                        match frontend.send_multipart(msg).await {
+                            Ok(()) => message_count += 1,
+                            Err(e) if is_transient_send_error(&e) => {
+                                debug!("Proxy: transient send to {}, dropping frame: {}",
+                                       frontend.socket_desc(), e);
+                            }
+                            Err(e) => return Err(e),
+                        }
                     }
                 }
             }
@@ -659,6 +701,26 @@ impl ProxySocket for SubSocket {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transient_send_errors_are_classified() {
+        // Transient: dropped frame, proxy stays up.
+        for kind in [
+            io::ErrorKind::WouldBlock,
+            io::ErrorKind::Interrupted,
+            io::ErrorKind::TimedOut,
+        ] {
+            assert!(is_transient_send_error(&io::Error::new(kind, "x")));
+        }
+        // Fatal: proxy tears down.
+        for kind in [
+            io::ErrorKind::BrokenPipe,
+            io::ErrorKind::ConnectionReset,
+            io::ErrorKind::NotConnected,
+        ] {
+            assert!(!is_transient_send_error(&io::Error::new(kind, "x")));
+        }
+    }
 
     /// Mock socket for testing proxy logic
     struct MockSocket {

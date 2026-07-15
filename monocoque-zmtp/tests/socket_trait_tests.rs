@@ -8,7 +8,7 @@ use monocoque_zmtp::Socket;
 fn test_socket_trait_send_recv_signature() {
     monocoque_core::rt::LocalRuntime::new()
         .unwrap()
-        .block_on(test_socket_trait_send_recv_signature_impl())
+        .block_on(test_socket_trait_send_recv_signature_impl());
 }
 
 async fn test_socket_trait_send_recv_signature_impl() {
@@ -65,7 +65,7 @@ async fn test_socket_trait_send_recv_signature_impl() {
 fn test_multiple_socket_types() {
     monocoque_core::rt::LocalRuntime::new()
         .unwrap()
-        .block_on(test_multiple_socket_types_impl())
+        .block_on(test_multiple_socket_types_impl());
 }
 
 async fn test_multiple_socket_types_impl() {

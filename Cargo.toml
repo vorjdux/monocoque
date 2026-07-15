@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["monocoque-core", "monocoque-zmtp", "monocoque"]
-exclude = ["monocoque-fuzz"]
+exclude = ["monocoque-fuzz", "monocoque-loom"]
 default-members = ["monocoque"]
 
 [workspace.package]
@@ -11,6 +11,57 @@ license = "MIT"
 authors = ["Matheus Santos <vorj.dux@gmail.com>"]
 repository = "https://github.com/vorjdux/monocoque"
 rust-version = "1.85"
+
+# Workspace-wide lint configuration.
+#
+# clippy::pedantic and clippy::nursery are enabled for every target (lib, tests,
+# examples, benches) via `[lints] workspace = true` in each member. The group
+# lints run at `warn` with priority -1 so the specific `allow`s below (default
+# priority 0) win. The allow-set is the union of what the crates intentionally
+# accept: casts that are provably bounded on the wire path, the thread-per-core
+# `!Send` future model, builder-pattern ergonomics, and doc/style preferences.
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+# Thread-per-core runtime: futures are intentionally not Send.
+future_not_send = "allow"
+let_underscore_future = "allow"
+# Async fns kept async for signature consistency across backends / traits.
+unused_async = "allow"
+# Wire-protocol and metrics math: casts are bounded by construction.
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+cast_possible_wrap = "allow"
+# Builder / API ergonomics.
+return_self_not_must_use = "allow"
+must_use_candidate = "allow"
+missing_const_for_fn = "allow"
+needless_pass_by_value = "allow"
+needless_pass_by_ref_mut = "allow"
+struct_excessive_bools = "allow"
+# Documentation policy (added incrementally; false positives are common).
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+doc_markdown = "allow"
+doc_lazy_continuation = "allow"
+missing_fields_in_debug = "allow"
+# The ZMQ domain has inherently similar names (xpub/xsub, sndbuf/rcvbuf,
+# req/rep), so this fires constantly as a false positive.
+similar_names = "allow"
+# Style preferences kept deliberately.
+module_name_repetitions = "allow"
+items_after_statements = "allow"
+uninlined_format_args = "allow"
+manual_let_else = "allow"
+match_same_arms = "allow"
+question_mark = "allow"
+needless_continue = "allow"
+should_implement_trait = "allow"
+option_if_let_else = "allow"
+while_let_loop = "allow"
+never_loop = "allow"
+multiple_crate_versions = "allow"
 
 [workspace.dependencies]
 # Core dependencies
@@ -43,7 +94,9 @@ parking_lot = "0.12"
 socket2 = { version = "0.5", features = ["all"] }
 
 # Logging
-tracing = "0.1"
+# release_max_level_info compiles out trace!/debug! callsites in release builds
+# so the hot send/recv path pays no runtime level check for them.
+tracing = { version = "0.1", features = ["release_max_level_info"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Cryptography
@@ -84,20 +137,3 @@ strip = "symbols"
 [profile.bench]
 debug = true
 strip = false
-
-[workspace.lints.clippy]
-module_name_repetitions = "allow"
-missing_errors_doc = "allow"
-missing_panics_doc = "allow"
-missing_const_for_fn = "allow"
-multiple_crate_versions = "allow"
-future_not_send = "allow"
-cast_possible_truncation = "allow"
-cast_sign_loss = "allow"
-items_after_statements = "allow"
-must_use_candidate = "allow"
-needless_pass_by_value = "allow"
-needless_pass_by_ref_mut = "allow"
-return_self_not_must_use = "allow"
-match_same_arms = "allow"
-struct_excessive_bools = "allow"

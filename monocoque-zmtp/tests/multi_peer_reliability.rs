@@ -149,6 +149,7 @@ fn test_pubsub_fanout_distinct_topics() {
 /// "weather.temp".  Messages on "weather.temp" reach both A and B;
 /// messages on "weather.hum" reach only A.
 #[test]
+#[allow(clippy::too_many_lines)] // Multi-peer scenario test; splitting hurts readability.
 fn test_pubsub_fanout_overlapping_topics() {
     let (addr_tx, addr_rx) = std::sync::mpsc::channel::<std::net::SocketAddr>();
     let (sub_ready_tx, sub_ready_rx) = std::sync::mpsc::channel::<()>();

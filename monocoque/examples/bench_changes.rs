@@ -6,7 +6,7 @@
 //!   * receive batching:  `recv_batch()` vs `recv()`
 //!   * PUB coalescing:    absolute broadcast throughput (always on)
 //!
-//! Run with:  cargo run --release --example bench_changes
+//! Run with:  cargo run --release --example `bench_changes`
 //!
 //! Numbers are machine-specific; the harness prints the ratio so the relative
 //! effect is what matters.

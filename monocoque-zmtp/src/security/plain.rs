@@ -110,7 +110,10 @@ pub trait PlainAuthHandler {
 /// For production use, implement PlainAuthHandler with database lookup.
 #[derive(Clone)]
 pub struct StaticPlainHandler {
-    credentials: std::collections::HashMap<String, String>,
+    /// Passwords are wrapped in `Zeroizing` so the plaintext is scrubbed from
+    /// memory when an entry (or the whole map) is dropped, rather than lingering
+    /// in freed heap.
+    credentials: std::collections::HashMap<String, zeroize::Zeroizing<String>>,
 }
 
 impl fmt::Debug for StaticPlainHandler {
@@ -131,7 +134,8 @@ impl StaticPlainHandler {
 
     /// Register a username/password pair in the credential map.
     pub fn add_user(&mut self, username: impl Into<String>, password: impl Into<String>) {
-        self.credentials.insert(username.into(), password.into());
+        self.credentials
+            .insert(username.into(), zeroize::Zeroizing::new(password.into()));
     }
 }
 
@@ -151,17 +155,23 @@ impl PlainAuthHandler for StaticPlainHandler {
         _address: &str,
     ) -> Result<String, String> {
         use subtle::ConstantTimeEq;
-        match self.credentials.get(username) {
-            Some(expected_password)
-                if expected_password
-                    .as_bytes()
-                    .ct_eq(password.as_bytes())
-                    .into() =>
-            {
-                Ok(username.to_string())
-            }
-            Some(_) => Err("Invalid password".to_string()),
-            None => Err("Unknown user".to_string()),
+
+        // Always run a constant-time comparison, even when the username is
+        // unknown, so response timing cannot distinguish "unknown user" from
+        // "known user, wrong password" (username enumeration). On a miss we
+        // compare the supplied password against a fixed dummy value instead of
+        // returning early.
+        const DUMMY_PASSWORD: &str = "\0monocoque-plain-miss-placeholder\0";
+        let expected = self.credentials.get(username);
+        let reference = expected.map_or(DUMMY_PASSWORD, |p| p.as_str());
+        let password_matches: bool = reference.as_bytes().ct_eq(password.as_bytes()).into();
+
+        if expected.is_some() && password_matches {
+            Ok(username.to_string())
+        } else {
+            // Single, indistinguishable error for both bad-password and
+            // unknown-user so the reason string does not leak which failed.
+            Err("Invalid credentials".to_string())
         }
     }
 }
@@ -489,7 +499,7 @@ mod tests {
     fn test_static_plain_handler() {
         monocoque_core::rt::LocalRuntime::new()
             .unwrap()
-            .block_on(test_static_plain_handler_impl())
+            .block_on(test_static_plain_handler_impl());
     }
 
     async fn test_static_plain_handler_impl() {
@@ -505,16 +515,25 @@ mod tests {
         assert_eq!(result.unwrap(), "admin");
 
         // Invalid password
-        let result = handler
+        let wrong_password = handler
             .authenticate("admin", "wrong", "test", "127.0.0.1")
             .await;
-        assert!(result.is_err());
+        assert!(wrong_password.is_err());
 
         // Unknown user
-        let result = handler
+        let unknown_user = handler
             .authenticate("unknown", "password", "test", "127.0.0.1")
             .await;
-        assert!(result.is_err());
+        assert!(unknown_user.is_err());
+
+        // The two failure modes must be indistinguishable in their error
+        // reason, so a caller cannot enumerate valid usernames from the
+        // response. (The constant-time compare closes the timing channel.)
+        assert_eq!(
+            wrong_password.unwrap_err(),
+            unknown_user.unwrap_err(),
+            "wrong-password and unknown-user must return the same error"
+        );
     }
 
     #[test]

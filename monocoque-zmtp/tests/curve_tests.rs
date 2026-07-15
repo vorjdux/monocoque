@@ -176,7 +176,7 @@ fn test_curve_debug_impl_hides_secret() {
 fn test_curve_handshake_sequence() {
     monocoque_core::rt::LocalRuntime::new()
         .unwrap()
-        .block_on(test_curve_handshake_sequence_impl())
+        .block_on(test_curve_handshake_sequence_impl());
 }
 
 async fn test_curve_handshake_sequence_impl() {

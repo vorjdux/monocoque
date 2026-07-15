@@ -39,7 +39,7 @@ const READY: &[u8] = b"\x01"; // Worker ready signal
 const HEARTBEAT: &[u8] = b"\x02"; // Worker heartbeat
 
 // Timing constants
-const HEARTBEAT_INTERVAL: Duration = Duration::from_millis(1000);
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Paranoid Pirate Worker with heartbeating
 ///

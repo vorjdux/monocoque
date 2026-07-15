@@ -74,7 +74,7 @@ fn main() {
         }
         let elapsed = start.elapsed();
 
-        let _ = server.await;
+        monocoque::rt::join(server).await;
 
         println!("Client completed {success_count} messages");
         let per_msg = elapsed.as_secs_f64() * 1_000_000.0 / f64::from(success_count);

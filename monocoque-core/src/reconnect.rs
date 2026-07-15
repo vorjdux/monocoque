@@ -70,16 +70,20 @@ impl ReconnectState {
     pub fn next_delay(&mut self) -> Duration {
         let delay = self.current_interval;
 
-        // Calculate next interval with exponential backoff
         self.attempt += 1;
-        self.current_interval = self
-            .base_interval
-            .checked_mul(1_u32 << self.attempt.min(10))
-            .unwrap_or(self.max_interval);
 
-        // Cap at max interval
-        if self.current_interval > self.max_interval {
-            self.current_interval = self.max_interval;
+        // libzmq semantics: reconnect_ivl_max == 0 disables exponential backoff
+        // and reconnects at the constant base interval. A max below the base is
+        // likewise treated as "hold at base" (there is no room to grow). Only
+        // when max > base do we apply exponential backoff capped at max.
+        if self.max_interval.is_zero() || self.max_interval <= self.base_interval {
+            self.current_interval = self.base_interval;
+        } else {
+            self.current_interval = self
+                .base_interval
+                .checked_mul(1_u32 << self.attempt.min(10))
+                .unwrap_or(self.max_interval)
+                .min(self.max_interval);
         }
 
         delay
@@ -209,6 +213,42 @@ mod tests {
         }));
 
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_max_zero_holds_at_base_no_zero_delay_loop() {
+        // reconnect_ivl_max == 0 (the default) means "no exponential backoff,
+        // reconnect at the constant base interval" per libzmq. The previous
+        // implementation clamped the growing interval to max==0, producing a
+        // 100ms, 0, 0, 0... hot-loop that hammered connect().
+        let options = SocketOptions::default()
+            .with_reconnect_ivl(Duration::from_millis(100))
+            .with_reconnect_ivl_max(Duration::ZERO);
+
+        let mut state = ReconnectState::new(&options);
+
+        for _ in 0..10 {
+            assert_eq!(
+                state.next_delay(),
+                Duration::from_millis(100),
+                "max=0 must hold the delay at the base interval, never 0"
+            );
+        }
+    }
+
+    #[test]
+    fn test_max_below_base_holds_at_base() {
+        // A max smaller than the base leaves no room to grow: hold at base
+        // rather than clamping down to the smaller max.
+        let options = SocketOptions::default()
+            .with_reconnect_ivl(Duration::from_millis(100))
+            .with_reconnect_ivl_max(Duration::from_millis(50));
+
+        let mut state = ReconnectState::new(&options);
+
+        for _ in 0..5 {
+            assert_eq!(state.next_delay(), Duration::from_millis(100));
+        }
     }
 
     #[test]

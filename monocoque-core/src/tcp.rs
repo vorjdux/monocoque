@@ -67,6 +67,96 @@ pub fn enable_tcp_nodelay<S>(_stream: &S) -> io::Result<()> {
     Ok(())
 }
 
+/// Configure the OS-level socket send/receive buffer sizes (`SO_SNDBUF` /
+/// `SO_RCVBUF`) on a TCP stream.
+///
+/// A value of `0` (or negative) leaves the corresponding buffer at the OS
+/// default. On high bandwidth-delay-product links the kernel socket buffer size
+/// is what caps single-flow throughput, so exposing this is both a correctness
+/// and a performance lever.
+///
+/// Note: the kernel may round or clamp the requested size, and Linux typically
+/// reports back roughly double the requested value from `getsockopt`.
+///
+/// # Errors
+///
+/// Returns an error if the socket options cannot be set.
+#[cfg(unix)]
+pub fn configure_socket_buffers<S: std::os::unix::io::AsRawFd>(
+    stream: &S,
+    sndbuf: i32,
+    rcvbuf: i32,
+) -> io::Result<()> {
+    use std::os::unix::io::FromRawFd;
+
+    if sndbuf <= 0 && rcvbuf <= 0 {
+        return Ok(());
+    }
+
+    let fd = stream.as_raw_fd();
+    let sock = unsafe { socket2::Socket::from_raw_fd(fd) };
+
+    let result = (|| {
+        if sndbuf > 0 {
+            sock.set_send_buffer_size(sndbuf as usize)?;
+        }
+        if rcvbuf > 0 {
+            sock.set_recv_buffer_size(rcvbuf as usize)?;
+        }
+        Ok(())
+    })();
+
+    std::mem::forget(sock); // Don't close the fd
+    result
+}
+
+/// Configure the OS-level socket send/receive buffer sizes (Windows).
+///
+/// See the Unix variant for details.
+///
+/// # Errors
+///
+/// Returns an error if the socket options cannot be set.
+#[cfg(windows)]
+pub fn configure_socket_buffers<S: std::os::windows::io::AsRawSocket>(
+    stream: &S,
+    sndbuf: i32,
+    rcvbuf: i32,
+) -> io::Result<()> {
+    use std::os::windows::io::FromRawSocket;
+
+    if sndbuf <= 0 && rcvbuf <= 0 {
+        return Ok(());
+    }
+
+    let raw = stream.as_raw_socket();
+    let sock = unsafe { socket2::Socket::from_raw_socket(raw) };
+
+    let result = (|| {
+        if sndbuf > 0 {
+            sock.set_send_buffer_size(sndbuf as usize)?;
+        }
+        if rcvbuf > 0 {
+            sock.set_recv_buffer_size(rcvbuf as usize)?;
+        }
+        Ok(())
+    })();
+
+    std::mem::forget(sock); // Don't close the socket
+    result
+}
+
+/// Configure the OS-level socket buffer sizes (unsupported platforms).
+///
+/// # Errors
+///
+/// Never returns an error on this platform.
+#[cfg(not(any(unix, windows)))]
+pub fn configure_socket_buffers<S>(_stream: &S, sndbuf: i32, rcvbuf: i32) -> io::Result<()> {
+    let _ = (sndbuf, rcvbuf);
+    Ok(())
+}
+
 /// Configure TCP keepalive settings on a TCP stream.
 ///
 /// This enables connection monitoring for long-lived connections, helping detect
@@ -200,4 +290,52 @@ pub fn configure_tcp_keepalive<S>(
     // Unsupported platform - just continue
     let _ = (keepalive, keepalive_cnt, keepalive_idle, keepalive_intvl);
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::net::{TcpListener, TcpStream};
+
+    #[test]
+    fn configure_socket_buffers_applies_requested_sizes() {
+        use socket2::Socket;
+        use std::os::unix::io::{AsRawFd, FromRawFd};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = TcpStream::connect(addr).unwrap();
+
+        let requested = 256 * 1024;
+        configure_socket_buffers(&client, requested, requested).unwrap();
+
+        // Read the sizes back off the fd. The kernel may round or (on Linux)
+        // roughly double the requested value, so assert it grew rather than an
+        // exact match.
+        let fd = client.as_raw_fd();
+        let sock = unsafe { Socket::from_raw_fd(fd) };
+        let snd = sock.send_buffer_size().unwrap();
+        let rcv = sock.recv_buffer_size().unwrap();
+        std::mem::forget(sock);
+
+        assert!(
+            snd >= requested as usize,
+            "SO_SNDBUF not applied: got {snd}, requested {requested}"
+        );
+        assert!(
+            rcv >= requested as usize,
+            "SO_RCVBUF not applied: got {rcv}, requested {requested}"
+        );
+    }
+
+    #[test]
+    fn configure_socket_buffers_zero_is_noop() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = TcpStream::connect(addr).unwrap();
+
+        // 0 / negative means "leave OS default" and must not error.
+        configure_socket_buffers(&client, 0, 0).unwrap();
+        configure_socket_buffers(&client, -1, -1).unwrap();
+    }
 }

@@ -191,8 +191,7 @@ fn test_stream_send_respects_send_hwm() {
     assert_eq!(
         err_kind,
         std::io::ErrorKind::WouldBlock,
-        "expected WouldBlock, got {:?}",
-        err_kind
+        "expected WouldBlock, got {err_kind:?}"
     );
 }
 
@@ -324,4 +323,76 @@ fn test_stream_disconnect_removes_peer() {
 
     let ok = result_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert!(ok, "send to disconnected peer should not error");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Test: close_peer cancels the reader task (no more data after close)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// After `close_peer`, the peer's reader task must be cancelled, so data the
+/// client sends afterwards is NOT read and delivered. Before the fix, the
+/// detached reader kept the read half open and kept reading into the inbound
+/// channel until the remote closed, leaking the task and fd. This asserts the
+/// reader stops.
+#[test]
+fn test_stream_close_peer_cancels_reader() {
+    let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
+    let (closed_tx, closed_rx) = mpsc::channel::<()>();
+    let (leaked_tx, leaked_rx) = mpsc::channel::<bool>();
+
+    thread::spawn(move || {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(async move {
+                let mut srv = StreamSocket::bind("127.0.0.1:0").await.unwrap();
+                addr_tx.send(srv.local_addr().unwrap()).unwrap();
+
+                let id = srv.accept_raw().await.unwrap();
+                assert_eq!(srv.peer_count(), 1);
+
+                // Close the peer: this must cancel its reader task.
+                assert!(srv.close_peer(&id));
+                assert_eq!(srv.peer_count(), 0);
+
+                // Tell the client it may now send post-close data.
+                closed_tx.send(()).unwrap();
+
+                // Drain the inbound channel briefly. A cancelled reader delivers
+                // at most a disconnect notification (empty data frame); it must
+                // never deliver the client's post-close payload.
+                let mut leaked = false;
+                for _ in 0..6 {
+                    match monocoque_core::rt::timeout(Duration::from_millis(150), srv.recv()).await
+                    {
+                        Ok(Ok(Some(msg))) => {
+                            if msg
+                                .get(2)
+                                .is_some_and(|d| d.as_ref() == b"after-close-data")
+                            {
+                                leaked = true;
+                                break;
+                            }
+                        }
+                        // Channel closed, io error, or timed out: nothing more.
+                        Ok(Ok(None) | Err(_)) | Err(_) => break,
+                    }
+                }
+                leaked_tx.send(leaked).unwrap();
+            });
+    });
+
+    let addr = addr_rx.recv().unwrap();
+    let mut client = std::net::TcpStream::connect(addr).unwrap();
+
+    // Wait until the server has closed the peer, then send data. A leaked
+    // reader would still read and deliver this.
+    closed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let _ = client.write_all(b"after-close-data");
+    let _ = client.flush();
+
+    let leaked = leaked_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(
+        !leaked,
+        "reader task leaked: it read client data after close_peer"
+    );
 }

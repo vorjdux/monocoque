@@ -8,7 +8,7 @@ use monocoque_zmtp::security::zap::{ZapMechanism, ZapRequest};
 fn test_static_plain_handler_valid_credentials() {
     monocoque_core::rt::LocalRuntime::new()
         .unwrap()
-        .block_on(test_static_plain_handler_valid_credentials_impl())
+        .block_on(test_static_plain_handler_valid_credentials_impl());
 }
 
 async fn test_static_plain_handler_valid_credentials_impl() {
@@ -35,7 +35,7 @@ async fn test_static_plain_handler_valid_credentials_impl() {
 fn test_static_plain_handler_invalid_password() {
     monocoque_core::rt::LocalRuntime::new()
         .unwrap()
-        .block_on(test_static_plain_handler_invalid_password_impl())
+        .block_on(test_static_plain_handler_invalid_password_impl());
 }
 
 async fn test_static_plain_handler_invalid_password_impl() {
@@ -46,14 +46,16 @@ async fn test_static_plain_handler_invalid_password_impl() {
         .authenticate("admin", "wrongpassword", "test", "127.0.0.1")
         .await;
     assert!(result.is_err());
-    assert_eq!(result.unwrap_err(), "Invalid password");
+    // Unified error: wrong password and unknown user are indistinguishable to
+    // prevent username enumeration.
+    assert_eq!(result.unwrap_err(), "Invalid credentials");
 }
 
 #[test]
 fn test_static_plain_handler_unknown_user() {
     monocoque_core::rt::LocalRuntime::new()
         .unwrap()
-        .block_on(test_static_plain_handler_unknown_user_impl())
+        .block_on(test_static_plain_handler_unknown_user_impl());
 }
 
 async fn test_static_plain_handler_unknown_user_impl() {
@@ -64,7 +66,8 @@ async fn test_static_plain_handler_unknown_user_impl() {
         .authenticate("hacker", "anything", "test", "127.0.0.1")
         .await;
     assert!(result.is_err());
-    assert_eq!(result.unwrap_err(), "Unknown user");
+    // Same unified error as the wrong-password case (no username enumeration).
+    assert_eq!(result.unwrap_err(), "Invalid credentials");
 }
 
 #[test]
