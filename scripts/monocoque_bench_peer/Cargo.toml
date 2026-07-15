@@ -3,7 +3,8 @@
 [package]
 name = "monocoque_bench_peer"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.95"
 description = "Two-process benchmark peer for the monocoque comparison suite"
 
 [[bin]]
