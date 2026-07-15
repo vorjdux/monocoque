@@ -20,6 +20,17 @@ The upgrade pulls in compio's upstream soundness fixes (the `AsyncStream`
 unsoundness fixed in 0.16.1, `OpCode::cancel` made safe in 0.18) and unblocks the
 features below that need `TcpStream::from_std` / `set_reuseport`.
 
+#### Minimum supported Rust version raised to 1.95
+
+The default compio backend now requires **rustc 1.95** (up from 1.85). Every
+backend depends on the `compio-io`/`compio-buf` trait crates, and `compio-buf`
+uses the `maybe_uninit_slice` std feature (stable in 1.93), so the tokio and smol
+backends build on 1.95 and can compile as far back as 1.93. The default compio
+runtime additionally pulls `compio-driver`/`compio-executor`, which use
+`cfg_select` (stable in 1.95), plus `darling` 0.23 via `compio-macros` (needs
+1.88); 1.95 is the first release where all of them are available. The workspace
+declares a single MSRV of 1.95, matching the default configuration.
+
 ### ✨ Features
 
 #### SO_REUSEPORT

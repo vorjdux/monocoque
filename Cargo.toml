@@ -10,7 +10,14 @@ edition = "2024"
 license = "MIT"
 authors = ["Matheus Santos <vorj.dux@gmail.com>"]
 repository = "https://github.com/vorjdux/monocoque"
-rust-version = "1.85"
+# Raised to 1.95 by the default compio 0.19 backend. Every backend depends on the
+# compio-io/compio-buf trait crates, and compio-buf uses the maybe_uninit_slice
+# std API (stable in 1.93), so the tokio and smol backends build on 1.93+. The
+# default compio runtime additionally pulls compio-driver/compio-executor, which
+# use cfg_select (stable in 1.95), plus darling 0.23 via compio-macros (needs
+# 1.88); 1.95 is the first release that satisfies all of them. This single field
+# declares the default (compio) floor of 1.95.
+rust-version = "1.95"
 
 # Workspace-wide lint configuration.
 #
