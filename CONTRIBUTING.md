@@ -23,7 +23,8 @@ The workspace has three crates plus a separate fuzzing crate.
 - `monocoque-zmtp` is internal. It is the ZMTP 3.1 implementation. Do not depend on it directly, the public API goes through `monocoque`.
 - `monocoque-fuzz` holds the fuzz targets and is excluded from the workspace.
 
-There is a PROJECT_STRUCTURE.md with more detail on the directory tree.
+The [documentation index](docs/README.md) links the guides for each area, and
+`docs/blueprints/00-overview.md` walks the architecture in depth.
 
 ## Getting set up
 
@@ -65,7 +66,7 @@ Benchmarks, built on criterion:
 scripts/bench_all.sh
 ```
 
-Fuzzing needs a nightly toolchain and cargo-fuzz. The targets cover the decoder, the frame codec, the CURVE handshake, PLAIN security, and the subscription trie:
+Fuzzing needs a nightly toolchain and cargo-fuzz. The targets cover the decoder, the frame codec, the greeting parser, command parsing, the CURVE handshake, PLAIN security, the subscription trie, and ZAP request decoding:
 
 ```
 cargo install cargo-fuzz
@@ -83,8 +84,8 @@ A pull request needs to pass all of these, so it saves a round trip to run them 
   `cargo clippy --workspace --all-targets --no-default-features --features runtime-smol,zmq -- -D warnings`
 - Tests on all three backends (see above)
 - A build on the MSRV (1.95): `cargo build --workspace`
-- Docs build with no warnings: `cargo doc --no-deps --workspace`
-- A security audit of dependencies
+- Docs build with no warnings: `cargo doc --no-deps --workspace --features zmq`
+- Supply-chain checks against the committed lock: `cargo audit` and `cargo deny check`
 - Fuzz targets build on nightly
 - Interop tests against libzmq, from both Rust and pyzmq
 

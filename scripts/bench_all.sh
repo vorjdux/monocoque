@@ -229,7 +229,7 @@ Criterion provides:
 - **Median**: 50th percentile
 - **MAD**: Median Absolute Deviation
 
-## Performance Targets (from PERFORMANCE_ROADMAP.md)
+## Performance Targets (see docs/performance.md)
 
 ### Phase 1 Goals (Current)
 
