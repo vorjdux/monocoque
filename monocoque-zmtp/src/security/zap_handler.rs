@@ -9,6 +9,7 @@ use crate::{DealerSocket, inproc_stream::InprocStream};
 use monocoque_core::options::SocketOptions;
 use std::io;
 use std::sync::Arc;
+use tracing::warn;
 
 /// Trait for custom ZAP authentication handlers
 ///
@@ -34,6 +35,10 @@ pub struct DefaultZapHandler<H: PlainAuthHandler> {
     /// Optional whitelist of permitted CURVE public keys (32 bytes each).
     /// When Some, only listed keys are accepted. When None, all valid keys are accepted.
     curve_key_whitelist: Option<std::collections::HashSet<[u8; 32]>>,
+    /// Set when the caller has explicitly acknowledged (via
+    /// `accept_any_curve_key`) that running with no whitelist accepts any valid
+    /// key. Suppresses the otherwise-loud warning on each such authorization.
+    accept_any_curve_ack: bool,
 }
 
 impl<H: PlainAuthHandler> DefaultZapHandler<H> {
@@ -44,6 +49,7 @@ impl<H: PlainAuthHandler> DefaultZapHandler<H> {
             plain_handler,
             accept_curve,
             curve_key_whitelist: None,
+            accept_any_curve_ack: false,
         }
     }
 
@@ -51,6 +57,19 @@ impl<H: PlainAuthHandler> DefaultZapHandler<H> {
     /// Only keys in this set will be accepted.
     pub fn with_curve_whitelist(mut self, keys: Vec<[u8; 32]>) -> Self {
         self.curve_key_whitelist = Some(keys.into_iter().collect());
+        self
+    }
+
+    /// Explicitly acknowledge accepting ANY valid CURVE key (no whitelist).
+    ///
+    /// Without a whitelist, CURVE only encrypts - it authenticates no one, since
+    /// every well-formed key is accepted. That is a deliberate choice for some
+    /// deployments (public endpoints that want encryption without access
+    /// control), but it is easy to reach by accident. Call this to state the
+    /// intent and silence the per-authorization warning; otherwise the handler
+    /// warns loudly every time it admits an un-whitelisted key.
+    pub fn accept_any_curve_key(mut self) -> Self {
+        self.accept_any_curve_ack = true;
         self
     }
 }
@@ -148,8 +167,20 @@ impl<H: PlainAuthHandler> ZapHandler for DefaultZapHandler<H> {
                             "CURVE key not in whitelist",
                         );
                     }
+                } else if !self.accept_any_curve_ack {
+                    // No whitelist and not explicitly acknowledged: this admits
+                    // any valid key, which authenticates no one. Warn loudly so
+                    // it is never a silent default. Suppress with
+                    // `accept_any_curve_key()` or restrict with
+                    // `with_curve_whitelist()`.
+                    warn!(
+                        domain = %request.domain,
+                        address = %request.address,
+                        "CURVE authorization with no whitelist: admitting any valid client key \
+                         (encryption only, no access control). Call with_curve_whitelist() to \
+                         restrict, or accept_any_curve_key() to acknowledge this intentionally."
+                    );
                 }
-                // When no whitelist configured: accept all valid keys (accept_curve=true already checked)
 
                 // Use the hex-encoded public key as user_id
                 use std::fmt::Write as _;

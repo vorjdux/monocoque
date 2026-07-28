@@ -49,7 +49,6 @@ use std::time::Duration;
 use thiserror::Error;
 use tracing::{debug, warn};
 use x25519_dalek::{PublicKey, StaticSecret};
-use zeroize::Zeroize;
 
 use crate::codec::ZmtpError;
 use crate::security::zap::{ZapMechanism, ZapRequest, ZapStatus};
@@ -159,14 +158,10 @@ impl std::fmt::Debug for CurveSecretKey {
     }
 }
 
-impl Drop for CurveSecretKey {
-    fn drop(&mut self) {
-        // Zeroize the raw scalar bytes before deallocation to prevent
-        // secret key material from lingering in freed memory.
-        let mut raw = self.0.to_bytes();
-        raw.zeroize();
-    }
-}
+// No manual Drop: the inner x25519_dalek::StaticSecret is built with the
+// `zeroize` feature and zeroizes its scalar on drop. The previous hand-written
+// Drop zeroized `self.0.to_bytes()`, which is a fresh COPY of the scalar - a
+// no-op that left the real secret untouched and gave a false sense of hygiene.
 
 /// CURVE key pair (public + secret)
 #[derive(Debug, Clone)]
@@ -541,12 +536,13 @@ impl CurveMessageCipher {
                 .try_into()
                 .map_err(|_| CurveError::InvalidNonce)?,
         );
-        if counter < self.recv_nonce {
+        // Strict in-order counter over reliable TCP: the next frame must carry
+        // exactly the expected counter. This rejects replays and reordering, and
+        // it does NOT mutate replay state (that only advances after the tag
+        // verifies below), so attacker bytes cannot desync the counter.
+        if counter != self.recv_nonce {
             return Err(CurveError::ProtocolViolation);
         }
-        self.recv_nonce = counter
-            .checked_add(1)
-            .ok_or(CurveError::ProtocolViolation)?;
 
         let prefix: &[u8; 16] = if self.is_client {
             b"CurveZMQMESSAGES"
@@ -558,6 +554,10 @@ impl CurveMessageCipher {
         nonce[16..].copy_from_slice(parts.short_nonce);
 
         let plaintext = self.cipher.decrypt(parts.ciphertext, &nonce)?;
+        // Tag verified: only now advance replay state.
+        self.recv_nonce = counter
+            .checked_add(1)
+            .ok_or(CurveError::ProtocolViolation)?;
         if plaintext.is_empty() {
             return Err(CurveError::ProtocolViolation);
         }
@@ -932,34 +932,9 @@ impl CurveClient {
         Ok(())
     }
 
-    /// Encrypt a message for the server
-    pub fn encrypt_message(&mut self, plaintext: &[u8]) -> Result<Bytes, CurveError> {
-        let message_box = self
-            .message_box
-            .as_ref()
-            .ok_or(CurveError::ProtocolViolation)?;
-
-        // Nonce = "CurveZMQMESSAGEC" + 8-byte counter (client→server)
-        let mut nonce = [0u8; CURVE_NONCE_SIZE];
-        nonce[..16].copy_from_slice(b"CurveZMQMESSAGEC");
-        nonce[16..].copy_from_slice(&self.send_nonce.to_be_bytes());
-        self.send_nonce = self
-            .send_nonce
-            .checked_add(1)
-            .ok_or(CurveError::ProtocolViolation)?;
-
-        let ciphertext = message_box.encrypt(plaintext, &nonce)?;
-
-        let mut message = BytesMut::with_capacity(CURVE_MESSAGE.len() + 8 + ciphertext.len());
-        message.extend_from_slice(CURVE_MESSAGE);
-        message.extend_from_slice(&nonce[16..]); // 8-byte counter suffix only
-        message.extend_from_slice(&ciphertext);
-
-        Ok(message.freeze())
-    }
-
-    /// Decrypt a message from the server
-    pub fn decrypt_message(&mut self, message: &[u8]) -> Result<Bytes, CurveError> {
+    /// Decrypt a message from the server. Test-only.
+    #[cfg(test)]
+    fn decrypt_message(&mut self, message: &[u8]) -> Result<Bytes, CurveError> {
         let parts = parse_curve_message(message)?;
         let message_box = self
             .message_box
@@ -972,12 +947,11 @@ impl CurveClient {
                 .try_into()
                 .map_err(|_| CurveError::InvalidNonce)?,
         );
-        if counter < self.recv_nonce {
-            return Err(CurveError::ProtocolViolation); // replay
+        // Strict in-order counter; does not mutate replay state before the tag
+        // is verified.
+        if counter != self.recv_nonce {
+            return Err(CurveError::ProtocolViolation);
         }
-        self.recv_nonce = counter
-            .checked_add(1)
-            .ok_or(CurveError::ProtocolViolation)?;
 
         // Reconstruct full 24-byte nonce (server→client direction)
         let mut nonce = [0u8; CURVE_NONCE_SIZE];
@@ -985,6 +959,10 @@ impl CurveClient {
         nonce[16..].copy_from_slice(parts.short_nonce);
 
         let plaintext = message_box.decrypt(parts.ciphertext, &nonce)?;
+        // Tag verified: advance replay state only now.
+        self.recv_nonce = counter
+            .checked_add(1)
+            .ok_or(CurveError::ProtocolViolation)?;
         Ok(Bytes::from(plaintext))
     }
 }
@@ -1376,34 +1354,9 @@ impl CurveServer {
         Ok(())
     }
 
-    /// Encrypt a message for the client
-    pub fn encrypt_message(&mut self, plaintext: &[u8]) -> Result<Bytes, CurveError> {
-        let message_box = self
-            .message_box
-            .as_ref()
-            .ok_or(CurveError::ProtocolViolation)?;
-
-        // Nonce = "CurveZMQMESSAGES" + 8-byte counter (server→client)
-        let mut nonce = [0u8; CURVE_NONCE_SIZE];
-        nonce[..16].copy_from_slice(b"CurveZMQMESSAGES");
-        nonce[16..].copy_from_slice(&self.send_nonce.to_be_bytes());
-        self.send_nonce = self
-            .send_nonce
-            .checked_add(1)
-            .ok_or(CurveError::ProtocolViolation)?;
-
-        let ciphertext = message_box.encrypt(plaintext, &nonce)?;
-
-        let mut message = BytesMut::with_capacity(CURVE_MESSAGE.len() + 8 + ciphertext.len());
-        message.extend_from_slice(CURVE_MESSAGE);
-        message.extend_from_slice(&nonce[16..]); // 8-byte suffix only
-        message.extend_from_slice(&ciphertext);
-
-        Ok(message.freeze())
-    }
-
-    /// Decrypt a message from the client
-    pub fn decrypt_message(&mut self, message: &[u8]) -> Result<Bytes, CurveError> {
+    /// Decrypt a message from the client. Test-only.
+    #[cfg(test)]
+    fn decrypt_message(&mut self, message: &[u8]) -> Result<Bytes, CurveError> {
         let parts = parse_curve_message(message)?;
         let message_box = self
             .message_box
@@ -1416,12 +1369,11 @@ impl CurveServer {
                 .try_into()
                 .map_err(|_| CurveError::InvalidNonce)?,
         );
-        if counter < self.recv_nonce {
-            return Err(CurveError::ProtocolViolation); // replay
+        // Strict in-order counter; does not mutate replay state before the tag
+        // is verified.
+        if counter != self.recv_nonce {
+            return Err(CurveError::ProtocolViolation);
         }
-        self.recv_nonce = counter
-            .checked_add(1)
-            .ok_or(CurveError::ProtocolViolation)?;
 
         // Reconstruct full 24-byte nonce (client→server direction)
         let mut nonce = [0u8; CURVE_NONCE_SIZE];
@@ -1429,6 +1381,10 @@ impl CurveServer {
         nonce[16..].copy_from_slice(parts.short_nonce);
 
         let plaintext = message_box.decrypt(parts.ciphertext, &nonce)?;
+        // Tag verified: advance replay state only now.
+        self.recv_nonce = counter
+            .checked_add(1)
+            .ok_or(CurveError::ProtocolViolation)?;
         Ok(Bytes::from(plaintext))
     }
 }
@@ -1453,11 +1409,12 @@ pub fn create_curve_zap_request(
     )
 }
 
-/// CURVE server handshake with ZAP authentication
+/// CURVE server handshake with ZAP authentication.
 ///
-/// Performs the full CURVE handshake (HELLO/WELCOME/INITIATE/READY) and then
-/// authenticates the client's long-term public key via ZAP.  On ZAP failure a
-/// ZMTP ERROR command is sent before closing.
+/// Drives HELLO/WELCOME/INITIATE, authorizes the client's authenticated
+/// long-term key via ZAP, and only on success sends READY. READY is never sent
+/// before authorization: a rejected client receives a ZMTP ERROR (with a fixed,
+/// generic reason) and the connection closes, so it never sees a 200 READY.
 pub async fn curve_server_handshake_zap<S>(
     stream: &mut S,
     server_keypair: CurveKeyPair,
@@ -1474,11 +1431,17 @@ where
     debug!("[CURVE SERVER ZAP] Starting ZAP-authenticated handshake");
 
     let mut curve_server = CurveServer::new(server_keypair, local_socket_type);
-    let result = curve_server.handshake(stream, timeout).await?;
 
-    let client_public_key = result.peer_public_key.ok_or(ZmtpError::Protocol)?;
+    // Drive the handshake only up to INITIATE, which yields the client's
+    // authenticated long-term public key. READY is deliberately withheld until
+    // ZAP authorizes that key.
+    curve_server.recv_hello(stream, timeout).await?;
+    curve_server.send_welcome(stream, timeout).await?;
+    curve_server.recv_initiate(stream, timeout).await?;
 
-    debug!("[CURVE SERVER ZAP] Handshake complete, authenticating via ZAP");
+    let client_public_key = curve_server.client_public.ok_or(ZmtpError::Protocol)?;
+
+    debug!("[CURVE SERVER ZAP] INITIATE received; authorizing client key before READY");
 
     let zap_timeout = timeout.unwrap_or(Duration::from_secs(5));
     let mut zap_client = ZapClient::new(zap_timeout).map_err(|e| {
@@ -1494,20 +1457,38 @@ where
             ZmtpError::AuthenticationFailed
         })?;
 
-    if matches!(zap_response.status_code, ZapStatus::Success) {
-        debug!(
-            "[CURVE SERVER ZAP] Authentication successful for client key: {:?}",
-            client_public_key
-        );
-        Ok(result)
-    } else {
+    if !matches!(zap_response.status_code, ZapStatus::Success) {
+        // The detailed reason stays in the local log only. The wire reason is a
+        // fixed generic string so an unauthenticated peer learns nothing about
+        // the policy (why it was denied, whether the key is known, etc.).
         warn!(
-            "[CURVE SERVER ZAP] Authentication failed for {}: {} (status: {:?})",
+            "[CURVE SERVER ZAP] Authorization denied for {}: {} (status {:?})",
             peer_addr, zap_response.status_text, zap_response.status_code
         );
-        send_zmtp_error(stream, &zap_response.status_text).await;
-        Err(ZmtpError::AuthenticationFailed)
+        send_zmtp_error(stream, "Authentication failed").await;
+        return Err(ZmtpError::AuthenticationFailed);
     }
+
+    debug!("[CURVE SERVER ZAP] Authorized; sending READY");
+
+    // Authorized: finish the handshake by sending READY and build the message
+    // cipher from the server state.
+    curve_server.send_ready(stream, timeout).await?;
+    let message_box = curve_server.message_box.take().ok_or(ZmtpError::Protocol)?;
+    let cipher = CurveMessageCipher::new_server(
+        message_box,
+        curve_server.send_nonce,
+        curve_server.recv_nonce,
+    );
+    Ok(CurveHandshakeResult {
+        peer_socket_type: curve_server
+            .peer_socket_type
+            .clone()
+            .ok_or(ZmtpError::Protocol)?,
+        peer_identity: curve_server.peer_identity_recv.clone(),
+        peer_public_key: Some(client_public_key),
+        cipher: Some(cipher),
+    })
 }
 
 /// Send a ZMTP ERROR command frame to the peer (best-effort).
@@ -1850,9 +1831,11 @@ mod tests {
         // complementary box.
         let (client_box, server_box) = transient_box_pair();
 
+        // The server's recv counter starts at 1, and the counter is now strictly
+        // in-order, so the first frame must carry counter 1.
         let mut nonce = [0u8; CURVE_NONCE_SIZE];
         nonce[..16].copy_from_slice(b"CurveZMQMESSAGEC");
-        nonce[16..].copy_from_slice(&2u64.to_be_bytes());
+        nonce[16..].copy_from_slice(&1u64.to_be_bytes());
 
         let ciphertext = client_box.encrypt(b"client message", &nonce).unwrap();
         let mut frame = BytesMut::new();
