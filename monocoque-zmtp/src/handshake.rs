@@ -412,6 +412,14 @@ where
         let server_keypair = CurveKeyPair::from_keys(server_public, server_secret);
 
         if options.zap_domain.is_empty() {
+            // No zap_domain means no ZAP authorization runs at all: every client
+            // that completes the CURVE handshake is admitted (encryption only, no
+            // access control). Warn loudly so this is never a silent default. Set
+            // a zap_domain and run a ZAP handler to authorize client keys.
+            warn!(
+                "[HANDSHAKE] CURVE server has no zap_domain: accepting any client key \
+                 without authorization (encryption only). Configure ZAP to authenticate peers."
+            );
             let mut curve_server = CurveServer::new(server_keypair, local_socket_type.as_str());
             curve_server.handshake(stream, timeout).await
         } else {
