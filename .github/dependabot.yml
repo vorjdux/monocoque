@@ -1,0 +1,23 @@
+version: 2
+updates:
+  # Keep the SHA-pinned GitHub Actions current. Every `uses:` in the workflows is
+  # pinned to a 40-char commit SHA; dependabot proposes the SHA bumps (with the
+  # human-readable version in the trailing comment) so pinning does not mean
+  # rotting.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+
+  # Cargo dependencies for the workspace. Security updates land promptly; routine
+  # version bumps are batched weekly so the tracked Cargo.lock stays fresh.
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"

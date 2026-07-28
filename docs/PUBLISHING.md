@@ -7,11 +7,20 @@ Before publishing any crate, verify:
 - All public APIs have rustdoc comments, including `# Errors` sections where relevant
 - Examples compile and run correctly
 - CHANGELOG.md is up to date
-- `cargo test --workspace --all-features` passes
-- `cargo clippy --workspace --all-features` passes
-- `cargo doc --workspace --no-deps` builds cleanly
-- `cargo audit` shows no unresolved advisories
+- Per-backend tests pass. The runtime backends are mutually exclusive features,
+  so `--all-features` does not compile - run each backend leg instead:
+  - `cargo test --workspace --features zmq` (compio, default)
+  - `cargo test --workspace --no-default-features --features runtime-tokio,zmq`
+  - `cargo test --workspace --no-default-features --features runtime-smol,zmq`
+- Per-backend clippy passes (same three feature legs, with `-- -D warnings`)
+- `cargo doc --workspace --no-deps --features zmq` builds cleanly
+- `cargo audit` shows no unresolved advisories (against the tracked Cargo.lock)
+- `cargo deny check` is clean (advisories, licenses, bans, sources)
 - All changes are committed to git
+
+Tagging `vX.Y.Z` triggers `.github/workflows/release.yml`, which re-verifies the
+workspace version matches the tag and publishes the three crates in order. The
+manual steps below remain available for out-of-band releases.
 
 ## Publication order
 

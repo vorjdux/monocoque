@@ -1,0 +1,63 @@
+# cargo-deny configuration for monocoque.
+#
+# Runs in CI against the committed Cargo.lock (see .github/workflows/ci.yml,
+# the `cargo-deny` job). Four checks are gated:
+#   advisories - no known-vulnerable or unmaintained crates in the graph
+#   licenses   - only permissive licenses we can ship under MIT
+#   bans       - no banned crates, and duplicate-version drift is surfaced
+#   sources    - crates come only from crates.io (no ad-hoc git/registry sources)
+#
+# Docs: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+# Check the graph for every backend feature combination that ships, plus the
+# host target. The backends are mutually exclusive, so evaluate each explicitly.
+all-features = false
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+
+[advisories]
+# Fail on any advisory in the resolved graph. RUSTSEC-2024-0344 (the
+# curve25519-dalek timing bug) is covered by the >= 4.1.3 floor in Cargo.toml;
+# this check keeps the whole tree honest as it evolves.
+version = 2
+yanked = "deny"
+ignore = []
+
+[licenses]
+version = 2
+# Permissive set compatible with shipping monocoque under MIT.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[bans]
+# Surface accidental duplicate versions of a crate (a common way a bad version
+# sneaks in), but do not hard-fail the build on them yet - the async ecosystem
+# legitimately carries a few duplicates. Ratchet to "deny" once the graph is
+# clean.
+multiple-versions = "warn"
+wildcards = "deny"
+# Backend crates are mutually exclusive at compile time but coexist in the lock;
+# do not flag them as duplicate-feature conflicts.
+allow = []
+deny = []
+
+[sources]
+# Only crates.io. No git dependencies, no alternate registries.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

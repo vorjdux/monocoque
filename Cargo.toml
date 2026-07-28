@@ -107,11 +107,17 @@ tracing = { version = "0.1", features = ["release_max_level_info"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Cryptography
-x25519-dalek = { version = "2.0", features = ["static_secrets", "zeroize"] }
-chacha20poly1305 = "0.10"
-crypto_box = { version = "0.9", features = ["salsa20"] }
+#
+# Floors chosen so the resolved graph pulls curve25519-dalek >= 4.1.3, which
+# fixes RUSTSEC-2024-0344 (a signing/verification timing side channel). We do not
+# depend on curve25519-dalek directly - it arrives through x25519-dalek and
+# crypto_box - so the floor is enforced two ways: the committed Cargo.lock pins
+# 4.1.3, and cargo-deny/cargo-audit run against that lock in CI (deny.toml).
+x25519-dalek = { version = "2.0.1", features = ["static_secrets", "zeroize"] }
+chacha20poly1305 = "0.10.1"
+crypto_box = { version = "0.9.1", features = ["salsa20"] }
 sha2 = "0.10"
-rand = "0.8"
+rand = "0.8.5"
 subtle = "2"
 zeroize = "1"
 
@@ -121,11 +127,12 @@ num_cpus = "1.16"
 # Testing
 zmq = "0.10"
 criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
-# Exact pin: the CI-installed gungraun-runner binary must match this library
-# version, and Cargo.lock is not tracked, so a caret range would silently drift
-# to a newer release than the pinned runner and fail the bench. Keep this in sync
-# with GUNGRAUN_VERSION in .github/workflows/instr-bench.yml.
-gungraun = "=0.19.4"
+# The CI-installed gungraun-runner binary must match this library version. Now
+# that Cargo.lock is tracked, the exact version is pinned by the lock, and the
+# instr-bench workflow derives GUNGRAUN_VERSION from Cargo.lock rather than
+# hand-syncing a second copy here - so a caret range is safe and cannot drift the
+# runner out of step with the library.
+gungraun = "0.19"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
 portpicker = "0.1"
 hex = "0.4"
