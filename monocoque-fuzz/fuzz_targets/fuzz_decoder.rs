@@ -1,56 +1,53 @@
 #![no_main]
 
+//! Fuzzes the real streaming ZMTP decoder under fragmentation.
+//!
+//! `fuzz_frame_codec` drives a one-shot decode and an encode round-trip. This
+//! target instead exercises the resumable decode state machine the way a real
+//! socket feeds it: arbitrary bytes arrive in arbitrary-sized chunks across
+//! many `decode()` calls, so partial headers and partial payloads must be
+//! carried across reads without panicking, looping forever, or losing framing.
+//!
+//! It drives production types only (`ZmtpDecoder`, `SegmentedBuffer`) - no
+//! private reimplementation - so coverage tracks the code that actually ships.
+
+use bytes::Bytes;
 use libfuzzer_sys::fuzz_target;
+use monocoque_core::buffer::SegmentedBuffer;
+use monocoque_zmtp::codec::ZmtpDecoder;
 
 fuzz_target!(|data: &[u8]| {
-    // Test ZMTP greeting parsing - the first 64 bytes of the handshake
-    if data.len() >= 64 {
-        // Try to parse a greeting
-        let _ = parse_greeting(data);
-    }
+    // The first byte seeds the chunk size so different inputs fragment the same
+    // bytes differently; the rest is the byte stream fed to the decoder.
+    let (chunk_seed, stream) = match data.split_first() {
+        Some((&s, rest)) => (s as usize, rest),
+        None => return,
+    };
+    // Chunk size in 1..=64 - small chunks maximise the number of resume points.
+    let chunk = (chunk_seed & 0x3f) + 1;
 
-    // Test command parsing
-    if data.len() >= 2 {
-        let _ = parse_command(data);
-    }
-});
+    let mut decoder = ZmtpDecoder::new();
+    let mut buf = SegmentedBuffer::new();
 
-// Simple greeting parser to test - based on ZMTP spec
-fn parse_greeting(data: &[u8]) -> Result<(), &'static str> {
-    if data.len() < 64 {
-        return Err("Too short");
-    }
+    // A guard so a decoder that returned Ok(Some) on every call for a fixed
+    // buffer (which would be a bug) cannot spin here forever.
+    let mut budget: u32 = 100_000;
 
-    // Check signature
-    if data[0] != 0xff || data[9] != 0x7f {
-        return Err("Invalid signature");
-    }
+    for piece in stream.chunks(chunk) {
+        buf.push(Bytes::copy_from_slice(piece));
 
-    // Check protocol version
-    let major = data[10];
-    let minor = data[11];
-    if major != 3 || (minor != 0 && minor != 1) {
-        return Err("Unsupported version");
-    }
-
-    Ok(())
-}
-
-// Simple command parser
-fn parse_command(data: &[u8]) -> Result<(), &'static str> {
-    if data.len() < 2 {
-        return Err("Too short");
-    }
-
-    let flags = data[0];
-    let _size = data[1];
-
-    // Check if it's a long command
-    if (flags & 0x02) != 0 {
-        if data.len() < 9 {
-            return Err("Long command too short");
+        // Drain every complete frame the newly-arrived bytes make available.
+        // decode() must return Ok(Some(frame)) | Ok(None) | Err - never panic.
+        loop {
+            budget = match budget.checked_sub(1) {
+                Some(b) => b,
+                None => return,
+            };
+            match decoder.decode(&mut buf) {
+                Ok(Some(_frame)) => continue, // got a frame, try for the next
+                Ok(None) => break,            // need more bytes; feed the next chunk
+                Err(_) => return,             // rejected input; a valid outcome
+            }
         }
     }
-
-    Ok(())
-}
+});

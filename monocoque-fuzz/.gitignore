@@ -1,6 +1,11 @@
-# cargo-fuzz build and run artifacts (machine-generated, not committed).
-# Corpus is grown by CI / OSS-Fuzz and persisted there, not in git.
+# cargo-fuzz build/run artifacts that must never be committed.
 target/
-corpus/
-artifacts/
 coverage/
+# Crash reproducers land here; they are triage output, not source. Commit a
+# regression test for a real crash instead of the raw artifact.
+artifacts/
+
+# Note: corpus/ is intentionally NOT ignored. The committed inputs are seed
+# corpora that give every fuzz run (and a fresh CI job) a useful starting point.
+# The much larger machine-grown corpus is cached/uploaded between CI runs rather
+# than committed - see the fuzz job in .github/workflows/ci.yml.
