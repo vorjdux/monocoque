@@ -309,7 +309,10 @@ pub struct SocketOptions {
     ///
     /// Password for PLAIN authentication (client side).
     /// - Default: None (no authentication)
-    pub plain_password: Option<String>,
+    ///
+    /// Wrapped in `Zeroizing` so the password buffer is scrubbed when these
+    /// options (or a clone) are dropped. Read it via [`Self::plain_password`].
+    pub plain_password: Option<zeroize::Zeroizing<String>>,
 
     /// CURVE server mode (`ZMQ_CURVE_SERVER`)
     ///
@@ -328,7 +331,10 @@ pub struct SocketOptions {
     ///
     /// Local secret key for CURVE (32 bytes).
     /// - Default: None (no encryption)
-    pub curve_secretkey: Option<[u8; 32]>,
+    ///
+    /// Wrapped in `Zeroizing` so the key bytes are scrubbed when these options
+    /// (or a clone) are dropped. Read it via [`Self::curve_secretkey`].
+    pub curve_secretkey: Option<zeroize::Zeroizing<[u8; 32]>>,
 
     /// CURVE server key (`ZMQ_CURVE_SERVERKEY`)
     ///
@@ -778,12 +784,12 @@ impl SocketOptions {
 
     /// Get the configured PLAIN password, if any.
     pub fn plain_password(&self) -> Option<&str> {
-        self.plain_password.as_deref()
+        self.plain_password.as_ref().map(|p| p.as_str())
     }
 
     /// Get the configured CURVE secret key, if any.
-    pub const fn curve_secretkey(&self) -> Option<&[u8; 32]> {
-        self.curve_secretkey.as_ref()
+    pub fn curve_secretkey(&self) -> Option<&[u8; 32]> {
+        self.curve_secretkey.as_deref()
     }
 
     /// Get the configured read buffer size after applying the read-slab cap.
@@ -1095,7 +1101,7 @@ impl SocketOptions {
         password: impl Into<String>,
     ) -> Self {
         self.plain_username = Some(username.into());
-        self.plain_password = Some(password.into());
+        self.plain_password = Some(zeroize::Zeroizing::new(password.into()));
         self
     }
 
@@ -1124,9 +1130,9 @@ impl SocketOptions {
     /// let secret = [0u8; 32];  // Replace with actual key
     /// let opts = SocketOptions::new().with_curve_keypair(public, secret);
     /// ```
-    pub const fn with_curve_keypair(mut self, publickey: [u8; 32], secretkey: [u8; 32]) -> Self {
+    pub fn with_curve_keypair(mut self, publickey: [u8; 32], secretkey: [u8; 32]) -> Self {
         self.curve_publickey = Some(publickey);
-        self.curve_secretkey = Some(secretkey);
+        self.curve_secretkey = Some(zeroize::Zeroizing::new(secretkey));
         self
     }
 

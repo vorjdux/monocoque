@@ -371,7 +371,7 @@ where
             .map(|_| ())
     } else if let Some(ref username) = options.plain_username {
         debug!("[HANDSHAKE] Running PLAIN client exchange");
-        let password = options.plain_password.as_deref().unwrap_or("");
+        let password = options.plain_password().unwrap_or("");
         let credentials = PlainCredentials::new(username.clone(), password);
         plain_client_handshake(stream, &credentials, timeout).await
     } else {
@@ -403,7 +403,7 @@ where
 
     if options.curve_server {
         debug!("[HANDSHAKE] Running CURVE server exchange");
-        let secret_bytes = options.curve_secretkey.ok_or_else(|| {
+        let secret_bytes = *options.curve_secretkey().ok_or_else(|| {
             warn!("[HANDSHAKE] CURVE server mode requires curve_secretkey to be set, but it is missing");
             ZmtpError::Protocol
         })?;
@@ -435,10 +435,10 @@ where
             .await
         }
     } else if let (Some(secret_bytes), Some(server_key_bytes)) =
-        (options.curve_secretkey, options.curve_serverkey)
+        (options.curve_secretkey(), options.curve_serverkey)
     {
         debug!("[HANDSHAKE] Running CURVE client exchange");
-        let client_secret = CurveSecretKey::from_bytes(secret_bytes);
+        let client_secret = CurveSecretKey::from_bytes(*secret_bytes);
         let client_public = client_secret.public_key();
         let client_keypair = CurveKeyPair::from_keys(client_public, client_secret);
         let server_public = CurvePublicKey::from_bytes(server_key_bytes);

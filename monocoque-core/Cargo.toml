@@ -46,5 +46,7 @@ smallvec.workspace = true
 socket2.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+# Scrubs secret option fields (plain_password, curve_secretkey) on drop.
+zeroize.workspace = true
 tokio = { workspace = true, optional = true }
 smol = { workspace = true, optional = true }
