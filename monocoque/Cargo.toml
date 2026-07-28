@@ -99,6 +99,21 @@ required-features = ["zmq"]
 name = "allocation"
 harness = false
 
+[[bench]]
+name = "inproc_socket"
+harness = false
+required-features = ["zmq"]
+
+[[bench]]
+name = "fanout_slow_subscriber"
+harness = false
+required-features = ["zmq"]
+
+[[bench]]
+name = "router_n_peers"
+harness = false
+required-features = ["zmq"]
+
 [[example]]
 name = "runtime_backends"
 required-features = ["zmq"]
@@ -347,6 +362,18 @@ required-features = ["zmq"]
 
 [[test]]
 name = "socket_footprint_bound"
+required-features = ["zmq"]
+
+[[test]]
+name = "eager_semantics"
+required-features = ["zmq"]
+
+[[test]]
+name = "gate_invariants"
+required-features = ["zmq"]
+
+[[test]]
+name = "idle_wakeups"
 required-features = ["zmq"]
 
 [lints]
