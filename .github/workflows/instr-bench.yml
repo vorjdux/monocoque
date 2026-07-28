@@ -11,27 +11,43 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # Must match the exact `gungraun` library pin in the workspace Cargo.toml; the
-  # runner binary refuses to run against a newer library version.
-  GUNGRAUN_VERSION: 0.19.4
 
 jobs:
   instr-hotpath:
     name: Hot-path instruction counts
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        with:
+          toolchain: stable
       # Persists target/ across runs so callgrind has a baseline to compare a PR
       # against (keyed on the workflow + lockfile).
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: Install valgrind
         run: sudo apt-get update && sudo apt-get install -y valgrind
+      # The runner binary must match the gungraun library exactly. Derive the
+      # version from the tracked Cargo.lock instead of hand-syncing a constant -
+      # the lock is the single source of truth now that it is committed.
+      - name: Resolve gungraun version from Cargo.lock
+        id: gungraun
+        run: |
+          set -euo pipefail
+          ver=$(grep -A1 '^name = "gungraun"$' Cargo.lock \
+            | grep '^version = ' | head -1 | sed -E 's/^version = "(.*)"/\1/')
+          test -n "$ver" || { echo "gungraun not found in Cargo.lock"; exit 1; }
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "gungraun library version: $ver"
       - name: Install gungraun-runner
-        run: cargo install gungraun-runner --version "${GUNGRAUN_VERSION}" --locked
+        run: cargo install gungraun-runner --version "${{ steps.gungraun.outputs.version }}" --locked
       # The hot path is runtime-agnostic (codec, buffer, vectored-slice builder),
       # so one backend leg suffices; use the default (compio) plus zmq.
       - name: Run hot-path instruction-count bench

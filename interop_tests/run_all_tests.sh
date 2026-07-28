@@ -24,8 +24,11 @@ echo "✓ Dependencies OK (pyzmq version: $(python3 -c 'import zmq; print(zmq.zm
 # Build Rust examples (only the ones needed for tests)
 echo -e "\n[2/5] Building Rust examples..."
 cd "$(dirname "$0")/.."
-cargo build -p monocoque-zmtp --example simple_rep_server --quiet
-cargo build -p monocoque-zmtp --example simple_req_client --quiet
+# The examples live in the monocoque-rs crate and need the zmq feature (the ZMTP
+# protocol + ZMQ pattern API). Building them against monocoque-zmtp fails - that
+# crate has no such examples.
+cargo build -p monocoque-rs --example simple_rep_server --features zmq --quiet
+cargo build -p monocoque-rs --example simple_req_client --features zmq --quiet
 echo "✓ Examples built"
 
 # Run REQ/REP tests

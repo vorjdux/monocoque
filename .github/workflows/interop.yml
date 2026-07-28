@@ -6,22 +6,29 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   interop-rust:
-    name: Rust interop tests (monocoque ↔ libzmq)
+    name: Rust interop tests (monocoque - libzmq)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install libzmq
-        run: sudo apt-get install -y libzmq3-dev
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+        run: sudo apt-get update && sudo apt-get install -y libzmq3-dev
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: Run Rust interop tests
         run: |
-          cargo test -p monocoque-rs\
+          cargo test -p monocoque-rs \
             --features zmq \
             --test interop_pair \
             --test interop_pubsub \
@@ -30,21 +37,28 @@ jobs:
             --test interop_push_pull
 
   interop-python:
-    name: Python interop tests (pyzmq ↔ monocoque)
+    name: Python interop tests (pyzmq - monocoque)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install libzmq and Python deps
         run: |
-          sudo apt-get install -y libzmq3-dev
-          pip install pyzmq
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+          sudo apt-get update && sudo apt-get install -y libzmq3-dev
+          pip install pyzmq pytest pytest-timeout
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: Build monocoque release binary
         run: cargo build --release -p monocoque-rs --features zmq
+      # The `|| echo skipping` mask is removed: this job now fails honestly when a
+      # Python interop test fails, per the Phase 0 gate. The tests drive the built
+      # examples themselves and do not need a manually-started server.
       - name: Run Python interop tests
         working-directory: interop_tests
         run: |
           python3 -m pytest test_req_rep_interop.py \
                             test_pub_sub_interop.py \
-                            -v --timeout=30 || echo "Python tests require manual libzmq server - skipping in CI"
+                            -v --timeout=30
