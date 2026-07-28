@@ -329,6 +329,10 @@ name = "interop_load_balance"
 required-features = ["zmq"]
 
 [[test]]
+name = "interop_curve"
+required-features = ["zmq"]
+
+[[test]]
 name = "interop_pair"
 required-features = ["zmq"]
 
