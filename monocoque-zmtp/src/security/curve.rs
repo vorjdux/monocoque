@@ -31,6 +31,10 @@
 //! - RFC 23 (ZMTP 3.1): <https://rfc.zeromq.org/spec/23/>
 
 use bytes::{Buf, Bytes, BytesMut};
+// XChaCha20-Poly1305 is used ONLY for the server-internal WELCOME cookie (opaque
+// to the peer, so not an interop surface). The post-handshake MESSAGE box is NaCl
+// crypto_box (SalsaBox); its AEAD trait comes from the same re-exported `aead`
+// crate that crypto_box uses.
 use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
     aead::{Aead, KeyInit, OsRng},
@@ -41,7 +45,6 @@ use crypto_box::{
     aead::generic_array::GenericArray,
 };
 use rand::RngCore;
-use sha2::{Digest, Sha256};
 use std::time::Duration;
 use thiserror::Error;
 use tracing::{debug, warn};
@@ -223,19 +226,38 @@ fn salsa_decrypt(
         .map_err(|_| CurveError::DecryptionFailed)
 }
 
-// ── Message box (XChaCha20-Poly1305) ─────────────────────────────────────────
+// ── Message box (NaCl crypto_box, RFC 26) ────────────────────────────────────
 
-/// Post-handshake message encryption box (XChaCha20-Poly1305).
+/// Post-handshake CURVE message box.
 ///
-/// Keyed by SHA-256(c'·S ‖ C·s' ‖ c'·s') per the 3-way DH derivation.
+/// Per RFC 26 / CurveZMQ, MESSAGE frames are sealed with `crypto_box` (X25519 +
+/// XSalsa20-Poly1305) under the shared key `crypto_box_beforenm(c', s')` derived
+/// from the two SHORT-TERM (transient) keys exchanged in the handshake. That is
+/// exactly what libzmq/libsodium use, so the ciphertext interoperates with a real
+/// libzmq peer. (The prior build used XChaCha20-Poly1305 keyed by a SHA-256 of a
+/// 3-way DH, which is not the CurveZMQ construction: a libzmq peer completes the
+/// handshake and then cannot decrypt the first MESSAGE.)
+///
+/// The box is symmetric: the same `SalsaBox` value both seals frames this side
+/// sends and opens frames the peer sends, because
+/// `crypto_box_beforenm(their_pk, my_sk)` is identical on both ends.
 pub(crate) struct CurveBox {
-    cipher: XChaCha20Poly1305,
+    box_: SalsaBox,
 }
 
 impl CurveBox {
-    fn new(key: &[u8; CURVE_KEY_SIZE]) -> Self {
-        let cipher = XChaCha20Poly1305::new(key.into());
-        Self { cipher }
+    /// Build the message box from the peer's transient public key and this
+    /// side's transient secret key. For the client that is `(S', c')`; for the
+    /// server `(C', s')`. Both yield the same precomputed shared key.
+    fn from_transient_keys(
+        their_transient_pk: &[u8; CURVE_KEY_SIZE],
+        my_transient_sk: &[u8; CURVE_KEY_SIZE],
+    ) -> Self {
+        let pk = SalsaPublicKey::from(*their_transient_pk);
+        let sk = SalsaSecretKey::from(*my_transient_sk);
+        Self {
+            box_: SalsaBox::new(&pk, &sk),
+        }
     }
 
     fn encrypt(
@@ -243,9 +265,9 @@ impl CurveBox {
         plaintext: &[u8],
         nonce: &[u8; CURVE_NONCE_SIZE],
     ) -> Result<Vec<u8>, CurveError> {
-        let nonce = XNonce::from_slice(nonce);
-        self.cipher
-            .encrypt(nonce, plaintext)
+        let nonce = GenericArray::from(*nonce);
+        self.box_
+            .encrypt(&nonce, plaintext)
             .map_err(|_| CurveError::EncryptionFailed)
     }
 
@@ -254,9 +276,9 @@ impl CurveBox {
         ciphertext: &[u8],
         nonce: &[u8; CURVE_NONCE_SIZE],
     ) -> Result<Vec<u8>, CurveError> {
-        let nonce = XNonce::from_slice(nonce);
-        self.cipher
-            .decrypt(nonce, ciphertext)
+        let nonce = GenericArray::from(*nonce);
+        self.box_
+            .decrypt(&nonce, ciphertext)
             .map_err(|_| CurveError::DecryptionFailed)
     }
 }
@@ -281,19 +303,6 @@ fn parse_curve_message(message: &[u8]) -> Result<CurveMessageParts<'_>, CurveErr
         short_nonce: &message[command_len..command_len + CURVE_MESSAGE_NONCE_SIZE],
         ciphertext: &message[command_len + CURVE_MESSAGE_NONCE_SIZE..],
     })
-}
-
-// ── Key derivation ────────────────────────────────────────────────────────────
-
-/// Derive the post-handshake message key via SHA-256 of the three DH legs.
-///
-/// `dh1` = c'·S, `dh2` = C·s', `dh3` = c'·s'.
-fn derive_message_key(dh1: &[u8; 32], dh2: &[u8; 32], dh3: &[u8; 32]) -> [u8; 32] {
-    let mut h = Sha256::new();
-    h.update(dh1);
-    h.update(dh2);
-    h.update(dh3);
-    h.finalize().into()
 }
 
 // ── ZMTP frame helpers ────────────────────────────────────────────────────────
@@ -912,25 +921,12 @@ impl CurveClient {
         self.peer_socket_type = peer_st;
         self.peer_identity_recv = peer_id;
 
-        // Derive message key: SHA-256(c'·S ‖ C·s' ‖ c'·s')
-        let dh1 = self
-            .client_short_keypair
-            .secret
-            .diffie_hellman(&self.server_public)
-            .map_err(|_| ZmtpError::Protocol)?; // c'·S
-        let dh2 = self
-            .client_keypair
-            .secret
-            .diffie_hellman(&s_prime)
-            .map_err(|_| ZmtpError::Protocol)?; // C·s'
-        let dh3 = self
-            .client_short_keypair
-            .secret
-            .diffie_hellman(&s_prime)
-            .map_err(|_| ZmtpError::Protocol)?; // c'·s'
-
-        let key = derive_message_key(&dh1, &dh2, &dh3);
-        self.message_box = Some(CurveBox::new(&key));
+        // RFC 26 message box: crypto_box over the transient keys (S', c'). The
+        // shared key equals crypto_box_beforenm(c', s'), matching libzmq.
+        self.message_box = Some(CurveBox::from_transient_keys(
+            s_prime.as_bytes(),
+            &self.client_short_keypair.secret.to_raw_bytes(),
+        ));
 
         debug!("[CURVE CLIENT] Handshake complete");
         Ok(())
@@ -1343,26 +1339,17 @@ impl CurveServer {
         debug!("[CURVE SERVER] Sending READY");
 
         let c_prime = self.client_short_public.ok_or(ZmtpError::Protocol)?;
-        let c = self.client_public.ok_or(ZmtpError::Protocol)?;
+        // Guard that INITIATE was processed (the client long-term key is known),
+        // even though the RFC 26 message box below only needs the transient keys.
+        self.client_public.ok_or(ZmtpError::Protocol)?;
 
-        // Derive message key: SHA-256(c'·S ‖ C·s' ‖ c'·s')
-        let dh1 = self
-            .server_keypair
-            .secret
-            .diffie_hellman(&c_prime)
-            .map_err(|_| ZmtpError::Protocol)?; // S·c' = c'·S
-        let dh2 = self
-            .server_short_keypair
-            .secret
-            .diffie_hellman(&c)
-            .map_err(|_| ZmtpError::Protocol)?; // s'·C = C·s'
-        let dh3 = self
-            .server_short_keypair
-            .secret
-            .diffie_hellman(&c_prime)
-            .map_err(|_| ZmtpError::Protocol)?; // s'·c' = c'·s'
-        let key = derive_message_key(&dh1, &dh2, &dh3);
-        self.message_box = Some(CurveBox::new(&key));
+        // RFC 26 message box: crypto_box over the transient keys (C', s'). The
+        // shared key equals crypto_box_beforenm(c', s'), matching the client and
+        // a real libzmq peer.
+        self.message_box = Some(CurveBox::from_transient_keys(
+            c_prime.as_bytes(),
+            &self.server_short_keypair.secret.to_raw_bytes(),
+        ));
 
         // Encrypt server metadata in READY box (s'→c')
         let ready_counter: u64 = 1;
@@ -1657,10 +1644,82 @@ mod tests {
         );
     }
 
+    /// Build the pair of RFC 26 message boxes the client and server hold: two
+    /// complementary crypto_box handles over one pair of transient keypairs.
+    /// Both compute the same shared key, so either can open what the other seals.
+    fn transient_box_pair() -> (CurveBox, CurveBox) {
+        let client_t = CurveKeyPair::generate();
+        let server_t = CurveKeyPair::generate();
+        let client = CurveBox::from_transient_keys(
+            server_t.public.as_bytes(),
+            &client_t.secret.to_raw_bytes(),
+        );
+        let server = CurveBox::from_transient_keys(
+            client_t.public.as_bytes(),
+            &server_t.secret.to_raw_bytes(),
+        );
+        (client, server)
+    }
+
+    fn unhex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn curve_message_box_matches_libsodium_crypto_box() {
+        // Known-answer test against libsodium's crypto_box_easy - the exact
+        // primitive libzmq/CurveZMQ uses. This proves the MESSAGE box is
+        // byte-for-byte compatible with a real libzmq peer (including the MAC
+        // layout), which is the whole point of the RFC 26 construction. The
+        // vector was produced by calling libsodium directly: sender = client
+        // transient secret (sk_c), recipient = server transient public (pk_s),
+        // nonce = "CurveZMQMESSAGEC" + counter 1, plaintext = flags(0x00) + body.
+        let sk_c: [u8; 32] =
+            unhex("1433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5")
+                .try_into()
+                .unwrap();
+        let sk_s: [u8; 32] =
+            unhex("5465768798a9bacbdcedfe0f2031425364758697a8b9cadbecfd0e1f30415263")
+                .try_into()
+                .unwrap();
+        let pk_c: [u8; 32] =
+            unhex("5921ff69f366c4b810ae78ca70cbfa89dcf11fb69a1c2eaca858ec36530e532d")
+                .try_into()
+                .unwrap();
+        let pk_s: [u8; 32] =
+            unhex("01ddc214d3fe0dde1525e9b40a64b4e6dfd8949df684665950ce3b4214c79206")
+                .try_into()
+                .unwrap();
+        let nonce: [u8; CURVE_NONCE_SIZE] =
+            unhex("43757276655a4d514d455353414745430000000000000001")
+                .try_into()
+                .unwrap();
+        let plaintext = unhex("0068656c6c6f206c69627a6d712066726f6d206d6f6e6f636f717565");
+        let expected_ct =
+            unhex("2a39f8183b024250d3eafae1e9f30a77ccaa6b10011b937c346f70b18b7758acbfd05b50443aec7089ee5240");
+
+        // The client seals the frame; the bytes must equal libsodium's output.
+        let client_box = CurveBox::from_transient_keys(&pk_s, &sk_c);
+        let ct = client_box.encrypt(&plaintext, &nonce).unwrap();
+        assert_eq!(
+            ct, expected_ct,
+            "CURVE MESSAGE box is not byte-compatible with libsodium/libzmq"
+        );
+
+        // The server opens the libsodium-produced ciphertext with its own box.
+        let server_box = CurveBox::from_transient_keys(&pk_c, &sk_s);
+        let pt = server_box.decrypt(&expected_ct, &nonce).unwrap();
+        assert_eq!(pt, plaintext);
+    }
+
     #[test]
     fn test_curve_box_encrypt_decrypt() {
-        let shared_secret = [42u8; CURVE_KEY_SIZE];
-        let box_ = CurveBox::new(&shared_secret);
+        // A single message box is symmetric: it both seals and opens under its
+        // own precomputed shared key.
+        let (box_, _) = transient_box_pair();
 
         let plaintext = b"Hello, CURVE!";
         let nonce = [1u8; CURVE_NONCE_SIZE];
@@ -1676,9 +1735,9 @@ mod tests {
         // Encrypt on the client, decrypt on the server, for both MORE values.
         // Guards the zero-copy body slice in decrypt_frame (advance past the
         // 1-byte flags prefix) against off-by-one / flag-bit regressions.
-        let shared_secret = [42u8; CURVE_KEY_SIZE];
-        let mut client = CurveMessageCipher::new_client(CurveBox::new(&shared_secret), 0, 0);
-        let mut server = CurveMessageCipher::new_server(CurveBox::new(&shared_secret), 0, 0);
+        let (client_box, server_box) = transient_box_pair();
+        let mut client = CurveMessageCipher::new_client(client_box, 0, 0);
+        let mut server = CurveMessageCipher::new_server(server_box, 0, 0);
 
         for (payload, more) in [
             (b"first-frame".as_ref(), true),
@@ -1719,53 +1778,28 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::similar_names)]
-    fn test_3way_dh_message_key_symmetry() {
-        let client_long = CurveKeyPair::generate();
-        let server_long = CurveKeyPair::generate();
-        let client_short = CurveKeyPair::generate();
-        let server_short = CurveKeyPair::generate();
+    fn curve_message_box_shared_key_is_symmetric() {
+        // RFC 26 keys the message box on crypto_box_beforenm over the transient
+        // keys, so both sides derive the same key: a frame sealed by the client
+        // opens on the server and vice versa.
+        let (client_box, server_box) = transient_box_pair();
 
-        // Client side
-        let dh1c = client_short
-            .secret
-            .diffie_hellman(&server_long.public)
-            .unwrap();
-        let dh2c = client_long
-            .secret
-            .diffie_hellman(&server_short.public)
-            .unwrap();
-        let dh3c = client_short
-            .secret
-            .diffie_hellman(&server_short.public)
-            .unwrap();
-        let client_key = derive_message_key(&dh1c, &dh2c, &dh3c);
+        let mut nonce = [0u8; CURVE_NONCE_SIZE];
+        nonce[..16].copy_from_slice(b"CurveZMQMESSAGEC");
+        nonce[16..].copy_from_slice(&1u64.to_be_bytes());
 
-        // Server side
-        let dh1s = server_long
-            .secret
-            .diffie_hellman(&client_short.public)
-            .unwrap();
-        let dh2s = server_short
-            .secret
-            .diffie_hellman(&client_long.public)
-            .unwrap();
-        let dh3s = server_short
-            .secret
-            .diffie_hellman(&client_short.public)
-            .unwrap();
-        let server_key = derive_message_key(&dh1s, &dh2s, &dh3s);
+        let ct = client_box.encrypt(b"client to server", &nonce).unwrap();
+        let pt = server_box.decrypt(&ct, &nonce).unwrap();
+        assert_eq!(pt, b"client to server");
 
-        assert_eq!(
-            client_key, server_key,
-            "both sides must derive the same message key"
-        );
+        let ct2 = server_box.encrypt(b"server to client", &nonce).unwrap();
+        let pt2 = client_box.decrypt(&ct2, &nonce).unwrap();
+        assert_eq!(pt2, b"server to client");
     }
 
     #[test]
     fn curve_box_uses_message_counter_bytes_in_aead_nonce() {
-        let shared_secret = [42u8; CURVE_KEY_SIZE];
-        let box_ = CurveBox::new(&shared_secret);
+        let (box_, _) = transient_box_pair();
         let plaintext = b"same plaintext";
 
         let mut nonce_one = [0u8; CURVE_NONCE_SIZE];
@@ -1787,14 +1821,15 @@ mod tests {
 
     #[test]
     fn client_decrypt_message_accepts_valid_curve_message_command_header() {
-        let shared_secret = [42u8; CURVE_KEY_SIZE];
-        let box_ = CurveBox::new(&shared_secret);
+        // The server seals a server->client MESSAGE; the client opens it with the
+        // complementary box that shares the same key.
+        let (client_box, server_box) = transient_box_pair();
 
         let mut nonce = [0u8; CURVE_NONCE_SIZE];
         nonce[..16].copy_from_slice(b"CurveZMQMESSAGES");
         nonce[16..].copy_from_slice(&1u64.to_be_bytes());
 
-        let ciphertext = box_.encrypt(b"server message", &nonce).unwrap();
+        let ciphertext = server_box.encrypt(b"server message", &nonce).unwrap();
         let mut frame = BytesMut::new();
         frame.extend_from_slice(CURVE_MESSAGE);
         frame.extend_from_slice(&nonce[16..]);
@@ -1803,7 +1838,7 @@ mod tests {
         let client_keypair = CurveKeyPair::generate();
         let server_public = CurveKeyPair::generate().public;
         let mut client = CurveClient::new(client_keypair, server_public, "DEALER", None);
-        client.message_box = Some(CurveBox::new(&shared_secret));
+        client.message_box = Some(client_box);
 
         let plaintext = client.decrypt_message(&frame).unwrap();
         assert_eq!(plaintext.as_ref(), b"server message");
@@ -1811,14 +1846,15 @@ mod tests {
 
     #[test]
     fn server_decrypt_message_accepts_valid_curve_message_command_header() {
-        let shared_secret = [43u8; CURVE_KEY_SIZE];
-        let box_ = CurveBox::new(&shared_secret);
+        // The client seals a client->server MESSAGE; the server opens it with the
+        // complementary box.
+        let (client_box, server_box) = transient_box_pair();
 
         let mut nonce = [0u8; CURVE_NONCE_SIZE];
         nonce[..16].copy_from_slice(b"CurveZMQMESSAGEC");
         nonce[16..].copy_from_slice(&2u64.to_be_bytes());
 
-        let ciphertext = box_.encrypt(b"client message", &nonce).unwrap();
+        let ciphertext = client_box.encrypt(b"client message", &nonce).unwrap();
         let mut frame = BytesMut::new();
         frame.extend_from_slice(CURVE_MESSAGE);
         frame.extend_from_slice(&nonce[16..]);
@@ -1826,7 +1862,7 @@ mod tests {
 
         let server_keypair = CurveKeyPair::generate();
         let mut server = CurveServer::new(server_keypair, "ROUTER");
-        server.message_box = Some(CurveBox::new(&shared_secret));
+        server.message_box = Some(server_box);
 
         let plaintext = server.decrypt_message(&frame).unwrap();
         assert_eq!(plaintext.as_ref(), b"client message");
@@ -1837,7 +1873,7 @@ mod tests {
         let client_keypair = CurveKeyPair::generate();
         let server_public = CurveKeyPair::generate().public;
         let mut client = CurveClient::new(client_keypair, server_public, "DEALER", None);
-        client.message_box = Some(CurveBox::new(&[42u8; CURVE_KEY_SIZE]));
+        client.message_box = Some(transient_box_pair().0);
 
         let mut frame = BytesMut::new();
         frame.extend_from_slice(b"\x05READY");
@@ -1855,7 +1891,7 @@ mod tests {
         let client_keypair = CurveKeyPair::generate();
         let server_public = CurveKeyPair::generate().public;
         let mut client = CurveClient::new(client_keypair, server_public, "DEALER", None);
-        client.message_box = Some(CurveBox::new(&[42u8; CURVE_KEY_SIZE]));
+        client.message_box = Some(transient_box_pair().0);
 
         assert!(matches!(
             client.decrypt_message(CURVE_MESSAGE),
