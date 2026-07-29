@@ -5,6 +5,12 @@ use thiserror::Error;
 
 use monocoque_core::config::STAGING_BUF_INITIAL_CAP;
 
+/// Upper bound on the staging buffer's retained capacity between frames. A large
+/// fragmented frame grows `staging`; once it is delivered we release anything
+/// past this so a single big message does not pin an oversized buffer for the
+/// life of the connection. 64 KiB covers ordinary frames without reallocating.
+const STAGING_BUF_MAX_RETAINED: usize = 64 * 1024;
+
 /// ZMTP protocol errors
 #[derive(Debug, Error)]
 pub enum ZmtpError {
@@ -142,9 +148,19 @@ impl ZmtpDecoder {
                 return Ok(None);
             }
 
+            // `split()` hands the data to `payload` but leaves `staging`
+            // referencing the tail of the same (now large) allocation, which
+            // keeps the whole buffer alive for the connection's lifetime. If the
+            // frame we just delivered was large, drop that reference by replacing
+            // staging with a fresh small buffer so the big allocation can be
+            // freed once the payload is consumed.
+            let was_large = self.expected_body_len > STAGING_BUF_MAX_RETAINED;
             let payload = self.staging.split().freeze();
             self.pending_flags = None;
             self.expected_body_len = 0;
+            if was_large {
+                self.staging = BytesMut::with_capacity(STAGING_BUF_INITIAL_CAP);
+            }
 
             return Ok(Some(ZmtpFrame { flags, payload }));
         }
@@ -196,11 +212,15 @@ impl ZmtpDecoder {
                 return Err(ZmtpError::SizeTooLarge);
             }
 
-            let body_len = size as usize;
-            if body_len > self.max_frame_size {
+            // Compare against the cap as u64 BEFORE narrowing to usize. On a
+            // 32-bit target `size as usize` truncates, so a value like
+            // 0x1_0000_0064 would become 100 and slip past a post-narrow check,
+            // desyncing framing. try_from then cannot fail, since size is already
+            // known to be <= max_frame_size (which is a usize).
+            if size > self.max_frame_size as u64 {
                 return Err(ZmtpError::SizeTooLarge);
             }
-            body_len
+            usize::try_from(size).map_err(|_| ZmtpError::SizeTooLarge)?
         } else {
             let body_len = hdr[1] as usize;
             if body_len > self.max_frame_size {
@@ -448,5 +468,53 @@ mod tests {
         encode_multipart(&[], &mut buf);
 
         assert_eq!(&buf[..], b"prefix");
+    }
+
+    #[test]
+    fn decode_rejects_long_frame_length_that_would_truncate_past_the_cap() {
+        // A long-frame length of (1 << 32) | 100 narrows to 100 on a 32-bit
+        // usize and would slip past a post-narrow cap check, desyncing framing.
+        // The u64 comparison against max_frame_size must reject it. On 64-bit it
+        // is also simply larger than the cap.
+        let mut decoder = ZmtpDecoder::with_max_frame_size(1000);
+        let mut src = SegmentedBuffer::new();
+        let size: u64 = (1u64 << 32) + 100;
+        let mut header = vec![0x02u8]; // LONG flag, no MORE
+        header.extend_from_slice(&size.to_be_bytes());
+        src.push(Bytes::from(header));
+
+        assert!(matches!(
+            decoder.decode(&mut src),
+            Err(ZmtpError::SizeTooLarge)
+        ));
+    }
+
+    #[test]
+    fn staging_buffer_is_released_after_a_large_fragmented_frame() {
+        // Deliver a frame larger than the retained cap in two fragments so it
+        // goes through the staging buffer, then assert the decoder does not keep
+        // an oversized staging allocation pinned afterwards.
+        let body_len = STAGING_BUF_MAX_RETAINED * 2;
+        let mut decoder = ZmtpDecoder::with_max_frame_size(body_len * 2);
+
+        let mut header = vec![0x02u8]; // LONG flag, no MORE
+        header.extend_from_slice(&(body_len as u64).to_be_bytes());
+
+        // First push: header + half the body -> must stage and ask for more.
+        let mut src = SegmentedBuffer::new();
+        src.push(Bytes::from(header));
+        src.push(Bytes::from(vec![0x7u8; body_len / 2]));
+        assert!(matches!(decoder.decode(&mut src), Ok(None)));
+
+        // Second push: the rest -> frame completes.
+        src.push(Bytes::from(vec![0x7u8; body_len / 2]));
+        let frame = decoder.decode(&mut src).unwrap().unwrap();
+        assert_eq!(frame.payload.len(), body_len);
+
+        assert!(
+            decoder.staging.capacity() <= STAGING_BUF_MAX_RETAINED,
+            "staging retained {} bytes after a large frame; the big allocation was not released",
+            decoder.staging.capacity()
+        );
     }
 }
