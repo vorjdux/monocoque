@@ -106,6 +106,90 @@ fn test_sub_options_subscriptions_are_applied() {
     );
 }
 
+/// ZMQ_INVERT_MATCHING delivers the messages that do NOT match.
+///
+/// With invert set on both the PUB and the SUB, a subscriber that subscribes to
+/// "news." receives messages whose topic does not start with "news." and is
+/// filtered from those that do. Both ends must agree, since each filters.
+#[test]
+fn test_invert_matching_delivers_non_matching_messages() {
+    let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
+    let (sub_ready_tx, sub_ready_rx) = mpsc::channel::<()>();
+    let (client_done_tx, client_done_rx) = mpsc::channel::<()>();
+    let (msg_tx, msg_rx) = mpsc::channel::<Vec<Bytes>>();
+
+    let pub_handle = thread::spawn(move || {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(async move {
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                addr_tx.send(listener.local_addr().unwrap()).unwrap();
+
+                let mut pub_sock = PubSocket::with_workers_opts(
+                    1,
+                    SocketOptions::default().with_invert_matching(true),
+                )
+                .unwrap();
+                pub_sock.accept_subscriber(&listener).await.unwrap();
+
+                sub_ready_rx.recv().unwrap();
+                std::thread::sleep(Duration::from_millis(100));
+
+                // "news.*" matches the subscribed prefix, which invert excludes;
+                // "weather.today" does not match, so invert delivers it.
+                pub_sock
+                    .send(vec![Bytes::from("news.breaking")])
+                    .await
+                    .unwrap();
+                pub_sock
+                    .send(vec![Bytes::from("weather.today")])
+                    .await
+                    .unwrap();
+
+                client_done_rx.recv().unwrap();
+            });
+    });
+
+    let addr = addr_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    let client = thread::spawn(move || {
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(async move {
+                let stream = monocoque_core::rt::TcpStream::connect(addr).await.unwrap();
+                let opts = SocketOptions::default()
+                    .with_invert_matching(true)
+                    .with_subscribe(Bytes::from("news."));
+                let mut sub = SubSocket::with_options(stream, opts).await.unwrap();
+                sub_ready_tx.send(()).unwrap();
+
+                let first = monocoque_core::rt::timeout(Duration::from_secs(5), sub.recv())
+                    .await
+                    .expect("recv timed out")
+                    .unwrap()
+                    .expect("connection closed unexpectedly");
+                msg_tx.send(first).unwrap();
+                client_done_tx.send(()).unwrap();
+            });
+    });
+
+    pub_handle.join().expect("pub thread panicked");
+    client.join().expect("client thread panicked");
+
+    let frames = msg_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("did not receive a message");
+    assert!(
+        frames[0].starts_with(b"weather."),
+        "invert must deliver the non-matching 'weather.' message, got {:?}",
+        frames[0]
+    );
+    assert!(
+        !frames[0].starts_with(b"news."),
+        "invert must filter the matching 'news.' message"
+    );
+}
+
 /// Multiple subscriptions set in `SocketOptions` are all applied.
 ///
 /// Two topics are registered via options; only messages matching either prefix

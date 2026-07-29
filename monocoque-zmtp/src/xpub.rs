@@ -51,11 +51,14 @@ struct XPubSubscriber {
 }
 
 impl XPubSubscriber {
-    /// Check if message matches subscriber's subscriptions
-    fn matches(&self, msg: &[Bytes]) -> bool {
+    /// Check if message matches subscriber's subscriptions. With
+    /// ZMQ_INVERT_MATCHING the prefix result is negated: deliver to subscribers
+    /// whose prefixes do NOT match.
+    fn matches(&self, msg: &[Bytes], invert: bool) -> bool {
         // Check first frame against subscription prefixes
         if let Some(first_frame) = msg.first() {
-            self.subscriptions.matches(first_frame)
+            let matched = self.subscriptions.matches(first_frame);
+            if invert { !matched } else { matched }
         } else {
             false
         }
@@ -503,9 +506,10 @@ impl XPubSocket {
         let mut plain_wire: Option<bytes::Bytes> = None;
 
         let mut dead_subs = Vec::new();
+        let invert = self.options.invert_matching;
 
         for sub in self.subscribers.values_mut() {
-            if !sub.matches(&msg) {
+            if !sub.matches(&msg, invert) {
                 continue;
             }
 

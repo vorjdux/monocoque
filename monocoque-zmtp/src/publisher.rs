@@ -201,26 +201,25 @@ struct WorkerSubscriber {
 }
 
 impl WorkerSubscriber {
-    /// Check if message matches subscriber's subscriptions
-    fn matches(&self, msg: &[Bytes]) -> bool {
+    /// Check if message matches subscriber's subscriptions. With
+    /// ZMQ_INVERT_MATCHING the prefix result is negated: deliver messages whose
+    /// first frame does NOT match any subscribed prefix.
+    fn matches(&self, msg: &[Bytes], invert: bool) -> bool {
         let subs = self.subscriptions.read();
 
-        // Empty subscriptions = subscribe to all
-        if subs.is_empty() {
-            return true;
-        }
-
-        // Check first frame against subscription prefixes
-        if let Some(first_frame) = msg.first() {
-            for sub in subs.iter() {
-                if sub.is_empty()
+        let prefix_matched = msg.first().is_some_and(|first_frame| {
+            subs.iter().any(|sub| {
+                sub.is_empty()
                     || (first_frame.len() >= sub.len() && first_frame[..sub.len()] == sub[..])
-                {
-                    return true;
-                }
-            }
+            })
+        });
+
+        if invert {
+            !prefix_matched
+        } else {
+            // Empty subscriptions = subscribe to all.
+            subs.is_empty() || prefix_matched
         }
-        false
     }
 }
 
@@ -352,7 +351,12 @@ async fn subscription_reader(
 
 /// Worker thread that handles multiple subscribers
 #[allow(clippy::too_many_lines)]
-fn worker_thread(worker_id: usize, rx: Receiver<WorkerCommand>, sub_count: Arc<AtomicUsize>) {
+fn worker_thread(
+    worker_id: usize,
+    rx: Receiver<WorkerCommand>,
+    sub_count: Arc<AtomicUsize>,
+    invert_matching: bool,
+) {
     debug!("[Worker {}] Starting", worker_id);
 
     let rt = match monocoque_core::rt::LocalRuntime::new() {
@@ -450,7 +454,7 @@ fn worker_thread(worker_id: usize, rx: Receiver<WorkerCommand>, sub_count: Arc<A
                             let mut buf = bytes::BytesMut::new();
                             let mut failed = false;
                             for (idx, msg) in batch.iter().enumerate() {
-                                if !sub.matches(msg) {
+                                if !sub.matches(msg, invert_matching) {
                                     continue;
                                 }
                                 if let Some(ref arc_cipher) = sub.cipher {
@@ -732,6 +736,7 @@ impl PubSocket {
     /// Returns an error if a worker thread cannot be spawned.
     pub fn with_workers_opts(worker_count: usize, options: SocketOptions) -> io::Result<Self> {
         let hwm = options.send_hwm;
+        let invert_matching = options.invert_matching;
         debug!(
             "[PUB] Starting {} worker threads (channel HWM={})",
             worker_count, hwm
@@ -747,7 +752,7 @@ impl PubSocket {
             let worker_count = Arc::clone(&sub_count);
             let handle = thread::Builder::new()
                 .name(format!("pub-worker-{}", i))
-                .spawn(move || worker_thread(i, rx, worker_count))?;
+                .spawn(move || worker_thread(i, rx, worker_count, invert_matching))?;
             workers.push(tx);
             worker_handles.push(handle);
             worker_sub_counts.push(sub_count);

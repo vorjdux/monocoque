@@ -81,6 +81,11 @@ where
     base: SocketBase<S>,
     /// Accumulated frames for current multipart message
     frames: SmallVec<[Bytes; 4]>,
+    /// The routing envelope of the last received request: every frame up to and
+    /// including the first empty delimiter. Stripped from what `recv` returns and
+    /// re-prepended by `send` so the reply routes back over the ZMTP REQ/REP
+    /// contract (this is what makes libzmq REQ interop work).
+    request_envelope: Vec<Bytes>,
     /// Current state of the REP state machine
     state: RepState,
 }
@@ -137,6 +142,7 @@ where
         Ok(Self {
             base,
             frames: SmallVec::new(),
+            request_envelope: Vec::new(),
             state: RepState::AwaitingRequest,
         })
     }
@@ -193,10 +199,29 @@ where
                     crate::base::FrameResult::Data(more, payload) => {
                         self.frames.push(payload);
                         if !more {
-                            let msg: Vec<Bytes> = self.frames.drain(..).collect();
-                            trace!("[REP] Received {} frames", msg.len());
+                            let mut msg: Vec<Bytes> = self.frames.drain(..).collect();
+                            // Split off the routing envelope (every frame up to
+                            // and including the first empty delimiter) and hand
+                            // the caller only the request body. The envelope is
+                            // re-prepended by send() so the reply routes back.
+                            let body = if let Some(delim) =
+                                msg.iter().position(bytes::Bytes::is_empty)
+                            {
+                                let body = msg.split_off(delim + 1);
+                                self.request_envelope = msg;
+                                body
+                            } else {
+                                // No delimiter (a non-REQ peer): empty envelope.
+                                self.request_envelope.clear();
+                                msg
+                            };
+                            trace!(
+                                "[REP] Received {} body frames (envelope {} frames)",
+                                body.len(),
+                                self.request_envelope.len()
+                            );
                             self.state = RepState::ReadyToReply;
-                            return Ok(Some(msg));
+                            return Ok(Some(body));
                         }
                     }
                 }
@@ -248,8 +273,19 @@ where
 
         trace!("[REP] Sending {} frames", msg.len());
 
+        // Re-prepend the request's routing envelope (through the empty delimiter)
+        // so the reply routes back to the REQ peer over the ZMTP REQ/REP contract.
+        let reply = if self.request_envelope.is_empty() {
+            msg
+        } else {
+            let mut reply = Vec::with_capacity(self.request_envelope.len() + msg.len());
+            reply.append(&mut self.request_envelope);
+            reply.extend(msg);
+            reply
+        };
+
         // Encode message into write_buf (with CURVE encryption if active)
-        self.base.encode_message_to_write_buf(&msg)?;
+        self.base.encode_message_to_write_buf(&reply)?;
 
         // Delegate to base for writing
         self.base.write_from_buf().await?;

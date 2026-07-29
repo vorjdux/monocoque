@@ -196,14 +196,21 @@ where
                                 let msg: Vec<Bytes> = self.frames.drain(..).collect();
                                 trace!("[SUB] Received {} frames", msg.len());
 
-                                // Check if message matches any subscription
+                                // Check if message matches any subscription. With
+                                // ZMQ_INVERT_MATCHING the prefix result is negated:
+                                // deliver messages that do NOT match a prefix.
                                 let matches = {
                                     let subscriptions = &self.subscriptions;
+                                    let invert = self.base.options.invert_matching;
                                     msg.first().is_some_and(|first_frame| {
-                                        subscriptions.is_empty()
-                                            || subscriptions
-                                                .iter()
-                                                .any(|sub| first_frame.starts_with(sub))
+                                        let matched = subscriptions
+                                            .iter()
+                                            .any(|sub| first_frame.starts_with(sub));
+                                        if invert {
+                                            !matched
+                                        } else {
+                                            subscriptions.is_empty() || matched
+                                        }
                                     })
                                 };
 

@@ -345,17 +345,31 @@ impl StreamSocket {
 
         let routing_id = msg[0].clone();
 
-        // Collect all non-routing-id, non-empty frames as raw data.
-        let data: Bytes = msg
-            .iter()
-            .skip(1)
-            .find(|f| !f.is_empty())
-            .cloned()
-            .unwrap_or_default();
+        // Only the explicit two-frame [routing_id, ""] shape is a disconnect
+        // hint (libzmq semantics). Anything else is data, so a payload that
+        // merely happens to contain an empty frame is not mistaken for a close.
+        if msg.len() == 2 && msg[1].is_empty() {
+            self.disconnect(&routing_id);
+            return Ok(());
+        }
+
+        // STREAM is a raw byte stream: write every post-routing-id frame in
+        // order (the previous code sent only the first non-empty frame and
+        // silently truncated the rest).
+        let data: Bytes = if msg.len() == 2 {
+            msg[1].clone()
+        } else {
+            let total: usize = msg.iter().skip(1).map(Bytes::len).sum();
+            let mut buf = bytes::BytesMut::with_capacity(total);
+            for frame in msg.iter().skip(1) {
+                buf.extend_from_slice(frame);
+            }
+            buf.freeze()
+        };
 
         if data.is_empty() {
-            // Sending [routing_id, ""] is a disconnect hint (libzmq semantics).
-            self.disconnect(&routing_id);
+            // Nothing to write (e.g. just [routing_id], or all-empty frames that
+            // are not the two-frame disconnect shape); a no-op, not a disconnect.
             return Ok(());
         }
 

@@ -333,6 +333,10 @@ name = "interop_curve"
 required-features = ["zmq"]
 
 [[test]]
+name = "interop_req_rep"
+required-features = ["zmq"]
+
+[[test]]
 name = "interop_pair"
 required-features = ["zmq"]
 
