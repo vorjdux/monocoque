@@ -284,11 +284,8 @@ where
             reply
         };
 
-        // Encode message into write_buf (with CURVE encryption if active)
-        self.base.encode_message_to_write_buf(&reply)?;
-
-        // Delegate to base for writing
-        self.base.write_from_buf().await?;
+        // Coalesce / vector / copy-and-write as appropriate.
+        self.base.send_message(&reply).await?;
 
         // Transition back to awaiting request
         self.state = RepState::AwaitingRequest;

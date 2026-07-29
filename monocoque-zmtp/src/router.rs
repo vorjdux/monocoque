@@ -222,11 +222,8 @@ where
         // Skip the identity frame and send the rest
         let frames_to_send = &msg[1..];
 
-        // Encode message into write_buf (with CURVE encryption if active)
-        self.base.encode_message_to_write_buf(frames_to_send)?;
-
-        // Delegate to base for writing
-        self.base.write_from_buf().await?;
+        // Coalesce / vector / copy-and-write as appropriate.
+        self.base.send_message(frames_to_send).await?;
 
         trace!("[ROUTER] Message sent successfully");
         Ok(())

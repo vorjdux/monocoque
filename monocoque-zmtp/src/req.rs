@@ -237,11 +237,8 @@ where
             out
         };
 
-        // Encode message into write_buf (with CURVE encryption if active)
-        self.base.encode_message_to_write_buf(&frames_to_send)?;
-
-        // Delegate to base for writing
-        self.base.write_from_buf().await?;
+        // Coalesce / vector / copy-and-write as appropriate.
+        self.base.send_message(&frames_to_send).await?;
 
         // Transition to awaiting reply (unless already there in relaxed mode)
         self.state = ReqState::AwaitingReply;
