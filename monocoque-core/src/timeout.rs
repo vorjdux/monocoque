@@ -25,10 +25,15 @@ where
             Ok(stream.read_exact(buf).await)
         }
         Some(d) if d.is_zero() => {
-            // Non-blocking mode
+            // A zero budget cannot complete an exact read. These helpers serve
+            // the handshake, where that means the step is out of time; report a
+            // timeout rather than pretend a non-blocking read is in progress.
+            // (User-facing RCVTIMEO=0 non-blocking recv is handled in
+            // SocketBase::read_raw, which returns WouldBlock after draining any
+            // already-buffered frames - it never reaches this helper.)
             Err(io::Error::new(
-                io::ErrorKind::WouldBlock,
-                "Non-blocking mode not yet implemented",
+                io::ErrorKind::TimedOut,
+                "Read operation timed out (zero timeout budget)",
             ))
         }
         Some(d) => {
@@ -62,10 +67,12 @@ where
             Ok(stream.write_all(buf).await)
         }
         Some(d) if d.is_zero() => {
-            // Non-blocking mode
+            // A zero budget cannot complete a full write. See the read helper:
+            // in the handshake this means the step is out of time. User-facing
+            // SNDTIMEO=0 non-blocking send is handled in SocketBase, not here.
             Err(io::Error::new(
-                io::ErrorKind::WouldBlock,
-                "Non-blocking mode not yet implemented",
+                io::ErrorKind::TimedOut,
+                "Write operation timed out (zero timeout budget)",
             ))
         }
         Some(d) => {

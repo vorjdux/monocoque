@@ -122,6 +122,18 @@ where
     /// reallocated after an actual timeout drops it.
     pub(crate) recv_timeout_scratch: BytesMut,
 
+    /// Absolute deadline for the logical recv currently in progress.
+    ///
+    /// `recv_timeout` bounds a whole `recv()` call, not each raw read. A single
+    /// logical recv may loop over several `read_raw` reads (a multipart message
+    /// arriving in pieces, or a partial frame); arming a fresh `timeout(dur, ..)`
+    /// per read would let a peer that trickles one byte just under the timeout
+    /// evade `recv_timeout` forever. Instead the first read of a logical recv
+    /// arms this deadline once, every read in that recv races the *remaining*
+    /// budget against it, and completing a message (`process_frame` returns a
+    /// no-more-frames frame) clears it so the next recv starts fresh.
+    pub(crate) recv_deadline: Option<Instant>,
+
     /// Reusable write buffer for outgoing data
     pub(crate) write_buf: BytesMut,
 
@@ -261,6 +273,7 @@ where
             // allocated no page until first use), so an idle socket holds none.
             read_buf: BytesMut::new(),
             recv_timeout_scratch: BytesMut::new(),
+            recv_deadline: None,
             write_buf: BytesMut::with_capacity(write_capacity),
             iov: Vec::new(),
             send_buffer: BytesMut::with_capacity(write_capacity),
@@ -307,6 +320,7 @@ where
             // allocated no page until first use), so an idle socket holds none.
             read_buf: BytesMut::new(),
             recv_timeout_scratch: BytesMut::new(),
+            recv_deadline: None,
             write_buf: BytesMut::with_capacity(write_capacity),
             iov: Vec::new(),
             send_buffer: BytesMut::with_capacity(write_capacity),
@@ -618,6 +632,23 @@ where
             // reused; on timeout the scratch is lost and the next read allocates.
             Some(dur) => {
                 use monocoque_core::rt::timeout;
+
+                // Arm the logical-recv deadline once; every read in this recv
+                // then races the time that remains, so the whole recv is bounded
+                // by `dur` however many reads a trickling peer forces.
+                let now = Instant::now();
+                let deadline = *self.recv_deadline.get_or_insert(now + dur);
+                let remaining = deadline.saturating_duration_since(now);
+                if remaining.is_zero() {
+                    // Budget spent, including a deadline left stale by a dropped
+                    // recv future: report the timeout and re-arm on the next call.
+                    self.recv_deadline = None;
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!("Receive operation timed out after {:?}", dur),
+                    ));
+                }
+
                 let mut scratch = std::mem::take(&mut self.recv_timeout_scratch);
                 if scratch.capacity() < read_size {
                     scratch = BytesMut::with_capacity(read_size);
@@ -631,16 +662,15 @@ where
                     .stream
                     .as_mut()
                     .expect("BUG: stream must be Some  -  checked is_none() above");
-                let BufResult(result, mut scratch) =
-                    match timeout(dur, AsyncRead::read(stream, scratch)).await {
-                        Ok(r) => r,
-                        Err(_) => {
-                            return Err(io::Error::new(
-                                io::ErrorKind::TimedOut,
-                                format!("Receive operation timed out after {:?}", dur),
-                            ));
-                        }
-                    };
+                let Ok(BufResult(result, mut scratch)) =
+                    timeout(remaining, AsyncRead::read(stream, scratch)).await
+                else {
+                    self.recv_deadline = None;
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!("Receive operation timed out after {:?}", dur),
+                    ));
+                };
                 let n = result?;
                 if n == 0 {
                     trace!("[SocketBase] Connection closed (EOF)");
@@ -1111,6 +1141,9 @@ where
             // Logical message complete: reset for the next one.
             self.msg_frame_count = 0;
             self.msg_byte_count = 0;
+            // The recv that produced this message is done; drop its deadline so
+            // the next recv arms a fresh one (see `recv_deadline`).
+            self.recv_deadline = None;
         }
         Ok(())
     }
@@ -2135,6 +2168,105 @@ mod tests {
             assert!(
                 base.recv_timeout_scratch.capacity() > 0,
                 "the scratch buffer should be retained for reuse after a successful timed read"
+            );
+
+            monocoque_core::rt::join(peer).await;
+        });
+    }
+
+    #[test]
+    fn recv_timeout_bounds_the_whole_logical_recv_not_each_read() {
+        use monocoque_core::rt::{LocalRuntime, TcpListener, TcpStream};
+        use std::time::{Duration, Instant};
+
+        LocalRuntime::new().unwrap().block_on(async {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+
+            // The peer trickles one byte every 100ms and never sends a full
+            // frame. Each individual read lands well inside the 300ms timeout,
+            // so a per-read timer (the old bug) would never fire and the recv
+            // would stall forever. The per-logical-recv deadline must fire ~300ms
+            // in regardless of how many reads the trickle forces.
+            let peer = monocoque_core::rt::spawn(async move {
+                let (mut s, _) = listener.accept().await.unwrap();
+                use compio_buf::BufResult;
+                use compio_io::AsyncWriteExt;
+                for _ in 0..40 {
+                    let BufResult(res, _) = s.write_all(vec![0xffu8]).await;
+                    // Stop once the reader is gone and the write fails.
+                    if res.is_err() {
+                        break;
+                    }
+                    monocoque_core::rt::sleep(Duration::from_millis(100)).await;
+                }
+            });
+
+            let stream = TcpStream::connect(addr).await.unwrap();
+            let opts = SocketOptions::default().with_recv_timeout(Duration::from_millis(300));
+            let mut base = SocketBase::new(stream, SocketType::Dealer, opts);
+
+            let start = Instant::now();
+            let err = loop {
+                match base.read_raw().await {
+                    Ok(0) => panic!("unexpected EOF while trickling"),
+                    // Got a trickle byte; keep reading, same as a socket recv
+                    // loop that has not yet decoded a whole message.
+                    Ok(_) => continue,
+                    Err(e) => break e,
+                }
+            };
+            let elapsed = start.elapsed();
+
+            assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+            // Bounded by the 300ms deadline plus scheduling slack, NOT by
+            // 40 * 100ms of trickling.
+            assert!(
+                elapsed < Duration::from_millis(1500),
+                "the logical recv should time out ~300ms in, but took {elapsed:?}"
+            );
+            assert!(
+                base.recv_deadline.is_none(),
+                "the deadline must be cleared after a timeout so the next recv re-arms"
+            );
+
+            // Drop the reader so the peer's next write fails and it stops.
+            drop(base);
+            monocoque_core::rt::join(peer).await;
+        });
+    }
+
+    #[test]
+    fn completing_a_message_clears_the_recv_deadline() {
+        use monocoque_core::rt::{LocalRuntime, TcpListener, TcpStream};
+        use std::time::{Duration, Instant};
+
+        LocalRuntime::new().unwrap().block_on(async {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let peer = monocoque_core::rt::spawn(async move {
+                let _ = listener.accept().await.unwrap();
+                monocoque_core::rt::sleep(Duration::from_millis(50)).await;
+            });
+
+            let stream = TcpStream::connect(addr).await.unwrap();
+            let opts = SocketOptions::default().with_recv_timeout(Duration::from_millis(100));
+            let mut base = SocketBase::new(stream, SocketType::Dealer, opts);
+
+            base.recv_deadline = Some(Instant::now() + Duration::from_millis(100));
+            // A non-final frame leaves the logical message in progress, so the
+            // deadline stays armed across the reads that assemble it.
+            base.account_multipart_frame(true, 4).unwrap();
+            assert!(
+                base.recv_deadline.is_some(),
+                "mid-message: the recv deadline must stay armed"
+            );
+            // The final frame completes the message; the deadline is dropped so
+            // the next recv starts a fresh budget.
+            base.account_multipart_frame(false, 4).unwrap();
+            assert!(
+                base.recv_deadline.is_none(),
+                "message complete: the recv deadline must be cleared"
             );
 
             monocoque_core::rt::join(peer).await;
