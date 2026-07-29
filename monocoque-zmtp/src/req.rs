@@ -216,24 +216,25 @@ where
 
         trace!("[REQ] Sending {} frames", msg.len());
 
-        // If correlation is enabled, prepend request ID as an envelope
-        let frames_to_send = if self.base.options.req_correlate {
-            // Increment request ID
-            self.request_id = self.request_id.wrapping_add(1);
-            self.expected_request_id = Some(self.request_id);
-
-            trace!(
-                "[REQ] Correlation enabled, prepending request ID: {}",
-                self.request_id
-            );
-
-            // Prepend request ID as first frame (4 bytes, big-endian)
-            let mut correlated_msg = Vec::with_capacity(msg.len() + 1);
-            correlated_msg.push(Bytes::copy_from_slice(&self.request_id.to_be_bytes()));
-            correlated_msg.extend(msg);
-            correlated_msg
-        } else {
-            msg
+        // Build the REQ envelope: an optional 4-byte correlation ID, then the
+        // empty delimiter frame the ZMTP REQ/REP contract requires, then the
+        // body. A REP peer (including libzmq) strips the envelope up to and
+        // including the empty frame and re-prepends it on the reply; without the
+        // delimiter, libzmq REP interop is broken.
+        let frames_to_send = {
+            let mut out = Vec::with_capacity(msg.len() + 2);
+            if self.base.options.req_correlate {
+                self.request_id = self.request_id.wrapping_add(1);
+                self.expected_request_id = Some(self.request_id);
+                trace!(
+                    "[REQ] Correlation enabled, prepending request ID: {}",
+                    self.request_id
+                );
+                out.push(Bytes::copy_from_slice(&self.request_id.to_be_bytes()));
+            }
+            out.push(Bytes::new()); // empty delimiter
+            out.extend(msg);
+            out
         };
 
         // Encode message into write_buf (with CURVE encryption if active)
@@ -307,8 +308,11 @@ where
                             let msg: Vec<Bytes> = self.frames.drain(..).collect();
                             trace!("[REQ] Received {} frames", msg.len());
 
-                            // If correlation is enabled, validate request ID
-                            let validated_msg = if self.base.options.req_correlate {
+                            // Validate/strip the correlation ID (if enabled),
+                            // then strip the empty delimiter frame the REP peer
+                            // echoes back, leaving just the reply body.
+                            let mut msg = msg;
+                            if self.base.options.req_correlate {
                                 if msg.is_empty() {
                                     return Err(io::Error::new(
                                         io::ErrorKind::InvalidData,
@@ -351,13 +355,14 @@ where
                                     trace!("[REQ] Correlation ID validated successfully");
                                 }
 
-                                // Strip correlation frame and return the remaining owned frames.
-                                let mut msg = msg;
                                 msg.remove(0);
-                                msg
-                            } else {
-                                msg
-                            };
+                            }
+
+                            // Strip the empty delimiter the REP peer echoed.
+                            if msg.first().is_some_and(bytes::Bytes::is_empty) {
+                                msg.remove(0);
+                            }
+                            let validated_msg = msg;
 
                             self.state = ReqState::Idle;
                             self.expected_request_id = None;
