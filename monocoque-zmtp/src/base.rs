@@ -169,7 +169,22 @@ where
 
     /// Post-handshake CURVE cipher, if CURVE security is active.
     pub(crate) curve_cipher: Option<crate::security::curve::CurveMessageCipher>,
+
+    /// Frames accumulated so far in the current logical (multipart) message.
+    /// Reset when the MORE bit clears. Bounds an attacker who streams an endless
+    /// run of MORE frames (`\x01\x01...`) to grow memory without bound, which the
+    /// per-frame size cap does not catch.
+    pub(crate) msg_frame_count: usize,
+    /// Aggregate payload bytes accumulated in the current logical message.
+    pub(crate) msg_byte_count: usize,
 }
+
+/// Maximum number of frames in one logical multipart message before the peer is
+/// rejected. Legitimate multipart messages carry a handful of frames; a message
+/// past this bound is treated as abusive.
+const MAX_FRAMES_PER_MESSAGE: usize = 8192;
+/// Maximum aggregate payload size of one logical multipart message.
+const MAX_MESSAGE_AGGREGATE_BYTES: usize = 256 * 1024 * 1024;
 
 pub fn append_zmtp_cmd_frame(buf: &mut BytesMut, body: &[u8]) {
     let len = body.len();
@@ -249,6 +264,8 @@ where
             ping_sent_at: None,
             awaiting_pong: false,
             curve_cipher: None,
+            msg_frame_count: 0,
+            msg_byte_count: 0,
         }
     }
 
@@ -292,6 +309,8 @@ where
             ping_sent_at: None,
             awaiting_pong: false,
             curve_cipher: None,
+            msg_frame_count: 0,
+            msg_byte_count: 0,
         }
     }
 
@@ -978,6 +997,38 @@ where
         Ok(self.send_buffer.len() >= self.options.write_coalesce_threshold)
     }
 
+    /// Account one data frame against the current logical message's caps.
+    ///
+    /// Enforces a bound on the frame count and aggregate size of a single
+    /// multipart message. Without this a peer can stream MORE frames forever
+    /// (`\x01\x01...`) and grow the socket's accumulator without bound; the
+    /// per-frame size cap does not catch it. On exceed the connection is failed.
+    /// The counters reset when a message completes (the MORE bit clears).
+    fn account_multipart_frame(&mut self, more: bool, payload_len: usize) -> io::Result<()> {
+        self.msg_frame_count += 1;
+        self.msg_byte_count = self.msg_byte_count.saturating_add(payload_len);
+
+        if self.msg_frame_count > MAX_FRAMES_PER_MESSAGE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "multipart message exceeds the per-message frame-count cap",
+            ));
+        }
+        if self.msg_byte_count > MAX_MESSAGE_AGGREGATE_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "multipart message exceeds the per-message aggregate-size cap",
+            ));
+        }
+
+        if !more {
+            // Logical message complete: reset for the next one.
+            self.msg_frame_count = 0;
+            self.msg_byte_count = 0;
+        }
+        Ok(())
+    }
+
     /// Decode the next frame from the receive buffer, handling CURVE decryption and PING/PONG.
     pub fn process_frame(&mut self) -> io::Result<FrameResult> {
         use crate::security::curve::CurveMessageCipher;
@@ -997,6 +1048,7 @@ where
                             cipher.decrypt_frame(&frame.payload).map_err(|e| {
                                 io::Error::new(io::ErrorKind::InvalidData, e.to_string())
                             })?;
+                        self.account_multipart_frame(more, payload.len())?;
                         return Ok(FrameResult::Data(more, payload));
                     }
                     // PING/PONG
@@ -1017,7 +1069,9 @@ where
                             "unexpected plaintext data frame in CURVE mode",
                         ));
                     }
-                    Ok(FrameResult::Data(frame.more(), frame.payload))
+                    let more = frame.more();
+                    self.account_multipart_frame(more, frame.payload.len())?;
+                    Ok(FrameResult::Data(more, frame.payload))
                 }
             }
         }
@@ -1929,5 +1983,35 @@ mod tests {
             io::ErrorKind::NotConnected,
         )
         .await;
+    }
+
+    #[test]
+    fn process_frame_caps_multipart_frame_count() {
+        let stream = ScriptedWriteStream::new(Vec::<WriteStep>::new());
+        let mut base = SocketBase::new(stream, SocketType::Dealer, SocketOptions::default());
+
+        // Feed more MORE-frames than the cap allows. Each is a short data frame
+        // with the MORE bit set: flags=0x01, length=1, payload 'x'.
+        let more_frame = Bytes::from_static(b"\x01\x01x");
+        for _ in 0..=MAX_FRAMES_PER_MESSAGE {
+            base.recv.push(more_frame.clone());
+        }
+
+        let mut accepted = 0usize;
+        let err = loop {
+            match base.process_frame() {
+                Ok(FrameResult::Data(_, _)) => accepted += 1,
+                Ok(FrameResult::NeedMore) => panic!("ran out of data before the cap triggered"),
+                Ok(_) => {}
+                Err(e) => break e,
+            }
+        };
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            accepted, MAX_FRAMES_PER_MESSAGE,
+            "the decoder should accept exactly {MAX_FRAMES_PER_MESSAGE} frames of one \
+             logical message, then reject the next"
+        );
     }
 }

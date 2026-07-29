@@ -24,22 +24,19 @@ fn opts() -> SocketOptions {
 // A peer that streams an unbounded number of MORE frames in one logical message
 // must be rejected or have its connection closed, NOT accumulated without bound.
 //
-// STATUS: CURRENTLY UNENFORCED. The DEALER/PULL decode loop
-// (monocoque-zmtp/src/dealer.rs, base.rs) pushes every framed payload into an
-// unbounded `frames` accumulator and only completes the message when the MORE
-// bit clears; there is a per-FRAME size cap (`with_max_frame_size`) but no cap on
-// the frame COUNT or the aggregate size of one logical multipart message. So a
-// single message with a huge frame count is accumulated in full. This test
-// asserts the desired cap and is therefore `#[ignore]`d until the Phase 1 fix.
+// STATUS: ENFORCED. base.rs::account_multipart_frame caps the frame count and
+// aggregate size of a single logical multipart message at the shared decode
+// point (process_frame): a peer that streams MORE frames past the cap fails the
+// connection instead of growing the accumulator without bound. This test is now
+// active.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Frames in the oversized probe message. Far above any sane per-message cap.
 const PROBE_FRAMES: usize = 50_000;
-/// A sane ceiling the reworked decoder should enforce on a single message.
+/// A sane ceiling the decoder should enforce on a single message.
 const SANE_FRAME_CAP: usize = 1024;
 
 #[test]
-#[ignore = "guards multipart frame-count/aggregate-size cap; currently unenforced (unbounded frames accumulator in the ZMTP decode loop), activate when the Phase 1 fix lands"]
 fn multipart_frame_count_is_capped() {
     let (port_tx, port_rx) = mpsc::channel::<u16>();
 
