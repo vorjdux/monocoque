@@ -702,13 +702,22 @@ impl PubSocket {
     ///
     /// The count is the number of CPU cores, clamped to the range
     /// `[2, DEFAULT_MAX_WORKERS]`.
-    pub fn new() -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a worker thread cannot be spawned (OS resource
+    /// exhaustion). Previously this panicked.
+    pub fn new() -> io::Result<Self> {
         let workers = num_cpus::get().clamp(2, Self::DEFAULT_MAX_WORKERS);
         Self::with_workers(workers)
     }
 
     /// Create with a specific number of worker threads and default options.
-    pub fn with_workers(worker_count: usize) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a worker thread cannot be spawned.
+    pub fn with_workers(worker_count: usize) -> io::Result<Self> {
         Self::with_workers_opts(worker_count, SocketOptions::default())
     }
 
@@ -717,7 +726,11 @@ impl PubSocket {
     /// Worker channels are bounded by `options.send_hwm`. When a worker's channel
     /// is full (the worker is slow/blocked), broadcast messages for that worker are
     /// silently dropped and counted in `drop_count()`.
-    pub fn with_workers_opts(worker_count: usize, options: SocketOptions) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a worker thread cannot be spawned.
+    pub fn with_workers_opts(worker_count: usize, options: SocketOptions) -> io::Result<Self> {
         let hwm = options.send_hwm;
         debug!(
             "[PUB] Starting {} worker threads (channel HWM={})",
@@ -734,14 +747,13 @@ impl PubSocket {
             let worker_count = Arc::clone(&sub_count);
             let handle = thread::Builder::new()
                 .name(format!("pub-worker-{}", i))
-                .spawn(move || worker_thread(i, rx, worker_count))
-                .expect("Failed to spawn worker thread");
+                .spawn(move || worker_thread(i, rx, worker_count))?;
             workers.push(tx);
             worker_handles.push(handle);
             worker_sub_counts.push(sub_count);
         }
 
-        Self {
+        Ok(Self {
             workers,
             worker_handles,
             worker_sub_counts,
@@ -754,7 +766,7 @@ impl PubSocket {
             subscriber_count: 0,
             is_poisoned: false,
             drop_count: Arc::new(AtomicU64::new(0)),
-        }
+        })
     }
 
     /// Accept a new subscriber connection
@@ -1014,12 +1026,6 @@ impl PubSocket {
     #[inline]
     pub const fn socket_type(&self) -> SocketType {
         SocketType::Pub
-    }
-}
-
-impl Default for PubSocket {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

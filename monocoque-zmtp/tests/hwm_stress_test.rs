@@ -22,7 +22,7 @@ use std::time::Duration;
 
 #[test]
 fn test_pub_drop_count_starts_at_zero() {
-    let pub_sock = InternalPub::with_workers(1);
+    let pub_sock = InternalPub::with_workers(1).unwrap();
     assert_eq!(pub_sock.drop_count(), 0);
 }
 
@@ -53,7 +53,7 @@ fn test_pub_hwm_drops_with_slow_subscriber() {
                 addr_tx.send(listener.local_addr().unwrap()).unwrap();
 
                 let opts = SocketOptions::default().with_send_hwm(HWM);
-                let mut pub_sock = InternalPub::with_workers_opts(1, opts);
+                let mut pub_sock = InternalPub::with_workers_opts(1, opts).unwrap();
                 pub_sock.accept_subscriber(&listener).await.unwrap();
 
                 // Brief pause so subscriber's subscription bytes are processed.

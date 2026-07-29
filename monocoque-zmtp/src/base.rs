@@ -220,8 +220,9 @@ fn jittered_backoff(delay: std::time::Duration) -> std::time::Duration {
         return delay;
     }
     // Backoff delays are milliseconds to seconds, so the nanosecond count fits
-    // comfortably in u64.
-    let half_ns = (delay.as_nanos() / 2) as u64;
+    // in u64; use a checked conversion rather than a truncating cast so an
+    // absurdly large delay saturates instead of wrapping.
+    let half_ns = u64::try_from(delay.as_nanos() / 2).unwrap_or(u64::MAX);
     std::time::Duration::from_nanos(half_ns + rand::thread_rng().gen_range(0..=half_ns))
 }
 

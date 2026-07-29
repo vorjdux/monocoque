@@ -95,6 +95,14 @@ impl FromStr for Endpoint {
                 Err(EndpointError::InvalidInprocName(
                     "inproc name cannot be empty".to_string(),
                 ))
+            } else if name.chars().any(char::is_control) {
+                // Match the inproc transport's own validation
+                // (inproc::validate_and_extract_name): reject NUL and other
+                // control characters so a name cannot smuggle them past this
+                // parser and diverge from what the transport accepts.
+                Err(EndpointError::InvalidInprocName(
+                    "inproc name cannot contain control characters".to_string(),
+                ))
             } else {
                 Ok(Self::Inproc(name.to_string()))
             }
@@ -189,5 +197,17 @@ mod tests {
     fn test_invalid_inproc_empty() {
         let result = Endpoint::parse("inproc://");
         assert!(matches!(result, Err(EndpointError::InvalidInprocName(_))));
+    }
+
+    #[test]
+    fn test_invalid_inproc_control_characters() {
+        // Must reject the same inputs the inproc transport rejects, including an
+        // embedded NUL, so the two cannot diverge.
+        for bad in ["inproc://tenant\0shadow", "inproc://a\tb", "inproc://x\ny"] {
+            assert!(
+                matches!(Endpoint::parse(bad), Err(EndpointError::InvalidInprocName(_))),
+                "control character in {bad:?} should be rejected"
+            );
+        }
     }
 }

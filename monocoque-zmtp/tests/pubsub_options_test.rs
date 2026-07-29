@@ -40,7 +40,7 @@ fn test_sub_options_subscriptions_are_applied() {
                 let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
                 addr_tx.send(listener.local_addr().unwrap()).unwrap();
 
-                let mut pub_sock = PubSocket::new();
+                let mut pub_sock = PubSocket::new().unwrap();
                 pub_sock.accept_subscriber(&listener).await.unwrap();
 
                 // Wait for SUB to finish sending subscription bytes.
@@ -124,7 +124,7 @@ fn test_sub_options_multiple_subscriptions() {
                 let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
                 addr_tx.send(listener.local_addr().unwrap()).unwrap();
 
-                let mut pub_sock = PubSocket::new();
+                let mut pub_sock = PubSocket::new().unwrap();
                 pub_sock.accept_subscriber(&listener).await.unwrap();
 
                 sub_ready_rx.recv().unwrap();
@@ -215,7 +215,7 @@ fn test_pub_broadcast_coalescing_burst() {
                 let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
                 addr_tx.send(listener.local_addr().unwrap()).unwrap();
 
-                let mut pub_sock = PubSocket::new();
+                let mut pub_sock = PubSocket::new().unwrap();
                 pub_sock.accept_subscriber(&listener).await.unwrap();
 
                 sub_ready_rx.recv().unwrap();

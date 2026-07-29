@@ -45,7 +45,7 @@ impl PubSocket {
     pub async fn bind(addr: impl monocoque_core::rt::ToSocketAddrs) -> io::Result<Self> {
         let listener = TcpListener::bind(addr).await?;
         Ok(Self {
-            inner: InternalPub::new(),
+            inner: InternalPub::new()?,
             listener,
             monitor: None,
         })
@@ -58,7 +58,7 @@ impl PubSocket {
     ) -> io::Result<Self> {
         let listener = TcpListener::bind(addr).await?;
         Ok(Self {
-            inner: InternalPub::with_workers(worker_count),
+            inner: InternalPub::with_workers(worker_count)?,
             listener,
             monitor: None,
         })

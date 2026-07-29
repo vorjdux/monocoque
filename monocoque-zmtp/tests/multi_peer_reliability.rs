@@ -46,7 +46,7 @@ fn test_pubsub_fanout_distinct_topics() {
                     .unwrap();
                 addr_tx.send(listener.local_addr().unwrap()).unwrap();
 
-                let mut pub_sock = InternalPub::with_workers(2);
+                let mut pub_sock = InternalPub::with_workers(2).unwrap();
                 for _ in 0..N {
                     pub_sock.accept_subscriber(&listener).await.unwrap();
                 }
@@ -166,7 +166,7 @@ fn test_pubsub_fanout_overlapping_topics() {
                     .unwrap();
                 addr_tx.send(listener.local_addr().unwrap()).unwrap();
 
-                let mut pub_sock = InternalPub::with_workers(1);
+                let mut pub_sock = InternalPub::with_workers(1).unwrap();
                 pub_sock.accept_subscriber(&listener).await.unwrap();
                 pub_sock.accept_subscriber(&listener).await.unwrap();
 
