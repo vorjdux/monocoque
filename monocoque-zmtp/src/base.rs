@@ -115,6 +115,13 @@ where
     /// Reusable read slab; `take_read_buffer` carves each read off its tail.
     pub(crate) read_buf: BytesMut,
 
+    /// Dedicated scratch buffer for reads that use a recv timeout. A timed read
+    /// that elapses loses its buffer inside the cancelled future, so it must not
+    /// come from the shared `read_buf` slab (that would waste the slab on every
+    /// timeout). This buffer is reused across successful timed reads and only
+    /// reallocated after an actual timeout drops it.
+    pub(crate) recv_timeout_scratch: BytesMut,
+
     /// Reusable write buffer for outgoing data
     pub(crate) write_buf: BytesMut,
 
@@ -253,6 +260,7 @@ where
             // Lazily allocated on the first read (matches the old arena, which
             // allocated no page until first use), so an idle socket holds none.
             read_buf: BytesMut::new(),
+            recv_timeout_scratch: BytesMut::new(),
             write_buf: BytesMut::with_capacity(write_capacity),
             iov: Vec::new(),
             send_buffer: BytesMut::with_capacity(write_capacity),
@@ -298,6 +306,7 @@ where
             // Lazily allocated on the first read (matches the old arena, which
             // allocated no page until first use), so an idle socket holds none.
             read_buf: BytesMut::new(),
+            recv_timeout_scratch: BytesMut::new(),
             write_buf: BytesMut::with_capacity(write_capacity),
             iov: Vec::new(),
             send_buffer: BytesMut::with_capacity(write_capacity),
@@ -555,54 +564,95 @@ where
             ));
         }
 
-        // SAFETY: `buf` is passed straight to `read` below; on every path that
-        // exposes bytes it is first truncated to `n`, and the error/EOF paths
-        // drop it without inspecting its contents.
-        let buf = unsafe { take_read_buffer(&mut self.read_buf, self.options.read_buffer_size()) };
+        let read_size = self.options.read_buffer_size();
 
-        // Get stream reference only for I/O
-        let stream = self
-            .stream
-            .as_mut()
-            .expect("BUG: stream must be Some  -  checked is_none() above");
+        let n = match self.options.recv_timeout {
+            // No timeout: carve from the shared read slab and freeze in place.
+            None => {
+                // SAFETY: `buf` is passed straight to `read`; on the path that
+                // exposes bytes it is first truncated to `n`, and the EOF/error
+                // paths drop it without inspecting its contents.
+                let buf = unsafe { take_read_buffer(&mut self.read_buf, read_size) };
+                let stream = self
+                    .stream
+                    .as_mut()
+                    .expect("BUG: stream must be Some  -  checked is_none() above");
+                let BufResult(result, mut buf) = AsyncRead::read(stream, buf).await;
+                let n = result?;
+                if n == 0 {
+                    trace!("[SocketBase] Connection closed (EOF)");
+                    self.stream = None;
+                    return Ok(0);
+                }
 
-        // Apply recv timeout
-        let BufResult(result, mut buf) = match self.options.recv_timeout {
-            None => AsyncRead::read(stream, buf).await,
+                // Trim to what was actually read, then hand the unused tail of
+                // the carve back to the slab so slab consumption tracks bytes
+                // read, not the full carve. `reclaimed` (bytes past `n`) and
+                // `self.read_buf` (the rest of the slab) are contiguous in the
+                // same allocation, so `unsplit` rejoins them with no copy and the
+                // next read reuses that space. This retires the old
+                // per-small-frame copy_from_slice: freezing is zero-copy on every
+                // size and the slab is not wasted on short reads.
+                buf.truncate(n);
+                let mut reclaimed = buf.split_off(n);
+                // BytesMut::unsplit discards an empty `self` (`*self = other`),
+                // and `reclaimed` has len 0, so give it a scratch len covering
+                // its capacity first or the tail is dropped and the slab is not
+                // reclaimed. SAFETY: uninitialized scratch that take_read_buffer
+                // set_len's again before the next read overwrites it; never read
+                // or exposed. `reclaimed` and `self.read_buf` are contiguous, so
+                // unsplit merges without copying.
+                unsafe {
+                    reclaimed.set_len(reclaimed.capacity());
+                }
+                reclaimed.unsplit(std::mem::take(&mut self.read_buf));
+                self.read_buf = reclaimed;
+                self.recv.push(buf.freeze());
+                n
+            }
+
+            // Timeout: read into a dedicated scratch buffer, never the shared
+            // slab. A read that elapses loses its buffer inside the cancelled
+            // future; keeping that off the slab means a timeout never wastes the
+            // slab. On success the bytes are copied into recv and the scratch is
+            // reused; on timeout the scratch is lost and the next read allocates.
             Some(dur) => {
                 use monocoque_core::rt::timeout;
-                match timeout(dur, AsyncRead::read(stream, buf)).await {
-                    Ok(result) => result,
-                    Err(_) => {
-                        return Err(io::Error::new(
-                            io::ErrorKind::TimedOut,
-                            format!("Receive operation timed out after {:?}", dur),
-                        ));
-                    }
+                let mut scratch = std::mem::take(&mut self.recv_timeout_scratch);
+                if scratch.capacity() < read_size {
+                    scratch = BytesMut::with_capacity(read_size);
                 }
+                // SAFETY: uninitialized scratch; the read overwrites [0..n] and
+                // only [0..n] is copied out below.
+                unsafe {
+                    scratch.set_len(read_size);
+                }
+                let stream = self
+                    .stream
+                    .as_mut()
+                    .expect("BUG: stream must be Some  -  checked is_none() above");
+                let BufResult(result, mut scratch) =
+                    match timeout(dur, AsyncRead::read(stream, scratch)).await {
+                        Ok(r) => r,
+                        Err(_) => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::TimedOut,
+                                format!("Receive operation timed out after {:?}", dur),
+                            ));
+                        }
+                    };
+                let n = result?;
+                if n == 0 {
+                    trace!("[SocketBase] Connection closed (EOF)");
+                    self.stream = None;
+                    return Ok(0);
+                }
+                self.recv.push(Bytes::copy_from_slice(&scratch[..n]));
+                scratch.clear();
+                self.recv_timeout_scratch = scratch;
+                n
             }
         };
-
-        let n = result?;
-
-        if n == 0 {
-            // EOF - mark stream as disconnected
-            trace!("[SocketBase] Connection closed (EOF)");
-            self.stream = None;
-            return Ok(0);
-        }
-
-        // Push bytes into recv buffer (trim to what was actually read).
-        // Small frames are copied out of the shared 64 KiB read slab so a
-        // single lagging frame does not pin the whole slab by refcount (see
-        // io::take_read_buffer / COPY_OUT_THRESHOLD). Larger frames stay
-        // zero-copy via freeze().
-        buf.truncate(n);
-        if n < monocoque_core::io::COPY_OUT_THRESHOLD {
-            self.recv.push(Bytes::copy_from_slice(&buf));
-        } else {
-            self.recv.push(buf.freeze());
-        }
 
         // Update heartbeat idle timer: data was received so we are not idle
         self.note_recv();
@@ -2014,5 +2064,45 @@ mod tests {
             "the decoder should accept exactly {MAX_FRAMES_PER_MESSAGE} frames of one \
              logical message, then reject the next"
         );
+    }
+
+    #[test]
+    fn recv_timeout_reads_via_scratch_without_touching_the_slab() {
+        use monocoque_core::rt::{LocalRuntime, TcpListener, TcpStream};
+        use std::time::Duration;
+
+        LocalRuntime::new().unwrap().block_on(async {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+
+            let peer = monocoque_core::rt::spawn(async move {
+                let (mut s, _) = listener.accept().await.unwrap();
+                use compio_io::AsyncWriteExt;
+                let _ = s.write_all(b"hello").await;
+                // Keep the connection open so the reader sees the bytes.
+                monocoque_core::rt::sleep(Duration::from_millis(300)).await;
+            });
+
+            let stream = TcpStream::connect(addr).await.unwrap();
+            let opts = SocketOptions::default().with_recv_timeout(Duration::from_secs(2));
+            let mut base = SocketBase::new(stream, SocketType::Dealer, opts);
+
+            let slab_cap_before = base.read_buf.capacity();
+            let n = base.read_raw().await.unwrap();
+            assert_eq!(n, 5, "should read the 5 bytes the peer sent");
+
+            // The recv-timeout path used the dedicated scratch, never the slab.
+            assert_eq!(
+                base.read_buf.capacity(),
+                slab_cap_before,
+                "a recv-timeout read must not consume the shared read slab"
+            );
+            assert!(
+                base.recv_timeout_scratch.capacity() > 0,
+                "the scratch buffer should be retained for reuse after a successful timed read"
+            );
+
+            monocoque_core::rt::join(peer).await;
+        });
     }
 }
