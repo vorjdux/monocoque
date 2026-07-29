@@ -333,6 +333,14 @@ name = "interop_curve"
 required-features = ["zmq"]
 
 [[test]]
+name = "interop_plain"
+required-features = ["zmq"]
+
+[[test]]
+name = "interop_stream"
+required-features = ["zmq"]
+
+[[test]]
 name = "interop_req_rep"
 required-features = ["zmq"]
 

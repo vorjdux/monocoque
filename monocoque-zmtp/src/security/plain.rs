@@ -49,6 +49,66 @@ const PLAIN_HELLO: &[u8] = b"\x05HELLO";
 const PLAIN_WELCOME: &[u8] = b"\x07WELCOME";
 const PLAIN_ERROR: &[u8] = b"\x05ERROR";
 const TRAILING_BYTE_CHECK_TIMEOUT: Duration = Duration::from_millis(10);
+/// Upper bound on a PLAIN command body (HELLO/WELCOME/ERROR are tiny; two
+/// length-prefixed credentials are at most ~512 bytes).
+const MAX_PLAIN_CMD_BODY: usize = 512;
+
+/// Parse a PLAIN HELLO command body: `\x05HELLO <ulen><username> <plen><password>`.
+fn parse_plain_hello(body: &[u8]) -> Result<(String, String), ZmtpError> {
+    if !body.starts_with(PLAIN_HELLO) {
+        return Err(ZmtpError::Protocol);
+    }
+    let mut off = PLAIN_HELLO.len();
+
+    let ulen = *body.get(off).ok_or(ZmtpError::Protocol)? as usize;
+    off += 1;
+    let uend = off
+        .checked_add(ulen)
+        .filter(|&e| e <= body.len())
+        .ok_or(ZmtpError::Protocol)?;
+    let username = String::from_utf8(body[off..uend].to_vec()).map_err(|_| ZmtpError::Protocol)?;
+    off = uend;
+
+    let plen = *body.get(off).ok_or(ZmtpError::Protocol)? as usize;
+    off += 1;
+    let pend = off
+        .checked_add(plen)
+        .filter(|&e| e <= body.len())
+        .ok_or(ZmtpError::Protocol)?;
+    let password = String::from_utf8(body[off..pend].to_vec()).map_err(|_| ZmtpError::Protocol)?;
+
+    Ok((username, password))
+}
+
+/// Read a framed PLAIN HELLO command and return the parsed credentials.
+async fn read_plain_hello<S>(
+    stream: &mut S,
+    timeout: Option<Duration>,
+) -> Result<(String, String), ZmtpError>
+where
+    S: AsyncRead + Unpin,
+{
+    let body = crate::security::curve::read_zmtp_cmd(stream, timeout, MAX_PLAIN_CMD_BODY).await?;
+    parse_plain_hello(&body)
+}
+
+/// Write a PLAIN command body wrapped in a ZMTP command frame.
+async fn write_plain_cmd<S>(
+    stream: &mut S,
+    body: &[u8],
+    timeout: Option<Duration>,
+) -> Result<(), ZmtpError>
+where
+    S: AsyncWrite + Unpin,
+{
+    use compio_buf::BufResult;
+    use monocoque_core::timeout::write_all_with_timeout;
+    let mut framed = BytesMut::new();
+    crate::base::append_zmtp_cmd_frame(&mut framed, body);
+    let BufResult(result, _) = write_all_with_timeout(stream, framed.freeze().to_vec(), timeout).await?;
+    result?;
+    Ok(())
+}
 
 /// PLAIN client credentials
 #[derive(Clone)]
@@ -198,7 +258,7 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     use compio_buf::BufResult;
-    use monocoque_core::timeout::{read_exact_with_timeout, write_all_with_timeout};
+    use monocoque_core::timeout::write_all_with_timeout;
 
     debug!("[PLAIN CLIENT] Starting PLAIN authentication");
 
@@ -222,44 +282,30 @@ where
     hello.extend_from_slice(&[password_bytes.len() as u8]);
     hello.extend_from_slice(password_bytes);
 
-    // Send HELLO
-    let buf_result = write_all_with_timeout(stream, hello.freeze().to_vec(), timeout).await?;
+    // Send HELLO wrapped in a ZMTP command frame ([0x04][len][body]) so a real
+    // libzmq peer can parse it. (Previously the raw command body was written
+    // with no frame header, which only interoperated with monocoque itself.)
+    let mut framed = BytesMut::new();
+    crate::base::append_zmtp_cmd_frame(&mut framed, &hello);
+    let buf_result = write_all_with_timeout(stream, framed.freeze().to_vec(), timeout).await?;
     let BufResult(result, _) = buf_result;
     result?;
 
-    // Read the first byte to determine response type (command name length)
-    let len_buf = vec![0u8; 1];
-    let BufResult(res, len_buf) = read_exact_with_timeout(stream, len_buf, timeout).await?;
-    res?;
-    let cmd_len = len_buf[0] as usize;
-    if cmd_len == 0 || cmd_len > 32 {
+    // Read the response as a framed ZMTP command and match on its body.
+    let body =
+        crate::security::curve::read_zmtp_cmd(stream, timeout, MAX_PLAIN_CMD_BODY).await?;
+    if body.starts_with(PLAIN_WELCOME) {
+        debug!("[PLAIN CLIENT] Authentication successful");
+        Ok(())
+    } else if body.starts_with(PLAIN_ERROR) {
+        warn!("[PLAIN CLIENT] Authentication failed");
+        Err(ZmtpError::AuthenticationFailed)
+    } else {
         warn!(
-            "[PLAIN CLIENT] Invalid PLAIN response command length: {}",
-            cmd_len
+            "[PLAIN CLIENT] Invalid PLAIN response command: {:?}",
+            String::from_utf8_lossy(&body)
         );
-        return Err(ZmtpError::Protocol);
-    }
-    // Read command name
-    let cmd_buf = vec![0u8; cmd_len];
-    let BufResult(res, cmd_buf) = read_exact_with_timeout(stream, cmd_buf, timeout).await?;
-    res?;
-
-    match cmd_buf.as_slice() {
-        b"WELCOME" => {
-            debug!("[PLAIN CLIENT] Authentication successful");
-            Ok(())
-        }
-        b"ERROR" => {
-            warn!("[PLAIN CLIENT] Authentication failed");
-            Err(ZmtpError::AuthenticationFailed)
-        }
-        other => {
-            warn!(
-                "[PLAIN CLIENT] Invalid PLAIN response command: {:?}",
-                String::from_utf8_lossy(other)
-            );
-            Err(ZmtpError::Protocol)
-        }
+        Err(ZmtpError::Protocol)
     }
 }
 
@@ -277,52 +323,13 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
     H: PlainAuthHandler,
 {
-    use compio_buf::BufResult;
-    use monocoque_core::timeout::{read_exact_with_timeout, write_all_with_timeout};
-
     debug!(
         "[PLAIN SERVER] Waiting for PLAIN HELLO from {}",
         peer_address
     );
 
-    // Read command header (6 bytes: \x05HELLO)
-    let header = vec![0u8; 6];
-    let buf_result = read_exact_with_timeout(stream, header, timeout).await?;
-    let BufResult(result, header) = buf_result;
-    result?;
-
-    if &header[..] != PLAIN_HELLO {
-        warn!("[PLAIN SERVER] Invalid PLAIN command header");
-        return Err(ZmtpError::Protocol);
-    }
-
-    // Read username length
-    let len_buf = vec![0u8; 1];
-    let buf_result = read_exact_with_timeout(stream, len_buf, timeout).await?;
-    let BufResult(result, len_buf) = buf_result;
-    result?;
-    let username_len = len_buf[0] as usize;
-
-    // Read username
-    let username_buf = vec![0u8; username_len];
-    let buf_result = read_exact_with_timeout(stream, username_buf, timeout).await?;
-    let BufResult(result, username_buf) = buf_result;
-    result?;
-    let username = String::from_utf8(username_buf).map_err(|_| ZmtpError::Protocol)?;
-
-    // Read password length
-    let len_buf = vec![0u8; 1];
-    let buf_result = read_exact_with_timeout(stream, len_buf, timeout).await?;
-    let BufResult(result, len_buf) = buf_result;
-    result?;
-    let password_len = len_buf[0] as usize;
-
-    // Read password
-    let password_buf = vec![0u8; password_len];
-    let buf_result = read_exact_with_timeout(stream, password_buf, timeout).await?;
-    let BufResult(result, password_buf) = buf_result;
-    result?;
-    let password = String::from_utf8(password_buf).map_err(|_| ZmtpError::Protocol)?;
+    // Read the framed HELLO command and parse the credentials.
+    let (username, password) = read_plain_hello(stream, timeout).await?;
     reject_immediately_available_trailing_bytes(stream, TRAILING_BYTE_CHECK_TIMEOUT).await?;
 
     debug!("[PLAIN SERVER] Received credentials");
@@ -338,22 +345,12 @@ where
                 user_id
             );
 
-            // Send WELCOME
-            let buf_result =
-                write_all_with_timeout(stream, PLAIN_WELCOME.to_vec(), timeout).await?;
-            let BufResult(result, _) = buf_result;
-            result?;
-
+            write_plain_cmd(stream, PLAIN_WELCOME, timeout).await?;
             Ok(user_id)
         }
         Err(reason) => {
             warn!("[PLAIN SERVER] Authentication failed: {}", reason);
-
-            // Send ERROR
-            let buf_result = write_all_with_timeout(stream, PLAIN_ERROR.to_vec(), timeout).await?;
-            let BufResult(result, _) = buf_result;
-            result?;
-
+            write_plain_cmd(stream, PLAIN_ERROR, timeout).await?;
             Err(ZmtpError::AuthenticationFailed)
         }
     }
@@ -373,52 +370,14 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     use crate::security::zap_client::ZapClient;
-    use compio_buf::BufResult;
-    use monocoque_core::timeout::{read_exact_with_timeout, write_all_with_timeout};
 
     debug!(
         "[PLAIN SERVER ZAP] Waiting for PLAIN HELLO from {}",
         peer_address
     );
 
-    // Read command header (6 bytes: \x05HELLO)
-    let header = vec![0u8; 6];
-    let buf_result = read_exact_with_timeout(stream, header, timeout).await?;
-    let BufResult(result, header) = buf_result;
-    result?;
-
-    if &header[..] != PLAIN_HELLO {
-        warn!("[PLAIN SERVER ZAP] Invalid PLAIN command header");
-        return Err(ZmtpError::Protocol);
-    }
-
-    // Read username length
-    let len_buf = vec![0u8; 1];
-    let buf_result = read_exact_with_timeout(stream, len_buf, timeout).await?;
-    let BufResult(result, len_buf) = buf_result;
-    result?;
-    let username_len = len_buf[0] as usize;
-
-    // Read username
-    let username_buf = vec![0u8; username_len];
-    let buf_result = read_exact_with_timeout(stream, username_buf, timeout).await?;
-    let BufResult(result, username_buf) = buf_result;
-    result?;
-    let username = String::from_utf8(username_buf).map_err(|_| ZmtpError::Protocol)?;
-
-    // Read password length
-    let len_buf = vec![0u8; 1];
-    let buf_result = read_exact_with_timeout(stream, len_buf, timeout).await?;
-    let BufResult(result, len_buf) = buf_result;
-    result?;
-    let password_len = len_buf[0] as usize;
-
-    // Read password
-    let password_buf = vec![0u8; password_len];
-    let buf_result = read_exact_with_timeout(stream, password_buf, timeout).await?;
-    let BufResult(result, password_buf) = buf_result;
-    result?;
-    let password = String::from_utf8(password_buf).map_err(|_| ZmtpError::Protocol)?;
+    // Read the framed HELLO command and parse the credentials.
+    let (username, password) = read_plain_hello(stream, timeout).await?;
     reject_immediately_available_trailing_bytes(stream, TRAILING_BYTE_CHECK_TIMEOUT).await?;
 
     debug!("[PLAIN SERVER ZAP] Received credentials, sending ZAP request");
@@ -444,23 +403,14 @@ where
             zap_response.user_id
         );
 
-        // Send WELCOME
-        let buf_result = write_all_with_timeout(stream, PLAIN_WELCOME.to_vec(), timeout).await?;
-        let BufResult(result, _) = buf_result;
-        result?;
-
+        write_plain_cmd(stream, PLAIN_WELCOME, timeout).await?;
         Ok(zap_response.user_id)
     } else {
         warn!(
             "[PLAIN SERVER ZAP] Authentication failed: {}",
             zap_response.status_text
         );
-
-        // Send ERROR
-        let buf_result = write_all_with_timeout(stream, PLAIN_ERROR.to_vec(), timeout).await?;
-        let BufResult(result, _) = buf_result;
-        result?;
-
+        write_plain_cmd(stream, PLAIN_ERROR, timeout).await?;
         Err(ZmtpError::AuthenticationFailed)
     }
 }
@@ -584,24 +534,33 @@ mod tests {
             });
 
             let mut stream = TcpStream::connect(addr).await.unwrap();
-            let mut hello = plain_hello(b"admin", b"secret");
-            hello.extend_from_slice(b"\x05extra");
+            // Frame the HELLO as a ZMTP command, then append stray trailing bytes
+            // on the wire that the server must reject after reading the command.
+            let body = plain_hello(b"admin", b"secret");
+            let mut framed = Vec::new();
+            framed.push(0x04);
+            framed.push(body.len() as u8);
+            framed.extend_from_slice(&body);
+            framed.extend_from_slice(b"\x05extra");
             let BufResult(write_result, _) =
-                write_all_with_timeout(&mut stream, hello, Some(Duration::from_secs(1)))
+                write_all_with_timeout(&mut stream, framed, Some(Duration::from_secs(1)))
                     .await
                     .unwrap();
             write_result.unwrap();
 
+            // The server rejects and closes, so the WELCOME read may EOF; either
+            // way it must not return a WELCOME.
             let response = vec![0u8; PLAIN_WELCOME.len()];
-            let BufResult(read_result, response) =
-                read_exact_with_timeout(&mut stream, response, Some(Duration::from_secs(1)))
-                    .await
-                    .unwrap();
-            let _ = read_result;
+            let read = read_exact_with_timeout(&mut stream, response, Some(Duration::from_secs(1)))
+                .await;
+            let got_welcome = matches!(
+                &read,
+                Ok(BufResult(Ok(()), resp)) if resp.as_slice() == PLAIN_WELCOME
+            );
 
             let result = monocoque_core::rt::join(server_task).await;
             assert!(
-                result.is_err() && response.as_slice() != PLAIN_WELCOME,
+                result.is_err() && !got_welcome,
                 "PLAIN server authenticated a HELLO command with trailing credential bytes"
             );
         });

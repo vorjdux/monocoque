@@ -252,9 +252,19 @@ where
         }
     }
 
-    // Step 4: Send READY command (NULL and PLAIN only)
-    debug!("[HANDSHAKE] Step 4: Sending READY command...");
-    let ready_body = build_ready(local_socket_type.as_str(), identity);
+    // Step 4: Send the metadata command (NULL and PLAIN only). ZMTP PLAIN has
+    // the client send INITIATE (the server then replies READY); NULL and the
+    // PLAIN server send READY.
+    let plain_client = mechanism == SecurityMechanism::Plain && !options.plain_server;
+    debug!(
+        "[HANDSHAKE] Step 4: Sending {} command...",
+        if plain_client { "INITIATE" } else { "READY" }
+    );
+    let ready_body = if plain_client {
+        crate::utils::build_initiate(local_socket_type.as_str(), identity)
+    } else {
+        build_ready(local_socket_type.as_str(), identity)
+    };
     let ready_frame = encode_frame(FLAG_COMMAND, &ready_body);
     let BufResult(write_res, _) = write_all_with_timeout(stream, ready_frame.clone(), timeout)
         .await
@@ -566,29 +576,28 @@ pub fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), 
     // - N bytes: "READY"
     // - Properties as key-value pairs
 
-    if body.len() < 6 {
-        warn!(
-            "[HANDSHAKE] ZMTP READY parse: body too short  -  got {} bytes, need at least 6",
-            body.len()
-        );
+    if body.is_empty() {
+        warn!("[HANDSHAKE] ZMTP READY parse: empty body");
         return Err(ZmtpError::Protocol);
     }
 
+    // Accept READY or INITIATE (the client's PLAIN metadata command); both carry
+    // identical Socket-Type/Identity properties, only the name differs.
     let name_len = body[0] as usize;
-    if name_len != 5 || &body[1..6] != b"READY" {
+    let name = body.get(1..1 + name_len);
+    if name != Some(b"READY".as_ref()) && name != Some(b"INITIATE".as_ref()) {
         warn!(
-            "[HANDSHAKE] ZMTP READY parse: expected command name \"READY\" (length=5), \
+            "[HANDSHAKE] ZMTP READY parse: expected command name \"READY\" or \"INITIATE\", \
              got length={} name={:?}",
             name_len,
-            body.get(1..1 + name_len.min(body.len().saturating_sub(1)))
-                .map(|b| String::from_utf8_lossy(b).into_owned())
+            name.map(|b| String::from_utf8_lossy(b).into_owned())
                 .unwrap_or_default()
         );
         return Err(ZmtpError::Protocol);
     }
 
-    // Parse properties
-    let mut offset = 6;
+    // Parse properties, starting after the (variable-length) command name.
+    let mut offset = 1 + name_len;
     let mut socket_type = None;
     let mut identity = None;
 

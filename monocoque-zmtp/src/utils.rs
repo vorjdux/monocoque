@@ -88,11 +88,25 @@ pub fn encode_frame(flags: u8, body: &Bytes) -> Bytes {
 /// Optional:
 /// - Identity
 pub fn build_ready(socket_type: &str, identity: Option<&[u8]>) -> Bytes {
+    build_metadata_command("READY", socket_type, identity)
+}
+
+/// Build the PLAIN `INITIATE` command (client side).
+///
+/// Identical metadata to `READY`; only the command name differs. ZMTP PLAIN has
+/// the client send INITIATE after WELCOME and the server reply READY, so a PLAIN
+/// client must not send a bare READY (libzmq rejects it).
+pub fn build_initiate(socket_type: &str, identity: Option<&[u8]>) -> Bytes {
+    build_metadata_command("INITIATE", socket_type, identity)
+}
+
+/// Build a metadata-carrying command (`READY` or `INITIATE`) body.
+fn build_metadata_command(command: &str, socket_type: &str, identity: Option<&[u8]>) -> Bytes {
     let mut body = BytesMut::new();
 
-    // Command name
-    body.put_u8(5);
-    body.extend_from_slice(b"READY");
+    // Command name (length-prefixed).
+    body.put_u8(command.len() as u8);
+    body.extend_from_slice(command.as_bytes());
 
     // Mandatory: Socket-Type
     put_property(&mut body, "Socket-Type", socket_type.as_bytes());

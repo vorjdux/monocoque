@@ -304,7 +304,7 @@ fn parse_curve_message(message: &[u8]) -> Result<CurveMessageParts<'_>, CurveErr
 
 /// Read one ZMTP command frame and return its body.
 /// Rejects data frames (command flag 0x04 must be set).
-async fn read_zmtp_cmd<S>(
+pub(crate) async fn read_zmtp_cmd<S>(
     stream: &mut S,
     timeout: Option<Duration>,
     max_body: usize,
