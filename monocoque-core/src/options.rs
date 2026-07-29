@@ -551,7 +551,16 @@ impl Default for SocketOptions {
             send_hwm: 1000,
             immediate: false,
             max_msg_size: None,      // No limit
-            read_buffer_size: 8192,  // 8KB - balanced default
+            // 32 KiB read batch (half the 64 KiB slab). Larger batches cut recv
+            // syscalls on bulk transfers roughly in proportion to their size
+            // (measured over a 64 MiB PUSH/PULL flow: 8 KiB -> 8379 recvfrom,
+            // 16 KiB -> 4178, 32 KiB -> 2104, 64 KiB -> 1037), while the reclaim
+            // keeps short reads from wasting the slab. It is capped below the
+            // slab size: a batch equal to the slab would carve the whole slab per
+            // read, so an uncoalesced trickle of small reads would allocate a
+            // fresh slab each time. 32 KiB leaves room for ~512 small reads per
+            // slab and does not raise the per-connection footprint.
+            read_buffer_size: 32768,
             write_buffer_size: 8192, // 8KB - balanced default
             routing_id: None,
             connect_routing_id: None,

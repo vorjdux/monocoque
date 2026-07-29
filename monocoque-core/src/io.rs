@@ -32,17 +32,6 @@ use std::mem::MaybeUninit;
 /// the per-read buffer bound and its resident footprint are unchanged.
 pub const READ_SLAB_SIZE: usize = 64 * 1024;
 
-/// Frame-size threshold below which a received frame is copied out of the
-/// shared read slab into a right-sized allocation instead of being frozen in
-/// place.
-///
-/// Freezing a small frame shares the whole [`READ_SLAB_SIZE`] slab by refcount,
-/// so a single small frame that stays queued (a slow consumer, a lagging SUB)
-/// pins 64 KiB. Copying frames below this threshold releases the slab
-/// immediately; larger frames stay zero-copy, where the per-byte copy would
-/// outweigh the footprint saving.
-pub const COPY_OUT_THRESHOLD: usize = 4 * 1024;
-
 /// Take a read-sized scratch buffer from the front of `stash`, leaving the
 /// remaining tail in `stash` to hand out on the next call.
 ///
@@ -102,12 +91,20 @@ where
 {
     // Scope the spare-capacity borrow to the read so `buf` is free to mutate
     // again once the count is known.
-    let outcome = {
+    let (outcome, spare_len) = {
         let spare = buf.as_uninit();
-        read(spare).await
+        let spare_len = spare.len();
+        (read(spare).await, spare_len)
     };
     match outcome {
         Ok(n) => {
+            // A backend that reports more bytes than the spare slice held would
+            // make the set_len below declare uninitialized (or out-of-bounds)
+            // memory live. Catch that contract violation in debug builds.
+            debug_assert!(
+                n <= spare_len,
+                "read reported {n} bytes but the spare slice was only {spare_len}"
+            );
             // SAFETY: per this function's contract, `read` initialized exactly
             // the first `n` bytes of the spare slice it was handed. Declaring
             // that same length initialized matches what was actually written.
@@ -140,44 +137,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn small_frame_copy_releases_the_slab() {
-        use bytes::Bytes;
-
-        // One 64 KiB slab, fully initialized so we can read pointers safely.
+    fn reclaim_makes_slab_use_track_bytes_read_and_freezes_only_read_bytes() {
+        // One 64 KiB slab, fully initialized so we can read pointers/contents.
         let mut stash = BytesMut::new();
         stash.resize(READ_SLAB_SIZE, 0);
         let slab_ptr = stash.as_ptr();
 
-        // Freezing a small frame in place shares the slab: the frozen Bytes
-        // points into the original 64 KiB allocation, pinning all of it.
-        let mut a = unsafe { take_read_buffer(&mut stash, 8192) };
-        a.truncate(10);
-        let a_ptr = a.as_ptr();
-        assert_eq!(
-            a_ptr, slab_ptr,
-            "chunk should be carved from the slab front"
-        );
-        let frozen = a.freeze();
-        assert_eq!(
-            frozen.as_ptr(),
-            slab_ptr,
-            "freeze() shares the slab allocation"
-        );
+        // Carve a read buffer, "read" 10 bytes into it, and reclaim the unused
+        // tail back into the slab (the read_raw hot path).
+        let mut buf = unsafe { take_read_buffer(&mut stash, 8192) };
+        assert_eq!(buf.as_ptr(), slab_ptr, "carved from the slab front");
+        buf[..10].copy_from_slice(b"0123456789");
+        buf.truncate(10);
+        let mut reclaimed = buf.split_off(10);
+        // Scratch len so unsplit does not discard the empty tail (see read_raw).
+        // SAFETY: uninitialized scratch, overwritten before the next read.
+        unsafe {
+            reclaimed.set_len(reclaimed.capacity());
+        }
+        reclaimed.unsplit(std::mem::take(&mut stash));
+        stash = reclaimed;
 
-        // Copying a small frame out yields a fresh, right-sized allocation that
-        // does not reference the slab, so the slab is free once the chunk drops.
-        let mut b = unsafe { take_read_buffer(&mut stash, 8192) };
-        b.truncate(10);
-        let b_ptr = b.as_ptr();
-        let copied = Bytes::copy_from_slice(&b);
-        assert_ne!(
-            copied.as_ptr(),
-            b_ptr,
-            "copy_from_slice must allocate off the slab, not alias it"
+        // Freezing exposes exactly the 10 bytes read - never any of the
+        // uninitialized carve.
+        let frozen = buf.freeze();
+        assert_eq!(frozen.as_ref(), b"0123456789");
+        assert_eq!(frozen.as_ptr(), slab_ptr, "frozen frame aliases the slab head");
+
+        // The reclaim returned the unused bytes: the next carve advances by the
+        // 10 bytes read, not the full 8192 carve, and reuses the same slab.
+        let next = unsafe { take_read_buffer(&mut stash, 8192) };
+        assert_eq!(
+            next.as_ptr() as usize,
+            slab_ptr as usize + 10,
+            "the next carve reuses the reclaimed space (slab use tracks bytes read)"
         );
-        // The 10-byte frame above is well below the copy-out threshold, so the
-        // read path takes the copy branch for it.
-        let _ = COPY_OUT_THRESHOLD;
     }
 
     #[test]
