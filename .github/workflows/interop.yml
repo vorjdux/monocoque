@@ -34,7 +34,11 @@ jobs:
             --test interop_pubsub \
             --test interop_router \
             --test interop_load_balance \
-            --test interop_push_pull
+            --test interop_push_pull \
+            --test interop_req_rep \
+            --test interop_plain \
+            --test interop_stream \
+            --test interop_curve
 
   interop-python:
     name: Python interop tests (pyzmq - monocoque)
