@@ -76,8 +76,53 @@ impl SecurityMechanism {
 /// Performs the complete ZMTP handshake, selecting the security mechanism from options.
 ///
 /// This is the primary handshake entry point for sockets that have security configured.
-#[allow(clippy::too_many_lines)]
+///
+/// A single total deadline (`timeout`, the socket's `handshake_timeout`) bounds
+/// the WHOLE handshake, not just each step. Per-step timeouts alone let a slow
+/// peer reset the clock on every read/write and hold the handshake open
+/// indefinitely (slowloris); the total budget here caps the entire greeting,
+/// security exchange, and READY at one wall-clock value. A legitimate handshake
+/// completes in well under it; a trickling peer is dropped when it elapses.
 pub async fn perform_handshake_with_options<S>(
+    stream: &mut S,
+    local_socket_type: SocketType,
+    identity: Option<&[u8]>,
+    timeout: Option<Duration>,
+    options: &SocketOptions,
+) -> Result<HandshakeResult, ZmtpError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    // The handshake future is large; box it at the deadline boundary so the
+    // combinator (and every caller's future) stays small.
+    let inner = Box::pin(perform_handshake_inner(
+        stream,
+        local_socket_type,
+        identity,
+        timeout,
+        options,
+    ));
+    match timeout {
+        Some(budget) => match monocoque_core::rt::timeout(budget, inner).await {
+            Ok(result) => result,
+            Err(_elapsed) => {
+                warn!(
+                    "[HANDSHAKE] total handshake deadline of {:?} exceeded; closing (slowloris defense)",
+                    budget
+                );
+                Err(ZmtpError::Protocol)
+            }
+        },
+        // No configured timeout: preserve the prior unbounded behavior.
+        None => inner.await,
+    }
+}
+
+/// The handshake body, bounded by the total deadline in
+/// [`perform_handshake_with_options`]. `timeout` is still passed through as the
+/// per-step read/write bound.
+#[allow(clippy::too_many_lines)]
+async fn perform_handshake_inner<S>(
     stream: &mut S,
     local_socket_type: SocketType,
     identity: Option<&[u8]>,
@@ -885,6 +930,56 @@ mod tests {
             .await;
 
             monocoque_core::rt::join(peer_task).await;
+        });
+    }
+
+    #[test]
+    fn total_deadline_bounds_a_handshake_that_stalls_after_the_greeting() {
+        LocalRuntime::new().unwrap().block_on(async {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+
+            // The peer completes the greeting - so the handshake gets past step 2
+            // - then stalls with the connection held open, never sending the
+            // PLAIN WELCOME the client waits for. Without a bound the client would
+            // wait forever; the total handshake deadline must close it.
+            let peer_task = monocoque_core::rt::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                read_client_greeting(&mut stream).await;
+                let peer_greeting = build_greeting_with_mechanism(
+                    SecurityMechanism::Plain,
+                    &SocketOptions::new().with_plain_server(true),
+                );
+                write_greeting(&mut stream, peer_greeting.to_vec()).await;
+                // Hold the connection open, sending nothing further.
+                std::future::pending::<()>().await;
+            });
+
+            let mut stream = TcpStream::connect(addr).await.unwrap();
+            let options = SocketOptions::new().with_plain_credentials("alice", "secret");
+            let deadline = Duration::from_millis(400);
+            let start = std::time::Instant::now();
+            let result = perform_handshake_with_options(
+                &mut stream,
+                SocketType::Req,
+                None,
+                Some(deadline),
+                &options,
+            )
+            .await;
+            let elapsed = start.elapsed();
+
+            assert!(
+                result.is_err(),
+                "handshake must fail against a peer that stalls after the greeting"
+            );
+            assert!(
+                elapsed < deadline * 8,
+                "handshake ran {elapsed:?}, far beyond the {deadline:?} deadline; a stalling peer was not bounded"
+            );
+
+            // The peer stalls forever; drop its task rather than joining it.
+            drop(peer_task);
         });
     }
 }
