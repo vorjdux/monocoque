@@ -243,6 +243,7 @@ where
             let cr =
                 run_curve_exchange(stream, options, timeout, local_socket_type, identity).await?;
             let peer_socket_type = parse_socket_type(cr.peer_socket_type.as_ref())?;
+            check_socket_type_compatibility(local_socket_type, peer_socket_type)?;
             return Ok(HandshakeResult {
                 peer_identity: cr.peer_identity,
                 peer_socket_type,
@@ -377,6 +378,7 @@ where
     // Parse READY command
     let ready_bytes = Bytes::from(body_buf);
     let (peer_socket_type, peer_identity) = parse_ready_command(&ready_bytes)?;
+    check_socket_type_compatibility(local_socket_type, peer_socket_type)?;
 
     debug!(
         "[HANDSHAKE] Handshake complete! Peer is {}",
@@ -623,22 +625,33 @@ pub fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), 
         ]) as usize;
         offset += 4;
 
-        if offset + value_len > body.len() {
+        // value_len is an attacker-controlled 32-bit length. `offset + value_len`
+        // can wrap on a 32-bit target, pass a naive `> body.len()` check, and
+        // then panic slicing out of bounds. checked_add rejects the overflow.
+        let value_start = offset;
+        let value_end = offset.checked_add(value_len).filter(|&end| end <= body.len());
+        let Some(value_end) = value_end else {
             warn!(
-                "[HANDSHAKE] READY property value truncated (value_len={})",
+                "[HANDSHAKE] READY property value truncated or length overflow (value_len={})",
                 value_len
             );
             return Err(ZmtpError::Protocol);
-        }
-
-        // Store the range for zero-copy slice
-        let value_start = offset;
-        let value_end = offset + value_len;
-        offset += value_len;
+        };
+        offset = value_end;
 
         match key {
             b"Socket-Type" => {
                 if socket_type.is_some() {
+                    return Err(ZmtpError::Protocol);
+                }
+                // The longest valid socket-type name is "STREAM" (6 bytes). Cap
+                // the value so a bogus Socket-Type cannot force a large slice
+                // before parse_socket_type rejects it.
+                if value_len > 16 {
+                    warn!(
+                        "[HANDSHAKE] READY Socket-Type property too long: {} bytes",
+                        value_len
+                    );
                     return Err(ZmtpError::Protocol);
                 }
                 socket_type = Some(parse_socket_type(&body[value_start..value_end])?);
@@ -692,6 +705,41 @@ fn parse_socket_type(value: &[u8]) -> Result<SocketType, ZmtpError> {
             );
             Err(ZmtpError::Protocol)
         }
+    }
+}
+
+/// Reject socket-type pairings that ZMQ does not allow (e.g. PUB with REQ).
+///
+/// libzmq refuses an incompatible pairing at the ZMTP layer; without this a
+/// mismatched peer completes the handshake and then silently misbehaves. The
+/// rules mirror libzmq: each type lists the peer types it may talk to.
+fn check_socket_type_compatibility(
+    local: SocketType,
+    peer: SocketType,
+) -> Result<(), ZmtpError> {
+    use SocketType::{Dealer, Pair, Pub, Pull, Push, Rep, Req, Router, Sub, Xpub, Xsub};
+
+    let compatible_peers: &[SocketType] = match local {
+        Pair => &[Pair],
+        Pub | Xpub => &[Sub, Xsub],
+        Sub | Xsub => &[Pub, Xpub],
+        Req => &[Rep, Router],
+        Rep => &[Req, Dealer],
+        Dealer => &[Rep, Dealer, Router],
+        Router => &[Req, Dealer, Router],
+        Push => &[Pull],
+        Pull => &[Push],
+    };
+
+    if compatible_peers.contains(&peer) {
+        Ok(())
+    } else {
+        warn!(
+            "[HANDSHAKE] incompatible socket types: local {} cannot talk to peer {}",
+            local.as_str(),
+            peer.as_str()
+        );
+        Err(ZmtpError::Protocol)
     }
 }
 
@@ -981,5 +1029,85 @@ mod tests {
             // The peer stalls forever; drop its task rather than joining it.
             drop(peer_task);
         });
+    }
+
+    #[test]
+    fn parse_ready_rejects_overflowing_value_length_without_panicking() {
+        // READY body: name "READY", one property keyed "Socket-Type" whose
+        // 4-byte value length is u32::MAX. A naive `offset + value_len` wraps on
+        // a 32-bit target and slices out of bounds; the checked add must reject
+        // it (and it also exceeds the body on 64-bit). Either way: Err, no panic.
+        let mut body = Vec::new();
+        body.push(5u8);
+        body.extend_from_slice(b"READY");
+        body.push(11u8);
+        body.extend_from_slice(b"Socket-Type");
+        body.extend_from_slice(&u32::MAX.to_be_bytes()); // value_len = 0xFFFFFFFF
+        // No value bytes follow.
+
+        let result = parse_ready_command(&Bytes::from(body));
+        assert!(
+            matches!(result, Err(ZmtpError::Protocol)),
+            "oversized value length must be rejected, not panic or accepted"
+        );
+    }
+
+    #[test]
+    fn parse_ready_rejects_oversized_socket_type() {
+        // A Socket-Type value longer than any real name (here 20 bytes of 'A')
+        // must be rejected by the length cap before parse_socket_type runs.
+        let value = [b'A'; 20];
+        let mut body = Vec::new();
+        body.push(5u8);
+        body.extend_from_slice(b"READY");
+        body.push(11u8);
+        body.extend_from_slice(b"Socket-Type");
+        body.extend_from_slice(&(value.len() as u32).to_be_bytes());
+        body.extend_from_slice(&value);
+
+        assert!(matches!(
+            parse_ready_command(&Bytes::from(body)),
+            Err(ZmtpError::Protocol)
+        ));
+    }
+
+    #[test]
+    fn socket_type_compatibility_matches_zmq_rules() {
+        use SocketType::{Dealer, Pair, Pub, Pull, Push, Rep, Req, Router, Sub};
+
+        // Valid pairings.
+        for (a, b) in [
+            (Req, Rep),
+            (Rep, Req),
+            (Req, Router),
+            (Dealer, Router),
+            (Dealer, Dealer),
+            (Pub, Sub),
+            (Push, Pull),
+            (Pair, Pair),
+        ] {
+            assert!(
+                check_socket_type_compatibility(a, b).is_ok(),
+                "{} should be compatible with {}",
+                a.as_str(),
+                b.as_str()
+            );
+        }
+
+        // Invalid pairings.
+        for (a, b) in [
+            (Pub, Req),
+            (Req, Pub),
+            (Push, Sub),
+            (Pair, Dealer),
+            (Req, Req),
+        ] {
+            assert!(
+                check_socket_type_compatibility(a, b).is_err(),
+                "{} should be incompatible with {}",
+                a.as_str(),
+                b.as_str()
+            );
+        }
     }
 }

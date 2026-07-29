@@ -97,17 +97,21 @@ pub fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), 
         ]) as usize;
         offset += 4;
 
-        if offset + value_len > body.len() {
-            return Err(ZmtpError::Protocol);
-        }
-
+        // Attacker-controlled 32-bit length: `offset + value_len` can wrap on a
+        // 32-bit target and pass a naive bound check, then panic on the slice.
         let value_start = offset;
-        let value_end = offset + value_len;
-        offset += value_len;
+        let Some(value_end) = offset.checked_add(value_len).filter(|&end| end <= body.len()) else {
+            return Err(ZmtpError::Protocol);
+        };
+        offset = value_end;
 
         match key {
             b"Socket-Type" => {
                 if socket_type.is_some() {
+                    return Err(ZmtpError::Protocol);
+                }
+                // Longest valid name is "STREAM" (6 bytes); cap the value.
+                if value_len > 16 {
                     return Err(ZmtpError::Protocol);
                 }
                 socket_type = Some(parse_socket_type(&body[value_start..value_end])?);

@@ -443,13 +443,16 @@ impl ZapResponse {
             ]) as usize;
             cursor += 4;
 
-            // Read value
-            if cursor + value_len > data.len() {
+            // Read value. value_len is an attacker-controlled 32-bit length;
+            // `cursor + value_len` can wrap on a 32-bit target and pass a naive
+            // bound check, then panic on the slice. checked_add rejects overflow.
+            let Some(value_end) = cursor.checked_add(value_len).filter(|&end| end <= data.len())
+            else {
                 return Err("Invalid metadata: value out of bounds".to_string());
-            }
-            let value = String::from_utf8(data[cursor..cursor + value_len].to_vec())
+            };
+            let value = String::from_utf8(data[cursor..value_end].to_vec())
                 .map_err(|_| "Invalid metadata value")?;
-            cursor += value_len;
+            cursor = value_end;
 
             metadata.insert(key, value);
         }
