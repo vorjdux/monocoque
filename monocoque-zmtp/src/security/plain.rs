@@ -154,6 +154,7 @@ impl PlainAuthHandler for StaticPlainHandler {
         _domain: &str,
         _address: &str,
     ) -> Result<String, String> {
+        use sha2::{Digest, Sha256};
         use subtle::ConstantTimeEq;
 
         // Always run a constant-time comparison, even when the username is
@@ -164,7 +165,16 @@ impl PlainAuthHandler for StaticPlainHandler {
         const DUMMY_PASSWORD: &str = "\0monocoque-plain-miss-placeholder\0";
         let expected = self.credentials.get(username);
         let reference = expected.map_or(DUMMY_PASSWORD, |p| p.as_str());
-        let password_matches: bool = reference.as_bytes().ct_eq(password.as_bytes()).into();
+        // Compare fixed-width digests, not the passwords directly: subtle's
+        // slice ct_eq short-circuits when the lengths differ, which leaks the
+        // stored password's length. Hashing both to 32 bytes makes the compared
+        // width constant regardless of either password's length.
+        let reference_digest = Sha256::digest(reference.as_bytes());
+        let supplied_digest = Sha256::digest(password.as_bytes());
+        let password_matches: bool = reference_digest
+            .as_slice()
+            .ct_eq(supplied_digest.as_slice())
+            .into();
 
         if expected.is_some() && password_matches {
             Ok(username.to_string())
@@ -190,10 +200,7 @@ where
     use compio_buf::BufResult;
     use monocoque_core::timeout::{read_exact_with_timeout, write_all_with_timeout};
 
-    debug!(
-        "[PLAIN CLIENT] Starting PLAIN authentication for user: {}",
-        credentials.username
-    );
+    debug!("[PLAIN CLIENT] Starting PLAIN authentication");
 
     // Build HELLO command
     let mut hello = BytesMut::new();
@@ -318,7 +325,7 @@ where
     let password = String::from_utf8(password_buf).map_err(|_| ZmtpError::Protocol)?;
     reject_immediately_available_trailing_bytes(stream, TRAILING_BYTE_CHECK_TIMEOUT).await?;
 
-    debug!("[PLAIN SERVER] Received credentials for user: {}", username);
+    debug!("[PLAIN SERVER] Received credentials");
 
     // Authenticate via handler
     match handler
@@ -414,10 +421,7 @@ where
     let password = String::from_utf8(password_buf).map_err(|_| ZmtpError::Protocol)?;
     reject_immediately_available_trailing_bytes(stream, TRAILING_BYTE_CHECK_TIMEOUT).await?;
 
-    debug!(
-        "[PLAIN SERVER ZAP] Received credentials for user: {}, sending ZAP request",
-        username
-    );
+    debug!("[PLAIN SERVER ZAP] Received credentials, sending ZAP request");
 
     // Create ZAP client and send authentication request
     let mut zap_client = ZapClient::new(Duration::from_secs(5)).map_err(|_| {
