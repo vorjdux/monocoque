@@ -302,6 +302,10 @@ impl XPubSocket {
             "[XPUB] Polling {} subscribers for subscription events",
             self.subscribers.len()
         );
+        // Subscribers whose subscription stream failed to decode: evicted after
+        // the poll so a malformed frame is not re-decoded (and re-failed) on
+        // every poll, which would livelock the XPUB.
+        let mut to_evict: Vec<u64> = Vec::new();
         for sub in self.subscribers.values_mut() {
             // SAFETY: `slab` is passed straight to `read`; the data arm below
             // truncates it to `n` before freezing, and every other arm drops it
@@ -435,7 +439,12 @@ impl XPubSocket {
                                 }
                             }
                             Ok(None) => break,
-                            Err(_) => break,
+                            Err(_) => {
+                                // Malformed subscription frame: drop this
+                                // subscriber rather than re-decoding it forever.
+                                to_evict.push(sub.id);
+                                break;
+                            }
                         }
                     }
                 }
@@ -449,6 +458,11 @@ impl XPubSocket {
                     // Timeout  -  no data available from this subscriber
                 }
             }
+        }
+
+        // Evict subscribers whose subscription stream failed to decode.
+        for id in to_evict {
+            self.subscribers.remove(&id);
         }
 
         // Return any events collected from this poll round
@@ -835,7 +849,7 @@ mod tests {
 
         // Spawn PubSocket: accept the XSubSocket upstream connection, then broadcast.
         let pub_task = monocoque_core::rt::spawn(async move {
-            let mut pub_sock = InternalPub::new();
+            let mut pub_sock = InternalPub::new().unwrap();
             // Accept the connection that connect_upstream() will make.
             pub_sock.accept_subscriber(&pub_listener).await.unwrap();
             // Give the subscription reader time to process Subscribe("weather").

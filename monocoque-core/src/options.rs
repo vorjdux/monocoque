@@ -839,7 +839,13 @@ impl SocketOptions {
     /// let opts = SocketOptions::new().with_read_buffer_size(16384);
     /// ```
     pub const fn with_read_buffer_size(mut self, size: usize) -> Self {
-        self.read_buffer_size = if size > crate::io::READ_SLAB_SIZE {
+        // A read buffer of 0 (or a byte or two) turns the read loop into a spin
+        // or a false EOF, so floor it to a small minimum. The upper bound stays
+        // the read slab size.
+        const MIN_READ_BUFFER_SIZE: usize = 64;
+        self.read_buffer_size = if size < MIN_READ_BUFFER_SIZE {
+            MIN_READ_BUFFER_SIZE
+        } else if size > crate::io::READ_SLAB_SIZE {
             crate::io::READ_SLAB_SIZE
         } else {
             size
@@ -1289,8 +1295,11 @@ impl SocketOptions {
     /// Returns the interval to use, considering exponential backoff
     /// and the maximum interval setting.
     pub fn next_reconnect_ivl(&self, attempt: u32) -> Duration {
-        if self.reconnect_ivl_max.is_zero() {
-            // No exponential backoff, always use base interval
+        // Match reconnect::ReconnectState::next_delay so the two do not diverge:
+        // max == 0 disables exponential backoff, and a max at or below the base
+        // leaves no room to grow. Both cases hold at the base interval rather
+        // than (as before) clamping the growing value down to a smaller max.
+        if self.reconnect_ivl_max.is_zero() || self.reconnect_ivl_max <= self.reconnect_ivl {
             return self.reconnect_ivl;
         }
 
@@ -1372,6 +1381,24 @@ mod tests {
         assert_eq!(opts.next_reconnect_ivl(0), Duration::from_millis(100));
         assert_eq!(opts.next_reconnect_ivl(1), Duration::from_millis(100));
         assert_eq!(opts.next_reconnect_ivl(10), Duration::from_millis(100));
+    }
+
+    #[test]
+    fn test_reconnect_ivl_max_below_base_holds_at_base() {
+        // A max below the base leaves no room to grow: hold at base rather than
+        // clamping down to the smaller max. This matches ReconnectState and is
+        // the invariant next_reconnect_ivl previously violated.
+        let opts = SocketOptions::new()
+            .with_reconnect_ivl(Duration::from_millis(100))
+            .with_reconnect_ivl_max(Duration::from_millis(50));
+
+        for attempt in 0..5 {
+            assert_eq!(
+                opts.next_reconnect_ivl(attempt),
+                Duration::from_millis(100),
+                "max below base must hold at the base interval"
+            );
+        }
     }
 
     #[test]
