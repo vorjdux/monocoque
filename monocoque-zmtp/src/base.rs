@@ -699,10 +699,12 @@ where
         let guard = PoisonGuard::new(&mut self.is_poisoned);
 
         use compio_buf::BufResult;
-        let buf = self.send_buffer.split().freeze();
+        // Move send_buffer out by value: the owned-buffer write reuses this
+        // allocation on completion instead of freezing a fresh Bytes per flush.
+        let buf = std::mem::take(&mut self.send_buffer);
 
         // Apply send timeout
-        let BufResult(result, _) = match self.options.send_timeout {
+        let BufResult(result, buf) = match self.options.send_timeout {
             None => stream.write_all(buf).await,
             Some(dur) => {
                 use monocoque_core::rt::timeout;
@@ -717,6 +719,11 @@ where
                 }
             }
         };
+
+        // Recover the buffer's capacity for the next flush (see write_from_buf).
+        let mut buf = buf;
+        buf.clear();
+        self.send_buffer = buf;
 
         let write_result = result;
 
@@ -765,13 +772,15 @@ where
         // Arm poison guard
         let guard = PoisonGuard::new(&mut self.is_poisoned);
 
-        // Send write_buf contents
-        let buf = self.write_buf.split().freeze();
+        // Move write_buf out by value so the owned-buffer write reuses its
+        // allocation instead of freezing a fresh refcounted Bytes each send:
+        // no Arc alloc from freeze(), and the capacity comes straight back.
+        let buf = std::mem::take(&mut self.write_buf);
 
         use compio_buf::BufResult;
 
         // Apply send timeout from options
-        let BufResult(result, _) = match self.options.send_timeout {
+        let BufResult(result, buf) = match self.options.send_timeout {
             None => {
                 // Blocking mode - no timeout
                 stream.write_all(buf).await
@@ -791,6 +800,14 @@ where
             }
         };
 
+        // Recover the buffer for the next send: clear() resets the length to
+        // zero while keeping the capacity, so the hot path neither reallocates
+        // nor churns a refcount. Reached only on completion; the timeout arm
+        // returns early with the buffer still owned by the cancelled op.
+        let mut buf = buf;
+        buf.clear();
+        self.write_buf = buf;
+
         // Mark disconnected on error
         if result.is_err() {
             self.stream = None;
@@ -800,6 +817,24 @@ where
 
         guard.disarm();
         Ok(())
+    }
+
+    /// Send one fully-assembled message over the best available write path.
+    ///
+    /// Mirrors the branch PUSH inlines (see `push::send`): opportunistic
+    /// coalescing when enabled, an iovec (zero-copy) write for large frames,
+    /// otherwise encode into the reused `write_buf` and write. Sharing it here
+    /// lets DEALER/ROUTER/REQ/REP/PAIR reach the vectored and coalescing paths
+    /// instead of always copying every body into `write_buf` for one `write`.
+    pub(crate) async fn send_message(&mut self, msg: &[Bytes]) -> io::Result<()> {
+        if self.options.write_coalescing {
+            self.send_coalesced(msg).await
+        } else if self.should_vectored_write(msg) {
+            self.send_vectored(msg).await
+        } else {
+            self.encode_message_to_write_buf(msg)?;
+            self.write_from_buf().await
+        }
     }
 
     /// Return `true` if `msg` should be sent with a vectored write rather than

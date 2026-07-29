@@ -91,11 +91,8 @@ where
     pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
         trace!("[PAIR] Sending {} frames", msg.len());
 
-        // Encode message into write_buf (with CURVE encryption if active)
-        self.base.encode_message_to_write_buf(&msg)?;
-
-        // Delegate to base for writing
-        self.base.write_from_buf().await?;
+        // Coalesce / vector / copy-and-write as appropriate.
+        self.base.send_message(&msg).await?;
 
         trace!("[PAIR] Message sent successfully");
         Ok(())
