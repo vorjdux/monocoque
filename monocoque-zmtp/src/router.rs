@@ -155,13 +155,13 @@ where
                     crate::base::FrameResult::Data(more, payload) => {
                         self.frames.push(payload);
                         if !more {
-                            let msg: Vec<Bytes> = self.frames.drain(..).collect();
-                            trace!("[ROUTER] Received {} frames", msg.len());
-
-                            // Prepend peer identity to the message
-                            let mut frames = Vec::with_capacity(msg.len() + 1);
+                            // Build the identity-prefixed message in a single
+                            // allocation: identity, then the drained body frames.
+                            // (Previously drain().collect() then a second Vec.)
+                            let mut frames = Vec::with_capacity(self.frames.len() + 1);
                             frames.push(self.peer_identity.clone());
-                            frames.extend(msg);
+                            frames.extend(self.frames.drain(..));
+                            trace!("[ROUTER] Received {} frames", frames.len());
                             return Ok(Some(frames));
                         }
                     }
@@ -179,6 +179,68 @@ where
                 self.base.flush_send_buffer().await?;
             }
             // Continue decoding with new data
+        }
+    }
+
+    /// Receive an identity-prefixed message into a caller-provided buffer.
+    ///
+    /// Allocation-free counterpart to [`recv`](Self::recv): `out` (cleared on
+    /// entry) receives the peer identity followed by the body frames, reusing
+    /// its allocation across calls. Returns `Ok(true)` on a complete message,
+    /// `Ok(false)` on EOF.
+    pub async fn recv_into(&mut self, out: &mut Vec<Bytes>) -> io::Result<bool> {
+        out.clear();
+        loop {
+            loop {
+                match self.base.process_frame()? {
+                    crate::base::FrameResult::NeedMore => break,
+                    crate::base::FrameResult::CommandHandled => {
+                        if !self.base.send_buffer.is_empty() {
+                            self.base.flush_send_buffer().await?;
+                        }
+                    }
+                    crate::base::FrameResult::Data(more, payload) => {
+                        self.frames.push(payload);
+                        if !more {
+                            out.reserve(self.frames.len() + 1);
+                            out.push(self.peer_identity.clone());
+                            out.extend(self.frames.drain(..));
+                            return Ok(true);
+                        }
+                    }
+                }
+            }
+
+            let n = self.base.read_raw().await?;
+            if n == 0 {
+                return Ok(false);
+            }
+            if self.base.check_heartbeat()? {
+                self.base.flush_send_buffer().await?;
+            }
+        }
+    }
+
+    /// Try to receive an identity-prefixed message into `out` without a read.
+    ///
+    /// Returns `Ok(true)` with a complete message (identity + body) moved into
+    /// `out`, or `Ok(false)` leaving `out` untouched when nothing is buffered.
+    pub fn try_recv_into(&mut self, out: &mut Vec<Bytes>) -> io::Result<bool> {
+        loop {
+            match self.base.process_frame()? {
+                crate::base::FrameResult::NeedMore => return Ok(false),
+                crate::base::FrameResult::CommandHandled => {}
+                crate::base::FrameResult::Data(more, payload) => {
+                    self.frames.push(payload);
+                    if !more {
+                        out.clear();
+                        out.reserve(self.frames.len() + 1);
+                        out.push(self.peer_identity.clone());
+                        out.extend(self.frames.drain(..));
+                        return Ok(true);
+                    }
+                }
+            }
         }
     }
 

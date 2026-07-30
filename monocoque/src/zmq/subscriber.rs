@@ -239,6 +239,19 @@ where
         self.inner.recv().await
     }
 
+    /// Receive a matching message into a caller-provided buffer, reusing its
+    /// allocation. Allocation-free counterpart to [`recv`](Self::recv): filtered
+    /// messages are dropped without allocating. Returns `Ok(true)` on a matching
+    /// message, `Ok(false)` on EOF.
+    pub async fn recv_into(&mut self, out: &mut Vec<Bytes>) -> io::Result<bool> {
+        self.inner.recv_into(out).await
+    }
+
+    /// Try to receive a matching message into `out` without a kernel read.
+    pub fn try_recv_into(&mut self, out: &mut Vec<Bytes>) -> io::Result<bool> {
+        self.inner.try_recv_into(out)
+    }
+
     /// Get the socket type.
     ///
     /// # ZeroMQ Compatibility

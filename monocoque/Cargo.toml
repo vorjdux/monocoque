@@ -377,6 +377,10 @@ name = "recv_into"
 required-features = ["zmq"]
 
 [[test]]
+name = "interop_recv_into"
+required-features = ["zmq"]
+
+[[test]]
 name = "fanin_rss_bound"
 required-features = ["zmq"]
 

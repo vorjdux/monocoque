@@ -199,22 +199,8 @@ where
                     crate::base::FrameResult::Data(more, payload) => {
                         self.frames.push(payload);
                         if !more {
-                            let mut msg: Vec<Bytes> = self.frames.drain(..).collect();
-                            // Split off the routing envelope (every frame up to
-                            // and including the first empty delimiter) and hand
-                            // the caller only the request body. The envelope is
-                            // re-prepended by send() so the reply routes back.
-                            let body = if let Some(delim) =
-                                msg.iter().position(bytes::Bytes::is_empty)
-                            {
-                                let body = msg.split_off(delim + 1);
-                                self.request_envelope = msg;
-                                body
-                            } else {
-                                // No delimiter (a non-REQ peer): empty envelope.
-                                self.request_envelope.clear();
-                                msg
-                            };
+                            let mut body = Vec::new();
+                            self.split_request_envelope(&mut body);
                             trace!(
                                 "[REP] Received {} body frames (envelope {} frames)",
                                 body.len(),
@@ -238,6 +224,61 @@ where
                 self.base.flush_send_buffer().await?;
             }
             // Continue decoding with new data
+        }
+    }
+
+    /// Split the just-assembled request in `self.frames` into the routing
+    /// envelope (kept in `self.request_envelope` for `send` to re-prepend) and
+    /// the body (moved into `out`). Every frame up to and including the first
+    /// empty delimiter is the envelope; a non-REQ peer with no delimiter yields
+    /// an empty envelope and an all-body message. Both target buffers are reused.
+    fn split_request_envelope(&mut self, out: &mut Vec<Bytes>) {
+        out.clear();
+        self.request_envelope.clear();
+        if let Some(delim) = self.frames.iter().position(bytes::Bytes::is_empty) {
+            out.extend(self.frames.drain(delim + 1..));
+            self.request_envelope.extend(self.frames.drain(..));
+        } else {
+            out.extend(self.frames.drain(..));
+        }
+        self.frames.clear();
+    }
+
+    /// Receive a request body into a caller-provided buffer, reusing its
+    /// allocation.
+    ///
+    /// Allocation-free counterpart to [`recv`](Self::recv): the routing envelope
+    /// is stashed for the reply and the body is moved into `out` (cleared on
+    /// entry). Returns `Ok(true)` on a complete request, `Ok(false)` on EOF.
+    pub async fn recv_into(&mut self, out: &mut Vec<Bytes>) -> io::Result<bool> {
+        out.clear();
+        loop {
+            loop {
+                match self.base.process_frame()? {
+                    crate::base::FrameResult::NeedMore => break,
+                    crate::base::FrameResult::CommandHandled => {
+                        if !self.base.send_buffer.is_empty() {
+                            self.base.flush_send_buffer().await?;
+                        }
+                    }
+                    crate::base::FrameResult::Data(more, payload) => {
+                        self.frames.push(payload);
+                        if !more {
+                            self.split_request_envelope(out);
+                            self.state = RepState::ReadyToReply;
+                            return Ok(true);
+                        }
+                    }
+                }
+            }
+
+            let n = self.base.read_raw().await?;
+            if n == 0 {
+                return Ok(false);
+            }
+            if self.base.check_heartbeat()? {
+                self.base.flush_send_buffer().await?;
+            }
         }
     }
 

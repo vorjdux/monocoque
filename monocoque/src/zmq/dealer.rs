@@ -477,6 +477,25 @@ where
     pub async fn recv(&mut self) -> io::Result<Option<Vec<Bytes>>> {
         self.inner.recv().await
     }
+
+    /// Receive a message into a caller-provided buffer, reusing its allocation.
+    ///
+    /// Allocation-free counterpart to [`recv`](Self::recv). Returns `Ok(true)`
+    /// when a complete message was read into `out` (cleared on entry), or
+    /// `Ok(false)` on a closed connection.
+    pub async fn recv_into(&mut self, out: &mut Vec<Bytes>) -> io::Result<bool> {
+        self.inner.recv_into(out).await
+    }
+
+    /// Try to receive a message into `out` without a kernel read.
+    pub fn try_recv_into(&mut self, out: &mut Vec<Bytes>) -> io::Result<bool> {
+        self.inner.try_recv_into(out)
+    }
+
+    /// Receive a single-frame message, returning just its frame.
+    pub async fn recv_one(&mut self) -> io::Result<Option<Bytes>> {
+        self.inner.recv_one().await
+    }
 }
 
 impl<S> DealerSocket<S>

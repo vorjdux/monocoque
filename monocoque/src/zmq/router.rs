@@ -456,6 +456,18 @@ where
     pub async fn recv(&mut self) -> io::Result<Option<Vec<Bytes>>> {
         self.inner.recv().await
     }
+
+    /// Receive an identity-prefixed message into a caller-provided buffer,
+    /// reusing its allocation. Allocation-free counterpart to
+    /// [`recv`](Self::recv); returns `Ok(true)` on a message, `Ok(false)` on EOF.
+    pub async fn recv_into(&mut self, out: &mut Vec<Bytes>) -> io::Result<bool> {
+        self.inner.recv_into(out).await
+    }
+
+    /// Try to receive an identity-prefixed message into `out` without a read.
+    pub fn try_recv_into(&mut self, out: &mut Vec<Bytes>) -> io::Result<bool> {
+        self.inner.try_recv_into(out)
+    }
 }
 
 // Unix-specific impl for IPC support

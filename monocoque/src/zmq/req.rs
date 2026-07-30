@@ -373,6 +373,14 @@ where
         self.inner.recv().await
     }
 
+    /// Receive a reply into a caller-provided buffer, reusing its allocation.
+    ///
+    /// Allocation-free counterpart to [`recv`](Self::recv) with the envelope
+    /// stripped. Returns `Ok(true)` on a reply, `Ok(false)` on EOF.
+    pub async fn recv_into(&mut self, out: &mut Vec<Bytes>) -> io::Result<bool> {
+        self.inner.recv_into(out).await
+    }
+
     /// Get a reference to the socket options.
     ///
     /// # Example

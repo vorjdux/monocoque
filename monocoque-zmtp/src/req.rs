@@ -216,26 +216,7 @@ where
 
         trace!("[REQ] Sending {} frames", msg.len());
 
-        // Build the REQ envelope: an optional 4-byte correlation ID, then the
-        // empty delimiter frame the ZMTP REQ/REP contract requires, then the
-        // body. A REP peer (including libzmq) strips the envelope up to and
-        // including the empty frame and re-prepends it on the reply; without the
-        // delimiter, libzmq REP interop is broken.
-        let frames_to_send = {
-            let mut out = Vec::with_capacity(msg.len() + 2);
-            if self.base.options.req_correlate {
-                self.request_id = self.request_id.wrapping_add(1);
-                self.expected_request_id = Some(self.request_id);
-                trace!(
-                    "[REQ] Correlation enabled, prepending request ID: {}",
-                    self.request_id
-                );
-                out.push(Bytes::copy_from_slice(&self.request_id.to_be_bytes()));
-            }
-            out.push(Bytes::new()); // empty delimiter
-            out.extend(msg);
-            out
-        };
+        let frames_to_send = self.build_req_envelope(msg);
 
         // Coalesce / vector / copy-and-write as appropriate.
         self.base.send_message(&frames_to_send).await?;
@@ -245,6 +226,29 @@ where
 
         trace!("[REQ] Message sent successfully");
         Ok(())
+    }
+
+    /// Build the REQ wire envelope: an optional 4-byte correlation ID, then the
+    /// empty delimiter frame the ZMTP REQ/REP contract requires, then the body.
+    ///
+    /// A REP peer (including libzmq) strips the envelope up to and including the
+    /// empty frame and re-prepends it on the reply; without the delimiter,
+    /// libzmq REP interop is broken. Consumes `msg` (moved in, no per-frame
+    /// clone) and bumps the correlation counter when enabled.
+    fn build_req_envelope(&mut self, msg: Vec<Bytes>) -> Vec<Bytes> {
+        let mut out = Vec::with_capacity(msg.len() + 2);
+        if self.base.options.req_correlate {
+            self.request_id = self.request_id.wrapping_add(1);
+            self.expected_request_id = Some(self.request_id);
+            trace!(
+                "[REQ] Correlation enabled, prepending request ID: {}",
+                self.request_id
+            );
+            out.push(Bytes::copy_from_slice(&self.request_id.to_be_bytes()));
+        }
+        out.push(Bytes::new()); // empty delimiter
+        out.extend(msg);
+        out
     }
 
     /// Receive a reply message.
@@ -301,69 +305,18 @@ where
                         self.frames.push(payload);
 
                         if !more {
-                            // Complete message received
-                            let msg: Vec<Bytes> = self.frames.drain(..).collect();
-                            trace!("[REQ] Received {} frames", msg.len());
-
-                            // Validate/strip the correlation ID (if enabled),
-                            // then strip the empty delimiter frame the REP peer
-                            // echoes back, leaving just the reply body.
-                            let mut msg = msg;
-                            if self.base.options.req_correlate {
-                                if msg.is_empty() {
-                                    return Err(io::Error::new(
-                                        io::ErrorKind::InvalidData,
-                                        "Correlation enabled but received empty message",
-                                    ));
-                                }
-
-                                // First frame should be the request ID (4 bytes)
-                                let id_frame = &msg[0];
-                                if id_frame.len() != 4 {
-                                    return Err(io::Error::new(
-                                        io::ErrorKind::InvalidData,
-                                        format!(
-                                            "Correlation frame has invalid length: {} (expected 4)",
-                                            id_frame.len()
-                                        ),
-                                    ));
-                                }
-
-                                let received_id = u32::from_be_bytes([
-                                    id_frame[0],
-                                    id_frame[1],
-                                    id_frame[2],
-                                    id_frame[3],
-                                ]);
-
-                                trace!("[REQ] Received correlation ID: {}", received_id);
-
-                                // Validate against expected ID
-                                if let Some(expected) = self.expected_request_id {
-                                    if received_id != expected {
-                                        return Err(io::Error::new(
-                                            io::ErrorKind::InvalidData,
-                                            format!(
-                                                "Request ID mismatch: expected {}, got {}",
-                                                expected, received_id
-                                            ),
-                                        ));
-                                    }
-                                    trace!("[REQ] Correlation ID validated successfully");
-                                }
-
-                                msg.remove(0);
-                            }
-
-                            // Strip the empty delimiter the REP peer echoed.
-                            if msg.first().is_some_and(bytes::Bytes::is_empty) {
-                                msg.remove(0);
-                            }
-                            let validated_msg = msg;
+                            // Validate the correlation ID (if enabled) and locate
+                            // the reply body past the echoed envelope, then drain
+                            // just the body into a fresh Vec (one allocation, no
+                            // per-frame remove(0) shuffles).
+                            let strip = self.reply_envelope_strip_len()?;
+                            let body: Vec<Bytes> = self.frames.drain(strip..).collect();
+                            self.frames.clear();
+                            trace!("[REQ] Received {} body frames", body.len());
 
                             self.state = ReqState::Idle;
                             self.expected_request_id = None;
-                            return Ok(Some(validated_msg));
+                            return Ok(Some(body));
                         }
                     }
                 }
@@ -381,6 +334,87 @@ where
                 self.base.flush_send_buffer().await?;
             }
             // Continue decoding with new data
+        }
+    }
+
+    /// Number of leading frames in `self.frames` that make up the reply
+    /// envelope (optional correlation ID + empty delimiter) and must be stripped
+    /// to leave just the body. Validates the correlation ID when enabled.
+    fn reply_envelope_strip_len(&self) -> io::Result<usize> {
+        let mut strip = 0;
+        if self.base.options.req_correlate {
+            let Some(id_frame) = self.frames.first() else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Correlation enabled but received empty message",
+                ));
+            };
+            if id_frame.len() != 4 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "Correlation frame has invalid length: {} (expected 4)",
+                        id_frame.len()
+                    ),
+                ));
+            }
+            let received_id =
+                u32::from_be_bytes([id_frame[0], id_frame[1], id_frame[2], id_frame[3]]);
+            if let Some(expected) = self.expected_request_id
+                && received_id != expected
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Request ID mismatch: expected {}, got {}", expected, received_id),
+                ));
+            }
+            strip += 1;
+        }
+        // Strip the empty delimiter the REP peer echoed, if present.
+        if self.frames.get(strip).is_some_and(bytes::Bytes::is_empty) {
+            strip += 1;
+        }
+        Ok(strip)
+    }
+
+    /// Receive a reply into a caller-provided buffer, reusing its allocation.
+    ///
+    /// Allocation-free counterpart to [`recv`](Self::recv): the reply body (with
+    /// the correlation/delimiter envelope stripped) is moved into `out` (cleared
+    /// on entry). Returns `Ok(true)` on a complete reply, `Ok(false)` on EOF.
+    pub async fn recv_into(&mut self, out: &mut Vec<Bytes>) -> io::Result<bool> {
+        out.clear();
+        loop {
+            loop {
+                match self.base.process_frame()? {
+                    crate::base::FrameResult::NeedMore => break,
+                    crate::base::FrameResult::CommandHandled => {
+                        if !self.base.send_buffer.is_empty() {
+                            self.base.flush_send_buffer().await?;
+                        }
+                    }
+                    crate::base::FrameResult::Data(more, payload) => {
+                        self.frames.push(payload);
+                        if !more {
+                            let strip = self.reply_envelope_strip_len()?;
+                            out.extend(self.frames.drain(strip..));
+                            self.frames.clear();
+                            self.state = ReqState::Idle;
+                            self.expected_request_id = None;
+                            return Ok(true);
+                        }
+                    }
+                }
+            }
+
+            let n = self.base.read_raw().await?;
+            if n == 0 {
+                self.state = ReqState::Idle;
+                return Ok(false);
+            }
+            if self.base.check_heartbeat()? {
+                self.base.flush_send_buffer().await?;
+            }
         }
     }
 
@@ -661,6 +695,17 @@ impl ReqSocket<TcpStream> {
     ///
     /// Respects `max_reconnect_attempts`  -  returns `NotConnected` when exhausted.
     pub async fn send_with_reconnect(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
+        // Enforce the state machine once, then build the wire envelope a single
+        // time. Retries re-send the same frames by borrow instead of cloning
+        // msg on every attempt (the happy first try now pays no clone at all).
+        if !self.base.options.req_relaxed && self.state != ReqState::Idle {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Cannot send while awaiting reply - must call recv() first (use req_relaxed mode to allow multiple outstanding requests)",
+            ));
+        }
+        let frames = self.build_req_envelope(msg);
+
         let max = self.base.options.max_reconnect_attempts;
         let mut attempts = 0u32;
 
@@ -679,18 +724,19 @@ impl ReqSocket<TcpStream> {
                     "[REQ] Stream disconnected, reconnecting (attempt {})",
                     attempts
                 );
-                self.state = ReqState::Idle;
-                self.expected_request_id = None;
                 self.try_reconnect().await?;
             }
 
-            match self.send(msg.clone()).await {
-                Ok(()) => return Ok(()),
+            // State only advances to AwaitingReply on success, so it stays Idle
+            // across retries and the envelope stays valid to resend.
+            match self.base.send_message(&frames).await {
+                Ok(()) => {
+                    self.state = ReqState::AwaitingReply;
+                    return Ok(());
+                }
                 Err(_) if self.base.stream.is_none() => {
-                    // write_from_buf set stream = None → network error, retry
+                    // send_message set stream = None → network error, retry
                     debug!("[REQ] Send failed (stream lost), will reconnect");
-                    self.state = ReqState::Idle;
-                    self.expected_request_id = None;
                 }
                 Err(e) => return Err(e),
             }
