@@ -315,8 +315,22 @@ mod tests {
     use super::*;
     use std::sync::atomic::Ordering;
 
+    /// `SLOW_PATH_ENTRIES` is a process-global counter, but cargo runs tests in
+    /// parallel, so any test that parks a waiter would pollute a concurrent
+    /// test's reading of it. Every test that touches the counter holds this lock
+    /// for its duration, giving it exclusive use. (Recover from a poisoned lock
+    /// so one failing test does not cascade into the others.)
+    static SLOW_PATH_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn lock_slow_path_counter() -> std::sync::MutexGuard<'static, ()> {
+        SLOW_PATH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     #[test]
     fn uncontended_acquire_takes_fast_path() {
+        let _guard = lock_slow_path_counter();
         // A series of uncontended acquire/release cycles must never park a
         // waiter, so no queueing overhead is paid on the hot path.
         let permits = SemaphorePermits::new(1024 * 1024);
@@ -338,6 +352,7 @@ mod tests {
 
     #[test]
     fn contended_acquire_parks_then_completes_on_release() {
+        let _guard = lock_slow_path_counter();
         // With the pool exhausted, a second acquire must park and only complete
         // once the first permit is released - no blocking thread involved.
         let permits = SemaphorePermits::new(1024);
@@ -366,6 +381,7 @@ mod tests {
 
     #[test]
     fn waiters_are_granted_in_fifo_order() {
+        let _guard = lock_slow_path_counter();
         use std::cell::RefCell;
         use std::rc::Rc;
 
@@ -406,6 +422,7 @@ mod tests {
 
     #[test]
     fn cancelled_waiter_does_not_leak_capacity() {
+        let _guard = lock_slow_path_counter();
         // A waiter that is polled (parked) and then dropped before being granted
         // must remove itself so its slot does not wedge the queue, and must not
         // consume capacity.
