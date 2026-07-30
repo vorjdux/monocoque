@@ -22,7 +22,7 @@ fuzz_target!(|data: &[u8]| {
             payload
                 .chunks(chunk_size)
                 .take(num_frames)
-                .map(|c| Bytes::copy_from_slice(c))
+                .map(Bytes::copy_from_slice)
                 .collect()
         };
 
@@ -36,7 +36,7 @@ fuzz_target!(|data: &[u8]| {
         let frames: Vec<Bytes> = data[1..]
             .chunks(((data.len() - 1) / 6).max(1))
             .take(6)
-            .map(|c| Bytes::copy_from_slice(c))
+            .map(Bytes::copy_from_slice)
             .collect();
 
         let _ = ZapResponse::decode(&frames);
