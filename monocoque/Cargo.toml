@@ -37,6 +37,10 @@ name = "dealer_write_probe"
 required-features = ["zmq"]
 
 [[example]]
+name = "dealer_throughput_probe"
+required-features = ["zmq"]
+
+[[example]]
 name = "bench_changes"
 required-features = ["zmq"]
 

@@ -251,6 +251,27 @@ SocketOptions::default()
 Smaller thresholds lower the latency tail at the cost of slightly fewer messages
 per syscall. The default 64 KB is optimal for sustained throughput on loopback.
 
+### Coalescing on the connected sockets (0.4)
+
+Before 0.4 only PUSH honored `with_write_coalescing`; DEALER, ROUTER, REQ, REP,
+and PAIR ignored the flag and issued one kernel write per send regardless. 0.4
+routes all of them through the same coalesce/vector/write path, so a batching
+DEALER caller finally gets the syscall amortization PUSH already had. For a
+1,000,000-message 64 B DEALER-to-ROUTER flow over TCP loopback (receiver-timed,
+`examples/dealer_throughput_probe.rs`):
+
+| DEALER send path | throughput |
+|---|---|
+| coalescing off (the 0.3 behavior, one write per send) | 0.47 M msg/s |
+| coalescing on (0.4 wires it in) | 18.0 M msg/s |
+
+That is a ~38x improvement for batched DEALER workloads, and it is not
+measurement-sensitive: the win is a deterministic drop in write submissions. The
+same 20,000-message run under `strace` falls from 32,260 to 80 `io_uring_enter`
+calls once coalescing is honored (`examples/dealer_write_probe.rs`). The eager
+(one-write-per-send) DEALER path is unchanged; this is purely what a caller gains
+by opting into coalescing, which 0.3 did not deliver for these socket types.
+
 ---
 
 ### Why coalescing is opt-in

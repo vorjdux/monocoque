@@ -166,7 +166,9 @@ send branch is now factored into a shared `SocketBase::send_message` (coalesce,
 else vector large frames, else encode and write) and all five send functions
 route through it. Batching small DEALER frames collapses write submissions: a
 20000 by 64-byte DEALER-to-ROUTER run over TCP loopback drops from 32260 to 80
-`io_uring_enter` calls with coalescing on. The buffered write helpers also
+`io_uring_enter` calls with coalescing on, and a 1,000,000-message version of the
+same flow rises from 0.47 M to 18.0 M msg/s (about 38x) now that DEALER honors
+the coalescing flag it previously ignored. The buffered write helpers also
 replace `split().freeze()` with a `mem::take` / `write_all` / recover / `clear`
 cycle, so the owned buffer comes straight back with its capacity intact and no
 per-send `Arc` from freezing.
