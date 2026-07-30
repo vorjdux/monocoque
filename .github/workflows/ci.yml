@@ -91,15 +91,18 @@ jobs:
       contents: read
     strategy:
       fail-fast: false
-      # The default compio backend floors at 1.95 (cfg_select); the tokio and
-      # smol backends build on 1.93. Each leg builds with `--features zmq` so the
-      # ZMTP protocol + ZMQ pattern API - the thing users actually compile - is
-      # covered, not just the bare core.
+      # The workspace declares a single MSRV of 1.95: the crates support all
+      # three backends behind features, so they carry one `rust-version`, and the
+      # default compio backend floors it at 1.95 (compio-driver uses cfg_select).
+      # Cargo enforces that declared version for every build, so the tokio and
+      # smol backends are checked on 1.95 too. Each leg builds with `--features
+      # zmq` so the ZMTP protocol + ZMQ pattern API - the thing users actually
+      # compile - is covered, not just the bare core.
       matrix:
         leg:
           - { name: "compio 1.95", toolchain: "1.95", flags: "--features zmq" }
-          - { name: "tokio 1.93", toolchain: "1.93", flags: "--no-default-features --features runtime-tokio,zmq" }
-          - { name: "smol 1.93", toolchain: "1.93", flags: "--no-default-features --features runtime-smol,zmq" }
+          - { name: "tokio 1.95", toolchain: "1.95", flags: "--no-default-features --features runtime-tokio,zmq" }
+          - { name: "smol 1.95", toolchain: "1.95", flags: "--no-default-features --features runtime-smol,zmq" }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
