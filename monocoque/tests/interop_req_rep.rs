@@ -47,8 +47,13 @@ fn interop_monocoque_rep_libzmq_req() {
     req.connect(&format!("tcp://{addr}")).unwrap();
 
     req.send("ping", 0).unwrap();
-    let reply = req.recv_bytes(0).expect("libzmq REQ got no reply from monocoque REP");
-    assert_eq!(reply, b"pong", "libzmq REQ could not exchange with monocoque REP");
+    let reply = req
+        .recv_bytes(0)
+        .expect("libzmq REQ got no reply from monocoque REP");
+    assert_eq!(
+        reply, b"pong",
+        "libzmq REQ could not exchange with monocoque REP"
+    );
 
     result_rx
         .recv_timeout(Duration::from_secs(10))
@@ -92,8 +97,13 @@ fn interop_libzmq_rep_monocoque_req() {
             });
     });
 
-    let request = rep.recv_bytes(0).expect("libzmq REP got no request from monocoque REQ");
-    assert_eq!(request, b"ping", "libzmq REP could not read monocoque REQ request");
+    let request = rep
+        .recv_bytes(0)
+        .expect("libzmq REP got no request from monocoque REQ");
+    assert_eq!(
+        request, b"ping",
+        "libzmq REP could not read monocoque REQ request"
+    );
     rep.send("pong", 0).unwrap();
 
     result_rx

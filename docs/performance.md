@@ -376,6 +376,15 @@ writes the frames into a caller-owned buffer instead, so a recv loop that reuses
 one buffer allocates nothing per message. `try_recv_into` is the non-blocking
 drain counterpart, for emptying everything decoded from one kernel read.
 
+As of 0.4.0 the allocation-free receive API is available on every recv-capable
+socket (DEALER, ROUTER, REQ, REP, PAIR, SUB), not just PULL, and the
+single-frame pipeline sockets (PULL, DEALER, PAIR) also expose `recv_one` for
+messages known to be one frame. Each socket keeps its receive semantics: ROUTER
+still prefixes the peer identity, REQ strips the reply envelope, REP stashes the
+routing envelope, and SUB drops filtered messages without allocating them.
+Measured over 256 DEALER messages, `recv()` charges 261 allocations and
+`recv_into()` charges 1.
+
 ```rust
 use bytes::Bytes;
 use monocoque::zmq::PullSocket;

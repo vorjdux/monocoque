@@ -1323,7 +1323,7 @@ checksum = "21909324aa58f5c284d91cac514c6d081210901dc372d7c8ea6a9d7e0406097a"
 
 [[package]]
 name = "monocoque-rs"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1348,7 +1348,7 @@ dependencies = [
 
 [[package]]
 name = "monocoque-rs-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-lock",
  "bytes",
@@ -1372,7 +1372,7 @@ dependencies = [
 
 [[package]]
 name = "monocoque-rs-zmtp"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "bytes",

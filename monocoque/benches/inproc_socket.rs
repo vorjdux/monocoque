@@ -68,8 +68,7 @@ fn run_roundtrip(iters: u64) -> Duration {
     let server = thread::spawn(move || {
         let rt = monocoque::rt::LocalRuntime::new().unwrap();
         rt.block_on(async move {
-            let mut server =
-                DealerSocket::bind_inproc_bidi(&server_endpoint, options()).unwrap();
+            let mut server = DealerSocket::bind_inproc_bidi(&server_endpoint, options()).unwrap();
             ready_tx.send(()).unwrap();
             // Echo every frame back until the client drops (recv -> None/EOF).
             loop {
@@ -89,8 +88,7 @@ fn run_roundtrip(iters: u64) -> Duration {
     let elapsed = {
         let rt = monocoque::rt::LocalRuntime::new().unwrap();
         rt.block_on(async move {
-            let mut client =
-                DealerSocket::connect_inproc(&client_endpoint, options()).unwrap();
+            let mut client = DealerSocket::connect_inproc(&client_endpoint, options()).unwrap();
 
             // Warm the pipe so the first send/recv buffer growth is untimed.
             client.send(vec![payload.clone()]).await.unwrap();

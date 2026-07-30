@@ -22,7 +22,10 @@ use std::time::Duration;
 fn keypair(seed: u8) -> (/* public */ [u8; 32], /* secret */ [u8; 32]) {
     let mut sec = [0u8; 32];
     for (i, b) in sec.iter_mut().enumerate() {
-        *b = (i as u8).wrapping_mul(31).wrapping_add(seed).wrapping_add(1);
+        *b = (i as u8)
+            .wrapping_mul(31)
+            .wrapping_add(seed)
+            .wrapping_add(1);
     }
     let public = *CurveSecretKey::from_bytes(sec).public_key().as_bytes();
     (public, sec)
@@ -76,8 +79,9 @@ fn curve_interop_monocoque_server_libzmq_client() {
                 match dealer.recv().await {
                     Ok(Some(msg)) if msg[0].as_ref() == b"ping-from-libzmq" => {}
                     other => {
-                        let _ = result_tx
-                            .send(Err(format!("server could not decrypt libzmq MESSAGE: {other:?}")));
+                        let _ = result_tx.send(Err(format!(
+                            "server could not decrypt libzmq MESSAGE: {other:?}"
+                        )));
                         return;
                     }
                 }
@@ -146,15 +150,18 @@ fn curve_interop_libzmq_server_monocoque_client() {
                 let opts = SocketOptions::default()
                     .with_curve_serverkey(server_pub)
                     .with_curve_keypair(client_pub, client_sec);
-                let mut dealer =
-                    match DealerSocket::connect_with_options(&format!("tcp://{addr}"), opts).await {
-                        Ok(d) => d,
-                        Err(e) => {
-                            let _ =
-                                result_tx.send(Err(format!("client CURVE handshake failed: {e}")));
-                            return;
-                        }
-                    };
+                let mut dealer = match DealerSocket::connect_with_options(
+                    &format!("tcp://{addr}"),
+                    opts,
+                )
+                .await
+                {
+                    Ok(d) => d,
+                    Err(e) => {
+                        let _ = result_tx.send(Err(format!("client CURVE handshake failed: {e}")));
+                        return;
+                    }
+                };
                 dealer
                     .send(vec![Bytes::from_static(b"ping-from-monocoque")])
                     .await
@@ -164,8 +171,9 @@ fn curve_interop_libzmq_server_monocoque_client() {
                         let _ = result_tx.send(Ok(()));
                     }
                     other => {
-                        let _ = result_tx
-                            .send(Err(format!("client could not decrypt libzmq MESSAGE: {other:?}")));
+                        let _ = result_tx.send(Err(format!(
+                            "client could not decrypt libzmq MESSAGE: {other:?}"
+                        )));
                     }
                 }
             });

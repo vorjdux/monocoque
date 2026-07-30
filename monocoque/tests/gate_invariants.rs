@@ -48,7 +48,9 @@ fn multipart_frame_count_is_capped() {
                 .await
                 .unwrap();
             // One logical message carrying an abusive number of frames.
-            let msg: Vec<Bytes> = (0..PROBE_FRAMES).map(|_| Bytes::from_static(b"x")).collect();
+            let msg: Vec<Bytes> = (0..PROBE_FRAMES)
+                .map(|_| Bytes::from_static(b"x"))
+                .collect();
             let _ = push.send(msg).await;
             let _ = push.flush().await;
             // Keep the socket alive briefly so the peer can react.
@@ -61,18 +63,20 @@ fn multipart_frame_count_is_capped() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         port_tx.send(listener.local_addr().unwrap().port()).unwrap();
         let (stream, _) = listener.accept().await.unwrap();
-        let mut pull = PullSocket::from_tcp_with_options(stream, opts()).await.unwrap();
+        let mut pull = PullSocket::from_tcp_with_options(stream, opts())
+            .await
+            .unwrap();
 
         // DESIRED: the abusive message is rejected/closed, or at worst delivered
         // truncated to a sane cap - never accumulated in full.
-        match pull.recv().await {
-            Ok(Some(msg)) => assert!(
+        // Ok(None)/Err means the decoder rejected or closed: the invariant holds.
+        if let Ok(Some(msg)) = pull.recv().await {
+            assert!(
                 msg.len() <= SANE_FRAME_CAP,
                 "a single logical message accumulated {} frames without bound \
                  (cap {SANE_FRAME_CAP}); the decoder must reject or close instead",
                 msg.len()
-            ),
-            Ok(None) | Err(_) => { /* rejected/closed: the invariant holds */ }
+            );
         }
     });
 
@@ -132,7 +136,9 @@ fn subscription_state_freed_on_disconnect() {
         let rt = LocalRuntime::new().unwrap();
         rt.block_on(async move {
             let stream = monocoque::rt::TcpStream::connect(addr).await.unwrap();
-            let mut sub = SubSocket::from_tcp_with_options(stream, opts()).await.unwrap();
+            let mut sub = SubSocket::from_tcp_with_options(stream, opts())
+                .await
+                .unwrap();
             sub.subscribe(b"topic").await.unwrap();
             // Drop the subscriber to disconnect.
             drop(sub);

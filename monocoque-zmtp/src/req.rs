@@ -365,7 +365,10 @@ where
             {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    format!("Request ID mismatch: expected {}, got {}", expected, received_id),
+                    format!(
+                        "Request ID mismatch: expected {}, got {}",
+                        expected, received_id
+                    ),
                 ));
             }
             strip += 1;

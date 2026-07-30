@@ -2,7 +2,9 @@
 //!
 //! CurveZMQ provides public-key cryptography with perfect forward secrecy:
 //! - Elliptic curve Diffie-Hellman key exchange (X25519)
-//! - Authenticated encryption (XSalsa20-Poly1305 for handshake, XChaCha20-Poly1305 for messages)
+//! - Authenticated encryption (XSalsa20-Poly1305 via NaCl `crypto_box` for both
+//!   the handshake boxes and application messages; XChaCha20-Poly1305 is used
+//!   only for the server-internal WELCOME cookie, which never leaves the server)
 //! - Resistance to man-in-the-middle attacks
 //! - Zero-knowledge proof of long-term key ownership via vouch
 //!
@@ -1679,8 +1681,9 @@ mod tests {
                 .try_into()
                 .unwrap();
         let plaintext = unhex("0068656c6c6f206c69627a6d712066726f6d206d6f6e6f636f717565");
-        let expected_ct =
-            unhex("2a39f8183b024250d3eafae1e9f30a77ccaa6b10011b937c346f70b18b7758acbfd05b50443aec7089ee5240");
+        let expected_ct = unhex(
+            "2a39f8183b024250d3eafae1e9f30a77ccaa6b10011b937c346f70b18b7758acbfd05b50443aec7089ee5240",
+        );
 
         // The client seals the frame; the bytes must equal libsodium's output.
         let client_box = CurveBox::from_transient_keys(&pk_s, &sk_c);

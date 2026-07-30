@@ -100,7 +100,10 @@ pub fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), 
         // Attacker-controlled 32-bit length: `offset + value_len` can wrap on a
         // 32-bit target and pass a naive bound check, then panic on the slice.
         let value_start = offset;
-        let Some(value_end) = offset.checked_add(value_len).filter(|&end| end <= body.len()) else {
+        let Some(value_end) = offset
+            .checked_add(value_len)
+            .filter(|&end| end <= body.len())
+        else {
             return Err(ZmtpError::Protocol);
         };
         offset = value_end;

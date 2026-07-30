@@ -50,7 +50,7 @@ Match buffer sizes to your typical message size:
 let options = SocketOptions::small();   // 4 KB buffers
 
 // Default (1-10 KB messages)
-let options = SocketOptions::default(); // 8 KB buffers
+let options = SocketOptions::default(); // 32 KB read / 8 KB write buffers
 
 // Large messages (>10 KB)
 let options = SocketOptions::large();   // 16 KB buffers

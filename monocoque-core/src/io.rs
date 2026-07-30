@@ -162,7 +162,11 @@ mod tests {
         // uninitialized carve.
         let frozen = buf.freeze();
         assert_eq!(frozen.as_ref(), b"0123456789");
-        assert_eq!(frozen.as_ptr(), slab_ptr, "frozen frame aliases the slab head");
+        assert_eq!(
+            frozen.as_ptr(),
+            slab_ptr,
+            "frozen frame aliases the slab head"
+        );
 
         // The reclaim returned the unused bytes: the next carve advances by the
         // 10 bytes read, not the full 8192 carve, and reuses the same slab.

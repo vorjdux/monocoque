@@ -6,7 +6,7 @@ Add the dependencies to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-monocoque-rs-zmtp = { version = "0.2.0", path = "..." }   # crates.io name
+monocoque-rs-zmtp = { version = "0.4.0", path = "..." }   # crates.io name
 compio = { version = "0.19", features = ["runtime", "macros"] }
 bytes = "1"
 ```
@@ -20,17 +20,17 @@ All sockets follow the same construction pattern:
 ```rust
 use monocoque_zmtp::{DealerSocket, RouterSocket, SocketOptions};
 
-// Default options
-let socket = DealerSocket::new();
+// Connect with default options
+let socket = DealerSocket::connect("127.0.0.1:5555").await?;
 
-// Custom options
+// Connect with custom options
 let options = SocketOptions::new()
     .with_recv_timeout(Duration::from_secs(5))
     .with_send_hwm(1000);
-let socket = DealerSocket::with_options(options);
+let socket = DealerSocket::connect_with_options("127.0.0.1:5555", options).await?;
 
-// Connect directly
-let socket = DealerSocket::from_tcp("127.0.0.1:5555").await?;
+// Or wrap a stream you already have
+let socket = DealerSocket::from_tcp(existing_stream).await?;
 ```
 
 Sending and receiving use `Vec<Bytes>` for multipart messages:

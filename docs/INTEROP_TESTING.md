@@ -100,7 +100,7 @@ EOF
 
 ## CURVE Encryption Interop
 
-Monocoque implements CURVE (RFC 26) using X25519 + ChaCha20-Poly1305. Key exchange is compatible with libzmq, but note that libzmq uses Z85 encoding for keys while Monocoque uses raw 32-byte keys - conversion is required.
+Monocoque implements CURVE (RFC 26) using X25519 + XSalsa20-Poly1305 (NaCl `crypto_box`). Key exchange and message encryption are compatible with libzmq, but note that libzmq uses Z85 encoding for keys while Monocoque uses raw 32-byte keys - conversion is required.
 
 Generate keypairs:
 
