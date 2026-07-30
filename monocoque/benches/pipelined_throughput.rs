@@ -71,7 +71,7 @@ fn monocoque_dealer_router_pipelined(c: &mut Criterion) {
                             let (stream, _) = listener.accept().await.unwrap();
                             let mut router = RouterSocket::from_tcp_with_options(
                                 stream,
-                                SocketOptions::default().with_buffer_sizes(16384, 16384),
+                                SocketOptions::default(),
                             )
                             .await
                             .unwrap();
@@ -108,6 +108,8 @@ fn monocoque_dealer_router_pipelined(c: &mut Criterion) {
                         .await
                         .unwrap();
 
+                        // Allocation-free drain of the echoed batch.
+                        let mut buf: Vec<bytes::Bytes> = Vec::with_capacity(4);
                         for _ in 0..(TOTAL_MESSAGES / BATCH_SIZE) {
                             for _ in 0..BATCH_SIZE {
                                 dealer
@@ -117,7 +119,7 @@ fn monocoque_dealer_router_pipelined(c: &mut Criterion) {
                             dealer.flush().await.unwrap();
 
                             for _ in 0..BATCH_SIZE {
-                                if dealer.recv().await.ok().flatten().is_none() {
+                                if !dealer.recv_into(&mut buf).await.unwrap_or(false) {
                                     break;
                                 }
                             }
