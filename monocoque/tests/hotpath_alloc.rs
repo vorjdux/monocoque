@@ -20,8 +20,8 @@
 //! `Vec<Bytes>` per message by design, so it can never be zero-alloc.
 
 use bytes::Bytes;
-use monocoque::rt::{LocalRuntime, TcpListener};
-use monocoque::zmq::{PullSocket, PushSocket, SocketOptions};
+use monocoque::rt::{LocalRuntime, TcpListener, TcpStream};
+use monocoque::zmq::{DealerSocket, PullSocket, PushSocket, SocketOptions};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
@@ -152,4 +152,79 @@ fn single_frame_hot_path_makes_no_per_message_allocation() {
     });
 
     sender.join().unwrap();
+}
+
+/// Direct A/B for the ported `recv_into`: `recv` allocates a fresh `Vec<Bytes>`
+/// per message by design, while `recv_into` reuses the caller's buffer. Draining
+/// the same buffered burst two ways shows `recv` scales one allocation per
+/// message and `recv_into` does not. Uses DEALER (the representative port); the
+/// draining runs after the sender's writes complete, so only the receiver's
+/// allocations fall inside the counted window.
+#[test]
+fn dealer_recv_into_avoids_the_per_message_vec_that_recv_allocates() {
+    const N: usize = 256; // ~18 KiB of 64-byte frames: fits in socket buffers
+    let rt = LocalRuntime::new().unwrap();
+
+    // A connected DEALER pair on this runtime (sender, receiver).
+    async fn dealer_pair() -> (DealerSocket<TcpStream>, DealerSocket<TcpStream>) {
+        let listener = TcpListener::bind(ADDR).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let endpoint = format!("tcp://{addr}");
+        let accept = async {
+            let (stream, _) = listener.accept().await.unwrap();
+            DealerSocket::from_tcp(stream).await.unwrap()
+        };
+        let connect = DealerSocket::connect(&endpoint);
+        let (recv_side, send_side) = futures::future::join(accept, connect).await;
+        (send_side.unwrap(), recv_side)
+    }
+
+    let (recv_allocs, recv_into_allocs) = rt.block_on(async {
+        let payload = Bytes::from(vec![0u8; PAYLOAD]);
+
+        // Baseline: drain with recv(), which allocates one Vec per message.
+        let (mut tx, mut rx) = dealer_pair().await;
+        for _ in 0..N {
+            tx.send(vec![payload.clone()]).await.unwrap();
+        }
+        ALLOCS.store(0, Ordering::Relaxed);
+        COUNTING.store(1, Ordering::Relaxed);
+        for _ in 0..N {
+            rx.recv().await.unwrap().unwrap();
+        }
+        COUNTING.store(0, Ordering::Relaxed);
+        let recv_allocs = ALLOCS.load(Ordering::Relaxed);
+
+        // Optimized: drain the same burst with recv_into into one reused buffer.
+        let (mut tx, mut rx) = dealer_pair().await;
+        for _ in 0..N {
+            tx.send(vec![payload.clone()]).await.unwrap();
+        }
+        let mut buf: Vec<Bytes> = Vec::with_capacity(4);
+        // Grow buf to steady state before counting.
+        rx.recv_into(&mut buf).await.unwrap();
+        ALLOCS.store(0, Ordering::Relaxed);
+        COUNTING.store(1, Ordering::Relaxed);
+        for _ in 1..N {
+            rx.recv_into(&mut buf).await.unwrap();
+        }
+        COUNTING.store(0, Ordering::Relaxed);
+        let recv_into_allocs = ALLOCS.load(Ordering::Relaxed);
+
+        (recv_allocs, recv_into_allocs)
+    });
+
+    // recv() allocates about one Vec per message (measured: 261 for 256);
+    // recv_into() reuses the buffer (measured: 1 for 256).
+    assert!(
+        recv_allocs >= N,
+        "recv() over {N} messages allocated only {recv_allocs}; expected >= {N} \
+         (one Vec per message)"
+    );
+    // recv_into() reuses the buffer, so its allocations do not scale with N.
+    assert!(
+        recv_into_allocs * 8 < recv_allocs,
+        "recv_into() allocated {recv_into_allocs} over {N} messages vs recv()'s \
+         {recv_allocs}; expected recv_into to be far below (buffer reused)"
+    );
 }

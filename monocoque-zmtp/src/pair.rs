@@ -141,6 +141,107 @@ where
         }
     }
 
+    /// Receive a message into a caller-provided buffer, reusing its allocation.
+    ///
+    /// Allocation-free counterpart to [`recv`](Self::recv): frames go into `out`
+    /// (cleared on entry) instead of a fresh `Vec`. Returns `Ok(true)` on a
+    /// complete message, `Ok(false)` on EOF.
+    pub async fn recv_into(&mut self, out: &mut Vec<Bytes>) -> io::Result<bool> {
+        out.clear();
+        loop {
+            loop {
+                match self.base.process_frame()? {
+                    crate::base::FrameResult::NeedMore => break,
+                    crate::base::FrameResult::CommandHandled => {
+                        if !self.base.send_buffer.is_empty() {
+                            self.base.flush_send_buffer().await?;
+                        }
+                    }
+                    crate::base::FrameResult::Data(more, payload) => {
+                        if !more && self.frames.is_empty() {
+                            out.push(payload);
+                            return Ok(true);
+                        }
+                        self.frames.push(payload);
+                        if !more {
+                            out.extend(self.frames.drain(..));
+                            return Ok(true);
+                        }
+                    }
+                }
+            }
+
+            let n = self.base.read_raw().await?;
+            if n == 0 {
+                return Ok(false);
+            }
+            if self.base.check_heartbeat()? {
+                self.base.flush_send_buffer().await?;
+            }
+        }
+    }
+
+    /// Try to receive a message into `out` without a kernel read.
+    ///
+    /// Returns `Ok(true)` with a complete message moved into `out`, or
+    /// `Ok(false)` leaving `out` untouched when nothing complete is buffered.
+    pub fn try_recv_into(&mut self, out: &mut Vec<Bytes>) -> io::Result<bool> {
+        loop {
+            match self.base.process_frame()? {
+                crate::base::FrameResult::NeedMore => return Ok(false),
+                crate::base::FrameResult::CommandHandled => {}
+                crate::base::FrameResult::Data(more, payload) => {
+                    if !more && self.frames.is_empty() {
+                        out.clear();
+                        out.push(payload);
+                        return Ok(true);
+                    }
+                    self.frames.push(payload);
+                    if !more {
+                        out.clear();
+                        out.extend(self.frames.drain(..));
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Receive a single-frame message, returning just its frame.
+    ///
+    /// Returns `Ok(None)` on EOF, and an error if the message is multipart.
+    pub async fn recv_one(&mut self) -> io::Result<Option<Bytes>> {
+        loop {
+            loop {
+                match self.base.process_frame()? {
+                    crate::base::FrameResult::NeedMore => break,
+                    crate::base::FrameResult::CommandHandled => {
+                        if !self.base.send_buffer.is_empty() {
+                            self.base.flush_send_buffer().await?;
+                        }
+                    }
+                    crate::base::FrameResult::Data(more, payload) => {
+                        if more || !self.frames.is_empty() {
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                "recv_one received a multipart message",
+                            ));
+                        }
+                        return Ok(Some(payload));
+                    }
+                }
+            }
+
+            let n = self.base.read_raw().await?;
+            if n == 0 {
+                return Ok(None);
+            }
+            if self.base.check_heartbeat()? {
+                self.base.flush_send_buffer().await?;
+            }
+        }
+    }
+
     /// Close the socket gracefully by shutting down the underlying stream.
     pub async fn close(mut self) -> io::Result<()> {
         trace!("[PAIR] Closing socket");

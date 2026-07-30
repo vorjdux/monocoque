@@ -162,6 +162,113 @@ where
         }
     }
 
+    /// Receive a message into a caller-provided buffer, reusing its allocation.
+    ///
+    /// Allocation-free counterpart to [`recv`](Self::recv): frames are pushed
+    /// into `out` (cleared on entry) instead of a freshly allocated `Vec`, so a
+    /// steady recv loop performs no per-message heap allocation. Returns
+    /// `Ok(true)` when a complete message was read, `Ok(false)` on EOF.
+    pub async fn recv_into(&mut self, out: &mut Vec<Bytes>) -> io::Result<bool> {
+        out.clear();
+        loop {
+            loop {
+                match self.base.process_frame()? {
+                    crate::base::FrameResult::NeedMore => break,
+                    crate::base::FrameResult::CommandHandled => {
+                        if !self.base.send_buffer.is_empty() {
+                            self.base.flush_send_buffer().await?;
+                        }
+                    }
+                    crate::base::FrameResult::Data(more, payload) => {
+                        if !more && self.frames.is_empty() {
+                            out.push(payload);
+                            return Ok(true);
+                        }
+                        self.frames.push(payload);
+                        if !more {
+                            out.extend(self.frames.drain(..));
+                            return Ok(true);
+                        }
+                    }
+                }
+            }
+
+            let n = self.base.read_raw().await?;
+            if n == 0 {
+                return Ok(false);
+            }
+            if self.base.check_heartbeat()? {
+                self.base.flush_send_buffer().await?;
+            }
+        }
+    }
+
+    /// Try to receive a message into `out` without a kernel read.
+    ///
+    /// Allocation-free counterpart to a non-blocking recv: returns `Ok(true)`
+    /// with a complete message moved into `out` (its capacity reused), or
+    /// `Ok(false)` leaving `out` untouched when no complete message is buffered.
+    /// Partial frames stay in the accumulator so it interleaves with
+    /// [`recv_into`](Self::recv_into) for multipart messages split across reads.
+    pub fn try_recv_into(&mut self, out: &mut Vec<Bytes>) -> io::Result<bool> {
+        loop {
+            match self.base.process_frame()? {
+                crate::base::FrameResult::NeedMore => return Ok(false),
+                crate::base::FrameResult::CommandHandled => {}
+                crate::base::FrameResult::Data(more, payload) => {
+                    if !more && self.frames.is_empty() {
+                        out.clear();
+                        out.push(payload);
+                        return Ok(true);
+                    }
+                    self.frames.push(payload);
+                    if !more {
+                        out.clear();
+                        out.extend(self.frames.drain(..));
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Receive a single-frame message, returning just its frame.
+    ///
+    /// Convenience for pipelines whose messages are always one frame (the
+    /// counterpart to a single-frame send): skips the caller's `Vec`. Returns
+    /// `Ok(None)` on EOF, and an error if the message turns out to be multipart.
+    pub async fn recv_one(&mut self) -> io::Result<Option<Bytes>> {
+        loop {
+            loop {
+                match self.base.process_frame()? {
+                    crate::base::FrameResult::NeedMore => break,
+                    crate::base::FrameResult::CommandHandled => {
+                        if !self.base.send_buffer.is_empty() {
+                            self.base.flush_send_buffer().await?;
+                        }
+                    }
+                    crate::base::FrameResult::Data(more, payload) => {
+                        if more || !self.frames.is_empty() {
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                "recv_one received a multipart message",
+                            ));
+                        }
+                        return Ok(Some(payload));
+                    }
+                }
+            }
+
+            let n = self.base.read_raw().await?;
+            if n == 0 {
+                return Ok(None);
+            }
+            if self.base.check_heartbeat()? {
+                self.base.flush_send_buffer().await?;
+            }
+        }
+    }
+
     /// Send a message immediately.
     ///
     /// Encodes and sends the message in a single I/O operation.
@@ -778,10 +885,13 @@ impl DealerSocket<TcpStream> {
                 self.try_reconnect().await?;
             }
 
-            match self.send(msg.clone()).await {
+            // Borrow msg instead of cloning: send only reads it, and it must
+            // survive for a possible retry after reconnect. On the common
+            // first-try success this pays no per-send Vec clone.
+            match self.base.send_message(&msg).await {
                 Ok(()) => return Ok(()),
                 Err(_) if self.base.stream.is_none() => {
-                    // write_from_buf set stream = None → network error, retry
+                    // send_message set stream = None → network error, retry
                     debug!("[DEALER] Send failed (stream lost), will reconnect");
                 }
                 Err(e) => return Err(e),

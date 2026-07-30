@@ -92,17 +92,7 @@ where
     /// Returns an error if the socket is poisoned, disconnected, or if the write fails.
     pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
         trace!("[PUSH] Sending {} frames", msg.len());
-
-        if self.base.options.write_coalescing {
-            self.base.send_coalesced(&msg).await?;
-        } else if self.base.should_vectored_write(&msg) {
-            // Large frame: write header + body as an iovec, skipping the copy
-            // into the userspace send buffer.
-            self.base.send_vectored(&msg).await?;
-        } else {
-            self.base.encode_message_to_write_buf(&msg)?;
-            self.base.write_from_buf().await?;
-        }
+        self.base.send_message(&msg).await?;
 
         // Check heartbeat: send PING if the connection has been idle too long
         if self.base.check_heartbeat()? {
@@ -301,10 +291,17 @@ impl PushSocket<TcpStream> {
                 self.try_reconnect().await?;
             }
 
-            match self.send(msg.clone()).await {
-                Ok(()) => return Ok(()),
+            // Borrow msg instead of cloning: it must survive a possible retry
+            // after reconnect, but the happy first-try path pays no Vec clone.
+            match self.base.send_message(&msg).await {
+                Ok(()) => {
+                    if self.base.check_heartbeat()? {
+                        self.base.flush_send_buffer().await?;
+                    }
+                    return Ok(());
+                }
                 Err(_) if self.base.stream.is_none() => {
-                    // write_from_buf set stream = None → network error, retry
+                    // send_message set stream = None → network error, retry
                     debug!("[PUSH] Send failed (stream lost), will reconnect");
                 }
                 Err(e) => return Err(e),

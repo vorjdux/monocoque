@@ -174,6 +174,16 @@ where
         self.inner.recv().await
     }
 
+    /// Receive a request body into a caller-provided buffer, reusing its
+    /// allocation.
+    ///
+    /// Allocation-free counterpart to [`recv`](Self::recv): the routing envelope
+    /// is stashed for the reply and the body is moved into `out`. Returns
+    /// `Ok(true)` on a request, `Ok(false)` on EOF.
+    pub async fn recv_into(&mut self, out: &mut Vec<Bytes>) -> io::Result<bool> {
+        self.inner.recv_into(out).await
+    }
+
     /// Get the socket type.
     ///
     /// # ZeroMQ Compatibility

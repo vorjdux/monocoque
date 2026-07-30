@@ -193,30 +193,13 @@ where
                             self.frames.push(payload);
 
                             if !more {
-                                let msg: Vec<Bytes> = self.frames.drain(..).collect();
-                                trace!("[SUB] Received {} frames", msg.len());
-
-                                // Check if message matches any subscription. With
-                                // ZMQ_INVERT_MATCHING the prefix result is negated:
-                                // deliver messages that do NOT match a prefix.
-                                let matches = {
-                                    let subscriptions = &self.subscriptions;
-                                    let invert = self.base.options.invert_matching;
-                                    msg.first().is_some_and(|first_frame| {
-                                        let matched = subscriptions
-                                            .iter()
-                                            .any(|sub| first_frame.starts_with(sub));
-                                        if invert {
-                                            !matched
-                                        } else {
-                                            subscriptions.is_empty() || matched
-                                        }
-                                    })
-                                };
-
-                                if matches {
+                                if self.message_matches() {
+                                    let msg: Vec<Bytes> = self.frames.drain(..).collect();
+                                    trace!("[SUB] Received {} frames", msg.len());
                                     return Ok(Some(msg));
                                 }
+                                // Drop the filtered message without allocating it.
+                                self.frames.clear();
                                 trace!("[SUB] Message filtered out (no matching subscription)");
                                 continue 'outer;
                             }
@@ -235,6 +218,90 @@ where
                     self.base.flush_send_buffer().await?;
                 }
                 // Continue decoding with new data
+            }
+        }
+    }
+
+    /// Whether the just-assembled message in `self.frames` passes the
+    /// subscription filter. With `ZMQ_INVERT_MATCHING` the prefix result is
+    /// negated: deliver messages that do NOT match a subscribed prefix.
+    fn message_matches(&self) -> bool {
+        let subscriptions = &self.subscriptions;
+        let invert = self.base.options.invert_matching;
+        self.frames.first().is_some_and(|first_frame| {
+            let matched = subscriptions.iter().any(|sub| first_frame.starts_with(sub));
+            if invert {
+                !matched
+            } else {
+                subscriptions.is_empty() || matched
+            }
+        })
+    }
+
+    /// Receive a matching message into a caller-provided buffer, reusing its
+    /// allocation.
+    ///
+    /// Allocation-free counterpart to [`recv`](Self::recv): filtered-out
+    /// messages are dropped without allocating, and a matching message's frames
+    /// are moved into `out` (cleared on entry). Returns `Ok(true)` on a matching
+    /// message, `Ok(false)` on EOF.
+    pub async fn recv_into(&mut self, out: &mut Vec<Bytes>) -> io::Result<bool> {
+        out.clear();
+        'outer: loop {
+            loop {
+                match self.base.process_frame()? {
+                    crate::base::FrameResult::NeedMore => break,
+                    crate::base::FrameResult::CommandHandled => {
+                        if !self.base.send_buffer.is_empty() {
+                            self.base.flush_send_buffer().await?;
+                        }
+                    }
+                    crate::base::FrameResult::Data(more, payload) => {
+                        self.frames.push(payload);
+                        if !more {
+                            if self.message_matches() {
+                                out.extend(self.frames.drain(..));
+                                return Ok(true);
+                            }
+                            self.frames.clear();
+                            continue 'outer;
+                        }
+                    }
+                }
+            }
+
+            let n = self.base.read_raw().await?;
+            if n == 0 {
+                return Ok(false);
+            }
+            if self.base.check_heartbeat()? {
+                self.base.flush_send_buffer().await?;
+            }
+        }
+    }
+
+    /// Try to receive a matching message into `out` without a kernel read.
+    ///
+    /// Drains and discards any buffered non-matching messages, then returns
+    /// `Ok(true)` with a matching message moved into `out`, or `Ok(false)`
+    /// (leaving `out` untouched) when no complete matching message is buffered.
+    pub fn try_recv_into(&mut self, out: &mut Vec<Bytes>) -> io::Result<bool> {
+        loop {
+            match self.base.process_frame()? {
+                crate::base::FrameResult::NeedMore => return Ok(false),
+                crate::base::FrameResult::CommandHandled => {}
+                crate::base::FrameResult::Data(more, payload) => {
+                    self.frames.push(payload);
+                    if !more {
+                        if self.message_matches() {
+                            out.clear();
+                            out.extend(self.frames.drain(..));
+                            return Ok(true);
+                        }
+                        // Filtered out: drop and keep scanning buffered frames.
+                        self.frames.clear();
+                    }
+                }
             }
         }
     }
