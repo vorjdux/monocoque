@@ -97,7 +97,15 @@ fn is_transient_send_error(err: &io::Error) -> bool {
 ///
 /// Note: This trait is designed for single-threaded async runtimes like compio
 /// and does not require `Send`.
-#[async_trait::async_trait(?Send)]
+///
+/// Uses native async-fn-in-trait rather than `#[async_trait]`: the proxy loop
+/// forwards every message through `recv_multipart`/`send_multipart`, and boxing
+/// each of those futures per message was pure overhead on this thread-per-core
+/// runtime. AFIT removes the per-message heap allocation. `ProxySocket` is only
+/// ever used behind generics (`proxy<F, B, C>`), never as `dyn ProxySocket`, so
+/// object safety does not apply; the public-AFIT Send-bound lint is irrelevant
+/// to this deliberately `!Send` API.
+#[allow(async_fn_in_trait)]
 pub trait ProxySocket {
     /// Receive a multipart message from the socket.
     ///
@@ -466,7 +474,6 @@ where
 // ===== ProxySocket Implementations =====
 
 // XSUB socket (frontend in PUB-SUB broker)
-#[async_trait::async_trait(?Send)]
 impl ProxySocket for XSubSocket {
     async fn recv_multipart(&mut self) -> io::Result<Option<Vec<Bytes>>> {
         self.recv().await
@@ -520,7 +527,6 @@ impl ProxySocket for XSubSocket {
 }
 
 // XPUB socket (backend in PUB-SUB broker)
-#[async_trait::async_trait(?Send)]
 impl ProxySocket for XPubSocket {
     async fn recv_multipart(&mut self) -> io::Result<Option<Vec<Bytes>>> {
         // XPUB receives subscription events, not data
@@ -550,7 +556,6 @@ impl ProxySocket for XPubSocket {
 }
 
 // DEALER socket (backend in REQ-REP load balancer)
-#[async_trait::async_trait(?Send)]
 impl ProxySocket for DealerSocket {
     async fn recv_multipart(&mut self) -> io::Result<Option<Vec<Bytes>>> {
         self.recv().await
@@ -566,7 +571,6 @@ impl ProxySocket for DealerSocket {
 }
 
 // ROUTER socket (frontend in REQ-REP load balancer)
-#[async_trait::async_trait(?Send)]
 impl ProxySocket for RouterSocket {
     async fn recv_multipart(&mut self) -> io::Result<Option<Vec<Bytes>>> {
         self.recv().await
@@ -582,7 +586,6 @@ impl ProxySocket for RouterSocket {
 }
 
 // PULL socket (frontend in PUSH-PULL forwarder)
-#[async_trait::async_trait(?Send)]
 impl ProxySocket for PullSocket {
     async fn recv_multipart(&mut self) -> io::Result<Option<Vec<Bytes>>> {
         self.recv().await
@@ -599,7 +602,6 @@ impl ProxySocket for PullSocket {
 }
 
 // PUSH socket (backend in PUSH-PULL forwarder)
-#[async_trait::async_trait(?Send)]
 impl ProxySocket for PushSocket {
     async fn recv_multipart(&mut self) -> io::Result<Option<Vec<Bytes>>> {
         // PUSH doesn't receive
@@ -616,7 +618,6 @@ impl ProxySocket for PushSocket {
 }
 
 // REQ socket
-#[async_trait::async_trait(?Send)]
 impl ProxySocket for ReqSocket {
     async fn recv_multipart(&mut self) -> io::Result<Option<Vec<Bytes>>> {
         self.recv().await
@@ -632,7 +633,6 @@ impl ProxySocket for ReqSocket {
 }
 
 // REP socket
-#[async_trait::async_trait(?Send)]
 impl ProxySocket for RepSocket {
     async fn recv_multipart(&mut self) -> io::Result<Option<Vec<Bytes>>> {
         self.recv().await
@@ -648,7 +648,6 @@ impl ProxySocket for RepSocket {
 }
 
 // PAIR socket
-#[async_trait::async_trait(?Send)]
 impl ProxySocket for PairSocket {
     async fn recv_multipart(&mut self) -> io::Result<Option<Vec<Bytes>>> {
         self.recv().await
@@ -664,7 +663,6 @@ impl ProxySocket for PairSocket {
 }
 
 // PUB socket (typically not used in proxy, but included for completeness)
-#[async_trait::async_trait(?Send)]
 impl ProxySocket for PubSocket {
     async fn recv_multipart(&mut self) -> io::Result<Option<Vec<Bytes>>> {
         // PUB doesn't receive
@@ -681,7 +679,6 @@ impl ProxySocket for PubSocket {
 }
 
 // SUB socket (typically not used directly in proxy, XSUB is preferred)
-#[async_trait::async_trait(?Send)]
 impl ProxySocket for SubSocket {
     async fn recv_multipart(&mut self) -> io::Result<Option<Vec<Bytes>>> {
         self.recv().await
@@ -742,7 +739,6 @@ mod tests {
         }
     }
 
-    #[async_trait::async_trait(?Send)]
     impl ProxySocket for MockSocket {
         async fn recv_multipart(&mut self) -> io::Result<Option<Vec<Bytes>>> {
             Ok(self.recv_queue.pop())

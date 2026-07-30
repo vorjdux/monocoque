@@ -313,7 +313,7 @@ impl PushSocket<TcpStream> {
     }
 }
 
-crate::impl_socket_trait!(PushSocket<S>, SocketType::Push);
+crate::impl_socket_trait_send_only!(PushSocket<S>, SocketType::Push);
 
 #[cfg(all(test, unix))]
 mod tests {

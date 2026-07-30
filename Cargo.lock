@@ -1351,7 +1351,6 @@ name = "monocoque-rs-core"
 version = "0.3.0"
 dependencies = [
  "async-lock",
- "async-trait",
  "bytes",
  "compio",
  "compio-buf",
