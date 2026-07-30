@@ -443,4 +443,4 @@ impl PullSocket<TcpStream> {
     }
 }
 
-crate::impl_socket_trait!(PullSocket<S>, SocketType::Pull);
+crate::impl_socket_trait_recv_only!(PullSocket<S>, SocketType::Pull);

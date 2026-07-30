@@ -561,4 +561,4 @@ mod tests {
     }
 }
 
-crate::impl_socket_trait!(XSubSocket<S>, SocketType::Xsub);
+crate::impl_socket_trait_recv_only!(XSubSocket<S>, SocketType::Xsub);

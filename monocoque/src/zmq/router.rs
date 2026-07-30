@@ -483,29 +483,16 @@ impl RouterSocket<monocoque_core::rt::UnixStream> {
     }
 }
 
-// Implement ProxySocket for the high-level RouterSocket wrapper
+// Implement ProxySocket for the high-level RouterSocket wrapper. Now that
+// ProxySocket uses native async-fn-in-trait, this is a direct forward with no
+// hand-written Box::pin desugaring or per-call heap allocation.
 impl monocoque_zmtp::proxy::ProxySocket for RouterSocket<TcpStream> {
-    fn recv_multipart<'life0, 'async_trait>(
-        &'life0 mut self,
-    ) -> ::core::pin::Pin<
-        Box<dyn ::core::future::Future<Output = io::Result<Option<Vec<Bytes>>>> + 'async_trait>,
-    >
-    where
-        'life0: 'async_trait,
-        Self: 'async_trait,
-    {
-        Box::pin(async move { self.recv().await })
+    async fn recv_multipart(&mut self) -> io::Result<Option<Vec<Bytes>>> {
+        self.recv().await
     }
 
-    fn send_multipart<'life0, 'async_trait>(
-        &'life0 mut self,
-        msg: Vec<Bytes>,
-    ) -> ::core::pin::Pin<Box<dyn ::core::future::Future<Output = io::Result<()>> + 'async_trait>>
-    where
-        'life0: 'async_trait,
-        Self: 'async_trait,
-    {
-        Box::pin(async move { self.send(msg).await })
+    async fn send_multipart(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
+        self.send(msg).await
     }
 
     fn socket_desc(&self) -> &'static str {

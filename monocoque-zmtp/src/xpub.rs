@@ -697,7 +697,6 @@ impl fmt::Debug for XPubSocket {
 }
 
 // Implement Socket trait for XPubSocket (non-generic)
-#[async_trait::async_trait(?Send)]
 impl crate::Socket for XPubSocket {
     async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
         self.send(msg).await

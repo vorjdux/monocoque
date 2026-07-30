@@ -452,4 +452,4 @@ impl SubSocket<TcpStream> {
     }
 }
 
-crate::impl_socket_trait!(SubSocket<S>, SocketType::Sub);
+crate::impl_socket_trait_recv_only!(SubSocket<S>, SocketType::Sub);

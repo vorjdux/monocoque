@@ -1044,7 +1044,6 @@ impl Drop for PubSocket {
 }
 
 // Implement Socket trait for PubSocket (non-generic)
-#[async_trait::async_trait(?Send)]
 impl crate::Socket for PubSocket {
     async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
         self.send(msg).await

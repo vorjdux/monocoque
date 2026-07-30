@@ -38,7 +38,13 @@ use crate::SocketType;
 ///     Ok(())
 /// }
 /// ```
-#[async_trait::async_trait(?Send)]
+// Native async-fn-in-trait rather than `#[async_trait]`: this runtime is
+// thread-per-core and every future is intentionally `!Send`, so the boxing
+// async_trait added on each send/recv bought nothing. AFIT drops that per-call
+// heap allocation. The trait is never used as `dyn Socket` (callers are
+// generic), so object safety is not a concern; allow the public-AFIT lint whose
+// Send-bound warning does not apply to this deliberately single-threaded API.
+#[allow(async_fn_in_trait)]
 pub trait Socket {
     /// Send a multipart message on the socket.
     ///
@@ -89,7 +95,6 @@ pub trait Socket {
 #[macro_export]
 macro_rules! impl_socket_trait {
     ($socket_type:ty, $zmq_type:expr) => {
-        #[async_trait::async_trait(?Send)]
         impl<S> $crate::Socket for $socket_type
         where
             S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin + 'static,
@@ -100,6 +105,66 @@ macro_rules! impl_socket_trait {
 
             async fn recv(&mut self) -> std::io::Result<Option<Vec<bytes::Bytes>>> {
                 self.recv().await
+            }
+
+            fn socket_type(&self) -> $crate::SocketType {
+                $zmq_type
+            }
+        }
+    };
+}
+
+/// Implement the `Socket` trait for a receive-only socket (PULL, SUB, XSUB).
+///
+/// These types have no inherent `send`, so `Socket::send` must not forward to
+/// `self.send` - with native async-fn-in-trait that would resolve to this very
+/// trait method and recurse. It returns `Unsupported` instead, matching how PUB
+/// reports the reverse direction.
+#[macro_export]
+macro_rules! impl_socket_trait_recv_only {
+    ($socket_type:ty, $zmq_type:expr) => {
+        impl<S> $crate::Socket for $socket_type
+        where
+            S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin + 'static,
+        {
+            async fn send(&mut self, _msg: Vec<bytes::Bytes>) -> std::io::Result<()> {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "this socket type does not support send",
+                ))
+            }
+
+            async fn recv(&mut self) -> std::io::Result<Option<Vec<bytes::Bytes>>> {
+                self.recv().await
+            }
+
+            fn socket_type(&self) -> $crate::SocketType {
+                $zmq_type
+            }
+        }
+    };
+}
+
+/// Implement the `Socket` trait for a send-only socket (PUSH).
+///
+/// PUSH has no inherent `recv`, so `Socket::recv` returns `Unsupported` rather
+/// than forwarding to itself and recursing under native async-fn-in-trait.
+#[macro_export]
+macro_rules! impl_socket_trait_send_only {
+    ($socket_type:ty, $zmq_type:expr) => {
+        impl<S> $crate::Socket for $socket_type
+        where
+            S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin + 'static,
+        {
+            async fn send(&mut self, msg: Vec<bytes::Bytes>) -> std::io::Result<()> {
+                self.send(msg).await
+            }
+
+            async fn recv(&mut self) -> std::io::Result<Option<Vec<bytes::Bytes>>> {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "this socket type does not support recv",
+                ))
             }
 
             fn socket_type(&self) -> $crate::SocketType {
