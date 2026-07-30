@@ -88,7 +88,7 @@ flume = "0.11"
 futures = "0.3"
 async-trait = "0.1"
 thiserror = "1"
-hashbrown = "0.14"
+hashbrown = "0.17"
 smallvec = "1.13"
 
 # Async utilities
