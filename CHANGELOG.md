@@ -307,6 +307,36 @@ broadened to the core buffer and ZMTP codec, a non-gating coverage job is added,
 and tag-triggered release automation verifies the workspace version matches the
 tag before publishing the crates in order.
 
+#### Benchmarks exercise the optimized paths, and two harness bugs fixed
+
+The connected-socket benches did not opt into the paths this release optimized:
+none enabled write coalescing on DEALER/ROUTER, almost none used `recv_into`, and
+most pinned a 16 KB read buffer, so the coalescing, allocation-free receive, and
+wider read-batch wins were invisible to the suite. The `router_n_peers` and
+`pipelined_throughput` benches now use the recommended fast path. Doing so
+surfaced two latent harness bugs, both fixed rather than reverted. The
+independent-pairs and router benches created a fresh TCP listener and connection
+inside the timed loop; once coalescing made each iteration fast the connection
+churn saturated the ephemeral port range (TIME_WAIT climbed past 7000 while
+ESTABLISHED stayed at 4, so no socket leak) and a later bind failed with
+AddrInUse. They now establish the connection once and run every iteration over
+it, which both fixes the failure and makes them measure message throughput
+instead of TCP setup. The inproc socket bench joined its echo server before
+unbinding the endpoint, but the inproc registry keeps a sender clone alive until
+unbind, so the server never saw EOF and the join blocked forever; unbinding
+before the join lets it complete. A DEALER-to-ROUTER throughput probe example was
+added to make the coalescing win reproducible.
+
+#### Fuzz target and test-isolation fixes
+
+The CURVE handshake fuzz target still called `CurveClient`/`CurveServer`
+`decrypt_message`, which was removed when the message path moved to
+`CurveMessageCipher`, so the fuzz crate no longer compiled; it now targets the
+current public surface. The byte-semaphore tests shared a process-global
+slow-path counter that parallel test execution could pollute, making one test
+pass or fail by scheduling; the counter-touching tests now serialize on a
+test-only lock.
+
 ### 📚 Documentation
 
 - Fixed dangling references: CONTRIBUTING no longer points at a removed
