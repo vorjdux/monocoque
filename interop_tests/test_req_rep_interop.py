@@ -46,7 +46,6 @@ class MonocoqueServer:
             self.process.wait(timeout=5)
 
 
-@pytest.mark.skip(reason="Tests work manually - pytest subprocess handling issue. Run './test_interop.sh' instead")
 def test_libzmq_req_to_monocoque_rep():
     """Test libzmq REQ client → Monocoque REP server"""
     
@@ -137,7 +136,6 @@ def test_multipart_message_req_rep():
         server.stop()
 
 
-@pytest.mark.skip(reason="Monocoque examples have compilation issues")
 def test_multiple_request_cycles():
     """Test multiple request/reply cycles"""
     

@@ -10,16 +10,21 @@ import subprocess
 import signal
 from pathlib import Path
 
+# The examples are prebuilt (debug) by CI with the `zmq` feature; drive the
+# binaries directly rather than `cargo run`, which would not pass the feature.
+CARGO_BIN = Path(__file__).parent.parent / "target" / "debug"
+SUB_CLIENT = str(CARGO_BIN / "examples" / "sub_client")
+PUB_SERVER = str(CARGO_BIN / "examples" / "pub_server")
+
 
 def test_libzmq_pub_to_monocoque_sub():
     """Test libzmq PUB → Monocoque SUB"""
     
     # Start Monocoque SUB subscriber
     subscriber = subprocess.Popen(
-        ["cargo", "run", "--example", "sub_client", "--", "--port", "15560"],
+        [SUB_CLIENT, "--port", "15560"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        cwd=Path(__file__).parent.parent
     )
     
     time.sleep(1)  # Let subscriber connect
@@ -61,10 +66,9 @@ def test_monocoque_pub_to_libzmq_sub():
     
     # Start Monocoque PUB publisher
     publisher = subprocess.Popen(
-        ["cargo", "run", "--example", "pub_server", "--", "--port", "15561"],
+        [PUB_SERVER, "--port", "15561"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        cwd=Path(__file__).parent.parent
     )
     
     time.sleep(1)  # Let publisher bind
@@ -107,11 +111,9 @@ def test_topic_filtering():
     
     # Start Monocoque subscriber with topic filter
     subscriber = subprocess.Popen(
-        ["cargo", "run", "--example", "sub_client", "--", 
-         "--port", "15562", "--topic", "ALERT"],
+        [SUB_CLIENT, "--port", "15562", "--topic", "ALERT"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        cwd=Path(__file__).parent.parent
     )
     
     time.sleep(1)

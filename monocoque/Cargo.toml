@@ -304,6 +304,14 @@ name = "simple_req_client"
 required-features = ["zmq"]
 
 [[example]]
+name = "sub_client"
+required-features = ["zmq"]
+
+[[example]]
+name = "pub_server"
+required-features = ["zmq"]
+
+[[example]]
 name = "simple_req_rep"
 required-features = ["zmq"]
 
