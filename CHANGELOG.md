@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 - 2026-07-30
+## 0.4.0 - 2026-07-31
 
 This release lands the first three phases of the roadmap. Phase 0 hardens the
 project's supply chain and verification infrastructure (SHA-pinned CI actions,
@@ -292,6 +292,15 @@ libzmq peer alongside the existing NULL suite (PAIR, PUB/SUB, ROUTER,
 load-balance, PUSH/PULL). The interop runner builds the examples with the `zmq`
 feature and no longer masks Python interop failures.
 
+The Python pyzmq interop suite now builds and passes end to end. The runner
+pre-builds the example binaries and points the tests at those exact paths
+(instead of a release path that never held the examples, which raised
+`FileNotFoundError`), adds the missing `sub_client` and `pub_server` examples so
+the PUB/SUB leg has monocoque peers to drive, and removes two stale skips on the
+REQ/REP cases. The new examples flush stdout per line (a block-buffered pipe
+otherwise lost its tail on `SIGTERM`), retry the connect, and accept a
+subscriber before publishing.
+
 #### Supply-chain and CI hardening
 
 `Cargo.lock` is now tracked so `cargo audit` and `cargo deny` run against the
@@ -302,10 +311,14 @@ lock. The crypto deps are floored so the graph pulls a patched
 advisory. Every workflow and job runs with least-privilege `contents: read`
 permissions, every action is pinned to a 40-character commit SHA with a version
 comment, and dependabot is configured for both GitHub Actions and cargo. The
-MSRV job builds with the `zmq` feature and adds tokio and smol legs, Miri is
-broadened to the core buffer and ZMTP codec, a non-gating coverage job is added,
-and tag-triggered release automation verifies the workspace version matches the
-tag before publishing the crates in order.
+MSRV job builds with the `zmq` feature and adds tokio and smol legs (pinned to
+1.95, the workspace's single declared MSRV, rather than an older toolchain the
+crates no longer compile on), Miri is broadened to the core buffer and ZMTP
+codec, a non-gating coverage job is added, and tag-triggered release automation
+verifies the workspace version matches the tag before publishing the crates in
+order. `event-listener` is floored at 5.4.2 to clear an informational
+unsoundness advisory (RUSTSEC-2026-0221) that reached the graph transitively
+through the smol backend's `async-lock`.
 
 #### Benchmarks exercise the optimized paths, and two harness bugs fixed
 
@@ -345,6 +358,14 @@ test-only lock.
   greeting, command, and ZAP request targets were missing).
 - Corrected small CI descriptions so the docs build feature and the
   supply-chain gate (cargo audit plus cargo deny) are accurate.
+- Re-measured the full benchmark suite on a quiet reference machine across all
+  three backends and refreshed the numbers in `README.md`, `docs/performance.md`,
+  `monocoque/BENCHMARKS.md`, and `docs/GETTING_STARTED.md` so the published
+  figures reflect the coalescing, allocation-free-receive, and read-slab work in
+  this release.
+- Pointed the `monocoque-core` and `monocoque-zmtp` crates at their own
+  `README.md` (and added one for `monocoque-core`) so crates.io renders a readme
+  for each published crate instead of reporting none.
 
 ## 0.3.0 - 2026-07-15
 
