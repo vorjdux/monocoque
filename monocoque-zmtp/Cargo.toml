@@ -11,7 +11,7 @@ keywords = ["zmq", "zeromq", "zmtp", "messaging", "protocol"]
 categories = ["network-programming"]
 homepage = "https://github.com/vorjdux/monocoque"
 documentation = "https://docs.rs/monocoque-rs"
-readme = "../README.md"
+readme = "README.md"
 
 [lib]
 name = "monocoque_zmtp"
