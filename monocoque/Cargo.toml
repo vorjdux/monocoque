@@ -37,6 +37,10 @@ name = "dealer_write_probe"
 required-features = ["zmq"]
 
 [[example]]
+name = "dealer_throughput_probe"
+required-features = ["zmq"]
+
+[[example]]
 name = "bench_changes"
 required-features = ["zmq"]
 
@@ -300,6 +304,14 @@ name = "simple_req_client"
 required-features = ["zmq"]
 
 [[example]]
+name = "sub_client"
+required-features = ["zmq"]
+
+[[example]]
+name = "pub_server"
+required-features = ["zmq"]
+
+[[example]]
 name = "simple_req_rep"
 required-features = ["zmq"]
 
@@ -409,8 +421,8 @@ workspace = true
 
 [dependencies]
 # Internal implementation crates (not exposed)
-monocoque-core = { version = "0.3.0", path = "../monocoque-core", package = "monocoque-rs-core", default-features = false }
-monocoque-zmtp = { version = "0.3.0", path = "../monocoque-zmtp", package = "monocoque-rs-zmtp", optional = true, default-features = false }
+monocoque-core = { version = "0.4.0", path = "../monocoque-core", package = "monocoque-rs-core", default-features = false }
+monocoque-zmtp = { version = "0.4.0", path = "../monocoque-zmtp", package = "monocoque-rs-zmtp", optional = true, default-features = false }
 
 # Re-export dependencies for user convenience
 bytes.workspace = true

@@ -638,7 +638,9 @@ pub fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), 
         // can wrap on a 32-bit target, pass a naive `> body.len()` check, and
         // then panic slicing out of bounds. checked_add rejects the overflow.
         let value_start = offset;
-        let value_end = offset.checked_add(value_len).filter(|&end| end <= body.len());
+        let value_end = offset
+            .checked_add(value_len)
+            .filter(|&end| end <= body.len());
         let Some(value_end) = value_end else {
             warn!(
                 "[HANDSHAKE] READY property value truncated or length overflow (value_len={})",
@@ -722,10 +724,7 @@ fn parse_socket_type(value: &[u8]) -> Result<SocketType, ZmtpError> {
 /// libzmq refuses an incompatible pairing at the ZMTP layer; without this a
 /// mismatched peer completes the handshake and then silently misbehaves. The
 /// rules mirror libzmq: each type lists the peer types it may talk to.
-fn check_socket_type_compatibility(
-    local: SocketType,
-    peer: SocketType,
-) -> Result<(), ZmtpError> {
+fn check_socket_type_compatibility(local: SocketType, peer: SocketType) -> Result<(), ZmtpError> {
     use SocketType::{Dealer, Pair, Pub, Pull, Push, Rep, Req, Router, Sub, Xpub, Xsub};
 
     let compatible_peers: &[SocketType] = match local {

@@ -849,11 +849,10 @@ dependencies = [
 
 [[package]]
 name = "event-listener"
-version = "5.4.1"
+version = "5.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e13b66accf52311f30a0db42147dadea9850cb48cd070028831ae5f5d4b856ab"
+checksum = "5a23add41df1562121a9393cb065eab5146a1242410f23a644851e90cfd669d2"
 dependencies = [
- "concurrent-queue",
  "parking",
  "pin-project-lite",
 ]
@@ -1323,7 +1322,7 @@ checksum = "21909324aa58f5c284d91cac514c6d081210901dc372d7c8ea6a9d7e0406097a"
 
 [[package]]
 name = "monocoque-rs"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1348,7 +1347,7 @@ dependencies = [
 
 [[package]]
 name = "monocoque-rs-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-lock",
  "bytes",
@@ -1372,7 +1371,7 @@ dependencies = [
 
 [[package]]
 name = "monocoque-rs-zmtp"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "bytes",

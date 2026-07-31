@@ -35,8 +35,8 @@ fn interop_stream_raw_tcp_roundtrip() {
                             if msg[2].as_ref() == b"hello" {
                                 break;
                             }
-                            let _ =
-                                result_tx.send(Err(format!("STREAM recv wrong data: {:?}", msg[2])));
+                            let _ = result_tx
+                                .send(Err(format!("STREAM recv wrong data: {:?}", msg[2])));
                             return;
                         }
                         Ok(Some(_)) => continue, // connect/disconnect notification
@@ -77,7 +77,10 @@ fn interop_stream_raw_tcp_roundtrip() {
     client
         .read_exact(&mut reply)
         .expect("raw TCP client did not receive the STREAM reply");
-    assert_eq!(&reply, b"world", "STREAM send must write all payload frames in order");
+    assert_eq!(
+        &reply, b"world",
+        "STREAM send must write all payload frames in order"
+    );
 
     result_rx
         .recv_timeout(Duration::from_secs(10))

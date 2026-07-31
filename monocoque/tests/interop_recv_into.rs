@@ -50,7 +50,8 @@ fn dealer_recv_into_matches_libzmq_dealer() {
     // Give the connection a moment to establish before sending.
     thread::sleep(Duration::from_millis(200));
     peer.send("one", 0).unwrap();
-    peer.send_multipart([b"a".as_ref(), b"b".as_ref()], 0).unwrap();
+    peer.send_multipart([b"a".as_ref(), b"b".as_ref()], 0)
+        .unwrap();
 
     result_rx
         .recv_timeout(Duration::from_secs(10))

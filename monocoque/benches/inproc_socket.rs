@@ -53,7 +53,10 @@ const PAYLOAD: usize = 64;
 static ENDPOINT_SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn options() -> SocketOptions {
-    SocketOptions::default().with_buffer_sizes(16384, 16384)
+    // Default 32 KB read batch. Coalescing does not apply to a ping-pong (each
+    // send must reach the peer for the reply), so the 0.4 win here is the
+    // allocation-free receive path used below.
+    SocketOptions::default()
 }
 
 /// Time `iters` round-trips of a single 64B frame over the inproc DEALER pair.
@@ -68,16 +71,19 @@ fn run_roundtrip(iters: u64) -> Duration {
     let server = thread::spawn(move || {
         let rt = monocoque::rt::LocalRuntime::new().unwrap();
         rt.block_on(async move {
-            let mut server =
-                DealerSocket::bind_inproc_bidi(&server_endpoint, options()).unwrap();
+            let mut server = DealerSocket::bind_inproc_bidi(&server_endpoint, options()).unwrap();
             ready_tx.send(()).unwrap();
-            // Echo every frame back until the client drops (recv -> None/EOF).
+            // Echo every frame back allocation-free until the endpoint is
+            // unbound (recv -> EOF). Dropping the client alone does NOT end this
+            // loop: the inproc registry keeps a sender clone alive, so the server
+            // stays readable until unbind_inproc removes the endpoint.
+            let mut buf: Vec<Bytes> = Vec::with_capacity(4);
             loop {
-                match server.recv().await {
-                    Ok(Some(msg)) => {
-                        server.send(msg).await.unwrap();
+                match server.recv_into(&mut buf).await {
+                    Ok(true) => {
+                        server.send(buf.clone()).await.unwrap();
                     }
-                    Ok(None) | Err(_) => break,
+                    Ok(false) | Err(_) => break,
                 }
             }
         });
@@ -89,27 +95,32 @@ fn run_roundtrip(iters: u64) -> Duration {
     let elapsed = {
         let rt = monocoque::rt::LocalRuntime::new().unwrap();
         rt.block_on(async move {
-            let mut client =
-                DealerSocket::connect_inproc(&client_endpoint, options()).unwrap();
+            let mut client = DealerSocket::connect_inproc(&client_endpoint, options()).unwrap();
 
             // Warm the pipe so the first send/recv buffer growth is untimed.
+            let mut buf: Vec<Bytes> = Vec::with_capacity(4);
             client.send(vec![payload.clone()]).await.unwrap();
-            let _ = client.recv().await.unwrap();
+            let _ = client.recv_into(&mut buf).await.unwrap();
 
             let start = Instant::now();
             for _ in 0..iters {
                 client.send(vec![payload.clone()]).await.unwrap();
-                let _ = client.recv().await.unwrap();
+                let _ = client.recv_into(&mut buf).await.unwrap();
             }
             let elapsed = start.elapsed();
-            // Drop the client here so the server's recv sees EOF and exits.
+            // Drop the client's sender; the endpoint is torn down by the unbind
+            // below (before the server join) so the server loop can exit.
             drop(client);
             elapsed
         })
     };
 
-    server.join().unwrap();
+    // Unbind BEFORE joining. The registry holds a sender clone that keeps the
+    // server's recv alive, so the server's echo loop only sees EOF once the
+    // endpoint is removed. Joining first (the old order) deadlocks: the server
+    // never exits, so join blocks forever and the unbind is never reached.
     let _ = monocoque_core::inproc::unbind_inproc(&endpoint);
+    server.join().unwrap();
     elapsed
 }
 

@@ -13,8 +13,7 @@ PLAIN sends credentials in cleartext, so it must run over TLS or a VPN in produc
 let options = SocketOptions::new()
     .with_plain_credentials("alice", "secret");
 
-let mut socket = DealerSocket::with_options(options);
-socket.connect("tcp://server:5555").await?;
+let mut socket = DealerSocket::connect_with_options("tcp://server:5555", options).await?;
 
 // Server with a static credential store
 use monocoque_zmtp::security::plain::StaticPlainHandler;
@@ -24,8 +23,11 @@ handler.add_user("alice", "secret");
 handler.add_user("bob", "hunter2");
 
 let options = SocketOptions::new().with_plain_server(true);
-let mut socket = RouterSocket::with_options(options);
-socket.bind("tcp://0.0.0.0:5555").await?;
+
+// Accept a connection, then apply the PLAIN server options to that stream.
+let listener = TcpListener::bind("0.0.0.0:5555").await?;
+let (stream, _) = listener.accept().await?;
+let mut socket = RouterSocket::with_options(stream, options).await?;
 ```
 
 For dynamic credentials (database lookup, LDAP, etc.), implement `PlainAuthHandler`:
@@ -59,7 +61,7 @@ See `examples/plain_auth_demo.rs` for a runnable example.
 
 ## CURVE Encryption
 
-CURVE is what you should use in production. It provides mutual authentication and message encryption (ChaCha20-Poly1305) with no shared secrets and no certificate authority. The server has a long-term keypair; clients get the server's public key out-of-band and generate ephemeral keys per connection.
+CURVE is what you should use in production. It provides mutual authentication and message encryption (XSalsa20-Poly1305, via NaCl `crypto_box`) with no shared secrets and no certificate authority. The server has a long-term keypair; clients get the server's public key out-of-band and generate ephemeral keys per connection.
 
 ```rust
 use monocoque_zmtp::security::curve::CurveKeyPair;
@@ -73,7 +75,9 @@ let server_opts = SocketOptions::default()
     .with_curve_server(true)
     .with_curve_keypair(*server_kp.public.as_bytes(), *server_kp.secret.as_bytes());
 
-let (_listener, mut server) = RouterSocket::bind_with_options("0.0.0.0:5555", server_opts).await?;
+let listener = TcpListener::bind("0.0.0.0:5555").await?;
+let (stream, _) = listener.accept().await?;
+let mut server = RouterSocket::with_options(stream, server_opts).await?;
 
 // Client
 let client_kp = CurveKeyPair::generate(); // ephemeral is fine

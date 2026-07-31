@@ -55,8 +55,13 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      - name: Build monocoque release binary
-        run: cargo build --release -p monocoque-rs --features zmq
+      - name: Build the interop example binaries (debug, with zmq)
+        # The Python tests drive these prebuilt debug binaries from
+        # target/debug/examples, so build exactly those with the zmq feature.
+        run: >
+          cargo build -p monocoque-rs --features zmq
+          --example simple_req_client --example simple_rep_server
+          --example sub_client --example pub_server
       # The `|| echo skipping` mask is removed: this job now fails honestly when a
       # Python interop test fails, per the Phase 0 gate. The tests drive the built
       # examples themselves and do not need a manually-started server.

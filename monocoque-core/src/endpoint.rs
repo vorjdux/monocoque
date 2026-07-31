@@ -205,7 +205,10 @@ mod tests {
         // embedded NUL, so the two cannot diverge.
         for bad in ["inproc://tenant\0shadow", "inproc://a\tb", "inproc://x\ny"] {
             assert!(
-                matches!(Endpoint::parse(bad), Err(EndpointError::InvalidInprocName(_))),
+                matches!(
+                    Endpoint::parse(bad),
+                    Err(EndpointError::InvalidInprocName(_))
+                ),
                 "control character in {bad:?} should be rejected"
             );
         }

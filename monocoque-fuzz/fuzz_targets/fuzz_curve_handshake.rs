@@ -72,29 +72,28 @@ fuzz_target!(|data: &[u8]| {
     }
 
     // -----------------------------------------------------------------------
-    // 4. Fuzz the decrypt_message path of CurveClient / CurveServer
+    // 4. Construct the handshake state machines and fuzz the message-cipher
+    //    classifier.
     //
-    // Both CurveClient and CurveServer are public structs with public
-    // decrypt_message methods.  Calling decrypt_message before the async
-    // handshake has completed means message_box is None, so the call returns
-    // Err(ProtocolViolation)  -  it must never panic regardless of the input.
+    // CurveClient::new / CurveServer::new must not panic, and
+    // CurveMessageCipher::is_curve_message must classify arbitrary bytes as
+    // curve-or-not without panicking regardless of the input. The message
+    // decrypt path (CurveMessageCipher::decrypt_frame) is reachable only after
+    // a completed handshake and is exercised by the decoder fuzz target that
+    // drives the real ZmtpDecoder.
     // -----------------------------------------------------------------------
     {
+        use monocoque_zmtp::security::curve::{CurveMessageCipher, CurveServer};
+
         let client_kp = CurveKeyPair::generate();
         let server_kp = CurveKeyPair::generate();
+        let _client = CurveClient::new(client_kp, server_kp.public, "DEALER", None);
 
-        let mut client = CurveClient::new(client_kp, server_kp.public, "DEALER", None);
-        // Err, not panic  -  message_box is None before handshake.
-        let _ = client.decrypt_message(data);
-    }
+        let server_kp2 = CurveKeyPair::generate();
+        let _server = CurveServer::new(server_kp2, "ROUTER");
 
-    {
-        let server_kp = CurveKeyPair::generate();
-        use monocoque_zmtp::security::curve::CurveServer;
-
-        let mut server = CurveServer::new(server_kp, "ROUTER");
-        // Err, not panic  -  message_box is None before handshake.
-        let _ = server.decrypt_message(data);
+        // Arbitrary bytes must classify without panicking.
+        let _ = CurveMessageCipher::is_curve_message(data);
     }
 
     // -----------------------------------------------------------------------

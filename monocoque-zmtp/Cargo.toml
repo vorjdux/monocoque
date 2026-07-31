@@ -11,7 +11,7 @@ keywords = ["zmq", "zeromq", "zmtp", "messaging", "protocol"]
 categories = ["network-programming"]
 homepage = "https://github.com/vorjdux/monocoque"
 documentation = "https://docs.rs/monocoque-rs"
-readme = "../README.md"
+readme = "README.md"
 
 [lib]
 name = "monocoque_zmtp"
@@ -38,7 +38,7 @@ compio-buf.workspace = true
 compio = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 smol = { workspace = true, optional = true }
-monocoque-core = { version = "0.3.0", path = "../monocoque-core", package = "monocoque-rs-core", default-features = false }
+monocoque-core = { version = "0.4.0", path = "../monocoque-core", package = "monocoque-rs-core", default-features = false }
 smallvec.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

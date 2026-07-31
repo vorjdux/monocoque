@@ -105,7 +105,8 @@ where
     use monocoque_core::timeout::write_all_with_timeout;
     let mut framed = BytesMut::new();
     crate::base::append_zmtp_cmd_frame(&mut framed, body);
-    let BufResult(result, _) = write_all_with_timeout(stream, framed.freeze().to_vec(), timeout).await?;
+    let BufResult(result, _) =
+        write_all_with_timeout(stream, framed.freeze().to_vec(), timeout).await?;
     result?;
     Ok(())
 }
@@ -292,8 +293,7 @@ where
     result?;
 
     // Read the response as a framed ZMTP command and match on its body.
-    let body =
-        crate::security::curve::read_zmtp_cmd(stream, timeout, MAX_PLAIN_CMD_BODY).await?;
+    let body = crate::security::curve::read_zmtp_cmd(stream, timeout, MAX_PLAIN_CMD_BODY).await?;
     if body.starts_with(PLAIN_WELCOME) {
         debug!("[PLAIN CLIENT] Authentication successful");
         Ok(())
@@ -551,8 +551,8 @@ mod tests {
             // The server rejects and closes, so the WELCOME read may EOF; either
             // way it must not return a WELCOME.
             let response = vec![0u8; PLAIN_WELCOME.len()];
-            let read = read_exact_with_timeout(&mut stream, response, Some(Duration::from_secs(1)))
-                .await;
+            let read =
+                read_exact_with_timeout(&mut stream, response, Some(Duration::from_secs(1))).await;
             let got_welcome = matches!(
                 &read,
                 Ok(BufResult(Ok(()), resp)) if resp.as_slice() == PLAIN_WELCOME

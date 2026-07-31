@@ -48,85 +48,99 @@ const PEER_COUNTS: &[usize] = &[1, 8, 64];
 const MESSAGES_PER_PEER: usize = 2_000;
 const PAYLOAD: usize = 64;
 
-fn options() -> SocketOptions {
-    SocketOptions::default().with_buffer_sizes(16384, 16384)
+// Recommended 0.4 throughput usage for the DEALER senders: coalesce sends into
+// one buffer (0.4 wires this into DEALER; 0.3 ignored it) and let the read batch
+// default to 32 KB instead of pinning 16 KB.
+fn dealer_options() -> SocketOptions {
+    SocketOptions::default().with_write_coalescing(true)
+}
+
+// ROUTER receiver: default options (32 KB read batch). It drains with recv_into
+// below, so it allocates no per-message Vec.
+fn router_options() -> SocketOptions {
+    SocketOptions::default()
 }
 
 /// Drive N DEALER peers into one ROUTER endpoint and time draining all messages.
 fn run_router(num_peers: usize, iters: u64) -> Duration {
-    let mut total = Duration::ZERO;
+    let (port_tx, port_rx) = mpsc::channel::<u16>();
+    let payload = Bytes::from(vec![0u8; PAYLOAD]);
 
-    for _ in 0..iters {
-        let (port_tx, port_rx) = mpsc::channel::<u16>();
-        let payload = Bytes::from(vec![0u8; PAYLOAD]);
+    // One set of N persistent connections for the whole measurement. Each peer
+    // sends `iters * MESSAGES_PER_PEER` messages and the ROUTER drains that many,
+    // timed once. Reusing the connections (instead of rebuilding them per
+    // iteration) keeps the ephemeral port range from filling with TIME_WAIT and
+    // failing a later bind with AddrInUse once the drain is fast.
+    let total_per_peer = iters as usize * MESSAGES_PER_PEER;
 
-        // ROUTER side: bind, accept N streams, drain all messages concurrently.
-        let router_thread = thread::spawn(move || {
+    // ROUTER side: bind, accept N streams, drain all messages concurrently.
+    let router_thread = thread::spawn(move || {
+        let rt = monocoque::rt::LocalRuntime::new().unwrap();
+        rt.block_on(async move {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            port_tx.send(listener.local_addr().unwrap().port()).unwrap();
+
+            // Accept and handshake every peer before timing.
+            let mut routers = Vec::with_capacity(num_peers);
+            for _ in 0..num_peers {
+                let (stream, _) = listener.accept().await.unwrap();
+                let router = RouterSocket::from_tcp_with_options(stream, router_options())
+                    .await
+                    .unwrap();
+                routers.push(router);
+            }
+
+            // Timed window: drain total_per_peer from each peer concurrently.
+            let start = Instant::now();
+            let mut handles = Vec::with_capacity(num_peers);
+            for mut router in routers {
+                handles.push(monocoque::rt::spawn(async move {
+                    // Allocation-free drain: one reused buffer, no per-message Vec.
+                    let mut buf: Vec<Bytes> = Vec::with_capacity(4);
+                    let mut got = 0usize;
+                    while got < total_per_peer {
+                        match router.recv_into(&mut buf).await {
+                            Ok(true) => got += 1,
+                            Ok(false) | Err(_) => break,
+                        }
+                    }
+                    got
+                }));
+            }
+            for handle in handles {
+                let _ = handle.await;
+            }
+            start.elapsed()
+        })
+    });
+
+    let port = port_rx.recv().unwrap();
+
+    // DEALER peers: each connects once and sends its full share.
+    let mut peers = Vec::with_capacity(num_peers);
+    for _ in 0..num_peers {
+        let peer_payload = payload.clone();
+        peers.push(thread::spawn(move || {
             let rt = monocoque::rt::LocalRuntime::new().unwrap();
             rt.block_on(async move {
-                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-                port_tx.send(listener.local_addr().unwrap().port()).unwrap();
-
-                // Accept and handshake every peer before timing.
-                let mut routers = Vec::with_capacity(num_peers);
-                for _ in 0..num_peers {
-                    let (stream, _) = listener.accept().await.unwrap();
-                    let router = RouterSocket::from_tcp_with_options(stream, options())
-                        .await
-                        .unwrap();
-                    routers.push(router);
+                let mut dealer = DealerSocket::connect_with_options(
+                    &format!("127.0.0.1:{port}"),
+                    dealer_options(),
+                )
+                .await
+                .unwrap();
+                for _ in 0..total_per_peer {
+                    dealer.send(vec![peer_payload.clone()]).await.unwrap();
                 }
-
-                // Timed window: drain MESSAGES_PER_PEER from each peer concurrently.
-                let start = Instant::now();
-                let mut handles = Vec::with_capacity(num_peers);
-                for mut router in routers {
-                    handles.push(monocoque::rt::spawn(async move {
-                        let mut got = 0usize;
-                        while got < MESSAGES_PER_PEER {
-                            match router.recv().await {
-                                Ok(Some(_)) => got += 1,
-                                Ok(None) | Err(_) => break,
-                            }
-                        }
-                        got
-                    }));
-                }
-                for handle in handles {
-                    let _ = handle.await;
-                }
-                start.elapsed()
-            })
-        });
-
-        let port = port_rx.recv().unwrap();
-
-        // DEALER peers: each connects and sends its share.
-        let mut peers = Vec::with_capacity(num_peers);
-        for _ in 0..num_peers {
-            let peer_payload = payload.clone();
-            peers.push(thread::spawn(move || {
-                let rt = monocoque::rt::LocalRuntime::new().unwrap();
-                rt.block_on(async move {
-                    let mut dealer =
-                        DealerSocket::connect_with_options(&format!("127.0.0.1:{port}"), options())
-                            .await
-                            .unwrap();
-                    for _ in 0..MESSAGES_PER_PEER {
-                        dealer.send(vec![peer_payload.clone()]).await.unwrap();
-                    }
-                    dealer.flush().await.unwrap();
-                });
-            }));
-        }
-
-        for peer in peers {
-            peer.join().unwrap();
-        }
-        total += router_thread.join().unwrap();
+                dealer.flush().await.unwrap();
+            });
+        }));
     }
 
-    total
+    for peer in peers {
+        peer.join().unwrap();
+    }
+    router_thread.join().unwrap()
 }
 
 fn router_n_peers(c: &mut Criterion) {

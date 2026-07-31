@@ -186,75 +186,100 @@ fn monocoque_multithreaded_independent_pairs(c: &mut Criterion) {
             BenchmarkId::new("pairs", num_threads),
             &num_threads,
             |b, &num_threads| {
-                b.iter(|| {
-                    // Spawn N independent pairs, each in its own thread
+                b.iter_custom(|iters| {
+                    // Each pair sets up ONE persistent DEALER<->ROUTER connection
+                    // outside the timed section, then times `iters` rounds of the
+                    // batched message workload over that same connection. Reusing
+                    // the connection is what makes this measure message throughput
+                    // rather than TCP setup, and it avoids churning a fresh
+                    // connection (and its TIME_WAIT) per iteration - which, once
+                    // the workload is fast, exhausts the ephemeral port range and
+                    // fails a later bind with AddrInUse.
                     let mut handles = Vec::new();
 
                     for _i in 0..num_threads {
                         let payload = payload.clone();
 
                         let handle = std::thread::spawn(move || {
-                            // Each pair gets its own compio runtime
                             let rt = monocoque::rt::LocalRuntime::new().unwrap();
                             rt.block_on(async {
                                 let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
                                 let server_addr = listener.local_addr().unwrap();
 
-                                // Router task
+                                // ROUTER echoes every message across all `iters`
+                                // rounds over the single accepted connection.
+                                let total = iters as usize * MESSAGES_PER_THREAD;
                                 let router_task = monocoque::rt::spawn(async move {
                                     let (stream, _) = listener.accept().await.unwrap();
                                     let mut router = RouterSocket::from_tcp_with_options(
                                         stream,
-                                        SocketOptions::default().with_buffer_sizes(16384, 16384),
+                                        SocketOptions::default().with_write_coalescing(true),
                                     )
                                     .await
                                     .unwrap();
 
-                                    for _ in 0..MESSAGES_PER_THREAD {
-                                        if let Ok(Some(msg)) = router.recv().await {
-                                            router.send(msg).await.ok();
+                                    let mut buf: Vec<Bytes> = Vec::with_capacity(4);
+                                    let mut echoed = 0usize;
+                                    for _ in 0..total {
+                                        if router.recv_into(&mut buf).await.unwrap_or(false) {
+                                            router.send(buf.clone()).await.ok();
+                                            echoed += 1;
+                                            if echoed.is_multiple_of(BATCH_SIZE) {
+                                                router.flush().await.ok();
+                                            }
                                         }
                                     }
+                                    router.flush().await.ok();
                                 });
 
-                                // Dealer task
                                 let stream = monocoque::rt::TcpStream::connect(server_addr)
                                     .await
                                     .unwrap();
                                 let mut dealer = DealerSocket::from_tcp_with_options(
                                     stream,
-                                    SocketOptions::default().with_buffer_sizes(16384, 16384),
+                                    SocketOptions::default().with_write_coalescing(true),
                                 )
                                 .await
                                 .unwrap();
 
-                                // Use batched streaming to avoid deadlock
-                                for _ in 0..(MESSAGES_PER_THREAD / BATCH_SIZE) {
-                                    // Send batch
-                                    for _ in 0..BATCH_SIZE {
-                                        dealer
-                                            .send(vec![black_box(payload.clone())])
-                                            .await
-                                            .unwrap();
-                                    }
-                                    // Receive batch
-                                    for _ in 0..BATCH_SIZE {
-                                        if dealer.recv().await.ok().flatten().is_none() {
-                                            break;
+                                // Timed: `iters` rounds over the one connection.
+                                let mut buf: Vec<Bytes> = Vec::with_capacity(4);
+                                let start = std::time::Instant::now();
+                                for _ in 0..iters {
+                                    for _ in 0..(MESSAGES_PER_THREAD / BATCH_SIZE) {
+                                        for _ in 0..BATCH_SIZE {
+                                            dealer
+                                                .send(vec![black_box(payload.clone())])
+                                                .await
+                                                .unwrap();
+                                        }
+                                        dealer.flush().await.unwrap();
+                                        for _ in 0..BATCH_SIZE {
+                                            if !dealer.recv_into(&mut buf).await.unwrap_or(false) {
+                                                break;
+                                            }
                                         }
                                     }
                                 }
+                                let elapsed = start.elapsed();
 
+                                drop(dealer);
                                 monocoque::rt::join(router_task).await;
-                            });
+                                elapsed
+                            })
                         });
                         handles.push(handle);
                     }
 
-                    // Wait for all pairs to complete
+                    // Pairs run concurrently; the batch wall-clock is the slowest.
+                    let mut max_elapsed = Duration::ZERO;
                     for handle in handles {
-                        handle.join().unwrap();
+                        let e = handle.join().unwrap();
+                        if e > max_elapsed {
+                            max_elapsed = e;
+                        }
                     }
+                    max_elapsed
                 });
             },
         );
@@ -307,14 +332,20 @@ fn monocoque_core_efficiency(c: &mut Criterion) {
                                     let (stream, _) = listener.accept().await.unwrap();
                                     let mut router = RouterSocket::from_tcp_with_options(
                                         stream,
-                                        SocketOptions::default().with_buffer_sizes(16384, 16384),
+                                        SocketOptions::default().with_write_coalescing(true),
                                     )
                                     .await
                                     .unwrap();
 
+                                    let mut buf: Vec<Bytes> = Vec::with_capacity(4);
+                                    let mut echoed = 0usize;
                                     for _ in 0..MESSAGES_PER_THREAD {
-                                        if let Ok(Some(msg)) = router.recv().await {
-                                            router.send(msg).await.ok();
+                                        if router.recv_into(&mut buf).await.unwrap_or(false) {
+                                            router.send(buf.clone()).await.ok();
+                                            echoed += 1;
+                                            if echoed.is_multiple_of(BATCH_SIZE) {
+                                                router.flush().await.ok();
+                                            }
                                         }
                                     }
                                 });
@@ -324,23 +355,22 @@ fn monocoque_core_efficiency(c: &mut Criterion) {
                                     .unwrap();
                                 let mut dealer = DealerSocket::from_tcp_with_options(
                                     stream,
-                                    SocketOptions::default().with_buffer_sizes(16384, 16384),
+                                    SocketOptions::default().with_write_coalescing(true),
                                 )
                                 .await
                                 .unwrap();
 
-                                // Use batched streaming to avoid deadlock
+                                let mut buf: Vec<Bytes> = Vec::with_capacity(4);
                                 for _ in 0..(MESSAGES_PER_THREAD / BATCH_SIZE) {
-                                    // Send batch
                                     for _ in 0..BATCH_SIZE {
                                         dealer
                                             .send(vec![black_box(payload.clone())])
                                             .await
                                             .unwrap();
                                     }
-                                    // Receive batch
+                                    dealer.flush().await.unwrap();
                                     for _ in 0..BATCH_SIZE {
-                                        if dealer.recv().await.ok().flatten().is_none() {
+                                        if !dealer.recv_into(&mut buf).await.unwrap_or(false) {
                                             break;
                                         }
                                     }

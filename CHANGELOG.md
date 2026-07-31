@@ -1,5 +1,372 @@
 # Changelog
 
+## 0.4.0 - 2026-07-31
+
+This release lands the first three phases of the roadmap. Phase 0 hardens the
+project's supply chain and verification infrastructure (SHA-pinned CI actions,
+cargo-deny, a rewritten fuzz harness, and benchmark guardrails). Phase 1 is a
+security and protocol-correctness pass: real RFC-26 CURVE encryption that
+interoperates with libzmq, several pre-auth denial-of-service fixes, and a set
+of ZMTP framing corrections that let REQ/REP, PLAIN, and STREAM talk to real
+libzmq peers. Phase 2 is a non-breaking performance pass: allocation-free
+receive on every socket, coalesced and vectored writes across the connected
+socket types, a reworked read slab, and native async-fn-in-trait in place of
+boxed trait futures. The one consumer-visible API change is that the PUB socket
+constructors now return `io::Result` instead of panicking.
+
+### 💥 Breaking Changes
+
+#### PUB socket constructors return `io::Result`
+
+`PubSocket::new`, `with_workers`, and `with_workers_opts` now return
+`io::Result` instead of panicking with `.expect` when a worker thread cannot be
+spawned (for example under OS resource exhaustion). The public bind paths
+already returned `io::Result` and simply propagate the error. The unused
+`Default` impl, which could not be fallible, has been removed. Callers that
+constructed a `PubSocket` directly need to handle or propagate the result.
+
+### ✨ Features
+
+#### Real RFC-26 CURVE message cipher for libzmq interop
+
+The post-handshake CURVE message box now uses the actual CurveZMQ construction:
+NaCl `crypto_box` (X25519 plus XSalsa20-Poly1305) keyed by `crypto_box_beforenm`
+over the two short-term transient keys, exactly what libzmq and libsodium use.
+The previous implementation boxed messages with XChaCha20-Poly1305 under a
+SHA-256 of a three-way Diffie-Hellman, which is not the CurveZMQ scheme, so a
+real libzmq peer completed the handshake and then could not decrypt the first
+message and encrypted interop never worked. The handshake already used the
+correct SalsaBox primitive and the message framing (the MESSAGEC/MESSAGES nonce
+prefixes, the 8-byte counter, the MORE flag byte) was already right, so only the
+cipher and its key changed. The server-internal WELCOME cookie stays on
+XChaCha20-Poly1305 since it is opaque to the peer and not an interop surface. A
+known-answer test drives libsodium's `crypto_box_easy` and asserts monocoque
+reproduces the ciphertext byte for byte, and live DEALER-to-DEALER interop runs
+in both directions against a real CURVE-enabled libzmq.
+
+#### Socket-type compatibility enforced at the ZMTP layer
+
+The handshake now enforces the socket-type compatibility matrix that libzmq
+uses. An incompatible pairing (a PUB peered with a REQ, a PAIR with a DEALER,
+and so on) is rejected at the ZMTP layer instead of completing the handshake
+and then silently misbehaving. Every valid pairing (REQ/REP, DEALER/ROUTER,
+PUB/SUB, PUSH/PULL, PAIR/PAIR, and the peer-symmetric cases) still passes.
+
+### 🔒 Security
+
+#### recv timeout now bounds the whole logical recv
+
+`recv_timeout` is meant to bound one `recv()` call, but a single logical recv
+loops over several raw reads while a multipart or partially-arrived message is
+assembled, and each read previously armed a fresh timeout. A peer that trickled
+one byte just under the timeout kept resetting the timer, so the timeout could
+be evaded indefinitely (a slow-loris hole). The socket now arms one deadline per
+logical recv on the first timed read, races every read in that recv against the
+time remaining, and clears the deadline when a message completes so the next
+recv starts fresh. A deadline left stale by a dropped recv future self-heals on
+the next read. The default no-timeout path is untouched.
+
+#### CURVE: authorize before READY, harden replay, default-deny
+
+The ZAP-authenticated server path previously drove the full
+HELLO/WELCOME/INITIATE/READY exchange and only then called ZAP, so a client
+received a 200 READY before it was authorized. The handshake now stops at
+INITIATE, authorizes the client's long-term key through ZAP, and sends READY
+only on success; a rejected client gets a ZMTP ERROR and the connection closes.
+The wire reason on an auth failure is now a fixed generic string, with the
+detail kept in the local log. The message decrypt paths no longer advance the
+receive nonce from attacker-supplied counter bytes before the Poly1305 tag is
+checked; they require a strict in-order counter and advance the nonce only after
+the tag verifies. A redundant pair of per-message encrypt/decrypt methods that
+could let two encryptors share one box has been removed. Accepting any valid
+CURVE key with no whitelist authenticates no one, so both the no-domain server
+path and the no-whitelist ZAP path now warn loudly; a deployment can
+acknowledge that intent with a new `DefaultZapHandler::accept_any_curve_key()`
+or restrict with `with_curve_whitelist()`.
+
+#### Handshake bounded by a total deadline
+
+A ZMTP handshake applied its timeout per read/write step, so a peer that
+trickled bytes could reset the clock on every step and hold the handshake open
+indefinitely. The entire handshake (greeting, security exchange, and READY) is
+now wrapped in one total deadline derived from `handshake_timeout`, with the
+per-step timeouts kept as a secondary bound. A legitimate handshake finishes
+well under it; a stalling peer is dropped when it elapses.
+
+#### Multipart frame-count and aggregate-size caps
+
+The shared decode point completed a logical message only when the MORE bit
+cleared, with no bound on how many frames or how many total bytes one message
+could carry. A peer streaming MORE frames forever grew the socket's accumulator
+without bound, which the per-frame size cap does not catch. The decoder now
+tracks the frame count and aggregate payload size of the in-progress multipart
+message and fails the connection once either exceeds its cap (8192 frames or 256
+MiB). The counters reset when a message completes; normal multipart messages are
+unaffected.
+
+#### Metadata parser bounds and long-frame length checks
+
+The READY and ZAP metadata parsers computed `offset + value_len` on an
+attacker-controlled 32-bit length before slicing, which can wrap on a 32-bit
+target, pass a naive bound check, and then panic out of bounds before
+authentication. Those adds are now checked, and the Socket-Type value length is
+capped since the longest valid name is six bytes. Separately, an 8-byte
+long-frame length was narrowed with an `as usize` cast before the max-frame-size
+check, so on a 32-bit target a declared length just above `1<<32` truncated to a
+small value, passed the cap, and desynced framing; the length is now compared
+against the cap as a `u64` first and converted with a checked conversion. A
+large fragmented frame also no longer pins its whole staging allocation for the
+connection's lifetime.
+
+#### Secret zeroization and a PLAIN password length oracle
+
+`plain_password` and `curve_secretkey` are now wrapped in `Zeroizing` so the
+password buffer and key bytes are scrubbed when the options (or a clone) are
+dropped. PLAIN authentication now compares fixed-width SHA-256 digests instead
+of the passwords directly; the constant-time slice compare short-circuits when
+the lengths differ, which leaked the stored password's length. Usernames are no
+longer logged at debug level on the client, server, and ZAP paths, where they
+otherwise recorded credentials in plaintext.
+
+#### Never close a borrowed fd when a socket option is rejected
+
+`enable_tcp_nodelay` and `configure_tcp_keepalive` wrapped a borrowed fd in an
+owning `socket2::Socket` and ran the fallible option calls with `?` before
+`mem::forget`. On any option error the early return dropped the wrapper and
+closed the fd the live stream still owned, yielding `EBADF` or cross-connection
+corruption once the fd number was recycled; the keepalive idle/interval/retries
+values are exactly the kind the kernel rejects, so the path was reachable. The
+fallible calls now run first and the wrapper is forgotten unconditionally before
+returning.
+
+### ⚡ Performance
+
+#### Allocation-free receive on every socket
+
+Only PULL offered `recv_into` / `try_recv_into`; every other socket's `recv`
+allocated a fresh `Vec<Bytes>` per message. The allocation-free receive path is
+now ported to DEALER, ROUTER, REQ, REP, PAIR, and SUB (with `recv_one` for the
+single-frame pipeline sockets), so a caller that reuses one buffer receives with
+no per-message heap allocation. Measured over 256 messages, `recv()` charges 261
+allocations and `recv_into()` charges 1. Each socket keeps its receive semantics
+(ROUTER prefixes the peer identity, REQ strips the correlation and delimiter
+envelope, REP stashes and re-prepends the routing envelope, SUB drops filtered
+messages without allocating them), and the envelope, identity, and filter logic
+is factored into shared helpers so `recv` and `recv_into` cannot drift. ROUTER
+recv now builds the identity-prefixed message in a single allocation, and the
+DEALER, PUSH, and REQ reconnect wrappers no longer clone the whole message on
+the happy path, so a first-try success pays no clone.
+
+#### Coalesced and vectored writes across the connected sockets
+
+Only PUSH reached the coalescing and vectored (iovec) write paths; DEALER,
+ROUTER, REQ, REP, and PAIR each copied every body into the write buffer and
+issued a separate write per send, ignoring `write_coalescing` entirely. PUSH's
+send branch is now factored into a shared `SocketBase::send_message` (coalesce,
+else vector large frames, else encode and write) and all five send functions
+route through it. Batching small DEALER frames collapses write submissions: a
+20000 by 64-byte DEALER-to-ROUTER run over TCP loopback drops from 32260 to 80
+`io_uring_enter` calls with coalescing on, and a 1,000,000-message version of the
+same flow rises from 0.47 M to 18.0 M msg/s (about 38x) now that DEALER honors
+the coalescing flag it previously ignored. The buffered write helpers also
+replace `split().freeze()` with a `mem::take` / `write_all` / recover / `clear`
+cycle, so the owned buffer comes straight back with its capacity intact and no
+per-send `Arc` from freezing.
+
+#### Reworked read slab and a wider default read batch
+
+The read path used to carve a full `read_buffer_size` chunk off the shared slab
+per read and advance the slab by the whole carve regardless of how much was
+read, so the slab was reallocated far sooner than necessary, and sub-threshold
+frames were copied out to avoid pinning the slab. No-timeout reads now trim to
+the bytes read and hand the unused tail back to the slab, which merges without
+copying, so slab consumption tracks bytes actually read and freezing is
+zero-copy on every size. Recv-timeout reads use a dedicated scratch buffer
+instead of the shared slab, since a timed read that elapses loses its buffer
+inside the cancelled future, so only the small scratch reallocates on an actual
+timeout and the slab is never touched by that path. The default read batch
+widens from 8 KiB to 32 KiB, a roughly 4x cut in recv syscalls on bulk
+transfers (measured over a 64 MiB PUSH/PULL flow), capped at half the 64 KiB
+slab so an uncoalesced trickle of small reads does not allocate a fresh slab
+each time.
+
+#### Native async-fn-in-trait and an async-native byte semaphore
+
+`#[async_trait]` is replaced with native async-fn-in-trait on the `Socket`,
+`ProxySocket`, and `BytePermits` traits. The runtime is thread-per-core and
+every future is intentionally `!Send`, so the box-per-call that `async_trait`
+added bought nothing; the proxy loop in particular paid a boxed future per
+forwarded message, and none of these traits is ever used as a trait object.
+Native AFIT also caught a latent infinite recursion that the boxing had hidden,
+where PULL/SUB/XSUB send and PUSH recv resolved to the trait method itself. The
+byte semaphore is reworked from a `parking_lot` condvar behind `spawn_blocking`
+into an async-native FIFO semaphore: the old slow path spawned a blocking thread
+per contended acquire and woke every waiter on each release (a thundering herd),
+while the new one parks a waker per waiter and on release hands freed bytes to
+the front waiters in FIFO order, waking only the ones it can satisfy. A cancelled
+waiter returns its slot so capacity never leaks, and the now-unused `async-trait`
+dependency is dropped from `monocoque-core`.
+
+### 🐛 Bug Fixes
+
+#### REQ/REP empty-delimiter envelope
+
+REQ sent the body with no delimiter and REP passed frames through untouched, so
+a real libzmq REQ/REP peer could not exchange messages. REQ now prepends the
+empty delimiter frame (after an optional correlation ID) and strips it from the
+reply; REP strips the request's routing envelope up to and including the first
+empty frame, returns just the body, and re-prepends the envelope on send.
+Verified in both directions against a real libzmq.
+
+#### PLAIN handshake framing and INITIATE
+
+Two PLAIN interop bugs are fixed. monocoque exchanged the HELLO/WELCOME/ERROR
+commands as raw bodies with no ZMTP command-frame header, so only monocoque
+could parse them; they are now framed and peer commands are read through the
+shared framed-command reader. After WELCOME, ZMTP PLAIN has the client send
+INITIATE and the server reply READY, but monocoque sent the generic symmetric
+READY, which libzmq rejects; the PLAIN client now sends INITIATE and the READY
+parser accepts either command. monocoque-to-monocoque PLAIN still works since
+both ends change together.
+
+#### ZMQ_INVERT_MATCHING actually inverts
+
+`ZMQ_INVERT_MATCHING` disabled only the publisher prefilter while every
+per-subscriber match still did normal prefix matching, so subscribers received
+the matching messages when they should have received the non-matching ones. The
+prefix result is now negated in all three match paths (SUB recv, PUB worker, and
+XPUB), and the flag is threaded to the PUB worker at spawn.
+
+#### STREAM multi-frame send
+
+The STREAM socket wrote only the first non-empty frame after the routing ID,
+silently truncating the rest, and treated any all-empty message as a disconnect.
+It now writes every post-routing-id frame in order and treats only the explicit
+two-frame `[routing_id, ""]` shape as the disconnect hint.
+
+#### Robustness fixes
+
+Several smaller correctness and liveness issues are fixed: an XPUB subscriber
+whose subscription stream fails to decode is now evicted after the poll instead
+of being re-decoded and re-failed on every poll, which had livelocked the
+socket; `Endpoint::from_str` rejects control characters (including NUL) in an
+inproc name, matching the inproc transport's own validation; `with_read_buffer_size`
+floors the size to a small minimum so a zero or near-zero value cannot turn the
+read loop into a spin or a false EOF; and the reconnect backoff now holds at the
+base interval when the configured max is zero or below the base, and converts
+its jitter nanos with a checked conversion instead of a truncating cast.
+
+### 🧪 Testing
+
+#### Fuzzing rewrite and seed corpora
+
+The decoder fuzz target was fuzzing a private inline reimplementation of the
+greeting and command reader with zero coverage of shipped code; it now drives
+the real streaming `ZmtpDecoder` under fragmentation (arbitrary bytes in
+arbitrary-sized chunks across many decode calls), exercising the resumable
+framing state machine that the one-shot codec target does not, with a progress
+budget to guard against a non-consuming loop. The fuzz runner discovers targets
+via `cargo fuzz list` and runs every one for a time budget, failing if any
+crashes, and seed corpora are committed for the decoder, frame codec, and
+subscription targets so every run and a fresh CI job start from useful inputs.
+The stale committed crash artifact is removed and reproducer artifacts are no
+longer tracked.
+
+#### Benchmark guardrails and rework tripwires
+
+`docs/performance.md` is frozen as a per-commit baseline that later phases must
+hold or beat. Three benches cover paths the existing suite missed: the inproc
+socket path with real DEALER sockets, PUB fan-out to 100 subscribers with one
+slow reader, and ROUTER throughput as connected DEALER peers scale to 64. A
+permanent eager-semantics tripwire asserts that after one awaited send the peer
+observes the exact bytes with no flush, extra send, or drop. A set of gate
+invariants is written ahead of the fixes they guard (the unbounded multipart
+accumulation, the missing per-subscriber prefix cap, and stale subscriber state
+after disconnect) so each activates the moment its fix lands; the frame-count and
+metadata-bound gates from Phase 0 are now active.
+
+#### libzmq interop tests in CI
+
+The REQ/REP, PLAIN, STREAM, and CURVE interop tests now run in CI against a real
+libzmq peer alongside the existing NULL suite (PAIR, PUB/SUB, ROUTER,
+load-balance, PUSH/PULL). The interop runner builds the examples with the `zmq`
+feature and no longer masks Python interop failures.
+
+The Python pyzmq interop suite now builds and passes end to end. The runner
+pre-builds the example binaries and points the tests at those exact paths
+(instead of a release path that never held the examples, which raised
+`FileNotFoundError`), adds the missing `sub_client` and `pub_server` examples so
+the PUB/SUB leg has monocoque peers to drive, and removes two stale skips on the
+REQ/REP cases. The new examples flush stdout per line (a block-buffered pipe
+otherwise lost its tail on `SIGTERM`), retry the connect, and accept a
+subscriber before publishing.
+
+#### Supply-chain and CI hardening
+
+`Cargo.lock` is now tracked so `cargo audit` and `cargo deny` run against the
+exact resolved graph. A `deny.toml` gates advisories, licenses, bans, and
+sources, with a cargo-deny CI job added and the audit job switched to run on the
+lock. The crypto deps are floored so the graph pulls a patched
+`curve25519-dalek`, and `spin` is bumped to 0.9.9 to clear a yanked-crate
+advisory. Every workflow and job runs with least-privilege `contents: read`
+permissions, every action is pinned to a 40-character commit SHA with a version
+comment, and dependabot is configured for both GitHub Actions and cargo. The
+MSRV job builds with the `zmq` feature and adds tokio and smol legs (pinned to
+1.95, the workspace's single declared MSRV, rather than an older toolchain the
+crates no longer compile on), Miri is broadened to the core buffer and ZMTP
+codec, a non-gating coverage job is added, and tag-triggered release automation
+verifies the workspace version matches the tag before publishing the crates in
+order. `event-listener` is floored at 5.4.2 to clear an informational
+unsoundness advisory (RUSTSEC-2026-0221) that reached the graph transitively
+through the smol backend's `async-lock`.
+
+#### Benchmarks exercise the optimized paths, and two harness bugs fixed
+
+The connected-socket benches did not opt into the paths this release optimized:
+none enabled write coalescing on DEALER/ROUTER, almost none used `recv_into`, and
+most pinned a 16 KB read buffer, so the coalescing, allocation-free receive, and
+wider read-batch wins were invisible to the suite. The `router_n_peers` and
+`pipelined_throughput` benches now use the recommended fast path. Doing so
+surfaced two latent harness bugs, both fixed rather than reverted. The
+independent-pairs and router benches created a fresh TCP listener and connection
+inside the timed loop; once coalescing made each iteration fast the connection
+churn saturated the ephemeral port range (TIME_WAIT climbed past 7000 while
+ESTABLISHED stayed at 4, so no socket leak) and a later bind failed with
+AddrInUse. They now establish the connection once and run every iteration over
+it, which both fixes the failure and makes them measure message throughput
+instead of TCP setup. The inproc socket bench joined its echo server before
+unbinding the endpoint, but the inproc registry keeps a sender clone alive until
+unbind, so the server never saw EOF and the join blocked forever; unbinding
+before the join lets it complete. A DEALER-to-ROUTER throughput probe example was
+added to make the coalescing win reproducible.
+
+#### Fuzz target and test-isolation fixes
+
+The CURVE handshake fuzz target still called `CurveClient`/`CurveServer`
+`decrypt_message`, which was removed when the message path moved to
+`CurveMessageCipher`, so the fuzz crate no longer compiled; it now targets the
+current public surface. The byte-semaphore tests shared a process-global
+slow-path counter that parallel test execution could pollute, making one test
+pass or fail by scheduling; the counter-touching tests now serialize on a
+test-only lock.
+
+### 📚 Documentation
+
+- Fixed dangling references: CONTRIBUTING no longer points at a removed
+  structure doc, the bench-target table points at `docs/performance.md`, and the
+  fuzz-target list is corrected to match the eight targets that exist (the
+  greeting, command, and ZAP request targets were missing).
+- Corrected small CI descriptions so the docs build feature and the
+  supply-chain gate (cargo audit plus cargo deny) are accurate.
+- Re-measured the full benchmark suite on a quiet reference machine across all
+  three backends and refreshed the numbers in `README.md`, `docs/performance.md`,
+  `monocoque/BENCHMARKS.md`, and `docs/GETTING_STARTED.md` so the published
+  figures reflect the coalescing, allocation-free-receive, and read-slab work in
+  this release.
+- Pointed the `monocoque-core` and `monocoque-zmtp` crates at their own
+  `README.md` (and added one for `monocoque-core`) so crates.io renders a readme
+  for each published crate instead of reporting none.
+
 ## 0.3.0 - 2026-07-15
 
 This cycle upgrades the io_uring runtime to compio 0.19, tightens resource

@@ -446,7 +446,9 @@ impl ZapResponse {
             // Read value. value_len is an attacker-controlled 32-bit length;
             // `cursor + value_len` can wrap on a 32-bit target and pass a naive
             // bound check, then panic on the slice. checked_add rejects overflow.
-            let Some(value_end) = cursor.checked_add(value_len).filter(|&end| end <= data.len())
+            let Some(value_end) = cursor
+                .checked_add(value_len)
+                .filter(|&end| end <= data.len())
             else {
                 return Err("Invalid metadata: value out of bounds".to_string());
             };

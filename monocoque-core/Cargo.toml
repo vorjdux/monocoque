@@ -11,7 +11,7 @@ keywords = ["messaging", "io_uring", "async", "zeromq", "kernel"]
 categories = ["network-programming", "asynchronous"]
 homepage = "https://github.com/vorjdux/monocoque"
 documentation = "https://docs.rs/monocoque-rs-core"
-readme = "../README.md"
+readme = "README.md"
 
 [lib]
 name = "monocoque_core"

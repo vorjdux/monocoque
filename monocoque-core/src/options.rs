@@ -30,10 +30,11 @@ use std::{fmt, time::Duration};
 pub struct SocketOptions {
     /// Read buffer size (bytes)
     ///
-    /// Size of the read-slab buffer for receiving data.
-    /// - Default: 8192 (8KB) - balanced for most workloads
+    /// Size of the per-read carve taken from the shared read slab.
+    /// - Default: 32768 (32KB) - cuts recv syscalls on bulk transfers while
+    ///   staying at half the 64KB slab so small-read trickle still reclaims
     /// - Small (4KB): Low-latency with small messages (< 1KB)
-    /// - Large (16KB): High-throughput with large messages (> 8KB)
+    /// - Large (up to 32KB): High-throughput with large messages (> 8KB)
     pub read_buffer_size: usize,
 
     /// Write buffer size (bytes)
@@ -550,7 +551,7 @@ impl Default for SocketOptions {
             recv_hwm: 1000,
             send_hwm: 1000,
             immediate: false,
-            max_msg_size: None,      // No limit
+            max_msg_size: None, // No limit
             // 32 KiB read batch (half the 64 KiB slab). Larger batches cut recv
             // syscalls on bulk transfers roughly in proportion to their size
             // (measured over a 64 MiB PUSH/PULL flow: 8 KiB -> 8379 recvfrom,

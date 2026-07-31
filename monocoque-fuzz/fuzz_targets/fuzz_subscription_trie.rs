@@ -60,15 +60,15 @@ fuzz_target!(|data: &[u8]| {
     let _ = trie.is_empty();
 
     // Fuzz SubscriptionEvent parsing (from_message / to_message round-trip).
-    if !data.is_empty() {
-        if let Some(event) = SubscriptionEvent::from_message(data) {
-            let encoded = event.to_message();
-            // The first byte of the encoded message must be 0x01 or 0x00.
-            assert!(encoded[0] == 0x01 || encoded[0] == 0x00);
+    if !data.is_empty()
+        && let Some(event) = SubscriptionEvent::from_message(data)
+    {
+        let encoded = event.to_message();
+        // The first byte of the encoded message must be 0x01 or 0x00.
+        assert!(encoded[0] == 0x01 || encoded[0] == 0x00);
 
-            // Round-trip: decode again and assert consistency.
-            let reparsed = SubscriptionEvent::from_message(&encoded);
-            assert!(reparsed.is_some());
-        }
+        // Round-trip: decode again and assert consistency.
+        let reparsed = SubscriptionEvent::from_message(&encoded);
+        assert!(reparsed.is_some());
     }
 });
