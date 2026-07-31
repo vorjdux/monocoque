@@ -51,14 +51,14 @@ live-connection timer.
 
 | Message size | compio | tokio | smol | rust-zmq |
 |---|---|---|---|---|
-| 64 B | 13.6 M msg/s | **17.1 M msg/s** | 13.2 M msg/s | 4.58 M msg/s |
-| 256 B | 8.2 M msg/s | **12.0 M msg/s** | 8.5 M msg/s | 2.60 M msg/s |
-| 1 KB | 3.5 M msg/s | **4.6 M msg/s** | 3.3 M msg/s | 1.01 M msg/s |
-| 4 KB | 1.19 M msg/s | **1.60 M msg/s** | 1.10 M msg/s | 383 K msg/s |
-| 16 KB | 370 K msg/s | **462 K msg/s** | 331 K msg/s | 130 K msg/s |
+| 64 B | 14.1 M msg/s | **18.0 M msg/s** | 12.9 M msg/s | 4.67 M msg/s |
+| 256 B | 8.3 M msg/s | **12.6 M msg/s** | 8.5 M msg/s | 2.66 M msg/s |
+| 1 KB | 3.5 M msg/s | **5.7 M msg/s** | 3.3 M msg/s | 1.06 M msg/s |
+| 4 KB | 1.15 M msg/s | **1.70 M msg/s** | 1.15 M msg/s | 406 K msg/s |
+| 16 KB | 356 K msg/s | **454 K msg/s** | 368 K msg/s | 126 K msg/s |
 
 All three backends beat libzmq once coalescing batches the writes: ~3.0x (compio),
-~3.7x (tokio), ~2.9x (smol) at 64 B, and ~2-4x across the size range. On these
+~3.9x (tokio), ~2.8x (smol) at 64 B, and ~2-4x across the size range. On these
 single-flow loopback microbenchmarks the epoll backends (tokio, smol) are the
 faster: a one-connection ping-pong does not exercise io_uring's strengths (batched
 submission, registered buffers, many concurrent connections) and just pays its
@@ -68,16 +68,16 @@ land for real network I/O and high connection counts. Measure on your own worklo
 Default (eager) mode sends each message immediately, one syscall per `send()`, and
 is the mode for latency-sensitive work where you want each message on the wire now
 rather than batched. On a bulk one-way firehose libzmq's internal batching leads
-at small sizes; steady-state REQ/REP latency, though, is ~2.6-3.9x lower on every
-monocoque backend (~9-14 µs vs libzmq's ~36 µs; compio is the lowest at ~9 µs).
+at small sizes; steady-state REQ/REP latency, though, is ~2.5-4x lower on every
+monocoque backend (~8-14 µs vs libzmq's ~34 µs; compio is the lowest at ~8.5 µs).
 Turn on coalescing for small-message throughput. For **large** frames eager mode
 automatically uses a vectored write (`writev`) so the body is never copied into
 the send buffer; the threshold (`vectored_write_threshold`, default 32 KB) is
 tunable per workload. IPC (Unix domain sockets) is ~3x faster than TCP loopback
 on every backend for same-host throughput.
 
-**PUB/SUB leads libzmq on both axes**: single-subscriber fan-out runs ~3.0x (compio),
-~3.5x (tokio), ~3.2x (smol) faster, and topic filtering at 10% match is a near tie. See
+**PUB/SUB leads libzmq on both axes**: single-subscriber fan-out runs ~3.2x (compio),
+~3.1x (tokio), ~3.2x (smol) faster, and topic filtering at 10% match is a near tie. See
 [docs/performance.md](docs/performance.md) for the full breakdown including
 latency numbers, per-backend tables, the vectored-write crossover measurements,
 PUB/SUB pattern results, and tuning guidance.
