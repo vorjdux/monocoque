@@ -114,7 +114,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # crypto_box - so the floor is enforced two ways: the committed Cargo.lock pins
 # 4.1.3, and cargo-deny/cargo-audit run against that lock in CI (deny.toml).
 x25519-dalek = { version = "2.0.1", features = ["static_secrets", "zeroize"] }
-chacha20poly1305 = "0.10.1"
+chacha20poly1305 = "0.11.0"
 crypto_box = { version = "0.9.1", features = ["salsa20"] }
 sha2 = "0.10"
 rand = "0.8.5"
