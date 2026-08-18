@@ -31,7 +31,7 @@ jobs:
           toolchain: stable
       # Persists target/ across runs so callgrind has a baseline to compare a PR
       # against (keyed on the workflow + lockfile).
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
       - name: Install valgrind
         run: sudo apt-get update && sudo apt-get install -y valgrind
       # The runner binary must match the gungraun library exactly. Derive the
