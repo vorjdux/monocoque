@@ -292,6 +292,36 @@ where
         channel_to_io_error(self.inner.send(msg).await)
     }
 
+    /// Send a single-frame request without allocating a `Vec`.
+    ///
+    /// Allocation-free counterpart to [`send`](Self::send) for the common
+    /// one-frame request: the wire envelope (optional correlation ID, empty
+    /// delimiter, body) is built on the stack. Paired with
+    /// [`recv_into`](Self::recv_into), a round trip performs no per-message heap
+    /// allocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if called while awaiting a reply (outside relaxed mode)
+    /// or if the underlying send fails.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use monocoque::zmq::ReqSocket;
+    /// use bytes::Bytes;
+    ///
+    /// # async fn example(socket: &mut ReqSocket) -> std::io::Result<()> {
+    /// let mut reply: Vec<Bytes> = Vec::new();
+    /// socket.send_one(Bytes::from_static(b"ping")).await?;
+    /// socket.recv_into(&mut reply).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn send_one(&mut self, frame: Bytes) -> io::Result<()> {
+        channel_to_io_error(self.inner.send_one(frame).await)
+    }
+
     /// Get the socket type.
     ///
     /// # ZeroMQ Compatibility

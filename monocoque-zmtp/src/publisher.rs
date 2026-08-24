@@ -712,8 +712,17 @@ impl PubSocket {
     /// Returns an error if a worker thread cannot be spawned (OS resource
     /// exhaustion). Previously this panicked.
     pub fn new() -> io::Result<Self> {
-        let workers = num_cpus::get().clamp(2, Self::DEFAULT_MAX_WORKERS);
-        Self::with_workers(workers)
+        Self::with_workers(Self::default_worker_count())
+    }
+
+    /// The worker count [`new`](Self::new) selects: the number of CPU cores,
+    /// clamped to `[2, DEFAULT_MAX_WORKERS]`.
+    ///
+    /// Exposed so callers that want the default topology with non-default socket
+    /// options do not have to restate the clamp.
+    #[must_use]
+    pub fn default_worker_count() -> usize {
+        num_cpus::get().clamp(2, Self::DEFAULT_MAX_WORKERS)
     }
 
     /// Create with a specific number of worker threads and default options.

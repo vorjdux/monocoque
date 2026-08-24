@@ -206,13 +206,7 @@ where
     /// # }
     /// ```
     pub async fn send(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
-        // Check state machine (unless in relaxed mode)
-        if !self.base.options.req_relaxed && self.state != ReqState::Idle {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Cannot send while awaiting reply - must call recv() first (use req_relaxed mode to allow multiple outstanding requests)",
-            ));
-        }
+        self.check_can_send()?;
 
         trace!("[REQ] Sending {} frames", msg.len());
 
@@ -228,6 +222,67 @@ where
         Ok(())
     }
 
+    /// Send a single-frame request without allocating a `Vec`.
+    ///
+    /// Allocation-free counterpart to [`send`](Self::send) for the common
+    /// one-frame request: the wire envelope (optional correlation ID, empty
+    /// delimiter, body) is built on the stack, so a steady request loop performs
+    /// no per-message heap allocation on the send side. Pair it with
+    /// [`recv_into`](Self::recv_into) for a round trip that allocates nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if called while awaiting a reply (outside relaxed mode)
+    /// or if the underlying send fails.
+    pub async fn send_one(&mut self, frame: Bytes) -> io::Result<()> {
+        self.check_can_send()?;
+
+        trace!("[REQ] Sending 1 frame");
+
+        if self.base.options.req_correlate {
+            let id = self.next_correlation_id();
+            let frames = [
+                Bytes::copy_from_slice(&id.to_be_bytes()),
+                Bytes::new(),
+                frame,
+            ];
+            self.base.send_message(&frames).await?;
+        } else {
+            let frames = [Bytes::new(), frame];
+            self.base.send_message(&frames).await?;
+        }
+
+        self.state = ReqState::AwaitingReply;
+
+        trace!("[REQ] Message sent successfully");
+        Ok(())
+    }
+
+    /// Reject a send that would violate the REQ send/recv alternation.
+    ///
+    /// Relaxed mode allows several outstanding requests, so the check is skipped
+    /// there.
+    fn check_can_send(&self) -> io::Result<()> {
+        if !self.base.options.req_relaxed && self.state != ReqState::Idle {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Cannot send while awaiting reply - must call recv() first (use req_relaxed mode to allow multiple outstanding requests)",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Advance and record the correlation ID for the request being sent.
+    fn next_correlation_id(&mut self) -> u32 {
+        self.request_id = self.request_id.wrapping_add(1);
+        self.expected_request_id = Some(self.request_id);
+        trace!(
+            "[REQ] Correlation enabled, prepending request ID: {}",
+            self.request_id
+        );
+        self.request_id
+    }
+
     /// Build the REQ wire envelope: an optional 4-byte correlation ID, then the
     /// empty delimiter frame the ZMTP REQ/REP contract requires, then the body.
     ///
@@ -238,13 +293,8 @@ where
     fn build_req_envelope(&mut self, msg: Vec<Bytes>) -> Vec<Bytes> {
         let mut out = Vec::with_capacity(msg.len() + 2);
         if self.base.options.req_correlate {
-            self.request_id = self.request_id.wrapping_add(1);
-            self.expected_request_id = Some(self.request_id);
-            trace!(
-                "[REQ] Correlation enabled, prepending request ID: {}",
-                self.request_id
-            );
-            out.push(Bytes::copy_from_slice(&self.request_id.to_be_bytes()));
+            let id = self.next_correlation_id();
+            out.push(Bytes::copy_from_slice(&id.to_be_bytes()));
         }
         out.push(Bytes::new()); // empty delimiter
         out.extend(msg);
