@@ -52,6 +52,14 @@ let reply = client.recv().await.expect("no reply");
 
 REQ enforces strict send/recv alternation. If you need to fire multiple requests without waiting, use DEALER/ROUTER instead.
 
+For a single-frame request in a hot loop, `send_one(frame)` builds the wire envelope on the stack instead of allocating a `Vec`. Paired with `recv_into`, a round trip allocates nothing:
+
+```rust
+let mut reply: Vec<Bytes> = Vec::new();
+client.send_one(Bytes::from("ping")).await?;
+client.recv_into(&mut reply).await?;
+```
+
 ### Async Request-Reply (DEALER/ROUTER)
 
 ```rust
@@ -86,6 +94,16 @@ sub_sock.subscribe(b"weather").await?;
 while let Ok(Some(msg)) = sub_sock.recv().await {
     println!("{:?}", msg);
 }
+```
+
+`bind` picks a worker count from the CPU count, clamped to `[2, 16]`. To tune the
+publisher, use `bind_with_options` (default worker count, custom options) or
+`bind_with_workers_opts` (both explicit). Publishers pushing many small frames
+usually want write coalescing on:
+
+```rust
+let opts = SocketOptions::default().with_write_coalescing(true);
+let mut pub_sock = PubSocket::bind_with_options("127.0.0.1:5556", opts).await?;
 ```
 
 The first frame is the topic. SUB filters by prefix match against subscribed topics. Subscribe to `b""` to receive everything.
@@ -174,7 +192,7 @@ Key options:
 - `conflate` - keep only the most recent message in the receive queue. Useful for telemetry or status updates where stale data is useless.
 - `tcp_keepalive` - detect dead connections. Use `with_tcp_keepalive(1)`, `with_tcp_keepalive_idle(60)`, `with_tcp_keepalive_intvl(10)`, `with_tcp_keepalive_cnt(3)` to enable.
 
-Buffer size presets: `SocketOptions::small()` (4KB, good for low-latency REQ/REP) and `SocketOptions::large()` (16KB, good for high-throughput DEALER/ROUTER).
+Buffer sizing: the defaults are a 32KB read buffer and an 8KB write buffer. Use `with_read_buffer_size(4096)` to trade throughput for latency on small messages, or `with_buffer_sizes(65_536, 65_536)` to widen the read batch for bulk transfers. The read buffer is clamped to the 64KB read slab and floored at 64 bytes. The `SocketOptions::small()` and `large()` presets are deprecated because both sit below the default.
 
 ---
 

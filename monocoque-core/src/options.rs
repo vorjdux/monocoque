@@ -5,27 +5,6 @@
 
 use std::{fmt, time::Duration};
 
-/// Socket configuration options.
-///
-/// These options control socket behavior including timeouts, buffer sizes,
-/// and reliability features. This struct consolidates all socket configuration
-/// in one place, following the `MongoDB` Rust driver pattern.
-///
-/// # Examples
-///
-/// ```
-/// use monocoque_core::options::SocketOptions;
-/// use std::time::Duration;
-///
-/// // Simple case: use defaults
-/// let opts = SocketOptions::default();
-///
-/// // Customize timeouts and buffers
-/// let opts = SocketOptions::default()
-///     .with_recv_timeout(Duration::from_secs(5))
-///     .with_send_timeout(Duration::from_secs(5))
-///     .with_buffer_sizes(65536, 16384);  // widen the read batch for bulk transfers
-/// ```
 /// Smallest usable read buffer.
 ///
 /// A read buffer of 0 (or a byte or two) turns the read loop into a spin or a
@@ -47,6 +26,27 @@ const fn clamp_read_buffer_size(size: usize) -> usize {
     }
 }
 
+/// Socket configuration options.
+///
+/// These options control socket behavior including timeouts, buffer sizes,
+/// and reliability features. This struct consolidates all socket configuration
+/// in one place, following the `MongoDB` Rust driver pattern.
+///
+/// # Examples
+///
+/// ```
+/// use monocoque_core::options::SocketOptions;
+/// use std::time::Duration;
+///
+/// // Simple case: use defaults
+/// let opts = SocketOptions::default();
+///
+/// // Customize timeouts and buffers
+/// let opts = SocketOptions::default()
+///     .with_recv_timeout(Duration::from_secs(5))
+///     .with_send_timeout(Duration::from_secs(5))
+///     .with_buffer_sizes(65536, 16384);  // widen the read batch for bulk transfers
+/// ```
 #[derive(Clone)]
 pub struct SocketOptions {
     /// Read buffer size (bytes)
@@ -1502,7 +1502,15 @@ mod tests {
         // `with_buffer_sizes` writes the same field as `with_read_buffer_size`
         // but used to skip the lower bound, so a zero read buffer slipped
         // through it and turned the read loop into a spin or a false EOF.
-        for size in [0, 1, 63, 64, 4096, crate::io::READ_SLAB_SIZE + 1, usize::MAX] {
+        for size in [
+            0,
+            1,
+            63,
+            64,
+            4096,
+            crate::io::READ_SLAB_SIZE + 1,
+            usize::MAX,
+        ] {
             let via_single = SocketOptions::new().with_read_buffer_size(size);
             let via_pair = SocketOptions::new().with_buffer_sizes(size, 8192);
 

@@ -38,6 +38,25 @@ Monocoque handles this with a poison flag. Before any write, a `PoisonGuard` set
 
 This applies to all socket types via `SocketBase`.
 
+### The receive path is not poisoned
+
+The poison flag covers writes only. There is no equivalent guard on the read
+path, and the two cancel differently.
+
+Cancelling a `recv()` does not lose decoded frames: partial multipart state lives
+on the socket, not in the future, so whatever has already been decoded survives
+and the next `recv()` continues from it. What can be lost is the single read that
+was in flight when the future was dropped, and losing those bytes desyncs the
+ZMTP stream. Unlike a cancelled write, this happens silently: the socket is not
+marked poisoned and the next call does not return `BrokenPipe`.
+
+In practice this is reachable only when you cancel a `recv()` yourself, by
+wrapping it in your own `timeout()` or racing it in a `select!`. Prefer the
+built-in `recv_timeout` socket option, which bounds the whole logical receive
+internally and leaves the socket usable when it elapses. If you must cancel a
+receive externally, treat the socket as suspect afterwards and reconnect rather
+than continuing to read from it.
+
 ```rust
 let result = timeout(Duration::from_secs(5), dealer.flush()).await;
 
@@ -45,11 +64,11 @@ match result {
     Ok(Ok(())) => {}
     Ok(Err(e)) if e.kind() == ErrorKind::BrokenPipe => {
         // Socket poisoned - reconnect
-        dealer = DealerSocket::connect_with_reconnect("tcp://127.0.0.1:5555").await?;
+        dealer = DealerSocket::connect("127.0.0.1:5555").await?;
     }
     Err(_timeout) => {
         // Timeout cancelled flush - socket is poisoned
-        dealer = DealerSocket::connect_with_reconnect("tcp://127.0.0.1:5555").await?;
+        dealer = DealerSocket::connect("127.0.0.1:5555").await?;
     }
 }
 ```
@@ -62,13 +81,14 @@ A poisoned socket cannot be reused. You must create a new connection.
 
 By default, if the underlying TCP connection drops, the socket becomes permanently unusable. The reconnection API changes this: monocoque stores the endpoint and transparently reconnects on the next send or receive call.
 
-Use `connect_with_reconnect` instead of building a socket from a raw stream:
+Build the socket with `connect` or `connect_with_options`, which store the
+endpoint, then use the reconnecting send and receive calls:
 
 ```rust
-let mut dealer = DealerSocket::connect_with_reconnect("tcp://127.0.0.1:5555").await?;
+let mut client = ReqSocket::connect("127.0.0.1:5555").await?;
 
 loop {
-    match dealer.send_with_reconnect(msg.clone()).await {
+    match client.send_with_reconnect(msg.clone()).await {
         Ok(()) => break,
         Err(e) if e.kind() == ErrorKind::NotConnected => {
             // Reconnection attempt is in progress - back off and retry
@@ -79,13 +99,23 @@ loop {
 }
 ```
 
-`recv_with_reconnect` works the same way on the receive side.
+`recv_with_reconnect` works the same way on the receive side, and
+`try_reconnect` forces an attempt without sending or receiving.
 
-Reconnection uses exponential backoff: 100ms initially, doubling on each failure up to 30 seconds, with ±25% jitter to avoid thundering herd. The backoff resets on a successful connection.
+Reconnection uses exponential backoff from `reconnect_ivl` (100ms by default),
+doubling up to `reconnect_ivl_max`, with equal jitter (a delay uniformly in
+`[d/2, d]`) so a fleet reconnecting after a shared outage spreads its retries.
+The backoff resets on a successful connection.
 
-The original `from_tcp` and `connect` APIs still work as before. They do not store an endpoint, so reconnection is not available on those sockets.
+`from_tcp` and the `from_*` constructors do not store an endpoint, so
+reconnection is not available on sockets built from a raw stream.
 
-**Current support**: `DealerSocket` only. SUB sockets need to re-subscribe on reconnect (not yet implemented). REQ sockets have a request/reply state machine that complicates mid-flight reconnection. ROUTER sockets accept incoming connections rather than initiating them, so this model does not apply directly.
+**Current support** in `monocoque::zmq`: `DealerSocket`, `PullSocket`,
+`PushSocket`, `ReqSocket`, and `SubSocket` expose `try_reconnect`, plus the
+`send_with_reconnect` / `recv_with_reconnect` pair appropriate to their
+direction. `RouterSocket` accepts incoming connections rather than initiating
+them, so the model does not apply. A SUB socket replays its stored subscription list to the
+new peer after reconnecting, so filters survive the drop.
 
 ---
 

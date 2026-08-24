@@ -11,7 +11,7 @@ By default, monocoque assigns a random identity when a peer connects. You can ov
 A DEALER (or REQ) socket announces its identity during the ZMTP handshake. Set it via `SocketOptions`:
 
 ```rust
-let options = SocketOptions::default().with_identity(b"worker-001".to_vec());
+let options = SocketOptions::default().with_routing_id(Bytes::from_static(b"worker-001"));
 let mut dealer = DealerSocket::connect_with_options("tcp://127.0.0.1:5555", options).await?;
 ```
 
@@ -70,6 +70,6 @@ This is useful for reconnecting clients that want to reclaim a stable identity w
 
 | monocoque API | ZeroMQ option |
 |---|---|
-| `SocketOptions::with_identity` | `ZMQ_ROUTING_ID` (61) |
+| `SocketOptions::with_routing_id` | `ZMQ_ROUTING_ID` (61) |
 | `RouterSocket::set_router_mandatory` | `ZMQ_ROUTER_MANDATORY` (33) |
 | `RouterSocket::set_router_handover` | `ZMQ_ROUTER_HANDOVER` (56) |
