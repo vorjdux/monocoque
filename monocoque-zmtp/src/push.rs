@@ -324,7 +324,7 @@ mod tests {
     /// Read `TCP_NODELAY` from a live fd without taking ownership of it.
     fn fd_nodelay(fd: RawFd) -> bool {
         let sock = unsafe { socket2::Socket::from_raw_fd(fd) };
-        let nd = sock.nodelay().expect("query TCP_NODELAY");
+        let nd = sock.tcp_nodelay().expect("query TCP_NODELAY");
         std::mem::forget(sock); // borrowed fd - do not close it
         nd
     }

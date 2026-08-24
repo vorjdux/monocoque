@@ -234,7 +234,7 @@ pub enum FrameResult {
 /// wake from the same backoff in lockstep and hammer it in synchronized waves.
 /// Jitter decorrelates them while preserving the backoff's growth.
 fn jittered_backoff(delay: std::time::Duration) -> std::time::Duration {
-    use rand::Rng;
+    use rand::RngExt;
     if delay.is_zero() {
         return delay;
     }
@@ -242,7 +242,7 @@ fn jittered_backoff(delay: std::time::Duration) -> std::time::Duration {
     // in u64; use a checked conversion rather than a truncating cast so an
     // absurdly large delay saturates instead of wrapping.
     let half_ns = u64::try_from(delay.as_nanos() / 2).unwrap_or(u64::MAX);
-    std::time::Duration::from_nanos(half_ns + rand::thread_rng().gen_range(0..=half_ns))
+    std::time::Duration::from_nanos(half_ns + rand::rng().random_range(0..=half_ns))
 }
 
 impl<S> SocketBase<S>
