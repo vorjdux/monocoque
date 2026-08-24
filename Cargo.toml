@@ -125,7 +125,7 @@ x25519-dalek = { version = "2.0.1", features = ["static_secrets", "zeroize"] }
 # `Aead` trait imported here would no longer be the one `CryptoBox` implements,
 # breaking the RFC-26 CURVE message path. Revisit when crypto_box ships a stable
 # 0.10 on aead 0.6 (0.10.0-pre.0 as of 2026-08).
-chacha20poly1305 = "0.10.1"
+chacha20poly1305 = "0.11.0"
 crypto_box = { version = "0.9.1", features = ["salsa20"] }
 sha2 = "0.10"
 rand = "0.10.2"
