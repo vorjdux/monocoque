@@ -1072,6 +1072,18 @@ where
     /// after the last message in a burst.
     pub(crate) async fn send_coalesced(&mut self, msg: &[Bytes]) -> io::Result<()> {
         use crate::codec::encode_multipart;
+        // A body at or above the vectored threshold costs more to copy into the
+        // coalescing buffer than the syscall it saves, so hand it to the kernel
+        // directly instead. Anything already buffered is flushed first so wire
+        // order is preserved. Without this, enabling coalescing made the
+        // zero-copy write path unreachable at every size, and every large body
+        // paid a userspace copy.
+        if self.should_vectored_write(msg) {
+            if !self.send_buffer.is_empty() {
+                self.flush_send_buffer().await?;
+            }
+            return self.send_vectored(msg).await;
+        }
         if let Some(ref mut cipher) = self.curve_cipher {
             let last = msg.len().saturating_sub(1);
             for (i, frame) in msg.iter().enumerate() {
@@ -2132,6 +2144,72 @@ mod tests {
             "the decoder should accept exactly {MAX_FRAMES_PER_MESSAGE} frames of one \
              logical message, then reject the next"
         );
+    }
+
+    #[test]
+    fn coalescing_vectors_a_large_body_rather_than_copying_it() {
+        use monocoque_core::rt::LocalRuntime;
+
+        // Coalescing used to win unconditionally over the vectored path, so a
+        // body far above `vectored_write_threshold` was still memcpy'd into the
+        // send buffer. Small frames must keep batching; large ones must go
+        // straight to the wire.
+        const THRESHOLD: usize = 4096;
+        let options = SocketOptions::default()
+            .with_write_coalescing(true)
+            .with_write_coalesce_threshold(64 * 1024)
+            .with_vectored_write_threshold(THRESHOLD);
+
+        LocalRuntime::new().unwrap().block_on(async {
+            let stream = ScriptedWriteStream::new(std::iter::empty());
+            let log = stream.log();
+            let mut base = SocketBase::new(stream, SocketType::Dealer, options);
+
+            // Below the threshold: batched, nothing on the wire yet.
+            let small = Bytes::from(vec![b'x'; THRESHOLD - 1]);
+            base.send_message(std::slice::from_ref(&small))
+                .await
+                .unwrap();
+            assert!(
+                log.is_empty(),
+                "a sub-threshold body should coalesce, not write"
+            );
+            let buffered = base.send_buffer.len();
+            assert!(
+                buffered >= small.len(),
+                "the small body belongs in the coalescing buffer"
+            );
+
+            // At the threshold: the pending buffer is flushed first (wire order
+            // is preserved) and the large body is handed to the kernel without
+            // being copied into the send buffer.
+            let large = Bytes::from(vec![b'y'; THRESHOLD]);
+            base.send_message(std::slice::from_ref(&large))
+                .await
+                .unwrap();
+            assert!(
+                !log.is_empty(),
+                "a body at the vectored threshold must reach the wire, not the copy buffer"
+            );
+            assert!(
+                base.send_buffer.is_empty(),
+                "the coalescing buffer should have been flushed before the vectored write"
+            );
+
+            let wire = log.bytes();
+            let first_y = wire.iter().position(|b| *b == b'y').unwrap();
+            let last_x = wire.iter().rposition(|b| *b == b'x').unwrap();
+            assert!(
+                last_x < first_y,
+                "the buffered small message must precede the vectored large one on the wire"
+            );
+            let body_run = wire[first_y..].iter().take_while(|b| **b == b'y').count();
+            assert_eq!(
+                body_run,
+                large.len(),
+                "the whole large body should have been written contiguously"
+            );
+        });
     }
 
     #[test]
