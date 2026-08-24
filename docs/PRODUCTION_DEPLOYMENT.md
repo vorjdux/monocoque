@@ -46,37 +46,43 @@ Apply without reboot: `sysctl -p`
 Match buffer sizes to your typical message size:
 
 ```rust
-// Small messages (<1 KB)
-let options = SocketOptions::small();   // 4 KB buffers
+// Default (32 KB read / 8 KB write) suits most workloads
+let options = SocketOptions::default();
 
-// Default (1-10 KB messages)
-let options = SocketOptions::default(); // 32 KB read / 8 KB write buffers
+// Small messages (<1 KB), trading throughput for latency
+let options = SocketOptions::default().with_read_buffer_size(4096);
 
-// Large messages (>10 KB)
-let options = SocketOptions::large();   // 16 KB buffers
-
-// Custom
-let mut options = SocketOptions::default();
-options.recv_buffer_size = 32 * 1024;
-options.send_buffer_size = 32 * 1024;
+// Bulk transfers: widen the read batch to the full 64 KB slab
+let options = SocketOptions::default().with_buffer_sizes(65_536, 65_536);
 ```
+
+The read buffer is clamped to the 64 KB read slab and floored at 64 bytes.
+`SocketOptions::small()` and `large()` are deprecated: both sit below the 32 KB
+default, so they slow bulk transfers down rather than speeding them up.
 
 ### TCP Options
 
-For low-latency request/reply, disable Nagle's algorithm:
+`TCP_NODELAY` is always enabled, on every connection, so Nagle's algorithm never
+delays a send. There is no option to turn it off: eager delivery is the contract,
+and batching is opted into explicitly with write coalescing instead.
+
+To detect dead peers, enable keepalive:
 
 ```rust
-options.tcp_nodelay = true;
-options.tcp_keepalive = true;
-options.tcp_keepalive_idle = 60;      // seconds idle before probing
-options.tcp_keepalive_interval = 10;  // seconds between probes
+let options = SocketOptions::default()
+    .with_tcp_keepalive(1)          // 1 enables, 0 disables, -1 leaves the OS default
+    .with_tcp_keepalive_idle(60)    // seconds idle before probing
+    .with_tcp_keepalive_intvl(10)   // seconds between probes
+    .with_tcp_keepalive_cnt(3);     // failed probes before the connection is dropped
 ```
 
-For high-throughput pub/sub, let the kernel batch:
+For high-throughput pub/sub, batch in userspace and give the kernel a larger
+send buffer:
 
 ```rust
-options.tcp_nodelay = false;
-options.send_buffer_size = 128 * 1024;
+let options = SocketOptions::default()
+    .with_write_coalescing(true)
+    .with_sndbuf(128 * 1024);
 ```
 
 For connections over WAN (multi-region), extend timeouts:

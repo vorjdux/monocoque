@@ -5,6 +5,27 @@
 
 use std::{fmt, time::Duration};
 
+/// Smallest usable read buffer.
+///
+/// A read buffer of 0 (or a byte or two) turns the read loop into a spin or a
+/// false EOF, so every setter floors to this.
+const MIN_READ_BUFFER_SIZE: usize = 64;
+
+/// Clamp a caller-supplied read buffer size into the usable range.
+///
+/// Both [`SocketOptions::with_read_buffer_size`] and
+/// [`SocketOptions::with_buffer_sizes`] write the same field, so they share one
+/// clamp rather than each carrying its own and drifting apart.
+const fn clamp_read_buffer_size(size: usize) -> usize {
+    if size < MIN_READ_BUFFER_SIZE {
+        MIN_READ_BUFFER_SIZE
+    } else if size > crate::io::READ_SLAB_SIZE {
+        crate::io::READ_SLAB_SIZE
+    } else {
+        size
+    }
+}
+
 /// Socket configuration options.
 ///
 /// These options control socket behavior including timeouts, buffer sizes,
@@ -24,7 +45,7 @@ use std::{fmt, time::Duration};
 /// let opts = SocketOptions::default()
 ///     .with_recv_timeout(Duration::from_secs(5))
 ///     .with_send_timeout(Duration::from_secs(5))
-///     .with_buffer_sizes(16384, 16384);  // 16KB buffers for high-throughput
+///     .with_buffer_sizes(65536, 16384);  // widen the read batch for bulk transfers
 /// ```
 #[derive(Clone)]
 pub struct SocketOptions {
@@ -34,7 +55,12 @@ pub struct SocketOptions {
     /// - Default: 32768 (32KB) - cuts recv syscalls on bulk transfers while
     ///   staying at half the 64KB slab so small-read trickle still reclaims
     /// - Small (4KB): Low-latency with small messages (< 1KB)
-    /// - Large (up to 32KB): High-throughput with large messages (> 8KB)
+    /// - Large (up to 65536, the slab size): fewer recv syscalls on bulk
+    ///   transfers, at the cost of one slab carve per read
+    ///
+    /// Values below 64 are raised to 64 and values above 65536 are lowered to
+    /// 65536. Note that anything under the 32KB default trades throughput away,
+    /// so reach for a smaller buffer only to cut latency, not to "tune".
     pub read_buffer_size: usize,
 
     /// Write buffer size (bytes)
@@ -634,6 +660,10 @@ impl SocketOptions {
     /// let opts = SocketOptions::small();  // 4KB buffers for REQ/REP
     /// ```
     #[must_use]
+    #[deprecated(
+        since = "0.4.1",
+        note = "sets a 4KB read buffer, which is below the 32KB default. Use SocketOptions::new().with_read_buffer_size(4096) if that is really what you want."
+    )]
     pub fn small() -> Self {
         Self {
             read_buffer_size: 4096,
@@ -654,6 +684,10 @@ impl SocketOptions {
     /// let opts = SocketOptions::large();  // 16KB buffers for DEALER/ROUTER
     /// ```
     #[must_use]
+    #[deprecated(
+        since = "0.4.1",
+        note = "sets a 16KB read buffer, which is below the 32KB default and so is slower, not faster. Use SocketOptions::new() and set what your workload needs."
+    )]
     pub fn large() -> Self {
         Self {
             read_buffer_size: 16384,
@@ -849,17 +883,7 @@ impl SocketOptions {
     /// let opts = SocketOptions::new().with_read_buffer_size(16384);
     /// ```
     pub const fn with_read_buffer_size(mut self, size: usize) -> Self {
-        // A read buffer of 0 (or a byte or two) turns the read loop into a spin
-        // or a false EOF, so floor it to a small minimum. The upper bound stays
-        // the read slab size.
-        const MIN_READ_BUFFER_SIZE: usize = 64;
-        self.read_buffer_size = if size < MIN_READ_BUFFER_SIZE {
-            MIN_READ_BUFFER_SIZE
-        } else if size > crate::io::READ_SLAB_SIZE {
-            crate::io::READ_SLAB_SIZE
-        } else {
-            size
-        };
+        self.read_buffer_size = clamp_read_buffer_size(size);
         self
     }
 
@@ -880,11 +904,7 @@ impl SocketOptions {
     /// let opts = SocketOptions::new().with_buffer_sizes(4096, 4096);
     /// ```
     pub const fn with_buffer_sizes(mut self, read_size: usize, write_size: usize) -> Self {
-        self.read_buffer_size = if read_size > crate::io::READ_SLAB_SIZE {
-            crate::io::READ_SLAB_SIZE
-        } else {
-            read_size
-        };
+        self.read_buffer_size = clamp_read_buffer_size(read_size);
         self.write_buffer_size = write_size;
         self
     }
@@ -1475,6 +1495,35 @@ mod tests {
             opts.read_buffer_size <= crate::io::READ_SLAB_SIZE,
             "SocketOptions allowed a read buffer size larger than the read slab"
         );
+    }
+
+    #[test]
+    fn both_read_buffer_setters_clamp_identically() {
+        // `with_buffer_sizes` writes the same field as `with_read_buffer_size`
+        // but used to skip the lower bound, so a zero read buffer slipped
+        // through it and turned the read loop into a spin or a false EOF.
+        for size in [
+            0,
+            1,
+            63,
+            64,
+            4096,
+            crate::io::READ_SLAB_SIZE + 1,
+            usize::MAX,
+        ] {
+            let via_single = SocketOptions::new().with_read_buffer_size(size);
+            let via_pair = SocketOptions::new().with_buffer_sizes(size, 8192);
+
+            assert_eq!(
+                via_single.read_buffer_size, via_pair.read_buffer_size,
+                "the two read-buffer setters disagree for {size}"
+            );
+            assert!(
+                via_pair.read_buffer_size >= MIN_READ_BUFFER_SIZE
+                    && via_pair.read_buffer_size <= crate::io::READ_SLAB_SIZE,
+                "with_buffer_sizes({size}) left the read buffer out of range"
+            );
+        }
     }
 
     #[test]

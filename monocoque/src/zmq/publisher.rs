@@ -64,6 +64,44 @@ impl PubSocket {
         })
     }
 
+    /// Bind with custom socket options and the default worker count.
+    ///
+    /// [`bind`](Self::bind) and [`bind_with_workers`](Self::bind_with_workers)
+    /// leave every worker on [`SocketOptions::default`], which means write
+    /// coalescing stays off. A publisher pushing small frames to many
+    /// subscribers wants it on, so this is the constructor to reach for when
+    /// tuning a PUB socket for throughput.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the address cannot be bound or a worker thread
+    /// cannot be spawned.
+    pub async fn bind_with_options(
+        addr: impl monocoque_core::rt::ToSocketAddrs,
+        options: SocketOptions,
+    ) -> io::Result<Self> {
+        Self::bind_with_workers_opts(addr, InternalPub::default_worker_count(), options).await
+    }
+
+    /// Bind with a specific number of worker threads and custom socket options.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the address cannot be bound or a worker thread
+    /// cannot be spawned.
+    pub async fn bind_with_workers_opts(
+        addr: impl monocoque_core::rt::ToSocketAddrs,
+        worker_count: usize,
+        options: SocketOptions,
+    ) -> io::Result<Self> {
+        let listener = TcpListener::bind(addr).await?;
+        Ok(Self {
+            inner: InternalPub::with_workers_opts(worker_count, options)?,
+            listener,
+            monitor: None,
+        })
+    }
+
     /// Accept a new subscriber connection.
     ///
     /// Performs ZMTP handshake and assigns the subscriber to a worker thread.

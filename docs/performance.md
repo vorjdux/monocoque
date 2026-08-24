@@ -499,21 +499,23 @@ unaffected, since they never move a stream across runtimes.
 ## Buffer sizes
 
 Read and write buffer sizes affect how many bytes fit before an extra read/write
-syscall is needed. Default is 8 KB.
+syscall is needed. The defaults are a 32 KB read buffer and an 8 KB write buffer.
+The read buffer is clamped to the 64 KB read slab, and floored at 64 bytes.
 
 ```rust
 use monocoque_core::options::SocketOptions;
 
 // Low-latency REQ/REP with small messages (< 1 KB)
-let opts = SocketOptions::small();   // 4 KB buffers
+let opts = SocketOptions::default().with_read_buffer_size(4096);
 
-// High-throughput PUSH/PULL with large messages (> 8 KB)
-let opts = SocketOptions::large();   // 16 KB buffers
-
-// Custom
-let opts = SocketOptions::default()
-    .with_buffer_sizes(32_768, 32_768);
+// Bulk transfers: widen the read batch to the full slab
+let opts = SocketOptions::default().with_buffer_sizes(65_536, 65_536);
 ```
+
+`SocketOptions::small()` and `large()` are deprecated. Both set read buffers
+below the 32 KB default, so they are slower than leaving the default alone
+despite being named as optimizations. Reach for a smaller read buffer only to
+cut latency, never to "tune" throughput.
 
 **Rule of thumb:** set read buffer >= your 99th-percentile message size.
 

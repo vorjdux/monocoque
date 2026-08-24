@@ -46,7 +46,7 @@ use crypto_box::{
     PublicKey as SalsaPublicKey, SalsaBox, SecretKey as SalsaSecretKey,
     aead::generic_array::GenericArray,
 };
-use rand::RngCore;
+use rand::Rng;
 use std::time::Duration;
 use thiserror::Error;
 use tracing::{debug, warn};
@@ -821,7 +821,7 @@ impl CurveClient {
 
         // Build vouch: Box[c'.pk ‖ s'.pk](C→S)
         let mut vouch_nonce_16 = [0u8; 16];
-        rand::thread_rng().fill_bytes(&mut vouch_nonce_16);
+        rand::rng().fill_bytes(&mut vouch_nonce_16);
         let mut vouch_nonce_24 = [0u8; 24];
         vouch_nonce_24[..8].copy_from_slice(b"VOUCH---");
         vouch_nonce_24[8..].copy_from_slice(&vouch_nonce_16);
@@ -1001,7 +1001,7 @@ impl CurveServer {
     /// Create new CURVE server
     pub fn new(server_keypair: CurveKeyPair, local_socket_type: impl Into<String>) -> Self {
         let mut cookie_key = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut cookie_key);
+        rand::rng().fill_bytes(&mut cookie_key);
         Self {
             server_keypair,
             server_short_keypair: CurveKeyPair::generate(),
@@ -1119,7 +1119,7 @@ impl CurveServer {
 
         // Build cookie (96 bytes): cookie_nonce_16 + XChaCha20ct(c'.pk ‖ s'.sk_bytes)
         let mut cookie_nonce_16 = [0u8; 16];
-        rand::thread_rng().fill_bytes(&mut cookie_nonce_16);
+        rand::rng().fill_bytes(&mut cookie_nonce_16);
         let mut cookie_nonce_24 = [0u8; 24];
         cookie_nonce_24[..8].copy_from_slice(b"COOKIE--");
         cookie_nonce_24[8..].copy_from_slice(&cookie_nonce_16);
@@ -1141,7 +1141,7 @@ impl CurveServer {
 
         // Build welcome_box (144 bytes): SalsaBox(S→c').encrypt(s'.pk ‖ cookie)
         let mut server_nonce_16 = [0u8; 16];
-        rand::thread_rng().fill_bytes(&mut server_nonce_16);
+        rand::rng().fill_bytes(&mut server_nonce_16);
         let mut welcome_nonce_24 = [0u8; 24];
         welcome_nonce_24[..8].copy_from_slice(b"WELCOME-");
         welcome_nonce_24[8..].copy_from_slice(&server_nonce_16);

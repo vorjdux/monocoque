@@ -92,6 +92,25 @@ impl SubSocket {
         Ok(sock)
     }
 
+    /// Connect to a publisher with custom socket options.
+    ///
+    /// Counterpart to [`connect`](Self::connect) for callers that need to set
+    /// buffer sizes, timeouts, or subscriptions before the connection is made.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the address cannot be parsed or the connection and
+    /// ZMTP handshake fail.
+    pub async fn connect_with_options(
+        addr: impl monocoque_core::rt::ToSocketAddrs,
+        options: monocoque_core::options::SocketOptions,
+    ) -> io::Result<Self> {
+        Ok(Self {
+            inner: InternalSub::connect_with_options(addr, options).await?,
+            monitor: None,
+        })
+    }
+
     /// Check if the socket is currently connected.
     #[inline]
     pub fn is_connected(&self) -> bool {

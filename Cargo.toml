@@ -5,7 +5,7 @@ exclude = ["monocoque-fuzz", "monocoque-loom"]
 default-members = ["monocoque"]
 
 [workspace.package]
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 license = "MIT"
 authors = ["Matheus Santos <vorj.dux@gmail.com>"]
@@ -35,6 +35,12 @@ future_not_send = "allow"
 let_underscore_future = "allow"
 # Async fns kept async for signature consistency across backends / traits.
 unused_async = "allow"
+# Same policy, trait-impl half: split out of `unused_async` in Rust 1.98. A no-op
+# or synchronous impl of an async trait method (NoOpPermits::acquire, the smol
+# and tokio flush/shutdown adapters, the inproc transport) keeps the `async fn`
+# signature the trait declares rather than desugaring to `impl Future` at one
+# site and not the others.
+unused_async_trait_impl = "allow"
 # Wire-protocol and metrics math: casts are bounded by construction.
 cast_possible_truncation = "allow"
 cast_sign_loss = "allow"
@@ -84,7 +90,7 @@ compio = { version = "0.19", default-features = false, features = ["runtime", "m
 # smol drives the same socket stack on a lightweight async-executor + async-io
 # stack. Only the `runtime-smol` feature pulls it in. See each crate's [features].
 smol = "2"
-flume = "0.11"
+flume = "0.12"
 futures = "0.3"
 async-trait = "0.1"
 thiserror = "2"
@@ -98,7 +104,7 @@ once_cell = "1.19"
 parking_lot = "0.12"
 
 # Networking
-socket2 = { version = "0.5", features = ["all"] }
+socket2 = { version = "0.6", features = ["all"] }
 
 # Logging
 # release_max_level_info compiles out trace!/debug! callsites in release builds
@@ -114,10 +120,15 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # crypto_box - so the floor is enforced two ways: the committed Cargo.lock pins
 # 4.1.3, and cargo-deny/cargo-audit run against that lock in CI (deny.toml).
 x25519-dalek = { version = "2.0.1", features = ["static_secrets", "zeroize"] }
+# Pinned to the aead 0.5 generation. 0.11 moves to aead 0.6 / hybrid-array,
+# which crypto_box 0.9 (aead 0.5 / generic-array) cannot interoperate with: the
+# `Aead` trait imported here would no longer be the one `CryptoBox` implements,
+# breaking the RFC-26 CURVE message path. Revisit when crypto_box ships a stable
+# 0.10 on aead 0.6 (0.10.0-pre.0 as of 2026-08).
 chacha20poly1305 = "0.10.1"
 crypto_box = { version = "0.9.1", features = ["salsa20"] }
 sha2 = "0.10"
-rand = "0.8.5"
+rand = "0.10.2"
 subtle = "2"
 zeroize = "1"
 

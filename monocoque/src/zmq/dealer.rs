@@ -313,6 +313,41 @@ impl DealerSocket {
             monitor: None,
         })
     }
+
+    /// Try to reconnect to the stored endpoint.
+    ///
+    /// Only sockets built with [`connect`](Self::connect) or
+    /// [`connect_with_options`](Self::connect_with_options) store an endpoint;
+    /// one built from a raw stream has nothing to reconnect to.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no endpoint is stored or the reconnection fails.
+    pub async fn try_reconnect(&mut self) -> io::Result<()> {
+        self.inner.try_reconnect().await
+    }
+
+    /// Send with automatic reconnection on network error.
+    ///
+    /// Retries up to `max_reconnect_attempts`, applying the configured backoff
+    /// between attempts.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the send fails and reconnection does not recover it.
+    pub async fn send_with_reconnect(&mut self, msg: Vec<Bytes>) -> io::Result<()> {
+        self.inner.send_with_reconnect(msg).await
+    }
+
+    /// Receive with automatic reconnection on EOF or network error.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the receive fails and reconnection does not recover
+    /// it.
+    pub async fn recv_with_reconnect(&mut self) -> io::Result<Option<Vec<Bytes>>> {
+        self.inner.recv_with_reconnect().await
+    }
 }
 
 // Generic impl - works with any stream type

@@ -70,10 +70,13 @@ is the mode for latency-sensitive work where you want each message on the wire n
 rather than batched. On a bulk one-way firehose libzmq's internal batching leads
 at small sizes; steady-state REQ/REP latency, though, is ~2.5-4x lower on every
 monocoque backend (~8-14 µs vs libzmq's ~34 µs; compio is the lowest at ~8.5 µs).
-Turn on coalescing for small-message throughput. For **large** frames eager mode
-automatically uses a vectored write (`writev`) so the body is never copied into
-the send buffer; the threshold (`vectored_write_threshold`, default 32 KB) is
-tunable per workload. IPC (Unix domain sockets) is ~3x faster than TCP loopback
+Turn on coalescing for small-message throughput. For **large** frames the send
+path automatically uses a vectored write (`writev`) so the body is never copied
+into the send buffer; the threshold (`vectored_write_threshold`, default 32 KB)
+is tunable per workload. This applies in both modes: with coalescing enabled, a
+body at or above the threshold flushes whatever is buffered and then goes
+straight to the kernel, so batching small frames does not cost you a copy on the
+large ones. IPC (Unix domain sockets) is ~3x faster than TCP loopback
 on every backend for same-host throughput.
 
 **PUB/SUB leads libzmq on both axes**: single-subscriber fan-out runs ~3.2x (compio),

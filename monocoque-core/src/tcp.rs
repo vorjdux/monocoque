@@ -46,7 +46,7 @@ pub fn enable_tcp_nodelay<S: std::os::unix::io::AsRawFd>(stream: &S) -> io::Resu
     // path and close a fd the stream is still using (EBADF, or corruption once
     // the fd number is recycled).
     let sock = unsafe { socket2::Socket::from_raw_fd(fd) };
-    let result = sock.set_nodelay(true);
+    let result = sock.set_tcp_nodelay(true);
     std::mem::forget(sock); // Don't close the fd, even on error.
     result
 }
@@ -67,7 +67,7 @@ pub fn enable_tcp_nodelay<S: std::os::windows::io::AsRawSocket>(stream: &S) -> i
     // ownership, so forget UNCONDITIONALLY. A `?` early return would drop `sock`
     // on the error path and close a handle the stream is still using.
     let sock = unsafe { socket2::Socket::from_raw_socket(raw) };
-    let result = sock.set_nodelay(true);
+    let result = sock.set_tcp_nodelay(true);
     std::mem::forget(sock); // Don't close the socket, even on error.
     result
 }

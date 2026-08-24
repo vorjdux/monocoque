@@ -1,5 +1,90 @@
 # Changelog
 
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## 0.4.1 - 2026-08-24
+
+A patch release: one option-validation bug, two additive constructors that make
+PUB and REQ tunable, a send-path fix that lets write coalescing and vectored
+writes coexist, plus dependency and CI maintenance. No breaking changes.
+
+### ✨ Features
+
+#### PUB sockets can be given socket options
+
+`PubSocket::bind_with_options` and `bind_with_workers_opts` are new. The facade
+previously exposed only `bind` and `bind_with_workers`, both of which pin every
+worker to `SocketOptions::default()`, so a PUB socket could not be given write
+coalescing even deliberately. The zmtp layer already accepted options; only the
+facade was missing them. `PubSocket::default_worker_count()` is also public now,
+so a caller wanting the default topology with custom options does not have to
+restate the CPU-count clamp.
+
+#### Allocation-free single-frame REQ send
+
+`ReqSocket::send_one` sends a one-frame request without allocating a `Vec`. The
+wire envelope (optional correlation ID, empty delimiter, body) is built on the
+stack, so a request loop paired with `recv_into` allocates nothing per round
+trip. `send` and `send_one` share the state-machine check and the correlation
+counter, so the two cannot drift.
+
+#### Facade parity for reconnection and SUB options
+
+`DealerSocket` now exposes `try_reconnect`, `send_with_reconnect` and
+`recv_with_reconnect` in `monocoque::zmq`. The zmtp layer already implemented
+them; only the delegation was missing, so the most-used socket type was the one
+socket without reconnection at the public API. `SubSocket::connect_with_options`
+is exposed for the same reason: configuring a subscriber at connect time
+previously meant dropping to the lower layer.
+
+### ⚡ Performance
+
+#### Write coalescing no longer blocks vectored writes
+
+The shared send path tested `write_coalescing` first and, when it was on, copied
+every frame body into the coalescing buffer regardless of size. That made the
+zero-copy vectored path unreachable at any size whenever coalescing was enabled,
+so a caller who wanted batching for small frames also paid a userspace copy on
+every large one. `send_coalesced` now checks the vectored threshold first: a body
+at or above it flushes whatever is buffered (preserving wire order) and goes
+straight to the kernel, while sub-threshold frames still batch as before.
+
+### 🐛 Bug Fixes
+
+#### Both read-buffer setters clamp identically
+
+`with_read_buffer_size` floored its argument at 64 bytes, but
+`with_buffer_sizes` writes the same field and clamped only the ceiling, so
+`with_buffer_sizes(0, n)` slipped past the guard added in 0.4.0 and left a
+zero-byte read loop that spins or reports a false EOF. Both setters now route
+through one clamp, covered by a test that asserts they agree across the range.
+
+### 📚 Documentation
+
+- Corrected the read-buffer documentation: the ceiling is the 64 KiB read slab,
+  not 32 KiB as the field docs claimed, and the struct example no longer
+  advertises a 16 KiB buffer (half the default) as the high-throughput setting.
+- Deprecated `SocketOptions::small()` and `large()`. Both set read buffers below
+  the 32 KiB default, so they are slower than not calling them despite being
+  named as optimizations.
+- Refreshed install snippets that still named 0.1 or 0.3.
+
+### 🧰 Maintenance
+
+- Dependencies: `flume` 0.11 to 0.12 (which also removes a duplicate flume from
+  the graph, since compio already required 0.12), `socket2` 0.5 to 0.6,
+  `rand` 0.8 to 0.10, `bytes` to 1.12.1. `chacha20poly1305` stays on 0.10: 0.11
+  moves to the `aead` 0.6 generation, which `crypto_box` 0.9 cannot interoperate
+  with, and no stable `crypto_box` on `aead` 0.6 exists yet.
+- Clippy runs on a pinned toolchain so a new Rust release cannot turn `main` red
+  without a code change, with a new non-gating job that builds, tests and lints
+  on `beta` to surface upcoming breakage before it reaches a release.
+- Allowed `clippy::unused_async_trait_impl`, the trait-impl half of the
+  already-allowed `unused_async`, introduced in Rust 1.98.
+
 ## 0.4.0 - 2026-07-31
 
 This release lands the first three phases of the roadmap. Phase 0 hardens the
@@ -2071,13 +2156,7 @@ let socket = ReqSocket::from_stream_with_config(
 -   Performance benchmarks verified 12-18% improvement for REQ/REP, 13-25% for DEALER/ROUTER patterns.
 -   Next recommended steps: Expose BufferConfig API, add write batching, implement auto-tuning.
 
-# Changelog
-
-All notable changes to this project will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
-## [Unreleased]
+## 0.1.0 - 2026-06-22
 
 ### Added
 
@@ -2192,5 +2271,3 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 -   Unused variable warnings in `dealer.rs` and `router.rs`
 -   Unit tests for core components
 -   All tests passing with zero errors
-
-[Unreleased]: https://github.com/vorjdux/monocoque/commits/main
