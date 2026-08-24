@@ -5,9 +5,13 @@ name: Release
 # in dependency order (core -> zmtp -> monocoque-rs). Requires the repository
 # secret CARGO_REGISTRY_TOKEN.
 #
+# Publishing is idempotent per crate: each step asks crates.io whether this
+# version is already up and skips it if so. That makes a re-run safe after a
+# partial failure, where an earlier crate uploaded and a later one did not.
+#
 # Backfill note: v0.3.0 predates this workflow. To register the historical
-# release, push the tag `v0.3.0` on commit c7d7ead once (crates already on
-# crates.io are skipped by the publish step's --dry-run check below).
+# release, push the tag `v0.3.0` on commit c7d7ead once; crates already on
+# crates.io are skipped rather than failing the run.
 
 on:
   push:
@@ -16,6 +20,12 @@ on:
 
 permissions:
   contents: read
+
+env:
+  # crates.io rejects API requests that carry no identifying User-Agent (403),
+  # which would otherwise make every "is it already published" probe look like
+  # a miss and turn the skip guard into a no-op.
+  UA: "monocoque-release-ci (https://github.com/vorjdux/monocoque)"
 
 jobs:
   publish:
@@ -40,18 +50,43 @@ jobs:
             echo "::error::tag v$tag does not match workspace version $ws"
             exit 1
           fi
+          echo "VERSION=$tag" >> "$GITHUB_ENV"
 
+      # `zmq` is a feature of monocoque-rs only: it is what compiles the ZMTP
+      # protocol and the ZeroMQ pattern API on top of the chassis. The two lower
+      # crates have no such feature (their features select a runtime backend),
+      # so passing it to them fails the publish before anything is uploaded.
+      # Each crate is verified on its own default features; --locked keeps the
+      # verification build on the committed lock rather than a fresh resolve.
       - name: Publish monocoque-rs-core
-        run: cargo publish -p monocoque-rs-core --features zmq
+        run: |
+          set -euo pipefail
+          if curl -sf -A "$UA" "https://crates.io/api/v1/crates/monocoque-rs-core/$VERSION" >/dev/null; then
+            echo "monocoque-rs-core $VERSION is already on crates.io, skipping"
+          else
+            cargo publish -p monocoque-rs-core --locked
+          fi
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
       - name: Publish monocoque-rs-zmtp
-        run: cargo publish -p monocoque-rs-zmtp --features zmq
+        run: |
+          set -euo pipefail
+          if curl -sf -A "$UA" "https://crates.io/api/v1/crates/monocoque-rs-zmtp/$VERSION" >/dev/null; then
+            echo "monocoque-rs-zmtp $VERSION is already on crates.io, skipping"
+          else
+            cargo publish -p monocoque-rs-zmtp --locked
+          fi
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
       - name: Publish monocoque-rs
-        run: cargo publish -p monocoque-rs --features zmq
+        run: |
+          set -euo pipefail
+          if curl -sf -A "$UA" "https://crates.io/api/v1/crates/monocoque-rs/$VERSION" >/dev/null; then
+            echo "monocoque-rs $VERSION is already on crates.io, skipping"
+          else
+            cargo publish -p monocoque-rs --locked --features zmq
+          fi
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
