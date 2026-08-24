@@ -35,6 +35,12 @@ future_not_send = "allow"
 let_underscore_future = "allow"
 # Async fns kept async for signature consistency across backends / traits.
 unused_async = "allow"
+# Same policy, trait-impl half: split out of `unused_async` in Rust 1.98. A no-op
+# or synchronous impl of an async trait method (NoOpPermits::acquire, the smol
+# and tokio flush/shutdown adapters, the inproc transport) keeps the `async fn`
+# signature the trait declares rather than desugaring to `impl Future` at one
+# site and not the others.
+unused_async_trait_impl = "allow"
 # Wire-protocol and metrics math: casts are bounded by construction.
 cast_possible_truncation = "allow"
 cast_sign_loss = "allow"

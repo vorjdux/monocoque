@@ -23,8 +23,7 @@ const COUNT: usize = 1_000_000;
 
 fn main() {
     let coalesce = std::env::var("MONOCOQUE_COALESCE")
-        .ok()
-        .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
+        .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
 
     let (port_tx, port_rx) = mpsc::channel::<u16>();
     let (rate_tx, rate_rx) = mpsc::channel::<f64>();
