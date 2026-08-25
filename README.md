@@ -39,38 +39,48 @@ The name comes from Formula 1 engineering, where the monocoque chassis achieves 
 
 ## Performance
 
-Benchmarked against rust-zmq (FFI bindings to libzmq). Separate OS threads for
-sender and receiver, real loopback TCP, Intel Core i7-1355U (12 threads),
-Linux 6.17, release build. The three runtime backends run the identical suite,
-and the figures below were re-measured together on the same machine; the compio
-column reflects the compio 0.19 runtime (its throughput and latency stepped up
-noticeably over the earlier runtime). The rust-zmq column uses the same
-live-connection timer.
+Comparative numbers come from **[zmq-arena](https://vorjdux.github.io/zmq-arena/)**,
+a standalone harness that runs fifteen ZeroMQ implementations as separate processes
+on bare metal, each in a cgroup v2 slice with a per-run network namespace, six
+replicates per cell with outlier dropping, recording syscall counts, CPU seconds
+and peak RSS alongside throughput and latency. Keeping the comparison in its own
+harness means these figures are reproducible from published data rather than
+asserted here.
 
-**PUSH/PULL throughput with write coalescing** (`with_write_coalescing(true)`):
+Figures below are the run of **2026-08-21**, Intel Core i5-13400 (16 cores), Linux
+6.8.0-58, performance governor, turbo off. Every implementation, transport and
+payload size, plus the raw per-run JSON, is at
+**<https://vorjdux.github.io/zmq-arena/>**.
 
-| Message size | compio | tokio | smol | rust-zmq |
-|---|---|---|---|---|
-| 64 B | 14.1 M msg/s | **18.0 M msg/s** | 12.9 M msg/s | 4.67 M msg/s |
-| 256 B | 8.3 M msg/s | **12.6 M msg/s** | 8.5 M msg/s | 2.66 M msg/s |
-| 1 KB | 3.5 M msg/s | **5.7 M msg/s** | 3.3 M msg/s | 1.06 M msg/s |
-| 4 KB | 1.15 M msg/s | **1.70 M msg/s** | 1.15 M msg/s | 406 K msg/s |
-| 16 KB | 356 K msg/s | **454 K msg/s** | 368 K msg/s | 126 K msg/s |
+**REQ/REP p50 latency, TCP** (lower is better). Monocoque takes the top three
+places at every payload size, with all three backends ahead of the field:
 
-All three backends beat libzmq once coalescing batches the writes: ~3.0x (compio),
-~3.9x (tokio), ~2.8x (smol) at 64 B, and ~2-4x across the size range. On these
-single-flow loopback microbenchmarks the epoll backends (tokio, smol) are the
-faster: a one-connection ping-pong does not exercise io_uring's strengths (batched
+| | 64 B | 1 KiB | 16 KiB |
+|---|---|---|---|
+| monocoque (compio) | **13.83 µs** | **14.49 µs** | **21.50 µs** |
+| monocoque (tokio) | 14.03 µs | 14.73 µs | 21.51 µs |
+| monocoque (smol) | 15.35 µs | 15.98 µs | 22.62 µs |
+| libzmq 4.3.5 | 37.70 µs | | |
+
+**PUSH/PULL throughput at 64 B**: 14.55 M msg/s over IPC and 8.44 M over TCP,
+against 7.79 M and 7.09 M for the next implementation. It does that on the lowest
+CPU in the field, 0.254 CPU-seconds per million messages versus 0.494 for the
+runner-up, at 0.016 syscalls per message and about 1.0 MB peak RSS.
+
+Where it does not lead: from 4 KiB upward the advantage inverts, and by 16 KiB
+monocoque is out of the top places on both throughput and CPU per message. The
+send path copies large bodies that a vectored write could hand to the kernel
+directly, which is the tuning knob discussed below.
+
+On single-flow loopback the epoll backends (tokio, smol) often edge out compio: a
+one-connection ping-pong does not exercise io_uring's strengths (batched
 submission, registered buffers, many concurrent connections) and just pays its
-per-op submission overhead. compio (io_uring) is the default and is where the wins
-land for real network I/O and high connection counts. Measure on your own workload.
+per-op submission overhead. compio is the default and is where the wins land for
+real network I/O and high connection counts. Measure on your own workload.
 
 Default (eager) mode sends each message immediately, one syscall per `send()`, and
 is the mode for latency-sensitive work where you want each message on the wire now
-rather than batched. On a bulk one-way firehose libzmq's internal batching leads
-at small sizes; steady-state REQ/REP latency, though, is ~2.5-4x lower on every
-monocoque backend (~8-14 µs vs libzmq's ~34 µs; compio is the lowest at ~8.5 µs).
-Turn on coalescing for small-message throughput. For **large** frames the send
+rather than batched. Turn on coalescing for small-message throughput. For **large** frames the send
 path automatically uses a vectored write (`writev`) so the body is never copied
 into the send buffer; the threshold (`vectored_write_threshold`, default 32 KB)
 is tunable per workload. This applies in both modes: with coalescing enabled, a
@@ -79,11 +89,12 @@ straight to the kernel, so batching small frames does not cost you a copy on the
 large ones. IPC (Unix domain sockets) is ~3x faster than TCP loopback
 on every backend for same-host throughput.
 
-**PUB/SUB leads libzmq on both axes**: single-subscriber fan-out runs ~3.2x (compio),
-~3.1x (tokio), ~3.2x (smol) faster, and topic filtering at 10% match is a near tie. See
-[docs/performance.md](docs/performance.md) for the full breakdown including
-latency numbers, per-backend tables, the vectored-write crossover measurements,
-PUB/SUB pattern results, and tuning guidance.
+For the full picture across every implementation, transport, payload size and
+peer count, including the runs where monocoque does not win, see
+**[zmq-arena](https://vorjdux.github.io/zmq-arena/)**.
+[docs/performance.md](docs/performance.md) covers the in-repo regression
+baselines and tuning guidance: which knobs exist, what they trade, and the
+allocation and instruction-count budgets CI holds each commit to.
 
 ## Quick Start
 
