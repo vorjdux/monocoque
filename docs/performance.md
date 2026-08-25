@@ -1,12 +1,46 @@
 # Performance
 
-## Benchmark results
+## Where the numbers live
 
-All numbers measured on loopback against rust-zmq (FFI bindings to libzmq).
-Hardware: Intel Core i7-1355U (12 threads), Linux 6.17, release build, `rustc 1.96`.
-Each benchmark runs sender and receiver on **separate OS threads** with separate
-runtimes, so the numbers reflect real kernel TCP/IPC round-trips, not cooperative
-task switching within a single runtime.
+Two kinds of measurement, kept apart on purpose.
+
+**Comparisons against other implementations live in
+[zmq-arena](https://vorjdux.github.io/zmq-arena/)**, a standalone harness that
+runs fifteen ZeroMQ implementations as separate processes on bare metal, each in
+a cgroup v2 slice with a per-run network namespace, six replicates per cell with
+outlier dropping. It records syscall counts, CPU seconds split by sender and
+receiver, peak RSS and run-to-run spread alongside throughput and latency, and
+publishes the raw JSON for every run. That is the place to look for how monocoque
+compares to libzmq, omq, rzmq, zmq.rs, celerity or the libzmq bindings, on TCP or
+IPC, across payload sizes and peer counts, and for the cells where monocoque does
+not come out ahead.
+
+Do not expect the arena's absolute figures to match a local `cargo bench` run.
+The arena measures inside a network namespace with cgroup isolation, which costs
+throughput and adds latency; that is the price of comparing implementations
+fairly rather than flattering any one of them.
+
+**Regression baselines stay in this repository**, because they gate every commit
+rather than describe a competitive position:
+
+- `benches/instr_hotpath.rs` counts instructions on the IO-free hot path under
+  callgrind and fails a run more than 5% over baseline
+- `tests/hotpath_alloc.rs` asserts the per-message allocation count
+- `tests/socket_footprint_bound.rs` bounds idle per-socket resident memory
+- `docs/perf/baselines/` holds the per-commit snapshots those gates compare to
+
+The rest of this document is tuning guidance: which knobs exist, what each one
+trades, and when to reach for it.
+
+## Local benchmark suite
+
+Hardware for the local figures quoted below: Intel Core i7-1355U (12 threads),
+Linux 6.17, release build, `rustc 1.96`. Each benchmark runs sender and receiver
+on **separate OS threads** with separate runtimes, so the numbers reflect real
+kernel TCP/IPC round-trips, not cooperative task switching within a single
+runtime. These are single-connection loopback microbenchmarks used to compare
+monocoque against itself across releases and knob settings, not against other
+implementations.
 
 Monocoque has three runtime backends: compio (io_uring), tokio (epoll), and smol
 (async-io/epoll). Each runs the identical suite, and all three are covered in the
@@ -32,12 +66,9 @@ All columns were re-measured together for the 0.4.0 release on this box on a
 quiet machine, on the same corrected live-connection timer (see below). Latency
 is a fresh steady-state run for all columns.
 
-Throughput timer lives on the receiver side and starts on a **live** connection
-for both monocoque and rust-zmq: the receiver takes one warmup message before the
-clock starts, so connection setup is excluded on both sides. (A prior bug started
-the zmq receiver's timer before the sender connected and folded in a 5 ms startup
-pause, which understated libzmq at small sizes; that is now fixed and both sides
-are timed identically.) Latency is measured steady-state: the connection is
+Throughput timer lives on the receiver side and starts on a **live** connection:
+the receiver takes one warmup message before the clock starts, so connection setup
+is excluded. Latency is measured steady-state: the connection is
 established once (plus 200 warmup rounds) outside the timer, then N back-to-back
 round-trips are timed, with socket teardown and thread join happening after the
 timer stops.
@@ -52,23 +83,23 @@ buffer flushed in one syscall; call `flush()` after the last send.
 
 Eager mode (one syscall per message):
 
-| Message size | compio | tokio | smol | rust-zmq |
-|---|---|---|---|---|
-| 64 B | 481 K msg/s | 520 K msg/s | 437 K msg/s | 4.67 M msg/s |
-| 256 B | 481 K msg/s | 513 K msg/s | 436 K msg/s | 2.66 M msg/s |
-| 1 KB | 440 K msg/s | 479 K msg/s | 396 K msg/s | 1.06 M msg/s |
-| 4 KB | 404 K msg/s | 419 K msg/s | 377 K msg/s | 406 K msg/s |
-| 16 KB | 335 K msg/s | 300 K msg/s | 279 K msg/s | 126 K msg/s |
+| Message size | compio | tokio | smol |
+|---|---|---|---|
+| 64 B | 481 K msg/s | 520 K msg/s | 437 K msg/s |
+| 256 B | 481 K msg/s | 513 K msg/s | 436 K msg/s |
+| 1 KB | 440 K msg/s | 479 K msg/s | 396 K msg/s |
+| 4 KB | 404 K msg/s | 419 K msg/s | 377 K msg/s |
+| 16 KB | 335 K msg/s | 300 K msg/s | 279 K msg/s |
 
 Write coalescing (batched into 64 KB writes):
 
-| Message size | compio | tokio | smol | rust-zmq |
-|---|---|---|---|---|
-| 64 B | 14.1 M msg/s | **18.0 M msg/s** | 12.9 M msg/s | 4.67 M msg/s |
-| 256 B | 8.3 M msg/s | **12.6 M msg/s** | 8.5 M msg/s | 2.66 M msg/s |
-| 1 KB | 3.5 M msg/s | **5.7 M msg/s** | 3.3 M msg/s | 1.06 M msg/s |
-| 4 KB | 1.15 M msg/s | **1.70 M msg/s** | 1.15 M msg/s | 406 K msg/s |
-| 16 KB | 356 K msg/s | **454 K msg/s** | 368 K msg/s | 126 K msg/s |
+| Message size | compio | tokio | smol |
+|---|---|---|---|
+| 64 B | 14.1 M msg/s | **18.0 M msg/s** | 12.9 M msg/s |
+| 256 B | 8.3 M msg/s | **12.6 M msg/s** | 8.5 M msg/s |
+| 1 KB | 3.5 M msg/s | **5.7 M msg/s** | 3.3 M msg/s |
+| 4 KB | 1.15 M msg/s | **1.70 M msg/s** | 1.15 M msg/s |
+| 16 KB | 356 K msg/s | **454 K msg/s** | 368 K msg/s |
 
 Eager mode is a **latency** tool, not a throughput one. Each `send()` puts that
 message on the wire immediately with its own syscall, so you control exactly when
@@ -79,26 +110,24 @@ a firehose of one-way messages, which is the opposite of eager mode's purpose, s
 read these numbers as "what happens if you eager-send a bulk stream," not as a
 verdict on the mode.
 
-On that firehose, libzmq's internal IO-thread batching dominates at small message
-sizes: at 64 B it moves 4.67 M msg/s versus monocoque's 437-520 K (~9-11x),
-because eager pays one kernel write per `send()` while libzmq amortizes many
-messages per syscall. The gap closes as messages grow: around 4 KB the two are
-near parity (libzmq 406 K vs monocoque 377-419 K), and by 16 KB monocoque eager
-(279-335 K) is ~2.2-2.7x *faster* than libzmq (126 K), where the larger payload
-amortizes the per-message syscall and vectored writes (`writev`, below) skip the
-userspace copy. The takeaway: if you are streaming small messages in bulk, turn on
-write coalescing; reach for eager when per-message delivery latency and control
-matter more than aggregate rate.
+The eager-versus-coalesced gap is the point of these two tables. At 64 B,
+coalescing moves roughly 30x more messages, because eager pays one kernel write
+per `send()` while coalescing amortizes hundreds of messages per syscall. The gap
+narrows as messages grow: by 16 KB a single payload nearly fills a write on its
+own, and the two modes converge. The takeaway: if you are streaming small
+messages in bulk, turn on write coalescing; reach for eager when per-message
+delivery latency and control matter more than aggregate rate.
+
+For how either mode compares against other implementations, see
+[zmq-arena](https://vorjdux.github.io/zmq-arena/).
 
 Write coalescing batches ~970 x 64 B messages (or ~240 x 256 B) into one
-`write_all()` call, eliminating the per-message kernel boundary crossing. Coalesced,
-all three backends beat libzmq by ~2-4x across the range: at 64 B ~3.0x (compio),
-~3.9x (tokio), ~2.8x (smol), and ~2.8x, ~3.6x, ~2.9x at 16 KB. tokio's epoll path
-still leads on these single-flow loopback runs, but the compio 0.19 upgrade lifted
-compio above smol (compio is io_uring's per-op submission overhead against epoll's
-readiness model, now much narrower). monocoque's coalescing is explicit rather than a
-scheduling side effect, and achieves a higher batch ratio with zero intermediate
-copies.
+`write_all()` call, eliminating the per-message kernel boundary crossing. tokio's
+epoll path still leads on these single-flow loopback runs, but the compio 0.19
+upgrade lifted compio above smol (io_uring's per-op submission overhead against
+epoll's readiness model, now much narrower). Coalescing here is explicit rather
+than a scheduling side effect, and achieves a high batch ratio with zero
+intermediate copies.
 
 For **large** frames, eager mode no longer copies the body into the send buffer:
 above `vectored_write_threshold` (default 32 KB) it writes the header and the
@@ -128,22 +157,20 @@ control over batch boundaries:
 The connection is established once (plus 200 warmup rounds) outside the timer;
 then N back-to-back REQ/REP round-trips are timed on that persistent connection,
 with socket teardown and thread join happening after the clock stops. These are
-true steady-state round-trip times, not connection setup or teardown. Both
-monocoque and zmq are measured identically.
+true steady-state round-trip times, not connection setup or teardown.
 
-| Message size | compio | tokio | smol | rust-zmq |
-|---|---|---|---|---|
-| 64 B | 8.4 µs | 9.8 µs | 12.4 µs | 33.8 µs |
-| 256 B | 8.5 µs | 9.5 µs | 12.6 µs | 33.3 µs |
-| 1 KB | 8.7 µs | 9.7 µs | 13.5 µs | 34.4 µs |
+| Message size | compio | tokio | smol |
+|---|---|---|---|
+| 64 B | 8.4 µs | 9.8 µs | 12.4 µs |
+| 256 B | 8.5 µs | 9.5 µs | 12.6 µs |
+| 1 KB | 8.7 µs | 9.7 µs | 13.5 µs |
 
-All three backends are ~2.5-4x lower round-trip latency than libzmq's ~34 µs:
 compio and tokio are lowest (compio ~8.5 µs after the 0.19 upgrade), and smol
-~12.8 µs (async-io's readiness
-wakeup costs it a couple of microseconds over the other two). The
-advantage over libzmq comes from the shorter userspace path on a single flow:
-monocoque does the I/O inline on the same thread, with no handoff to a separate
-IO thread on the send and recv path the way libzmq does. compio and tokio are
+~12.8 µs (async-io's readiness wakeup costs it a couple of microseconds over the
+other two). The short round-trip comes from doing the I/O inline on the same
+thread, with no handoff to a separate IO thread on the send and recv path.
+For how this compares against other implementations, see
+[zmq-arena](https://vorjdux.github.io/zmq-arena/). compio and tokio are
 neck and neck on this single-flow round-trip; the compio 0.19 upgrade brought
 io_uring's submit/reap cost down to par with (and often just under) an epoll
 wakeup, and on real network I/O and high connection counts io_uring pulls ahead.
@@ -195,17 +222,15 @@ overhead and no TCP framing cost.
 
 ### PUB/SUB patterns
 
-Both run sender and subscribers on separate OS threads against the same peer
-under test (monocoque vs rust-zmq).
+Sender and subscribers run on separate OS threads.
 
 **Fan-out** (single subscriber, 256 B messages):
 
-| | Per 100-msg batch | Throughput | vs zmq |
-|---|---|---|---|
-| monocoque (compio) | 36 µs | 2.76 M msg/s | **3.2x faster** |
-| monocoque (tokio) | 37 µs | 2.70 M msg/s | **3.1x faster** |
-| monocoque (smol) | 36 µs | 2.80 M msg/s | **3.2x faster** |
-| rust-zmq | 115 µs | 871 K msg/s | |
+| | Per 100-msg batch | Throughput |
+|---|---|---|
+| monocoque (compio) | 36 µs | 2.76 M msg/s |
+| monocoque (tokio) | 37 µs | 2.70 M msg/s |
+| monocoque (smol) | 36 µs | 2.80 M msg/s |
 
 **Topic filtering** (10% of messages match the subscription):
 
@@ -214,13 +239,13 @@ under test (monocoque vs rust-zmq).
 | monocoque (compio) | 4.6 µs | 21.9 M msg/s |
 | monocoque (tokio) | 4.7 µs | 21.5 M msg/s |
 | monocoque (smol) | 4.7 µs | 21.2 M msg/s |
-| rust-zmq | 6.0 µs | 16.8 M msg/s |
 
-On fan-out all three backends lead libzmq by ~3x (3.2x compio, 3.1x tokio, 3.2x
-smol) and are within noise of each other. Topic filtering is a near tie with
-libzmq: the numbers move run to run (this is a tight microbenchmark where a few
-hundred nanoseconds of filter cost dominates), so treat it as parity rather than
-a decisive win either way.
+The three backends are within noise of each other on both patterns. Topic
+filtering is a tight microbenchmark where a few hundred nanoseconds of filter
+cost dominates, so its numbers move run to run; read them as an order of
+magnitude rather than a ranking. Cross-implementation PUB/SUB results, including
+runs at 4 and 32 subscribers, are in
+[zmq-arena](https://vorjdux.github.io/zmq-arena/).
 
 ---
 
