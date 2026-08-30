@@ -137,7 +137,7 @@ num_cpus = "1.16"
 
 # Testing
 zmq = "0.10"
-criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
+criterion = { version = "0.8", features = ["async_tokio", "html_reports"] }
 # The CI-installed gungraun-runner binary must match this library version. Now
 # that Cargo.lock is tracked, the exact version is pinned by the lock, and the
 # instr-bench workflow derives GUNGRAUN_VERSION from Cargo.lock rather than
