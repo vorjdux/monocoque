@@ -12,7 +12,7 @@
 #[cfg(unix)]
 use bytes::Bytes;
 #[cfg(unix)]
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 
 // Identifies which runtime backend this build benchmarks, so compio, tokio, and smol
 // results land under distinct criterion ids instead of overwriting each other.
@@ -27,6 +27,8 @@ const BENCH_BACKEND: &str = if cfg!(feature = "runtime-tokio") {
 use monocoque::rt::{TcpListener, UnixListener};
 #[cfg(unix)]
 use monocoque::zmq::{PullSocket, PushSocket, RepSocket, ReqSocket, SocketOptions};
+#[cfg(unix)]
+use std::hint::black_box;
 #[cfg(unix)]
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(unix)]

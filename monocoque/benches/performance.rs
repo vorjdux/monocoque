@@ -5,8 +5,9 @@
 //! Run with: cargo bench --package monocoque-zmtp
 
 use bytes::Bytes;
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use monocoque_core::options::SocketOptions;
+use std::hint::black_box;
 use std::time::Duration;
 
 // Helper to run async code on the active runtime backend
