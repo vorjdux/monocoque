@@ -6,8 +6,9 @@
 //! Run with: `cargo bench --package monocoque -F zmq --bench allocation`
 
 use bytes::{Bytes, BytesMut};
-use criterion::{BatchSize, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
 use monocoque_core::buffer::SegmentedBuffer;
+use std::hint::black_box;
 
 /// `Bytes::copy_from_slice` vs `Bytes::from` (moves ownership)
 fn bench_bytes_construction(c: &mut Criterion) {

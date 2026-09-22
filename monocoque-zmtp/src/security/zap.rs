@@ -534,7 +534,7 @@ mod tests {
         ];
 
         let request = ZapRequest::decode(&frames).unwrap();
-        assert!(request.domain.is_empty());
+        assert_eq!(request.domain, "");
     }
 
     #[test]
@@ -617,7 +617,7 @@ mod tests {
 
         assert_eq!(decoded.status_code, ZapStatus::Failure);
         assert_eq!(decoded.status_text, "Invalid credentials");
-        assert!(decoded.user_id.is_empty());
+        assert_eq!(decoded.user_id, "");
     }
 
     #[test]

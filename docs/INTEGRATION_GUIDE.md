@@ -6,7 +6,7 @@ Add the dependencies to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-monocoque-rs-zmtp = { version = "0.4.0", path = "..." }   # crates.io name
+monocoque-rs-zmtp = { version = "0.4", path = "..." }   # crates.io name
 compio = { version = "0.19", features = ["runtime", "macros"] }
 bytes = "1"
 ```

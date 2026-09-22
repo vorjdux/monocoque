@@ -16,7 +16,7 @@
 //! runtime) so the measured time reflects real inter-thread communication.
 
 use bytes::Bytes;
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
 // Identifies which runtime backend this build benchmarks, so compio, tokio, and smol
 // results land under distinct criterion ids instead of overwriting each other.
@@ -29,6 +29,7 @@ const BENCH_BACKEND: &str = if cfg!(feature = "runtime-tokio") {
 };
 use monocoque::rt::TcpListener;
 use monocoque::zmq::{DealerSocket, RouterSocket, SocketOptions};
+use std::hint::black_box;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;

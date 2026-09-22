@@ -5,6 +5,63 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.4.2 - 2026-09-22
+
+A maintenance release. No API, wire-format or behaviour change: the library code
+is untouched apart from two test assertions. It exists to clear a yanked
+transitive dependency, to take the `async-trait` fix for a lint that broke the
+beta toolchain job, and to move the benchmark harness off a deprecated API.
+
+### 🧰 Maintenance
+
+#### Cleared a yanked crate from the dependency graph
+
+`chacha20` 0.10.1 was yanked upstream. It is not a direct dependency - it
+arrives through `rand` 0.10.2 - so nothing in this tree named it, but it sat in
+the committed `Cargo.lock` and failed `cargo deny`'s `yanked = "deny"` gate on
+every branch, including `main`. The lock now pins 0.10.2. `cargo deny` and
+`cargo audit` are clean again.
+
+#### Dependency bumps
+
+`async-trait` 0.1.91 to 0.1.92, `compio` 0.19.1 to 0.19.2, `thiserror` 2.0.19
+to 2.0.20, `socket2` to 0.6.5, and `criterion` 0.5 to 0.8 for the benchmark
+harness. The `compio` bump also moves `darling` to 0.24 through
+`compio-macros`; both stay inside the 1.95 MSRV, which is re-verified on all
+three backends.
+
+`chacha20poly1305` stays on 0.10 for the same reason as in 0.4.1: 0.11 moves to
+the `aead` 0.6 generation, and the only `crypto_box` release that could
+interoperate with it is still a pre-release, so the RFC-26 CURVE message path
+would not compile.
+
+#### The beta toolchain job is green again
+
+`async-trait` 0.1.92 resolves a `clippy::double_must_use` firing on its own
+generated code, which had been failing the non-gating `future-toolchain` job on
+all three backends for `PlainAuthHandler` and `ZapHandler`. Two ZAP test
+assertions also move from `assert!(x.is_empty())` to `assert_eq!(x, "")` for
+`clippy::assert_is_empty`, new in 1.99. Both were caught by that job doing
+exactly what it was added for: reporting upcoming breakage before it reaches
+stable.
+
+#### Benchmarks build without deprecation warnings
+
+`criterion` 0.8 deprecates `criterion::black_box`. The seven benchmark files
+that imported it now use `std::hint::black_box`, which is what it forwarded to.
+
+#### CI
+
+`dtolnay/rust-toolchain` is re-pinned to a newer commit across all four
+workflows. The release workflow's publish flags are fixed so a partially failed
+release can be re-run.
+
+### 📚 Documentation
+
+- The comparative benchmark figures now cite their source measurements.
+- The integration guide's install snippet pinned `0.4.0` where every other
+  snippet in the docs uses the `0.4` caret range.
+
 ## 0.4.1 - 2026-08-24
 
 A patch release: one option-validation bug, two additive constructors that make
