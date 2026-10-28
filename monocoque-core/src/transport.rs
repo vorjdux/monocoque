@@ -167,6 +167,21 @@ impl AsyncWrite for &Stream {
     }
 }
 
+/// `true` if `err` means the process or system ran out of file descriptors
+/// (EMFILE/ENFILE), the one accept failure worth backing off on.
+#[must_use]
+pub fn is_fd_exhaustion(err: &io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        matches!(err.raw_os_error(), Some(23 | 24))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = err;
+        false
+    }
+}
+
 /// A bound TCP or IPC listener.
 #[derive(Debug)]
 pub enum Listener {

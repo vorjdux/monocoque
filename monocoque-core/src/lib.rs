@@ -23,6 +23,7 @@ pub mod message;
 pub mod message_builder;
 pub mod monitor;
 pub mod msg;
+pub mod mux;
 pub mod options;
 pub mod poison;
 pub mod reconnect;
