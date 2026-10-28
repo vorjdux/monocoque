@@ -13,7 +13,7 @@ use std::io;
 /// PULL sockets receive messages from connected PUSH sockets.
 pub struct PullSocket<S = TcpStream>
 where
-    S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
+    S: compio_io::AsyncRead + compio_io::AsyncWrite + monocoque_core::rt::PeerAddress + Unpin,
 {
     inner: InternalPull<S>,
     monitor: Option<SocketEventSender>,
@@ -117,7 +117,7 @@ impl PullSocket<TcpStream> {
 
 impl<S> PullSocket<S>
 where
-    S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
+    S: compio_io::AsyncRead + compio_io::AsyncWrite + monocoque_core::rt::PeerAddress + Unpin,
 {
     /// Create a PULL socket from any stream.
     pub async fn new(stream: S) -> io::Result<Self> {

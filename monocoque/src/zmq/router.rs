@@ -47,7 +47,7 @@ use std::io;
 /// ```
 pub struct RouterSocket<S = TcpStream>
 where
-    S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
+    S: compio_io::AsyncRead + compio_io::AsyncWrite + monocoque_core::rt::PeerAddress + Unpin,
 {
     inner: InternalRouter<S>,
     monitor: Option<SocketEventSender>,
@@ -160,7 +160,8 @@ impl RouterSocket {
         options: monocoque_core::options::SocketOptions,
     ) -> io::Result<RouterSocket<Stream>>
     where
-        Stream: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
+        Stream:
+            compio_io::AsyncRead + compio_io::AsyncWrite + monocoque_core::rt::PeerAddress + Unpin,
     {
         Ok(RouterSocket {
             inner: InternalRouter::with_options(stream, options).await?,
@@ -172,7 +173,7 @@ impl RouterSocket {
 // Generic impl - works with any stream type
 impl<S> RouterSocket<S>
 where
-    S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
+    S: compio_io::AsyncRead + compio_io::AsyncWrite + monocoque_core::rt::PeerAddress + Unpin,
 {
     /// Enable monitoring for this socket.
     ///

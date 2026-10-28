@@ -128,7 +128,7 @@ pub struct ZapRequest {
     pub request_id: String,
     /// Security domain
     pub domain: String,
-    /// Peer address (IP:port)
+    /// Peer address: the peer's IP for TCP (no port), empty for IPC and inproc.
     pub address: String,
     /// Peer identity
     pub identity: Bytes,

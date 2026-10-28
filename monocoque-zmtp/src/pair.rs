@@ -23,7 +23,7 @@ use bytes::Bytes;
 use compio_io::{AsyncRead, AsyncWrite};
 use monocoque_core::endpoint::Endpoint;
 use monocoque_core::options::SocketOptions;
-use monocoque_core::rt::TcpStream;
+use monocoque_core::rt::{PeerAddress, TcpStream};
 use smallvec::SmallVec;
 use std::io;
 use tracing::{debug, trace};
@@ -34,7 +34,7 @@ use tracing::{debug, trace};
 /// message passing without any routing or filtering logic.
 pub struct PairSocket<S = TcpStream>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + PeerAddress + Unpin,
 {
     /// Base socket infrastructure (stream, buffers, options)
     base: SocketBase<S>,
@@ -44,7 +44,7 @@ where
 
 impl<S> PairSocket<S>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + PeerAddress + Unpin,
 {
     /// Create a new PAIR socket from a stream with default buffer configuration.
     pub async fn new(stream: S) -> io::Result<Self> {

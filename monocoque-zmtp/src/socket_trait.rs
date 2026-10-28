@@ -97,7 +97,11 @@ macro_rules! impl_socket_trait {
     ($socket_type:ty, $zmq_type:expr) => {
         impl<S> $crate::Socket for $socket_type
         where
-            S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin + 'static,
+            S: compio_io::AsyncRead
+                + compio_io::AsyncWrite
+                + monocoque_core::rt::PeerAddress
+                + Unpin
+                + 'static,
         {
             async fn send(&mut self, msg: Vec<bytes::Bytes>) -> std::io::Result<()> {
                 self.send(msg).await
@@ -125,7 +129,11 @@ macro_rules! impl_socket_trait_recv_only {
     ($socket_type:ty, $zmq_type:expr) => {
         impl<S> $crate::Socket for $socket_type
         where
-            S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin + 'static,
+            S: compio_io::AsyncRead
+                + compio_io::AsyncWrite
+                + monocoque_core::rt::PeerAddress
+                + Unpin
+                + 'static,
         {
             async fn send(&mut self, _msg: Vec<bytes::Bytes>) -> std::io::Result<()> {
                 Err(std::io::Error::new(
@@ -154,7 +162,11 @@ macro_rules! impl_socket_trait_send_only {
     ($socket_type:ty, $zmq_type:expr) => {
         impl<S> $crate::Socket for $socket_type
         where
-            S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin + 'static,
+            S: compio_io::AsyncRead
+                + compio_io::AsyncWrite
+                + monocoque_core::rt::PeerAddress
+                + Unpin
+                + 'static,
         {
             async fn send(&mut self, msg: Vec<bytes::Bytes>) -> std::io::Result<()> {
                 self.send(msg).await

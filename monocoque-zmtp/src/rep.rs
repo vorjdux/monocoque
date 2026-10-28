@@ -14,7 +14,7 @@
 
 use bytes::Bytes;
 use compio_io::{AsyncRead, AsyncWrite};
-use monocoque_core::rt::TcpStream;
+use monocoque_core::rt::{PeerAddress, TcpStream};
 use smallvec::SmallVec;
 use std::io;
 use tracing::{debug, trace};
@@ -75,7 +75,7 @@ pub enum RepState {
 /// ```
 pub struct RepSocket<S = TcpStream>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + PeerAddress + Unpin,
 {
     /// Base socket infrastructure (stream, buffers, options)
     base: SocketBase<S>,
@@ -92,7 +92,7 @@ where
 
 impl<S> RepSocket<S>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + PeerAddress + Unpin,
 {
     /// Create a new REP socket from a stream.
     ///

@@ -11,7 +11,7 @@
 use bytes::Bytes;
 use compio_io::{AsyncRead, AsyncWrite};
 use monocoque_core::options::SocketOptions;
-use monocoque_core::rt::TcpStream;
+use monocoque_core::rt::{PeerAddress, TcpStream};
 use smallvec::SmallVec;
 use std::io;
 use std::time::Duration;
@@ -23,7 +23,7 @@ use monocoque_core::endpoint::Endpoint;
 /// Direct-stream DEALER socket with optional auto-reconnection support.
 pub struct DealerSocket<S = TcpStream>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + PeerAddress + Unpin,
 {
     /// Base socket infrastructure (stream, buffers, options, reconnection)
     base: SocketBase<S>,
@@ -34,7 +34,7 @@ where
 
 impl<S> DealerSocket<S>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + PeerAddress + Unpin,
 {
     /// Create a new DEALER socket from a stream with default options.
     ///

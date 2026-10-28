@@ -47,6 +47,12 @@ impl InprocStream {
     }
 }
 
+impl monocoque_core::rt::PeerAddress for InprocStream {
+    fn zap_address(&self) -> String {
+        String::new()
+    }
+}
+
 impl AsyncRead for InprocStream {
     async fn read<B: IoBufMut>(&mut self, mut buf: B) -> BufResult<usize, B> {
         let buf_cap = buf.buf_capacity();

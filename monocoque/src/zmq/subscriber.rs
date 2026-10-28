@@ -44,7 +44,7 @@ use std::io;
 /// ```
 pub struct SubSocket<S = TcpStream>
 where
-    S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
+    S: compio_io::AsyncRead + compio_io::AsyncWrite + monocoque_core::rt::PeerAddress + Unpin,
 {
     inner: InternalSub<S>,
     monitor: Option<SocketEventSender>,
@@ -204,7 +204,8 @@ impl SubSocket {
         options: monocoque_core::options::SocketOptions,
     ) -> io::Result<SubSocket<Stream>>
     where
-        Stream: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
+        Stream:
+            compio_io::AsyncRead + compio_io::AsyncWrite + monocoque_core::rt::PeerAddress + Unpin,
     {
         Ok(SubSocket {
             inner: InternalSub::with_options(stream, options).await?,
@@ -216,7 +217,7 @@ impl SubSocket {
 // Generic impl - works with any stream type
 impl<S> SubSocket<S>
 where
-    S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
+    S: compio_io::AsyncRead + compio_io::AsyncWrite + monocoque_core::rt::PeerAddress + Unpin,
 {
     /// Enable monitoring for this socket.
     ///

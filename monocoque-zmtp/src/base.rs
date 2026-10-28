@@ -19,7 +19,7 @@ use monocoque_core::io::take_read_buffer;
 use monocoque_core::options::SocketOptions;
 use monocoque_core::poison::PoisonGuard;
 use monocoque_core::reconnect::ReconnectState;
-use monocoque_core::rt::TcpStream;
+use monocoque_core::rt::{PeerAddress, TcpStream};
 use std::fmt;
 use std::io;
 use std::time::Instant;
@@ -95,7 +95,7 @@ pub fn is_pong_payload(payload: &[u8]) -> bool {
 /// resulting in zero runtime overhead compared to duplicating code in each socket.
 pub struct SocketBase<S = TcpStream>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + PeerAddress + Unpin,
 {
     /// Underlying stream (TCP or Unix socket) - None when disconnected
     pub(crate) stream: Option<S>,
@@ -247,7 +247,7 @@ fn jittered_backoff(delay: std::time::Duration) -> std::time::Duration {
 
 impl<S> SocketBase<S>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + PeerAddress + Unpin,
 {
     /// Create a new SocketBase with the given stream and options.
     ///
@@ -1308,7 +1308,7 @@ impl SocketBase<TcpStream> {
 
 impl<S> fmt::Debug for SocketBase<S>
 where
-    S: AsyncRead + AsyncWrite + Unpin + fmt::Debug,
+    S: AsyncRead + AsyncWrite + PeerAddress + Unpin + fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SocketBase")
@@ -1383,6 +1383,12 @@ mod tests {
     struct ScriptedWriteStream {
         steps: VecDeque<WriteStep>,
         log: WriteLog,
+    }
+
+    impl monocoque_core::rt::PeerAddress for ScriptedWriteStream {
+        fn zap_address(&self) -> String {
+            String::new()
+        }
     }
 
     impl ScriptedWriteStream {

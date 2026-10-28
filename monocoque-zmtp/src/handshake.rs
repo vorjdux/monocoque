@@ -26,6 +26,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use compio_buf::BufResult;
 use compio_io::{AsyncRead, AsyncWrite};
 use monocoque_core::options::SocketOptions;
+use monocoque_core::rt::PeerAddress;
 use monocoque_core::timeout::{read_exact_with_timeout, write_all_with_timeout};
 use std::time::Duration;
 use tracing::{debug, warn};
@@ -91,7 +92,7 @@ pub async fn perform_handshake_with_options<S>(
     options: &SocketOptions,
 ) -> Result<HandshakeResult, ZmtpError>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + PeerAddress + Unpin,
 {
     // The handshake future is large; box it at the deadline boundary so the
     // combinator (and every caller's future) stays small.
@@ -130,7 +131,7 @@ async fn perform_handshake_inner<S>(
     options: &SocketOptions,
 ) -> Result<HandshakeResult, ZmtpError>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + PeerAddress + Unpin,
 {
     let mechanism = SecurityMechanism::from_options(options);
 
@@ -415,14 +416,15 @@ async fn run_plain_exchange<S>(
     timeout: Option<Duration>,
 ) -> Result<(), ZmtpError>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + PeerAddress + Unpin,
 {
     use crate::security::plain::{PlainCredentials, plain_client_handshake};
 
     if options.plain_server {
         debug!("[HANDSHAKE] Running PLAIN server exchange");
         let domain = options.zap_domain.as_str();
-        crate::security::plain::plain_server_handshake_zap(stream, domain, "unknown", timeout)
+        let peer_address = stream.zap_address();
+        crate::security::plain::plain_server_handshake_zap(stream, domain, &peer_address, timeout)
             .await
             .map(|_| ())
     } else if let Some(ref username) = options.plain_username {
@@ -451,7 +453,7 @@ async fn run_curve_exchange<S>(
     local_identity: Option<&[u8]>,
 ) -> Result<CurveHandshakeResult, ZmtpError>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + PeerAddress + Unpin,
 {
     use crate::security::curve::{
         CurveClient, CurveKeyPair, CurvePublicKey, CurveSecretKey, CurveServer,
@@ -480,12 +482,13 @@ where
             curve_server.handshake(stream, timeout).await
         } else {
             use crate::security::curve::curve_server_handshake_zap;
+            let peer_address = stream.zap_address();
             curve_server_handshake_zap(
                 stream,
                 server_keypair,
                 options.zap_domain.clone(),
                 timeout,
-                "unknown",
+                &peer_address,
                 local_socket_type.as_str(),
             )
             .await

@@ -42,7 +42,7 @@ use std::io;
 /// ```
 pub struct DealerSocket<S = TcpStream>
 where
-    S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
+    S: compio_io::AsyncRead + compio_io::AsyncWrite + monocoque_core::rt::PeerAddress + Unpin,
 {
     inner: InternalDealer<S>,
     monitor: Option<SocketEventSender>,
@@ -306,7 +306,8 @@ impl DealerSocket {
         options: monocoque_core::options::SocketOptions,
     ) -> io::Result<DealerSocket<Stream>>
     where
-        Stream: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
+        Stream:
+            compio_io::AsyncRead + compio_io::AsyncWrite + monocoque_core::rt::PeerAddress + Unpin,
     {
         Ok(DealerSocket {
             inner: InternalDealer::with_options(stream, options).await?,
@@ -353,7 +354,7 @@ impl DealerSocket {
 // Generic impl - works with any stream type
 impl<S> DealerSocket<S>
 where
-    S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
+    S: compio_io::AsyncRead + compio_io::AsyncWrite + monocoque_core::rt::PeerAddress + Unpin,
 {
     /// Enable monitoring for this socket.
     ///
@@ -535,7 +536,7 @@ where
 
 impl<S> DealerSocket<S>
 where
-    S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
+    S: compio_io::AsyncRead + compio_io::AsyncWrite + monocoque_core::rt::PeerAddress + Unpin,
 {
     /// Get the socket type.
     ///

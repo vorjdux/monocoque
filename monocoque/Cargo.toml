@@ -306,6 +306,10 @@ name = "zap_integration"
 required-features = ["zmq"]
 
 [[test]]
+name = "zap_peer_address"
+required-features = ["zmq"]
+
+[[test]]
 name = "req_state_machine"
 required-features = ["zmq"]
 

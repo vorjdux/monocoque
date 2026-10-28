@@ -11,7 +11,7 @@
 use bytes::Bytes;
 use compio_io::{AsyncRead, AsyncWrite};
 use monocoque_core::options::SocketOptions;
-use monocoque_core::rt::TcpStream;
+use monocoque_core::rt::{PeerAddress, TcpStream};
 use smallvec::SmallVec;
 use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -26,7 +26,7 @@ static PEER_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 /// Direct-stream ROUTER socket.
 pub struct RouterSocket<S = TcpStream>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + PeerAddress + Unpin,
 {
     /// Base socket infrastructure (stream, buffers, options)
     base: SocketBase<S>,
@@ -41,7 +41,7 @@ where
 
 impl<S> RouterSocket<S>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + PeerAddress + Unpin,
 {
     /// Create a new ROUTER socket from a stream using default options.
     ///
@@ -588,6 +588,12 @@ mod tests {
     use compio_io::{AsyncRead, AsyncWrite};
 
     struct TestStream;
+
+    impl PeerAddress for TestStream {
+        fn zap_address(&self) -> String {
+            String::new()
+        }
+    }
 
     impl AsyncRead for TestStream {
         async fn read<B: IoBufMut>(&mut self, buf: B) -> BufResult<usize, B> {

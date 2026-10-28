@@ -12,7 +12,7 @@ use crate::base::SocketBase;
 use bytes::{Bytes, BytesMut};
 use compio_io::{AsyncRead, AsyncWrite};
 use monocoque_core::options::SocketOptions;
-use monocoque_core::rt::TcpStream;
+use monocoque_core::rt::{PeerAddress, TcpStream};
 use smallvec::SmallVec;
 use std::io;
 use tracing::{debug, trace};
@@ -23,7 +23,7 @@ use monocoque_core::endpoint::Endpoint;
 /// Direct-stream SUB socket.
 pub struct SubSocket<S = TcpStream>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + PeerAddress + Unpin,
 {
     /// Base socket infrastructure (stream, buffers, options)
     base: SocketBase<S>,
@@ -35,7 +35,7 @@ where
 
 impl<S> SubSocket<S>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + PeerAddress + Unpin,
 {
     /// Create a new SUB socket from a stream with large buffer configuration (16KB).
     ///

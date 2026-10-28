@@ -21,7 +21,7 @@ use crate::{handshake::perform_handshake_with_options, session::SocketType};
 use bytes::Bytes;
 use compio_io::{AsyncRead, AsyncWrite};
 use monocoque_core::options::SocketOptions;
-use monocoque_core::rt::TcpStream;
+use monocoque_core::rt::{PeerAddress, TcpStream};
 use smallvec::SmallVec;
 use std::io;
 use tracing::{debug, trace};
@@ -32,7 +32,7 @@ use tracing::{debug, trace};
 /// the worker side of the pipeline pattern.
 pub struct PullSocket<S = TcpStream>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + PeerAddress + Unpin,
 {
     /// Base socket infrastructure (stream, buffers, options)
     base: SocketBase<S>,
@@ -42,7 +42,7 @@ where
 
 impl<S> PullSocket<S>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + PeerAddress + Unpin,
 {
     /// Create a new PULL socket from a stream with default buffer configuration.
     pub async fn new(stream: S) -> io::Result<Self> {

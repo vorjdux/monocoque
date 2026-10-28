@@ -21,7 +21,7 @@ use crate::{handshake::perform_handshake_with_options, session::SocketType};
 use bytes::Bytes;
 use compio_io::{AsyncRead, AsyncWrite};
 use monocoque_core::options::SocketOptions;
-use monocoque_core::rt::TcpStream;
+use monocoque_core::rt::{PeerAddress, TcpStream};
 use std::io;
 use tracing::{debug, trace};
 
@@ -31,7 +31,7 @@ use tracing::{debug, trace};
 /// fashion, providing load balancing for parallel processing.
 pub struct PushSocket<S = TcpStream>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + PeerAddress + Unpin,
 {
     /// Base socket infrastructure (stream, buffers, options)
     base: SocketBase<S>,
@@ -39,7 +39,7 @@ where
 
 impl<S> PushSocket<S>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + PeerAddress + Unpin,
 {
     /// Create a new PUSH socket from a stream with default buffer configuration.
     pub async fn new(stream: S) -> io::Result<Self> {

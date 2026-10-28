@@ -13,7 +13,7 @@ use std::io;
 /// PUSH sockets send messages in a round-robin fashion to connected PULL sockets.
 pub struct PushSocket<S = TcpStream>
 where
-    S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
+    S: compio_io::AsyncRead + compio_io::AsyncWrite + monocoque_core::rt::PeerAddress + Unpin,
 {
     inner: InternalPush<S>,
     monitor: Option<SocketEventSender>,
@@ -115,7 +115,7 @@ impl PushSocket<TcpStream> {
 
 impl<S> PushSocket<S>
 where
-    S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
+    S: compio_io::AsyncRead + compio_io::AsyncWrite + monocoque_core::rt::PeerAddress + Unpin,
 {
     /// Create a PUSH socket from any stream.
     pub async fn new(stream: S) -> io::Result<Self> {

@@ -51,7 +51,7 @@ use std::io;
 /// ```
 pub struct RepSocket<S = TcpStream>
 where
-    S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
+    S: compio_io::AsyncRead + compio_io::AsyncWrite + monocoque_core::rt::PeerAddress + Unpin,
 {
     inner: InternalRep<S>,
     monitor: Option<SocketEventSender>,
@@ -123,7 +123,8 @@ impl RepSocket {
         options: monocoque_core::options::SocketOptions,
     ) -> io::Result<RepSocket<Stream>>
     where
-        Stream: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
+        Stream:
+            compio_io::AsyncRead + compio_io::AsyncWrite + monocoque_core::rt::PeerAddress + Unpin,
     {
         Ok(RepSocket {
             inner: InternalRep::with_options(stream, options).await?,
@@ -135,7 +136,7 @@ impl RepSocket {
 // Generic impl - works with any stream type
 impl<S> RepSocket<S>
 where
-    S: compio_io::AsyncRead + compio_io::AsyncWrite + Unpin,
+    S: compio_io::AsyncRead + compio_io::AsyncWrite + monocoque_core::rt::PeerAddress + Unpin,
 {
     /// Enable monitoring for this socket.
     ///
