@@ -18,9 +18,11 @@ pub mod endpoint;
 pub mod error;
 pub mod inproc;
 pub mod io;
+pub mod localq;
 pub mod message;
 pub mod message_builder;
 pub mod monitor;
+pub mod msg;
 pub mod options;
 pub mod poison;
 pub mod reconnect;
@@ -29,6 +31,7 @@ pub mod socket_type;
 pub mod subscription;
 pub mod tcp;
 pub mod timeout;
+pub mod transport;
 
 #[cfg(unix)]
 pub mod ipc;

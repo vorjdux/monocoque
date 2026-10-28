@@ -206,6 +206,71 @@ macro_rules! impl_compio_io {
     };
 }
 
+/// Implement the `compio::io` traits for `&$ty`, so one stream can have a read
+/// and a write in flight at once through shared references, the way compio's
+/// native streams do. tokio's `poll_read`/`poll_write` need `Pin<&mut _>`, so
+/// these wait for readiness on `&self` and then issue the non-blocking
+/// `try_*` call, retrying on a spurious wakeup.
+macro_rules! impl_shared_io {
+    ($ty:ty) => {
+        impl AsyncRead for &$ty {
+            async fn read<B: IoBufMut>(&mut self, buf: B) -> BufResult<usize, B> {
+                let inner = &self.inner;
+                crate::io::fill_read(buf, async move |spare| {
+                    loop {
+                        inner.readable().await?;
+                        let mut dst: &mut [std::mem::MaybeUninit<u8>] = &mut *spare;
+                        match inner.try_read_buf(&mut dst) {
+                            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                            other => return other,
+                        }
+                    }
+                })
+                .await
+            }
+        }
+
+        impl AsyncWrite for &$ty {
+            async fn write<B: IoBuf>(&mut self, buf: B) -> BufResult<usize, B> {
+                let result = loop {
+                    if let Err(e) = self.inner.writable().await {
+                        break Err(e);
+                    }
+                    match self.inner.try_write(buf.as_init()) {
+                        Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                        other => break other,
+                    }
+                };
+                BufResult(result, buf)
+            }
+
+            async fn write_vectored<B: IoVectoredBuf>(&mut self, buf: B) -> BufResult<usize, B> {
+                let result = loop {
+                    if let Err(e) = self.inner.writable().await {
+                        break Err(e);
+                    }
+                    let attempt = crate::io::with_vectored_slices(&buf, |slices| {
+                        self.inner.try_write_vectored(slices)
+                    });
+                    match attempt {
+                        Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                        other => break other,
+                    }
+                };
+                BufResult(result, buf)
+            }
+
+            async fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+
+            async fn shutdown(&mut self) -> io::Result<()> {
+                socket2::SockRef::from(&self.inner).shutdown(std::net::Shutdown::Write)
+            }
+        }
+    };
+}
+
 // ── TCP ──────────────────────────────────────────────────────────────────
 
 /// Tokio TCP stream wearing the `compio::io` interface.
@@ -303,6 +368,7 @@ pub fn bind_reuseport(addr: SocketAddr) -> io::Result<TcpListener> {
 impl_compio_io!(read TcpStream);
 impl_compio_io!(write TcpStream);
 impl_compio_io!(raw_fd TcpStream);
+impl_shared_io!(TcpStream);
 // The split halves intentionally have no raw-fd accessor: TCP tuning is
 // applied to the whole stream before it is split, and tokio's halves do not
 // expose the descriptor.
@@ -408,6 +474,8 @@ mod unix {
             self.inner.as_raw_fd()
         }
     }
+
+    impl_shared_io!(UnixStream);
 
     #[cfg(test)]
     mod tests {

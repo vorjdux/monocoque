@@ -344,6 +344,38 @@ impl AsyncWrite for TcpStream {
     }
 }
 
+/// Implement the `compio::io` traits for `&$ty`, so a read and a write can be
+/// in flight on one stream at once. Every helper already works on `&Async<T>`.
+macro_rules! impl_shared_io {
+    ($ty:ty) => {
+        impl AsyncRead for &$ty {
+            async fn read<B: IoBufMut>(&mut self, buf: B) -> BufResult<usize, B> {
+                read_into(&self.inner, buf).await
+            }
+        }
+
+        impl AsyncWrite for &$ty {
+            async fn write<B: IoBuf>(&mut self, buf: B) -> BufResult<usize, B> {
+                write_from(&self.inner, buf).await
+            }
+
+            async fn write_vectored<B: IoVectoredBuf>(&mut self, buf: B) -> BufResult<usize, B> {
+                write_vectored_from(&self.inner, buf).await
+            }
+
+            async fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+
+            async fn shutdown(&mut self) -> io::Result<()> {
+                SockRef::from(self.inner.get_ref()).shutdown(std::net::Shutdown::Write)
+            }
+        }
+    };
+}
+
+impl_shared_io!(TcpStream);
+
 impl AsyncRead for OwnedReadHalf {
     async fn read<B: IoBufMut>(&mut self, buf: B) -> BufResult<usize, B> {
         read_into(&self.inner, buf).await
@@ -482,4 +514,6 @@ mod unix {
             self.inner.get_ref().as_raw_fd()
         }
     }
+
+    impl_shared_io!(UnixStream);
 }
