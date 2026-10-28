@@ -236,28 +236,39 @@ impl Msg {
         }
     }
 
-    /// Visit each frame as `Bytes` without consuming the message. Inline
-    /// frames are passed as a borrowed slice instead, since they have no
-    /// `Bytes` to share; `on_bytes` receives every frame that does.
-    pub fn for_each_frame(
-        &self,
-        mut on_slice: impl FnMut(&[u8], bool),
-        mut on_bytes: impl FnMut(&Bytes, bool),
-    ) {
-        let n = self.len();
-        match &self.frames {
-            FrameStore::Inline { len, data } => on_slice(&data[..usize::from(*len)], false),
-            FrameStore::Single(b) => on_bytes(b, false),
-            FrameStore::Multi(v) => {
-                for (i, b) in v.iter().enumerate() {
-                    on_bytes(b, i + 1 < n);
-                }
-            }
-            FrameStore::Shared(v) => {
-                for (i, b) in v.iter().enumerate() {
-                    on_bytes(b, i + 1 < n);
-                }
-            }
+    /// Iterate the frames as stored: a borrowed slice for an inline frame, the
+    /// shared `Bytes` otherwise, so an encoder can hand a large body to the
+    /// kernel without copying it.
+    pub fn frame_refs(&self) -> impl Iterator<Item = FrameRef<'_>> + '_ {
+        let (inline, stored): (Option<&[u8]>, &[Bytes]) = match &self.frames {
+            FrameStore::Inline { len, data } => (Some(&data[..usize::from(*len)]), &[]),
+            FrameStore::Single(b) => (None, std::slice::from_ref(b)),
+            FrameStore::Multi(v) => (None, v.as_slice()),
+            FrameStore::Shared(v) => (None, v),
+        };
+        inline
+            .into_iter()
+            .map(FrameRef::Slice)
+            .chain(stored.iter().map(FrameRef::Bytes))
+    }
+}
+
+/// One frame of a [`Msg`] as it is stored. See [`Msg::frame_refs`].
+#[derive(Clone, Copy, Debug)]
+pub enum FrameRef<'a> {
+    /// An inline frame.
+    Slice(&'a [u8]),
+    /// A frame held as `Bytes`.
+    Bytes(&'a Bytes),
+}
+
+impl FrameRef<'_> {
+    /// The frame's bytes.
+    #[must_use]
+    pub fn as_slice(&self) -> &[u8] {
+        match self {
+            Self::Slice(s) => s,
+            Self::Bytes(b) => b,
         }
     }
 }
@@ -525,19 +536,14 @@ mod tests {
     }
 
     #[test]
-    fn for_each_frame_reports_more_flags() {
+    fn frame_refs_expose_storage() {
         let msg: Msg = [Bytes::from_static(b"a"), Bytes::from_static(b"b")].into();
-        let mut seen = Vec::new();
-        msg.for_each_frame(
-            |_, _| unreachable!(),
-            |b, more| seen.push((b.clone(), more)),
-        );
-        assert_eq!(seen.len(), 2);
-        assert!(seen[0].1);
-        assert!(!seen[1].1);
+        let refs: Vec<FrameRef<'_>> = msg.frame_refs().collect();
+        assert_eq!(refs.len(), 2);
+        assert!(matches!(refs[0], FrameRef::Bytes(b) if b == &b"a"[..]));
         let inline = Msg::copy_from_slice(b"x");
-        let mut hit = false;
-        inline.for_each_frame(|s, more| hit = s == b"x" && !more, |_, _| unreachable!());
-        assert!(hit);
+        let refs: Vec<FrameRef<'_>> = inline.frame_refs().collect();
+        assert!(matches!(refs[..], [FrameRef::Slice(b"x")]));
+        assert!(Msg::new().frame_refs().next().is_none());
     }
 }

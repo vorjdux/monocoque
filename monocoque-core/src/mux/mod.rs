@@ -111,8 +111,10 @@ pub trait Protocol: 'static {
 
 /// Pattern hooks: what a socket type does when peers come and go.
 pub trait Hooks: 'static {
-    /// A peer finished its handshake.
-    fn on_peer_up(&mut self, _id: PeerId, _info: &PeerInfo) {}
+    /// A peer finished its handshake. Return `false` to refuse it.
+    fn on_peer_up(&mut self, _id: PeerId, _info: &PeerInfo) -> bool {
+        true
+    }
 
     /// A peer went away.
     fn on_peer_down(&mut self, _id: PeerId, _info: &PeerInfo) {}
@@ -153,6 +155,16 @@ impl PeerId {
     #[must_use]
     pub const fn as_u64(self) -> u64 {
         ((self.generation as u64) << 32) | self.index as u64
+    }
+
+    /// The id [`as_u64`](Self::as_u64) was taken from.
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation)] // each half is exactly 32 bits
+    pub const fn from_u64(v: u64) -> Self {
+        Self {
+            index: (v & 0xFFFF_FFFF) as u32,
+            generation: (v >> 32) as u32,
+        }
     }
 }
 
@@ -633,6 +645,25 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         origin: Origin,
         children: [Option<ChildId>; 2],
     ) {
+        if !self.hooks.on_peer_up(id, &info) {
+            // The pattern refused the peer (PAIR already has one).
+            state.borrow_mut().close(CloseReason::Local);
+            for child in children.into_iter().flatten() {
+                self.children.cancel(child);
+            }
+            self.free_peers.push(id.index);
+            if let Origin::Connector(c) = origin
+                && let Some(Some(conn)) = self.connectors.get(c)
+            {
+                conn.down.fire();
+            }
+            // Drop the Closed event the refusal queued; the peer never existed.
+            self.events
+                .q
+                .borrow_mut()
+                .retain(|ev| !matches!(ev, Event::Closed(p, _) if *p == id));
+            return;
+        }
         {
             let mut st = state.borrow_mut();
             for msg in &self.greeting {
@@ -641,7 +672,6 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
                 let _ = st.enqueue(msg);
             }
         }
-        self.hooks.on_peer_up(id, &info);
         self.peers[id.index as usize] = Some(PeerEntry {
             state,
             info,
@@ -1216,28 +1246,52 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         let mut sent = 0;
         for k in 0..self.lb.len() {
             let id = self.lb[k];
-            let state = match self.entry(id) {
-                Some(entry) if !entry.closed && select(id, &entry.info) => Rc::clone(&entry.state),
-                _ => continue,
-            };
-            let mut st = state.borrow_mut();
-            if !st.writable() {
-                continue;
-            }
-            let share = matches!(&st.outbound, Outbound::Wire { codec, hold: false, .. } if codec.shares_encoding());
-            if share {
-                let wire = shared.get_or_insert_with(|| {
-                    P::encode_shared(&self.cfg, msg, &mut self.shared_wire);
-                    self.shared_wire.split().freeze()
-                });
-                st.enqueue_wire(wire.clone());
-                sent += 1;
-            } else if st.enqueue(msg).is_ok() {
+            let chosen = self
+                .entry(id)
+                .is_some_and(|e| !e.closed && select(id, &e.info));
+            if chosen && self.fanout_one(id, msg, &mut shared) {
                 sent += 1;
             }
         }
         self.progress();
         sent
+    }
+
+    /// Send `msg` to each peer in `ids` that is live and has room. Like
+    /// [`fanout`](Self::fanout) for a caller that already knows the targets.
+    pub fn fanout_to(&mut self, msg: &Msg, ids: &[PeerId]) -> usize {
+        self.progress();
+        let mut shared: Option<Bytes> = None;
+        let sent = ids
+            .iter()
+            .filter(|&&id| self.fanout_one(id, msg, &mut shared))
+            .count();
+        self.progress();
+        sent
+    }
+
+    /// Queue `msg` toward `id` for a fan-out, reusing `shared` as the one
+    /// encoding every sharing peer gets.
+    fn fanout_one(&mut self, id: PeerId, msg: &Msg, shared: &mut Option<Bytes>) -> bool {
+        let state = match self.entry(id) {
+            Some(entry) if !entry.closed => Rc::clone(&entry.state),
+            _ => return false,
+        };
+        let mut st = state.borrow_mut();
+        if !st.writable() {
+            return false;
+        }
+        let share = matches!(&st.outbound, Outbound::Wire { codec, hold: false, .. } if codec.shares_encoding());
+        if share {
+            let wire = shared.get_or_insert_with(|| {
+                P::encode_shared(&self.cfg, msg, &mut self.shared_wire);
+                self.shared_wire.split().freeze()
+            });
+            st.enqueue_wire(wire.clone());
+            true
+        } else {
+            st.enqueue(msg).is_ok()
+        }
     }
 
     /// Release writes held by `write_coalescing` on every peer.

@@ -4,7 +4,7 @@
 //! - Zero-copy segmented buffer (`buffer`)
 //! - Shared owned-buffer I/O helpers for the runtime backends (`io`)
 //! - TCP utilities for high-performance networking (`tcp`)
-//! - PUB/SUB subscription index (`pubsub`)
+//! - The PUB/SUB subscription matcher (`subscription`)
 //! - Byte-based backpressure (`backpressure`)
 //! - Error types (`error`)
 
@@ -37,10 +37,6 @@ pub mod transport;
 #[cfg(unix)]
 pub mod ipc;
 
-pub mod pubsub {
-    pub mod index;
-}
-
 // Optional: a small prelude to make downstream crates ergonomic.
 // Keep it minimal to avoid API lock-in.
 pub mod prelude {
@@ -51,9 +47,9 @@ pub mod prelude {
     pub use crate::monitor::{SocketEvent, SocketMonitor};
     pub use crate::options::SocketOptions;
     pub use crate::poison::PoisonGuard;
-    pub use crate::pubsub::index::{PeerKey, SubscriptionIndex};
     pub use crate::reconnect::{ReconnectError, ReconnectState};
     pub use crate::socket_type::SocketType;
+    pub use crate::subscription::{PeerKey, SubscriptionIndex};
     pub use crate::tcp::{configure_tcp_keepalive, enable_tcp_nodelay};
 
     #[cfg(unix)]

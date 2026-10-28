@@ -52,7 +52,9 @@ pub mod codec;
 mod greeting;
 mod handshake;
 mod inproc_stream;
+pub mod sock;
 mod utils;
+pub mod wire;
 
 // Public protocol types
 /// Sans-IO ZMTP session and related types.

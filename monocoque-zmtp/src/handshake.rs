@@ -753,6 +753,13 @@ fn check_socket_type_compatibility(local: SocketType, peer: SocketType) -> Resul
     }
 }
 
+/// May a `local` socket talk to a peer that announced itself as `peer`?
+pub fn socket_types_compatible(local: SocketType, peer: &str) -> bool {
+    parse_socket_type(peer.as_bytes())
+        .and_then(|peer| check_socket_type_compatibility(local, peer))
+        .is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
