@@ -21,11 +21,8 @@ use std::time::Duration;
 /// path so it matches what libzmq computes from the same secret.
 fn keypair(seed: u8) -> (/* public */ [u8; 32], /* secret */ [u8; 32]) {
     let mut sec = [0u8; 32];
-    for (i, b) in sec.iter_mut().enumerate() {
-        *b = (i as u8)
-            .wrapping_mul(31)
-            .wrapping_add(seed)
-            .wrapping_add(1);
+    for (i, b) in (0u8..).zip(sec.iter_mut()) {
+        *b = i.wrapping_mul(31).wrapping_add(seed).wrapping_add(1);
     }
     let public = *CurveSecretKey::from_bytes(sec).public_key().as_bytes();
     (public, sec)

@@ -57,8 +57,6 @@ let options = SocketOptions::default().with_buffer_sizes(65_536, 65_536);
 ```
 
 The read buffer is clamped to the 64 KB read slab and floored at 64 bytes.
-`SocketOptions::small()` and `large()` are deprecated: both sit below the 32 KB
-default, so they slow bulk transfers down rather than speeding them up.
 
 ### TCP Options
 

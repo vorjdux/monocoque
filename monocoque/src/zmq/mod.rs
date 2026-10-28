@@ -73,7 +73,6 @@ mod subscriber;
 
 // Re-export socket types
 pub use dealer::DealerSocket;
-pub use monocoque_core::config::BufferConfig;
 pub use monocoque_core::endpoint::{Endpoint, EndpointError};
 pub use monocoque_core::monitor::{SocketEvent, SocketMonitor};
 pub use monocoque_core::options::SocketOptions;
@@ -106,14 +105,14 @@ pub use monocoque_core::ipc;
 /// // - PubSocket, SubSocket, XPubSocket, XSubSocket
 /// // - PushSocket, PullSocket, PushFanOut, PullFanIn, PairSocket
 /// // - Bytes for zero-copy messages
-/// // - BufferConfig, SocketOptions, SocketType for configuration
+/// // - SocketOptions, SocketType for configuration
 /// ```
 pub mod prelude {
     pub use super::proxy::{ProxyCommand, ProxySocket, proxy, proxy_steerable};
     pub use super::{
-        BufferConfig, DealerSocket, PairSocket, PubSocket, PullFanIn, PullSocket, PushFanOut,
-        PushSocket, RepSocket, ReqSocket, RouterSocket, SocketOptions, StreamSocket, SubSocket,
-        Subscription, SubscriptionEvent, SubscriptionTrie, XPubSocket, XSubSocket,
+        DealerSocket, PairSocket, PubSocket, PullFanIn, PullSocket, PushFanOut, PushSocket,
+        RepSocket, ReqSocket, RouterSocket, SocketOptions, StreamSocket, SubSocket, Subscription,
+        SubscriptionEvent, SubscriptionTrie, XPubSocket, XSubSocket,
     };
     pub use bytes::Bytes;
     pub use monocoque_core::socket_type::SocketType;

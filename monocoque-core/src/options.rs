@@ -648,54 +648,6 @@ impl SocketOptions {
         Self::default()
     }
 
-    /// Create socket options optimized for small messages (< 1KB).
-    ///
-    /// Sets 4KB buffers, suitable for low-latency request-reply patterns.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use monocoque_core::options::SocketOptions;
-    ///
-    /// let opts = SocketOptions::small();  // 4KB buffers for REQ/REP
-    /// ```
-    #[must_use]
-    #[deprecated(
-        since = "0.4.1",
-        note = "sets a 4KB read buffer, which is below the 32KB default. Use SocketOptions::new().with_read_buffer_size(4096) if that is really what you want."
-    )]
-    pub fn small() -> Self {
-        Self {
-            read_buffer_size: 4096,
-            write_buffer_size: 4096,
-            ..Self::default()
-        }
-    }
-
-    /// Create socket options optimized for large messages (> 8KB).
-    ///
-    /// Sets 16KB buffers, suitable for high-throughput async patterns.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use monocoque_core::options::SocketOptions;
-    ///
-    /// let opts = SocketOptions::large();  // 16KB buffers for DEALER/ROUTER
-    /// ```
-    #[must_use]
-    #[deprecated(
-        since = "0.4.1",
-        note = "sets a 16KB read buffer, which is below the 32KB default and so is slower, not faster. Use SocketOptions::new() and set what your workload needs."
-    )]
-    pub fn large() -> Self {
-        Self {
-            read_buffer_size: 16384,
-            write_buffer_size: 16384,
-            ..Self::default()
-        }
-    }
-
     /// Set receive timeout.
     ///
     /// # Examples

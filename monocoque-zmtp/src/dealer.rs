@@ -38,8 +38,7 @@ where
 {
     /// Create a new DEALER socket from a stream with default options.
     ///
-    /// Uses default buffer sizes (8KB) optimized for balanced workloads.
-    /// For high-throughput, use `SocketOptions::large()`.
+    /// Uses the default buffer sizes (32KB read, 8KB write).
     ///
     /// Works with both TCP and Unix domain sockets.
     ///
@@ -80,8 +79,7 @@ where
     /// # async fn example() -> std::io::Result<()> {
     /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
     ///
-    /// // High-throughput configuration
-    /// let options = SocketOptions::large()
+    /// let options = SocketOptions::new()
     ///     .with_recv_timeout(Duration::from_secs(5))
     ///     .with_send_timeout(Duration::from_secs(5));
     ///     
@@ -119,8 +117,6 @@ where
             frames: SmallVec::new(),
         })
     }
-
-    /// Connect to an endpoint with automatic reconnection support.
 
     /// Receive a message.
     pub async fn recv(&mut self) -> io::Result<Option<Vec<Bytes>>> {
@@ -500,11 +496,8 @@ where
     /// loop {
     ///     match TcpStream::connect(addr).await {
     ///         Ok(stream) => {
-    ///             let socket = DealerSocket::from_tcp_with_options(
-    ///                 stream,
-    ///                 monocoque_core::config::BufferConfig::large(),
-    ///                 options.clone()
-    ///             ).await?;
+    ///             let socket =
+    ///                 DealerSocket::from_tcp_with_options(stream, options.clone()).await?;
     ///             reconnect.reset();
     ///             // Use socket...
     ///             break;
@@ -755,7 +748,7 @@ impl DealerSocket<TcpStream> {
     /// # async fn example() -> std::io::Result<()> {
     /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
     ///
-    /// let options = SocketOptions::large()  // 16KB buffers
+    /// let options = SocketOptions::new()
     ///     .with_tcp_keepalive(1)
     ///     .with_tcp_keepalive_idle(60)
     ///     .with_recv_timeout(Duration::from_secs(5));

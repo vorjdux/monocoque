@@ -71,7 +71,8 @@ fn run_router(num_peers: usize, iters: u64) -> Duration {
     // timed once. Reusing the connections (instead of rebuilding them per
     // iteration) keeps the ephemeral port range from filling with TIME_WAIT and
     // failing a later bind with AddrInUse once the drain is fast.
-    let total_per_peer = iters as usize * MESSAGES_PER_PEER;
+    let total_per_peer =
+        usize::try_from(iters).expect("iteration count fits usize") * MESSAGES_PER_PEER;
 
     // ROUTER side: bind, accept N streams, drain all messages concurrently.
     let router_thread = thread::spawn(move || {

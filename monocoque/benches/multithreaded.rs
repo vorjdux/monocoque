@@ -209,7 +209,9 @@ fn monocoque_multithreaded_independent_pairs(c: &mut Criterion) {
 
                                 // ROUTER echoes every message across all `iters`
                                 // rounds over the single accepted connection.
-                                let total = iters as usize * MESSAGES_PER_THREAD;
+                                let total = usize::try_from(iters)
+                                    .expect("iteration count fits usize")
+                                    * MESSAGES_PER_THREAD;
                                 let router_task = monocoque::rt::spawn(async move {
                                     let (stream, _) = listener.accept().await.unwrap();
                                     let mut router = RouterSocket::from_tcp_with_options(

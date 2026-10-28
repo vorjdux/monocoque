@@ -64,11 +64,6 @@ where
 
     /// Create a new ROUTER socket with custom socket options.
     ///
-    /// # Buffer Configuration
-    /// - Use `SocketOptions::small()` (4KB) for low-latency with small messages
-    /// - Use `SocketOptions::large()` (16KB) for high-throughput with large messages
-    /// - Use `SocketOptions::default()` (8KB) for balanced workloads
-    ///
     /// # Example
     /// ```rust,no_run
     /// # use monocoque_zmtp::router::RouterSocket;
@@ -76,7 +71,7 @@ where
     /// # use monocoque_core::rt::TcpStream;
     /// # async fn example() -> std::io::Result<()> {
     /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
-    /// let opts = SocketOptions::large(); // 16KB buffers for throughput
+    /// let opts = SocketOptions::new().with_recv_hwm(10_000);
     /// let socket = RouterSocket::with_options(stream, opts).await?;
     /// # Ok(())
     /// # }
@@ -567,7 +562,7 @@ impl RouterSocket<TcpStream> {
     /// # use monocoque_core::rt::TcpStream;
     /// # async fn example() -> std::io::Result<()> {
     /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
-    /// let mut opts = SocketOptions::large();
+    /// let mut opts = SocketOptions::new();
     /// opts.tcp_keepalive = 1;
     /// let socket = RouterSocket::from_tcp_with_options(stream, opts).await?;
     /// # Ok(())

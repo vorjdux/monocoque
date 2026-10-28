@@ -62,7 +62,7 @@ const MATCHED_PER_ROUND: usize = MESSAGE_COUNT / 10;
 /// Time the delivery of `iters * MESSAGE_COUNT` messages to each subscriber
 /// while the publisher oversends. Returns the slowest subscriber's elapsed time.
 fn run_monocoque_fanout(num_subs: usize, iters: u64) -> Duration {
-    let target = iters as usize * MESSAGE_COUNT;
+    let target = usize::try_from(iters).expect("iteration count fits usize") * MESSAGE_COUNT;
     let payload = Bytes::from(vec![0u8; MESSAGE_SIZE]);
 
     let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
@@ -156,7 +156,7 @@ fn monocoque_pubsub_fanout(c: &mut Criterion) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn run_zmq_fanout(num_subs: usize, iters: u64) -> Duration {
-    let target = iters as usize * MESSAGE_COUNT;
+    let target = usize::try_from(iters).expect("iteration count fits usize") * MESSAGE_COUNT;
     let payload = vec![0u8; MESSAGE_SIZE];
 
     let (ep_tx, ep_rx) = mpsc::channel::<String>();
@@ -255,7 +255,8 @@ fn zmq_pubsub_fanout(c: &mut Criterion) {
 // number reflects the publish/filter rate the subscriber can sustain.
 
 fn run_monocoque_topic_filtering(iters: u64) -> Duration {
-    let target_matches = iters as usize * MATCHED_PER_ROUND;
+    let target_matches =
+        usize::try_from(iters).expect("iteration count fits usize") * MATCHED_PER_ROUND;
     let payload = Bytes::from(vec![0u8; MESSAGE_SIZE]);
 
     let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
@@ -317,7 +318,8 @@ fn monocoque_topic_filtering(c: &mut Criterion) {
 }
 
 fn run_zmq_topic_filtering(iters: u64) -> Duration {
-    let target_matches = iters as usize * MATCHED_PER_ROUND;
+    let target_matches =
+        usize::try_from(iters).expect("iteration count fits usize") * MATCHED_PER_ROUND;
     let payload = vec![0u8; MESSAGE_SIZE];
 
     let (ep_tx, ep_rx) = mpsc::channel::<String>();

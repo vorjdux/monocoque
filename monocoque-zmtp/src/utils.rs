@@ -59,9 +59,9 @@ pub fn encode_frame(flags: u8, body: &Bytes) -> Bytes {
     let header_len = if len <= 255 { 2 } else { 9 };
     let mut out = BytesMut::with_capacity(header_len + len);
 
-    if len <= 255 {
+    if let Ok(short) = u8::try_from(len) {
         out.put_u8(flags & !FLAG_LONG);
-        out.put_u8(len as u8);
+        out.put_u8(short);
     } else {
         out.put_u8(flags | FLAG_LONG);
         out.put_u64(len as u64);
@@ -104,8 +104,8 @@ pub fn build_initiate(socket_type: &str, identity: Option<&[u8]>) -> Bytes {
 fn build_metadata_command(command: &str, socket_type: &str, identity: Option<&[u8]>) -> Bytes {
     let mut body = BytesMut::new();
 
-    // Command name (length-prefixed).
-    body.put_u8(command.len() as u8);
+    // Command name (length-prefixed). Only the fixed READY/INITIATE names reach here.
+    body.put_u8(u8::try_from(command.len()).expect("ZMTP command name exceeds 255 bytes"));
     body.extend_from_slice(command.as_bytes());
 
     // Mandatory: Socket-Type
@@ -122,12 +122,14 @@ fn build_metadata_command(command: &str, socket_type: &str, identity: Option<&[u
 /// Helper: encode a READY property
 #[inline]
 fn put_property(dst: &mut BytesMut, name: &str, value: &[u8]) {
+    // Names are the fixed RFC 23 property names; values are a socket-type name
+    // or a routing identity, which the options layer caps at 255 bytes.
     let name_bytes = name.as_bytes();
 
-    dst.put_u8(name_bytes.len() as u8);
+    dst.put_u8(u8::try_from(name_bytes.len()).expect("ZMTP property name exceeds 255 bytes"));
     dst.extend_from_slice(name_bytes);
 
-    dst.put_u32(value.len() as u32);
+    dst.put_u32(u32::try_from(value.len()).expect("ZMTP property value exceeds u32"));
     dst.extend_from_slice(value);
 }
 

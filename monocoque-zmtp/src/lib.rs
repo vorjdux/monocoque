@@ -43,42 +43,8 @@
 //!
 //! - **Zero-copy**: Messages use `Bytes` for efficient sharing
 //! - **Runtime backends**: high-performance async I/O via `compio` (io_uring), tokio, or smol
-
-// Pedantic lints configuration
-#![allow(clippy::module_name_repetitions)]
-#![allow(clippy::return_self_not_must_use)] // Builder patterns are self-documenting
-#![allow(clippy::missing_errors_doc)] // Error types are self-explanatory
-#![allow(clippy::missing_panics_doc)] // Most panics are in unreachable paths or debug code
-#![allow(clippy::missing_const_for_fn)] // Const fn optimization not always beneficial
-#![allow(clippy::multiple_crate_versions)] // Transitive dependency management
-#![allow(clippy::future_not_send)] // Intentional: tied to the thread-per-core runtime model
-#![allow(clippy::missing_fields_in_debug)] // Debug impls are simplified for brevity
-#![allow(clippy::should_implement_trait)] // Custom method names are intentional
-#![allow(clippy::doc_lazy_continuation)] // Doc formatting false positives
-#![allow(clippy::empty_line_after_doc_comments)] // Doc spacing is intentional
-#![allow(clippy::duplicated_attributes)] // Allow duplicates for clarity
 //! - **Sans-IO protocol**: Testable, runtime-agnostic design
-//! - **Type-safe**: No unsafe code in protocol layer
 //! - **Interoperable**: Compatible with libzmq
-
-// Allow some pedantic lints
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_sign_loss)]
-#![allow(clippy::items_after_statements)]
-#![allow(clippy::module_name_repetitions)]
-#![allow(clippy::must_use_candidate)]
-#![allow(clippy::needless_pass_by_value)]
-#![allow(clippy::needless_pass_by_ref_mut)]
-#![allow(clippy::match_same_arms)]
-#![allow(clippy::unused_async)]
-#![allow(clippy::let_underscore_future)]
-#![allow(clippy::future_not_send)] // Runtime-agnostic design
-#![allow(clippy::uninlined_format_args)] // Style preference
-#![allow(clippy::missing_errors_doc)] // Will add gradually
-#![allow(clippy::doc_markdown)] // Too many false positives
-#![allow(clippy::while_let_loop)] // Sometimes clearer as explicit loop
-#![allow(clippy::option_if_let_else)] // Sometimes clearer as if/else
-#![allow(clippy::never_loop)] // State machines use loop with early returns
 
 // Internal modules (not part of public API)
 pub(crate) mod base;
@@ -89,11 +55,9 @@ mod inproc_stream;
 mod utils;
 
 // Public protocol types
-pub mod adapters;
 /// Sans-IO ZMTP session and related types.
 pub mod session;
 pub mod socket_trait;
-pub mod stream_sink;
 
 // Security mechanisms
 pub mod security;
@@ -146,7 +110,6 @@ pub use handshake::parse_ready_command;
 pub mod prelude {
     pub use super::session::SocketType;
     pub use super::socket_trait::Socket;
-    pub use super::stream_sink::{SocketSink, SocketStream, SocketStreamSink};
     pub use super::{
         DealerSocket, PairSocket, PubSocket, PullSocket, PushSocket, RepSocket, ReqSocket,
         RouterSocket, SubSocket, XPubSocket, XSubSocket,

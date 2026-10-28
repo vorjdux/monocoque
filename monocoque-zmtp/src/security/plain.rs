@@ -269,18 +269,14 @@ where
 
     // Username (length-prefixed)
     let username_bytes = credentials.username.as_bytes();
-    if username_bytes.len() > 255 {
-        return Err(ZmtpError::Protocol);
-    }
-    hello.extend_from_slice(&[username_bytes.len() as u8]);
+    let username_len = u8::try_from(username_bytes.len()).map_err(|_| ZmtpError::Protocol)?;
+    hello.extend_from_slice(&[username_len]);
     hello.extend_from_slice(username_bytes);
 
     // Password (length-prefixed)
     let password_bytes = credentials.password.as_bytes();
-    if password_bytes.len() > 255 {
-        return Err(ZmtpError::Protocol);
-    }
-    hello.extend_from_slice(&[password_bytes.len() as u8]);
+    let password_len = u8::try_from(password_bytes.len()).map_err(|_| ZmtpError::Protocol)?;
+    hello.extend_from_slice(&[password_len]);
     hello.extend_from_slice(password_bytes);
 
     // Send HELLO wrapped in a ZMTP command frame ([0x04][len][body]) so a real
@@ -442,9 +438,9 @@ mod tests {
     fn plain_hello(username: &[u8], password: &[u8]) -> Vec<u8> {
         let mut hello = Vec::new();
         hello.extend_from_slice(PLAIN_HELLO);
-        hello.push(username.len() as u8);
+        hello.push(u8::try_from(username.len()).unwrap());
         hello.extend_from_slice(username);
-        hello.push(password.len() as u8);
+        hello.push(u8::try_from(password.len()).unwrap());
         hello.extend_from_slice(password);
         hello
     }
@@ -539,7 +535,7 @@ mod tests {
             let body = plain_hello(b"admin", b"secret");
             let mut framed = Vec::new();
             framed.push(0x04);
-            framed.push(body.len() as u8);
+            framed.push(u8::try_from(body.len()).unwrap());
             framed.extend_from_slice(&body);
             framed.extend_from_slice(b"\x05extra");
             let BufResult(write_result, _) =

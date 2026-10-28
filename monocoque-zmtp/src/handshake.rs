@@ -344,14 +344,13 @@ where
             ZmtpError::Protocol
         })?;
         let raw_len = u64::from_be_bytes(len_buf);
-        if raw_len > usize::MAX as u64 {
+        usize::try_from(raw_len).map_err(|_| {
             warn!(
                 "[HANDSHAKE] ZMTP READY long-frame length overflows usize: {}",
                 raw_len
             );
-            return Err(ZmtpError::Protocol);
-        }
-        raw_len as usize
+            ZmtpError::Protocol
+        })?
     } else {
         header_buf[1] as usize
     };
@@ -767,9 +766,9 @@ mod tests {
         body.extend_from_slice(b"\x05READY");
 
         for (key, value) in properties {
-            body.push(key.len() as u8);
+            body.push(u8::try_from(key.len()).unwrap());
             body.extend_from_slice(key);
-            body.extend_from_slice(&(value.len() as u32).to_be_bytes());
+            body.extend_from_slice(&u32::try_from(value.len()).unwrap().to_be_bytes());
             body.extend_from_slice(value);
         }
 
@@ -1070,7 +1069,7 @@ mod tests {
         body.extend_from_slice(b"READY");
         body.push(11u8);
         body.extend_from_slice(b"Socket-Type");
-        body.extend_from_slice(&(value.len() as u32).to_be_bytes());
+        body.extend_from_slice(&20u32.to_be_bytes());
         body.extend_from_slice(&value);
 
         assert!(matches!(

@@ -270,10 +270,8 @@ bottleneck), so treat it as approximate.
 
 ### Vectored writes, recv_batch, PUB coalescing
 
-These paths have their own focused harness (not part of the criterion suite):
-`monocoque/examples/bench_changes.rs`, run with
-`cargo run --release --features zmq --example bench_changes`. It toggles each
-change via its public knob so the effect is isolated. Numbers below are a
+These paths were measured with a one-off harness (not part of the criterion
+suite) that toggled each change via its public knob so the effect was isolated. Numbers below are a
 separate loopback run; treat them as relative (they show the direction of each
 change), not directly comparable to the criterion tables above.
 

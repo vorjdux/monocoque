@@ -68,7 +68,7 @@ async fn recv_n(sub: &mut SubSocket, n: usize) {
 /// while one slow subscriber lags and the publisher oversends. Returns the
 /// slowest fast subscriber's elapsed time.
 fn run_fanout_slow(iters: u64) -> Duration {
-    let target = iters as usize * MESSAGE_COUNT;
+    let target = usize::try_from(iters).expect("iteration count fits usize") * MESSAGE_COUNT;
     let payload = Bytes::from(vec![0u8; MESSAGE_SIZE]);
 
     let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();

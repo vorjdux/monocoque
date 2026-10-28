@@ -58,7 +58,8 @@ fn monocoque_req_rep_latency(c: &mut Criterion) {
             &size,
             |b, _| {
                 b.iter_custom(|iters| {
-                    let total = WARMUP_ROUNDS + iters as usize;
+                    let total =
+                        WARMUP_ROUNDS + usize::try_from(iters).expect("iteration count fits usize");
 
                     // SETUP (not measured): server echoes `total` messages, then exits.
                     let (port_tx, port_rx) = mpsc::channel::<u16>();
@@ -148,7 +149,8 @@ fn zmq_req_rep_latency(c: &mut Criterion) {
             &size,
             |b, _| {
                 b.iter_custom(|iters| {
-                    let total = WARMUP_ROUNDS + iters as usize;
+                    let total =
+                        WARMUP_ROUNDS + usize::try_from(iters).expect("iteration count fits usize");
 
                     // SETUP (not measured): server echoes `total` messages, then exits.
                     let (endpoint_tx, endpoint_rx) = mpsc::channel::<String>();

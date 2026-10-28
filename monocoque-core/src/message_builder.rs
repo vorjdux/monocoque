@@ -146,57 +146,6 @@ impl Message {
         self
     }
 
-    /// Add a frame containing JSON-serialized data.
-    ///
-    /// Requires the `serde` feature to be enabled.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if serialization fails.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use monocoque_core::message_builder::Message;
-    /// use serde::Serialize;
-    ///
-    /// #[derive(Serialize)]
-    /// struct Data {
-    ///     value: i32,
-    /// }
-    ///
-    /// let data = Data { value: 42 };
-    /// let msg = Message::new()
-    ///     .push_str("data")
-    ///     .push_json(&data)?
-    ///     .into_frames();
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    #[cfg(feature = "serde")]
-    pub fn push_json<T: serde::Serialize>(mut self, value: &T) -> Result<Self, serde_json::Error> {
-        let json = serde_json::to_vec(value)?;
-        self.frames.push(Bytes::from(json));
-        Ok(self)
-    }
-
-    /// Add a frame containing MessagePack-serialized data.
-    ///
-    /// Requires the `msgpack` feature to be enabled. MessagePack is more compact
-    /// than JSON and often preferred for binary protocols.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if serialization fails.
-    #[cfg(feature = "msgpack")]
-    pub fn push_msgpack<T: serde::Serialize>(
-        mut self,
-        value: &T,
-    ) -> Result<Self, rmp_serde::encode::Error> {
-        let msgpack = rmp_serde::to_vec(value)?;
-        self.frames.push(Bytes::from(msgpack));
-        Ok(self)
-    }
-
     /// Add a frame containing a big-endian u32.
     ///
     /// Useful for protocol headers, message IDs, etc.

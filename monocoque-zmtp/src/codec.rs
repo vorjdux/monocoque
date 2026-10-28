@@ -288,10 +288,10 @@ impl ZmtpFrame {
 
         out.extend_from_slice(&[flags]);
 
-        if is_long {
-            out.extend_from_slice(&(body_len as u64).to_be_bytes());
+        if let Ok(short) = u8::try_from(body_len) {
+            out.extend_from_slice(&[short]);
         } else {
-            out.extend_from_slice(&[body_len as u8]);
+            out.extend_from_slice(&(body_len as u64).to_be_bytes());
         }
 
         out.extend_from_slice(&self.payload);
@@ -320,12 +320,12 @@ pub fn write_frame_header(buf: &mut BytesMut, body_len: usize, more: bool) -> us
     }
 
     buf.extend_from_slice(&[flags]);
-    if is_long {
+    if let Ok(short) = u8::try_from(body_len) {
+        buf.extend_from_slice(&[short]);
+        2
+    } else {
         buf.extend_from_slice(&(body_len as u64).to_be_bytes());
         9
-    } else {
-        buf.extend_from_slice(&[body_len as u8]);
-        2
     }
 }
 
@@ -368,10 +368,10 @@ pub fn encode_multipart(msg: &[Bytes], buf: &mut BytesMut) {
 
         buf.extend_from_slice(&[flags]);
 
-        if is_long {
-            buf.extend_from_slice(&(part.len() as u64).to_be_bytes());
+        if let Ok(short) = u8::try_from(part.len()) {
+            buf.extend_from_slice(&[short]);
         } else {
-            buf.extend_from_slice(&[part.len() as u8]);
+            buf.extend_from_slice(&(part.len() as u64).to_be_bytes());
         }
 
         buf.extend_from_slice(part);
@@ -381,14 +381,13 @@ pub fn encode_multipart(msg: &[Bytes], buf: &mut BytesMut) {
 /// Encode a single-frame data message directly into `buf`.
 #[inline]
 pub fn encode_single(part: &Bytes, buf: &mut BytesMut) {
-    let is_long = part.len() >= 256;
-    if is_long {
+    if let Ok(short) = u8::try_from(part.len()) {
+        buf.reserve(2 + part.len());
+        buf.extend_from_slice(&[0x00, short]);
+    } else {
         buf.reserve(9 + part.len());
         buf.extend_from_slice(&[0x02]);
         buf.extend_from_slice(&(part.len() as u64).to_be_bytes());
-    } else {
-        buf.reserve(2 + part.len());
-        buf.extend_from_slice(&[0x00, part.len() as u8]);
     }
     buf.extend_from_slice(part);
 }

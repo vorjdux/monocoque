@@ -29,26 +29,6 @@ name = "api_demo"
 required-features = ["zmq"]
 
 [[example]]
-name = "read_batch_probe"
-required-features = ["zmq"]
-
-[[example]]
-name = "dealer_write_probe"
-required-features = ["zmq"]
-
-[[example]]
-name = "dealer_throughput_probe"
-required-features = ["zmq"]
-
-[[example]]
-name = "bench_changes"
-required-features = ["zmq"]
-
-[[example]]
-name = "handshake_test"
-required-features = ["zmq"]
-
-[[example]]
 name = "hello_dealer"
 required-features = ["zmq"]
 
@@ -208,14 +188,6 @@ name = "authenticated_req_rep"
 required-features = ["zmq"]
 
 [[example]]
-name = "debug_handshake_timing"
-required-features = ["zmq"]
-
-[[example]]
-name = "debug_rep_server"
-required-features = ["zmq"]
-
-[[example]]
 name = "endpoint_parsing"
 required-features = ["zmq"]
 
@@ -276,10 +248,6 @@ name = "poison_guard_demo"
 required-features = ["zmq"]
 
 [[example]]
-name = "pubsub_events_new"
-required-features = ["zmq"]
-
-[[example]]
 name = "reconnection_demo"
 required-features = ["zmq"]
 
@@ -323,9 +291,6 @@ required-features = ["zmq"]
 name = "socket_monitoring"
 required-features = ["zmq"]
 
-[[example]]
-name = "stream_sink_adapters"
-required-features = ["zmq"]
 
 [[example]]
 name = "tcp_and_ipc_demo"

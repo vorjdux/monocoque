@@ -287,7 +287,7 @@ and PAIR ignored the flag and issued one kernel write per send regardless. 0.4
 routes all of them through the same coalesce/vector/write path, so a batching
 DEALER caller finally gets the syscall amortization PUSH already had. For a
 1,000,000-message 64 B DEALER-to-ROUTER flow over TCP loopback (receiver-timed,
-`examples/dealer_throughput_probe.rs`):
+one-off probe harness):
 
 | DEALER send path | throughput |
 |---|---|
@@ -297,7 +297,7 @@ DEALER caller finally gets the syscall amortization PUSH already had. For a
 That is a ~38x improvement for batched DEALER workloads, and it is not
 measurement-sensitive: the win is a deterministic drop in write submissions. The
 same 20,000-message run under `strace` falls from 32,260 to 80 `io_uring_enter`
-calls once coalescing is honored (`examples/dealer_write_probe.rs`). The eager
+calls once coalescing is honored. The eager
 (one-write-per-send) DEALER path is unchanged; this is purely what a caller gains
 by opting into coalescing, which 0.3 did not deliver for these socket types.
 
@@ -537,10 +537,8 @@ let opts = SocketOptions::default().with_read_buffer_size(4096);
 let opts = SocketOptions::default().with_buffer_sizes(65_536, 65_536);
 ```
 
-`SocketOptions::small()` and `large()` are deprecated. Both set read buffers
-below the 32 KB default, so they are slower than leaving the default alone
-despite being named as optimizations. Reach for a smaller read buffer only to
-cut latency, never to "tune" throughput.
+Reach for a read buffer below the 32 KB default only to cut latency, never to
+"tune" throughput.
 
 **Rule of thumb:** set read buffer >= your 99th-percentile message size.
 

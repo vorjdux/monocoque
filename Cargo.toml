@@ -42,7 +42,8 @@ unused_async = "allow"
 # site and not the others.
 unused_async_trait_impl = "allow"
 # Wire-protocol and metrics math: casts are bounded by construction.
-cast_possible_truncation = "allow"
+# cast_possible_truncation is deliberately NOT allowed: every narrowing cast is
+# either a checked conversion or carries a per-site allow stating its bound.
 cast_sign_loss = "allow"
 cast_precision_loss = "allow"
 cast_possible_wrap = "allow"

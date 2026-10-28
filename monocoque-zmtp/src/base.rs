@@ -207,8 +207,8 @@ const MAX_MESSAGE_AGGREGATE_BYTES: usize = 256 * 1024 * 1024;
 
 pub fn append_zmtp_cmd_frame(buf: &mut BytesMut, body: &[u8]) {
     let len = body.len();
-    if len <= 255 {
-        buf.extend_from_slice(&[0x04, len as u8]);
+    if let Ok(short) = u8::try_from(len) {
+        buf.extend_from_slice(&[0x04, short]);
     } else {
         buf.extend_from_slice(&[0x06]);
         buf.extend_from_slice(&(len as u64).to_be_bytes());
@@ -528,7 +528,7 @@ where
             // Compute TTL to advertise: use heartbeat_ttl if set, else ivl
             let ttl_dur = self.options.heartbeat_ttl.unwrap_or(ivl);
             // ZMTP TTL is in tenths of a second, capped at u16::MAX
-            let ttl_tenths = (ttl_dur.as_millis() / 100).min(u128::from(u16::MAX)) as u16;
+            let ttl_tenths = u16::try_from(ttl_dur.as_millis() / 100).unwrap_or(u16::MAX);
 
             let ping = build_ping_frame(ttl_tenths);
             self.send_buffer.extend_from_slice(&ping);

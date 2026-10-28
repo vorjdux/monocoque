@@ -337,11 +337,10 @@ where
             .map_err(ZmtpError::from)?;
         r?;
         let raw_len = u64::from_be_bytes(len_buf);
-        if raw_len > usize::MAX as u64 {
+        usize::try_from(raw_len).map_err(|_| {
             warn!("ZMTP long-frame length overflows usize: {}", raw_len);
-            return Err(ZmtpError::Protocol);
-        }
-        raw_len as usize
+            ZmtpError::Protocol
+        })?
     } else {
         let BufResult(r, len_buf) = read_exact_with_timeout(stream, [0u8; 1], timeout)
             .await
@@ -374,17 +373,10 @@ where
     use compio_buf::BufResult;
     use monocoque_core::timeout::write_all_with_timeout;
 
-    let len = body.len();
-    let mut frame = BytesMut::with_capacity(if len <= 255 { 2 + len } else { 9 + len });
-    if len <= 255 {
-        frame.extend_from_slice(&[0x04, len as u8]);
-    } else {
-        frame.extend_from_slice(&[0x06]);
-        frame.extend_from_slice(&(len as u64).to_be_bytes());
-    }
-    frame.extend_from_slice(body);
+    let mut frame = BytesMut::with_capacity(9 + body.len());
+    crate::base::append_zmtp_cmd_frame(&mut frame, body);
 
-    let BufResult(r, _) = write_all_with_timeout(stream, frame.freeze().to_vec(), timeout)
+    let BufResult(r, _) = write_all_with_timeout(stream, frame, timeout)
         .await
         .map_err(ZmtpError::from)?;
     r.map_err(Into::into)
@@ -406,10 +398,15 @@ fn encode_zmtp_props(socket_type: &str, identity: Option<&[u8]>) -> Vec<u8> {
 
 #[inline]
 fn push_prop(out: &mut Vec<u8>, key: &[u8], value: &[u8]) {
-    debug_assert!(key.len() <= 255);
-    out.push(key.len() as u8);
+    // Keys are the fixed RFC 23 property names; values are a socket-type name or
+    // a routing identity, which the options layer caps at 255 bytes.
+    out.push(u8::try_from(key.len()).expect("ZMTP property name exceeds 255 bytes"));
     out.extend_from_slice(key);
-    out.extend_from_slice(&(value.len() as u32).to_be_bytes());
+    out.extend_from_slice(
+        &u32::try_from(value.len())
+            .expect("ZMTP property value exceeds u32")
+            .to_be_bytes(),
+    );
     out.extend_from_slice(value);
 }
 
@@ -1500,20 +1497,18 @@ where
 {
     use compio_buf::BufResult;
 
-    // Cap reason at 248 bytes: body = 6 ("\x05ERROR") + 1 (len byte) + reason ≤ 255 (short-frame limit)
+    // Cap reason at 248 bytes: body = 6 ("\x05ERROR") + 1 (len byte) + reason <= 255,
+    // so the frame always takes the short form.
     let reason_bytes = reason.as_bytes();
-    let reason_len = reason_bytes.len().min(248) as u8;
+    let reason_len = reason_bytes.len().min(248);
 
-    let mut body = BytesMut::with_capacity(7 + reason_len as usize);
+    let mut body = BytesMut::with_capacity(7 + reason_len);
     body.extend_from_slice(b"\x05ERROR");
-    body.extend_from_slice(&[reason_len]);
-    body.extend_from_slice(&reason_bytes[..reason_len as usize]);
-    // body.len() ≤ 255, so the short ZMTP frame format (0x04 + 1-byte length) is always valid.
+    body.extend_from_slice(&[u8::try_from(reason_len).unwrap_or(u8::MAX)]);
+    body.extend_from_slice(&reason_bytes[..reason_len]);
 
-    let body_len = body.len() as u8;
-    let mut frame = BytesMut::with_capacity(2 + body_len as usize);
-    frame.extend_from_slice(&[0x04, body_len]);
-    frame.extend_from_slice(&body);
+    let mut frame = BytesMut::with_capacity(2 + body.len());
+    crate::base::append_zmtp_cmd_frame(&mut frame, &body);
 
     let BufResult(_, _) = stream.write_all(frame.freeze()).await;
 }
@@ -1579,9 +1574,9 @@ mod tests {
         let reason_len = reason.len().min(248);
         let mut frame = Vec::with_capacity(2 + 7 + reason_len);
         frame.push(0x04);
-        frame.push((7 + reason_len) as u8);
+        frame.push(u8::try_from(7 + reason_len).unwrap());
         frame.extend_from_slice(b"\x05ERROR");
-        frame.push(reason_len as u8);
+        frame.push(u8::try_from(reason_len).unwrap());
         frame.extend_from_slice(&reason[..reason_len]);
         frame
     }

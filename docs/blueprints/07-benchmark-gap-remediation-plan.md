@@ -229,8 +229,7 @@ Fix 5 is deferred by request.
 
 Loopback, release build, **4-core cloud Xeon @ 2.8 GHz (shared/throttled)**,
 *not* the reference machine in `BENCHMARKS.md`, so treat these as relative, not
-absolute. Harness: `monocoque/examples/bench_changes.rs`
-(`cargo run --release --features zmq --example bench_changes`), best of 2 runs.
+absolute. One-off probe harness, best of 2 runs.
 
 **Fix 1: vectored vs copy (PUSH/PULL eager, one message per `send`):**
 

@@ -479,8 +479,6 @@ impl RepSocket<TcpStream> {
         Self::from_tcp_with_options(stream, SocketOptions::default()).await
     }
 
-    /// Create a new REP socket from a TCP stream with TCP_NODELAY and custom config.
-
     /// Create a new REP socket from a TCP stream with TCP_NODELAY and custom options.
     pub async fn from_tcp_with_options(
         stream: TcpStream,

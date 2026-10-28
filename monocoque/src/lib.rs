@@ -75,27 +75,11 @@
 //!
 //! ## Safety
 //!
-//! - `unsafe` code is isolated to the owned-buffer read helpers in
-//!   `monocoque-core/src/io.rs` and the raw-socket tuning in `tcp.rs`
-//! - All protocol and routing layers are 100% safe Rust
-//! - Formal invariants documented in `docs/blueprints/06-safety-model-and-unsafe-audit.md`
+//! This crate contains no `unsafe`. The few `unsafe` blocks in the workspace
+//! (owned-buffer reads, raw-fd socket tuning, the in-process stream adapter) are
+//! inventoried in the README's Safety section, each with a `SAFETY:` contract.
 
 #![warn(missing_docs)]
-#![warn(clippy::all)]
-// Allow some pedantic patterns
-#![allow(clippy::module_name_repetitions)]
-#![allow(clippy::must_use_candidate)]
-#![allow(clippy::needless_pass_by_value)]
-#![allow(clippy::future_not_send)] // Runtime-agnostic design
-#![allow(clippy::missing_errors_doc)] // Will add gradually
-#![allow(clippy::doc_markdown)] // Too many false positives
-#![allow(clippy::return_self_not_must_use)] // Builder patterns are obvious
-#![allow(clippy::missing_panics_doc)] // Most panics are unreachable
-#![allow(clippy::missing_const_for_fn)] // Not always an optimization
-#![allow(clippy::multiple_crate_versions)] // Transitive dependencies
-#![allow(clippy::doc_lazy_continuation)] // Doc formatting is intentional
-#![allow(clippy::manual_let_else)] // Match expressions sometimes clearer
-#![allow(clippy::empty_line_after_outer_attr)] // Spacing is intentional
 
 // Re-export core types
 pub use bytes::Bytes;

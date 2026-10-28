@@ -132,11 +132,6 @@ where
 
     /// Create a new REQ socket with custom socket options.
     ///
-    /// # Buffer Configuration
-    /// - Use `SocketOptions::small()` (4KB) for low-latency request/reply with small messages
-    /// - Use `SocketOptions::large()` (16KB) for high-throughput with large messages
-    /// - Use `SocketOptions::default()` (8KB) for balanced workloads
-    ///
     /// # Example
     /// ```rust,no_run
     /// # use monocoque_zmtp::req::ReqSocket;
@@ -144,7 +139,7 @@ where
     /// # use monocoque_core::rt::TcpStream;
     /// # async fn example() -> std::io::Result<()> {
     /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
-    /// let mut opts = SocketOptions::small(); // 4KB for low latency
+    /// let mut opts = SocketOptions::new();
     /// opts.req_correlate = true; // Enable request ID correlation
     /// let socket = ReqSocket::with_options(stream, opts).await?;
     /// # Ok(())
@@ -607,7 +602,7 @@ impl ReqSocket<TcpStream> {
     /// # use monocoque_core::rt::TcpStream;
     /// # async fn example() -> std::io::Result<()> {
     /// let stream = TcpStream::connect("127.0.0.1:5555").await?;
-    /// let mut opts = SocketOptions::small();
+    /// let mut opts = SocketOptions::new();
     /// opts.req_correlate = true; // Enable request ID correlation
     /// let socket = ReqSocket::from_tcp_with_options(stream, opts).await?;
     /// # Ok(())
