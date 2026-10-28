@@ -505,7 +505,7 @@ mod tests {
         let a = Bytes::from_static(b"a");
         assert_eq!(idx.subscribe(1, a.clone()), Subscribed::FirstForPrefix);
         assert_eq!(idx.subscribe(1, a.clone()), Subscribed::Repeated);
-        assert_eq!(idx.subscribe(2, a.clone()), Subscribed::FirstForPeer);
+        assert_eq!(idx.subscribe(2, a), Subscribed::FirstForPeer);
         assert_eq!(idx.unsubscribe(1, b"a"), Unsubscribed::Decremented);
         assert_eq!(idx.unsubscribe(1, b"a"), Unsubscribed::LastForPeer);
         assert_eq!(idx.unsubscribe(1, b"a"), Unsubscribed::NotSubscribed);

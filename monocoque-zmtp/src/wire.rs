@@ -255,19 +255,23 @@ impl Codec for ZmtpCodec {
     }
 
     fn encode(&mut self, msg: &Msg, out: &mut OutQueue) -> Result<()> {
+        self.encode_prefixed(&[], msg, out)
+    }
+
+    fn encode_prefixed(&mut self, prefix: &[Bytes], msg: &Msg, out: &mut OutQueue) -> Result<()> {
+        let n = prefix.len() + msg.len();
+        let frames = prefix.iter().map(FrameRef::Bytes).chain(msg.frame_refs());
         if let Some(cipher) = self.cipher.as_mut() {
-            let n = msg.len();
-            for (i, frame) in msg.frames().enumerate() {
+            for (i, frame) in frames.enumerate() {
                 let body = cipher
-                    .encrypt_frame(frame, i + 1 < n)
+                    .encrypt_frame(frame.as_slice(), i + 1 < n)
                     .map_err(|e| MonocoqueError::Protocol(e.to_string()))?;
                 put_header(out.buf(), FLAG_COMMAND, body.len());
                 out.buf().extend_from_slice(&body);
             }
             return Ok(());
         }
-        let n = msg.len();
-        for (i, frame) in msg.frame_refs().enumerate() {
+        for (i, frame) in frames.enumerate() {
             let flags = if i + 1 < n { FLAG_MORE } else { 0 };
             let body = frame.as_slice();
             put_header(out.buf(), flags, body.len());

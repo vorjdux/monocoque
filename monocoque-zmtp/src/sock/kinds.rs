@@ -47,8 +47,8 @@ impl FromOptions for Plain {
 
 impl<K: Kind> Socket<K> {
     async fn recv_fair(&mut self) -> Result<MsgRef<'_>> {
-        let (peer, msg) = self.next_any().await?;
-        Ok(self.store(peer, msg))
+        self.next_into_slot().await?;
+        Ok(self.lend())
     }
 }
 
@@ -226,11 +226,11 @@ impl Socket<Router> {
     /// Receive the next message, prefixed with its sender's identity frame.
     pub async fn recv(&mut self) -> Result<MsgRef<'_>> {
         loop {
-            let (peer, mut msg) = self.next_any().await?;
+            let peer = self.next_into_slot().await?;
             let identity = self.core.borrow().hooks().identity_of.get(&peer).cloned();
             if let Some(identity) = identity {
-                msg.push_front(identity);
-                return Ok(self.store(peer, msg));
+                self.slot_mut().push_front(identity);
+                return Ok(self.lend());
             }
         }
     }
@@ -317,13 +317,14 @@ impl Socket<Req> {
                 "REQ must receive a reply before sending again",
             ));
         }
-        let mut msg = msg.into();
-        msg.push_front(Bytes::new());
-        if correlate {
+        let msg = msg.into();
+        let peer = if correlate {
             self.ext.request_id = self.ext.request_id.wrapping_add(1);
-            msg.push_front(Bytes::copy_from_slice(&self.ext.request_id.to_be_bytes()));
-        }
-        let peer = self.send_lb(msg).await?;
+            let id = Bytes::copy_from_slice(&self.ext.request_id.to_be_bytes());
+            self.send_lb_prefixed(&[id, Bytes::new()], msg).await?
+        } else {
+            self.send_lb_prefixed(&[Bytes::new()], msg).await?
+        };
         self.ext.waiting_on = Some(peer);
         Ok(())
     }
@@ -337,22 +338,21 @@ impl Socket<Req> {
         };
         let correlate = self.core.borrow().options().req_correlate;
         loop {
-            let Some(mut msg) = self.next_from(peer).await? else {
+            if !self.next_from_into_slot(peer).await? {
                 self.ext.waiting_on = None;
                 return Err(MonocoqueError::PeerDisconnected(
                     "the REQ peer went away before replying".into(),
                 ));
-            };
-            if correlate {
-                let id = msg.pop_front();
-                if id.as_deref() != Some(&self.ext.request_id.to_be_bytes()[..]) {
-                    continue;
-                }
+            }
+            let request_id = self.ext.request_id.to_be_bytes();
+            let msg = self.slot_mut();
+            if correlate && msg.pop_front().as_deref() != Some(&request_id[..]) {
+                continue;
             }
             // A reply without its empty delimiter is malformed: drop it.
             if msg.pop_front().is_some_and(|d| d.is_empty()) {
                 self.ext.waiting_on = None;
-                return Ok(self.store(peer, msg));
+                return Ok(self.lend());
             }
         }
     }
@@ -384,11 +384,12 @@ impl Socket<Rep> {
             ));
         }
         loop {
-            let (peer, mut msg) = self.next_any().await?;
+            let peer = self.next_into_slot().await?;
             // Peel the routing envelope: every frame up to and including the
             // first empty one. A request without a delimiter is malformed.
             let mut envelope: SmallVec<[Bytes; 4]> = SmallVec::new();
             let mut found = false;
+            let msg = self.slot_mut();
             while let Some(frame) = msg.pop_front() {
                 let empty = frame.is_empty();
                 envelope.push(frame);
@@ -399,7 +400,7 @@ impl Socket<Rep> {
             }
             if found {
                 self.ext.pending = Some((peer, envelope));
-                return Ok(self.store(peer, msg));
+                return Ok(self.lend());
             }
         }
     }
@@ -417,11 +418,10 @@ impl Socket<Rep> {
                 "REP must receive a request before replying",
             ));
         };
-        let mut msg = msg.into();
-        for frame in envelope.into_iter().rev() {
-            msg.push_front(frame);
-        }
-        match self.send_to_waiting(peer, msg).await {
+        match self
+            .send_to_waiting_prefixed(peer, &envelope, msg.into())
+            .await
+        {
             Err(MonocoqueError::HostUnreachable) => Ok(()),
             other => other,
         }

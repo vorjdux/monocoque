@@ -67,6 +67,15 @@ pub trait Codec: 'static {
     /// Encode `msg` into `out`.
     fn encode(&mut self, msg: &Msg, out: &mut OutQueue) -> Result<()>;
 
+    /// Encode `prefix` frames followed by `msg`, as one message. Envelopes
+    /// (REQ's delimiter, REP's routing stack) go through here so the user's
+    /// message is never rebuilt to carry them.
+    fn encode_prefixed(&mut self, prefix: &[Bytes], msg: &Msg, out: &mut OutQueue) -> Result<()> {
+        let mut whole: Msg = prefix.iter().cloned().collect();
+        whole.extend((0..msg.len()).filter_map(|i| msg.frame_bytes(i)));
+        self.encode(&whole, out)
+    }
+
     /// `true` when this connection's encoding of a message does not depend on
     /// per-connection state, so a fan-out may encode once and share the bytes.
     fn shares_encoding(&self) -> bool {
@@ -1082,14 +1091,42 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         }
     }
 
+    /// Like [`poll_recv`](Self::poll_recv), writing the message straight into
+    /// `slot` so it is not moved through every layer of the calling future.
+    pub fn poll_recv_into(&mut self, cx: &mut Context<'_>, slot: &mut Msg) -> Poll<PeerId> {
+        loop {
+            self.progress();
+            if let Some((id, msg)) = self.take_ready() {
+                *slot = msg;
+                return Poll::Ready(id);
+            }
+            if self.park(cx) {
+                return Poll::Pending;
+            }
+        }
+    }
+
     /// Poll for the next message from `id` only. `Ready(None)` once that peer
     /// is gone and has nothing left.
     pub fn poll_recv_from(&mut self, cx: &mut Context<'_>, id: PeerId) -> Poll<Option<Msg>> {
+        let mut slot = Msg::new();
+        self.poll_recv_from_into(cx, id, &mut slot)
+            .map(|got| got.then_some(slot))
+    }
+
+    /// Like [`poll_recv_from`](Self::poll_recv_from), writing into `slot`.
+    /// `Ready(false)` once the peer is gone and has nothing left.
+    pub fn poll_recv_from_into(
+        &mut self,
+        cx: &mut Context<'_>,
+        id: PeerId,
+        slot: &mut Msg,
+    ) -> Poll<bool> {
         loop {
             self.progress();
             let i = id.index as usize;
             let Some(entry) = self.entry(id) else {
-                return Poll::Ready(None);
+                return Poll::Ready(false);
             };
             let (msg, empty, closed) = {
                 let mut st = entry.state.borrow_mut();
@@ -1098,7 +1135,8 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             };
             if let Some(msg) = msg {
                 if let Some(msg) = self.hooks.on_inbound(id, msg) {
-                    return Poll::Ready(Some(msg));
+                    *slot = msg;
+                    return Poll::Ready(true);
                 }
                 continue;
             }
@@ -1108,7 +1146,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
                 {
                     self.free_peer(id);
                 }
-                return Poll::Ready(None);
+                return Poll::Ready(false);
             }
             if self.park(cx) {
                 return Poll::Pending;
@@ -1145,11 +1183,22 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         cx: &mut Context<'_>,
         msg: &mut Option<Msg>,
     ) -> Poll<Result<PeerId>> {
+        self.poll_send_lb_prefixed(cx, &[], msg)
+    }
+
+    /// [`poll_send_lb`](Self::poll_send_lb) with `prefix` frames sent ahead
+    /// of the message (an envelope), without rebuilding the message.
+    pub fn poll_send_lb_prefixed(
+        &mut self,
+        cx: &mut Context<'_>,
+        prefix: &[Bytes],
+        msg: &mut Option<Msg>,
+    ) -> Poll<Result<PeerId>> {
         loop {
             self.progress();
             if let Some(id) = self.pick_writable() {
                 let m = msg.take().expect("polled after completion");
-                let result = self.enqueue_to(id, m);
+                let result = self.enqueue_to(id, prefix, m);
                 self.progress();
                 return Poll::Ready(result.map(|()| id));
             }
@@ -1178,11 +1227,11 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         None
     }
 
-    fn enqueue_to(&mut self, id: PeerId, msg: Msg) -> Result<()> {
+    fn enqueue_to(&mut self, id: PeerId, prefix: &[Bytes], msg: Msg) -> Result<()> {
         let Some(entry) = self.entry(id) else {
             return Err(MonocoqueError::HostUnreachable);
         };
-        entry.state.borrow_mut().enqueue_owned(msg)
+        entry.state.borrow_mut().enqueue_prefixed(prefix, msg)
     }
 
     /// Queue `msg` toward `id` without waiting.
@@ -1213,6 +1262,18 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         id: PeerId,
         msg: &mut Option<Msg>,
     ) -> Poll<Result<()>> {
+        self.poll_send_to_prefixed(cx, id, &[], msg)
+    }
+
+    /// [`poll_send_to`](Self::poll_send_to) with `prefix` frames ahead of
+    /// the message.
+    pub fn poll_send_to_prefixed(
+        &mut self,
+        cx: &mut Context<'_>,
+        id: PeerId,
+        prefix: &[Bytes],
+        msg: &mut Option<Msg>,
+    ) -> Poll<Result<()>> {
         loop {
             self.progress();
             let Some(entry) = self.entry(id) else {
@@ -1223,7 +1284,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             }
             if entry.state.borrow().writable() {
                 let m = msg.take().expect("polled after completion");
-                let result = entry.state.borrow_mut().enqueue_owned(m);
+                let result = entry.state.borrow_mut().enqueue_prefixed(prefix, m);
                 self.progress();
                 return Poll::Ready(result);
             }
@@ -1417,10 +1478,13 @@ where
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<T> {
         let this = &mut *self;
+        this.core.borrow().wakeups.enter();
         let result = (this.f)(&mut this.core.borrow_mut(), cx);
+        let core = this.core.borrow();
         if result.is_ready() {
-            this.core.borrow().wakeups.unpark_user();
+            core.wakeups.unpark_user();
         }
+        core.wakeups.exit();
         result
     }
 }

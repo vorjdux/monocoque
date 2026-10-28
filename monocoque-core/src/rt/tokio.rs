@@ -217,11 +217,28 @@ macro_rules! impl_shared_io {
             async fn read<B: IoBufMut>(&mut self, buf: B) -> BufResult<usize, B> {
                 let inner = &self.inner;
                 crate::io::fill_read(buf, async move |spare| {
+                    // Try first: under a ping-pong the bytes are usually
+                    // already there, and registering readiness is the
+                    // expensive part.
+                    let len = spare.len();
                     loop {
-                        inner.readable().await?;
                         let mut dst: &mut [std::mem::MaybeUninit<u8>] = &mut *spare;
                         match inner.try_read_buf(&mut dst) {
-                            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                                inner.readable().await?;
+                            }
+                            Ok(n) if n > 0 && n < len => {
+                                // A short read drained the socket. Clear the
+                                // cached readiness (a closure that reports
+                                // WouldBlock does exactly that, with no
+                                // syscall) so the next read waits for an
+                                // event instead of spending a recv on EAGAIN.
+                                // tokio's own poll_read does the same.
+                                let _ = inner.try_io(tokio::io::Interest::READABLE, || {
+                                    Err::<(), _>(io::ErrorKind::WouldBlock.into())
+                                });
+                                return Ok(n);
+                            }
                             other => return other,
                         }
                     }
@@ -233,11 +250,12 @@ macro_rules! impl_shared_io {
         impl AsyncWrite for &$ty {
             async fn write<B: IoBuf>(&mut self, buf: B) -> BufResult<usize, B> {
                 let result = loop {
-                    if let Err(e) = self.inner.writable().await {
-                        break Err(e);
-                    }
                     match self.inner.try_write(buf.as_init()) {
-                        Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                        Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                            if let Err(e) = self.inner.writable().await {
+                                break Err(e);
+                            }
+                        }
                         other => break other,
                     }
                 };
@@ -246,14 +264,15 @@ macro_rules! impl_shared_io {
 
             async fn write_vectored<B: IoVectoredBuf>(&mut self, buf: B) -> BufResult<usize, B> {
                 let result = loop {
-                    if let Err(e) = self.inner.writable().await {
-                        break Err(e);
-                    }
                     let attempt = crate::io::with_vectored_slices(&buf, |slices| {
                         self.inner.try_write_vectored(slices)
                     });
                     match attempt {
-                        Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                        Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                            if let Err(e) = self.inner.writable().await {
+                                break Err(e);
+                            }
+                        }
                         other => break other,
                     }
                 };

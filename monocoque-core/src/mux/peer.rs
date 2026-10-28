@@ -183,6 +183,37 @@ impl<C: Codec> PeerState<C> {
 
     /// Queue `msg` by value, avoiding the clone an inproc peer would need.
     pub(crate) fn enqueue_owned(&mut self, msg: Msg) -> crate::error::Result<()> {
+        self.enqueue_prefixed(&[], msg)
+    }
+
+    /// Queue `prefix` frames then `msg` as one message. A wire peer encodes
+    /// the prefix in place; an inproc peer gets it prepended.
+    pub(crate) fn enqueue_prefixed(
+        &mut self,
+        prefix: &[Bytes],
+        mut msg: Msg,
+    ) -> crate::error::Result<()> {
+        if let Outbound::Wire {
+            codec,
+            out,
+            writer_waker,
+            hold,
+        } = &mut self.outbound
+        {
+            if prefix.is_empty() {
+                codec.encode(&msg, out)?;
+            } else {
+                codec.encode_prefixed(prefix, &msg, out)?;
+            }
+            out.note_message();
+            if !*hold && let Some(w) = writer_waker.take() {
+                w.wake();
+            }
+            return Ok(());
+        }
+        for frame in prefix.iter().rev() {
+            msg.push_front(frame.clone());
+        }
         match &mut self.outbound {
             Outbound::Local(tx) => tx
                 .try_send(msg)

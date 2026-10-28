@@ -29,12 +29,55 @@ struct WakeState {
 }
 
 /// Wake routing shared by every child waker of one socket.
+///
+/// The two flags mirror state kept under the lock (`woken` non-empty, `user`
+/// set) so the hot paths that usually find nothing to do skip the lock. They
+/// are only written under the lock, which orders them with the state they
+/// describe.
 #[derive(Default)]
 pub struct Wakeups {
     state: Mutex<WakeState>,
+    pending: AtomicBool,
+    user_parked: AtomicBool,
+    active: AtomicBool,
 }
 
+// The guards here are held across the flag stores on purpose: a flag written
+// after the lock is released could be observed out of step with the state it
+// mirrors.
+#[allow(clippy::significant_drop_tightening)]
 impl Wakeups {
+    /// The user task is inside a socket operation, which drains woken
+    /// children itself before returning: wakeups only need queueing.
+    pub fn enter(&self) {
+        self.active.store(true, Ordering::Release);
+    }
+
+    /// The operation is returning. Anything still queued goes to the driver
+    /// unless the user parked for it.
+    pub fn exit(&self) {
+        self.active.store(false, Ordering::Release);
+        if !self.pending.load(Ordering::Acquire) {
+            return;
+        }
+        // A wakeup raised after the operation's last drain (possibly from
+        // another thread's reactor) was only queued; deliver it now.
+        let target = {
+            let mut s = self.lock();
+            if s.woken.is_empty() {
+                return;
+            }
+            let user = s.user.take();
+            if user.is_some() {
+                self.user_parked.store(false, Ordering::Release);
+            }
+            user.or_else(|| s.driver.clone())
+        };
+        if let Some(w) = target {
+            w.wake();
+        }
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, WakeState> {
         // A panic while holding this lock leaves only a list of indices behind;
         // recovering it is always sound.
@@ -50,13 +93,18 @@ impl Wakeups {
             Some(w) if w.will_wake(waker) => {}
             _ => s.user = Some(waker.clone()),
         }
+        self.user_parked.store(true, Ordering::Release);
     }
 
     /// The user task is no longer parked; wakeups go to the driver again.
     pub fn unpark_user(&self) {
+        if !self.user_parked.load(Ordering::Acquire) && !self.pending.load(Ordering::Acquire) {
+            return;
+        }
         let pending = {
             let mut s = self.lock();
             s.user = None;
+            self.user_parked.store(false, Ordering::Release);
             !s.woken.is_empty()
         };
         // Work queued for a user who has since left must not be stranded.
@@ -90,7 +138,14 @@ impl Wakeups {
     /// Wake the parked user task, if any. Used when the driver produced
     /// something a parked user is waiting for.
     pub fn wake_user(&self) {
-        let w = self.lock().user.take();
+        if !self.user_parked.load(Ordering::Acquire) {
+            return;
+        }
+        let w = {
+            let mut s = self.lock();
+            self.user_parked.store(false, Ordering::Release);
+            s.user.take()
+        };
         if let Some(w) = w {
             w.wake();
         }
@@ -100,7 +155,15 @@ impl Wakeups {
         let target = {
             let mut s = self.lock();
             s.woken.push(id);
-            s.user.take().or_else(|| s.driver.clone())
+            self.pending.store(true, Ordering::Release);
+            if self.active.load(Ordering::Acquire) {
+                return;
+            }
+            let user = s.user.take();
+            if user.is_some() {
+                self.user_parked.store(false, Ordering::Release);
+            }
+            user.or_else(|| s.driver.clone())
         };
         if let Some(w) = target {
             w.wake();
@@ -108,12 +171,17 @@ impl Wakeups {
     }
 
     fn take_woken(&self, out: &mut Vec<ChildId>) {
-        std::mem::swap(&mut self.lock().woken, out);
+        if !self.pending.load(Ordering::Acquire) {
+            return;
+        }
+        let mut s = self.lock();
+        std::mem::swap(&mut s.woken, out);
+        self.pending.store(false, Ordering::Release);
     }
 
     /// `true` if some child has woken and not been polled yet.
     pub fn has_woken(&self) -> bool {
-        !self.lock().woken.is_empty()
+        self.pending.load(Ordering::Acquire)
     }
 }
 

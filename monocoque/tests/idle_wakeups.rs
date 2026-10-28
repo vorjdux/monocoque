@@ -3,9 +3,12 @@
 //! An established connection with no traffic and no heartbeat configured must
 //! leave every thread of the process blocked in the kernel. A polling loop, a
 //! per-operation timer, or a background task that spins shows up as context
-//! switches, so the gate counts them: it sums `voluntary_ctxt_switches` and
-//! `nonvoluntary_ctxt_switches` over every thread in `/proc/self/task` across a
-//! fixed idle window, with a `recv()` parked on every receive-capable socket.
+//! switches, so the gate counts them: it sums `voluntary_ctxt_switches` over
+//! every thread in `/proc/self/task` across a fixed idle window, with a
+//! `recv()` parked on every receive-capable socket. A thread that wakes to poll
+//! and blocks again switches voluntarily; nonvoluntary switches are preemption
+//! by other load on the machine and say nothing about the socket, so they are
+//! left out.
 //!
 //! The window is armed with one runtime timer, so the measuring thread itself
 //! blocks and wakes once; the budget allows a handful of switches for that and
@@ -41,10 +44,7 @@ fn process_context_switches() -> Option<u64> {
     for task in std::fs::read_dir("/proc/self/task").ok()? {
         let status = std::fs::read_to_string(task.ok()?.path().join("status")).ok()?;
         for line in status.lines() {
-            if let Some(rest) = line
-                .strip_prefix("voluntary_ctxt_switches:")
-                .or_else(|| line.strip_prefix("nonvoluntary_ctxt_switches:"))
-            {
+            if let Some(rest) = line.strip_prefix("voluntary_ctxt_switches:") {
                 total += rest.trim().parse::<u64>().ok()?;
             }
         }

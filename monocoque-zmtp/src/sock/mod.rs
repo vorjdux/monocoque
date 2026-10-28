@@ -230,38 +230,78 @@ impl<K: Kind> Socket<K> {
     }
 
     /// Next message from any peer, fair-queued, honoring `recv_timeout`.
-    pub(crate) async fn next_any(&mut self) -> Result<(PeerId, Msg)> {
+    pub(crate) async fn next_into_slot(&mut self) -> Result<PeerId> {
         let timeout = self.recv_timeout();
-        with_timeout(op(&self.core, SocketCore::poll_recv), timeout).await
-    }
-
-    /// Next message from `peer` only. `Ok(None)` once that peer is gone.
-    pub(crate) async fn next_from(&mut self, peer: PeerId) -> Result<Option<Msg>> {
-        let timeout = self.recv_timeout();
-        with_timeout(
-            op(&self.core, move |c, cx| c.poll_recv_from(cx, peer)),
+        let slot = &mut self.slot;
+        let peer = with_timeout(
+            op(&self.core, move |c, cx| c.poll_recv_into(cx, slot)),
             timeout,
         )
-        .await
+        .await?;
+        self.slot_peer = Some(peer);
+        Ok(peer)
+    }
+
+    /// The receive slot, filled by `next_into_slot`.
+    pub(crate) const fn slot_mut(&mut self) -> &mut Msg {
+        &mut self.slot
+    }
+
+    /// Lend out the receive slot.
+    pub(crate) fn lend(&mut self) -> MsgRef<'_> {
+        MsgRef::new(&mut self.slot)
+    }
+
+    /// Next message from `peer` only, into the receive slot. `Ok(false)` once
+    /// that peer is gone.
+    pub(crate) async fn next_from_into_slot(&mut self, peer: PeerId) -> Result<bool> {
+        let timeout = self.recv_timeout();
+        let slot = &mut self.slot;
+        let got = with_timeout(
+            op(&self.core, move |c, cx| {
+                c.poll_recv_from_into(cx, peer, slot)
+            }),
+            timeout,
+        )
+        .await?;
+        if got {
+            self.slot_peer = Some(peer);
+        }
+        Ok(got)
     }
 
     /// Send to the next peer with room, waiting while none has.
     pub(crate) async fn send_lb(&mut self, msg: Msg) -> Result<PeerId> {
+        self.send_lb_prefixed(&[], msg).await
+    }
+
+    /// Like `send_lb`, with envelope frames ahead of the message.
+    pub(crate) async fn send_lb_prefixed(&mut self, prefix: &[Bytes], msg: Msg) -> Result<PeerId> {
         let timeout = self.send_timeout();
         let mut slot = Some(msg);
         with_timeout(
-            op(&self.core, move |c, cx| c.poll_send_lb(cx, &mut slot)),
+            op(&self.core, move |c, cx| {
+                c.poll_send_lb_prefixed(cx, prefix, &mut slot)
+            }),
             timeout,
         )
         .await?
     }
 
-    /// Send to `peer`, waiting while it is at its HWM.
-    pub(crate) async fn send_to_waiting(&mut self, peer: PeerId, msg: Msg) -> Result<()> {
+    /// Send to `peer` with envelope frames ahead of the message, waiting
+    /// while it is at its HWM.
+    pub(crate) async fn send_to_waiting_prefixed(
+        &mut self,
+        peer: PeerId,
+        prefix: &[Bytes],
+        msg: Msg,
+    ) -> Result<()> {
         let timeout = self.send_timeout();
         let mut slot = Some(msg);
         with_timeout(
-            op(&self.core, move |c, cx| c.poll_send_to(cx, peer, &mut slot)),
+            op(&self.core, move |c, cx| {
+                c.poll_send_to_prefixed(cx, peer, prefix, &mut slot)
+            }),
             timeout,
         )
         .await?
@@ -270,13 +310,6 @@ impl<K: Kind> Socket<K> {
     /// Queue to `peer` without waiting.
     pub(crate) fn send_to_now(&mut self, peer: PeerId, msg: Msg) -> SendTo {
         self.core.borrow_mut().send_to(peer, msg)
-    }
-
-    /// Keep `msg` (from `peer`) in the receive slot and lend it out.
-    pub(crate) fn store(&mut self, peer: PeerId, msg: Msg) -> MsgRef<'_> {
-        self.slot = msg;
-        self.slot_peer = Some(peer);
-        MsgRef::new(&mut self.slot)
     }
 }
 

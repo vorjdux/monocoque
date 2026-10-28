@@ -138,9 +138,7 @@ impl Msg {
     /// Append a frame.
     pub fn push(&mut self, frame: impl Into<Bytes>) {
         let frame = frame.into();
-        if let FrameStore::Multi(v) = &mut self.frames
-            && !v.is_empty()
-        {
+        if let FrameStore::Multi(v) = &mut self.frames {
             v.push(frame);
             return;
         }
@@ -156,6 +154,10 @@ impl Msg {
             self.frames = FrameStore::Single(frame);
             return;
         }
+        if let FrameStore::Multi(v) = &mut self.frames {
+            v.insert(0, frame);
+            return;
+        }
         let mut v = self.take_vec();
         v.insert(0, frame);
         self.set_vec(v);
@@ -166,10 +168,27 @@ impl Msg {
         if self.is_empty() {
             return None;
         }
-        let mut v = self.take_vec();
-        let first = v.remove(0);
-        self.set_vec(v);
-        Some(first)
+        match &mut self.frames {
+            FrameStore::Multi(v) if v.len() > 2 => Some(v.remove(0)),
+            FrameStore::Multi(v) if v.len() == 2 => {
+                let second = v.pop().expect("len checked");
+                let first = v.pop().expect("len checked");
+                self.frames = FrameStore::Single(second);
+                Some(first)
+            }
+            FrameStore::Single(_) => {
+                match std::mem::replace(&mut self.frames, FrameStore::Multi(SmallVec::new())) {
+                    FrameStore::Single(b) => Some(b),
+                    _ => unreachable!("matched Single"),
+                }
+            }
+            _ => {
+                let mut v = self.take_vec();
+                let first = v.remove(0);
+                self.set_vec(v);
+                Some(first)
+            }
+        }
     }
 
     /// Store `v` in the cheapest shape that holds it.
