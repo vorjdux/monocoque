@@ -28,7 +28,13 @@ The [documentation index](docs/README.md) links the guides for each area, and
 
 ## Getting set up
 
-You need a Rust toolchain at 1.95 or newer, which is the MSRV.
+You need a Rust toolchain at 1.95 or newer, which is the MSRV. The repository's
+`rust-toolchain.toml` pins local builds to 1.98, the same toolchain CI runs clippy
+on (`CLIPPY_TOOLCHAIN` in `.github/workflows/ci.yml`). Clippy is pinned so a new
+Rust release cannot turn the lint job red without a code change, and the toolchain
+file keeps your local clippy output identical to CI's. The two pins move together.
+The other CI jobs override the file with `RUSTUP_TOOLCHAIN` and run on stable,
+beta, nightly or 1.95 as their purpose requires.
 
 ```
 git clone https://github.com/vorjdux/monocoque
@@ -95,7 +101,7 @@ The quick local check before pushing is fmt, clippy, and test.
 
 A few invariants hold the design together. Please keep to them, or open an issue if you think one should change.
 
-- Unsafe code is isolated to the allocator module in `monocoque-core`. Everything above it is safe Rust. Do not add `unsafe` elsewhere without a strong reason and a comment explaining why it is sound.
+- `unsafe` is limited to the places listed in the README's Safety section, which is the one authoritative inventory. Do not add `unsafe` elsewhere without a strong reason and a `SAFETY:` comment explaining why it is sound, and update that inventory in the same change.
 - The protocol codec is sans-io. The framing and greeting code parse bytes and produce frames without doing any I/O. Keep protocol logic and I/O separate, since that is what lets the core support more protocols later.
 - The public API lives only in `monocoque`. Keep `monocoque-core` and `monocoque-zmtp` internal.
 - Wire compatibility is the point of the project. Any change to protocol code must keep the libzmq interop tests passing. If you touch framing, run the interop suite before and after.

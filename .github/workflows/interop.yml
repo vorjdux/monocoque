@@ -15,6 +15,8 @@ env:
 jobs:
   interop-rust:
     name: Rust interop tests (monocoque - libzmq)
+    env:
+      RUSTUP_TOOLCHAIN: stable
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -42,6 +44,8 @@ jobs:
 
   interop-python:
     name: Python interop tests (pyzmq - monocoque)
+    env:
+      RUSTUP_TOOLCHAIN: stable
     runs-on: ubuntu-latest
     permissions:
       contents: read

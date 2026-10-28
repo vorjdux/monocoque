@@ -25,12 +25,17 @@ env:
   # `allow` when monocoque is built as a dependency, so a pin costs no
   # user-facing signal. Real compiler breakage is caught by the test job (latest
   # stable) and the non-gating `future-toolchain` job (beta) below. Bump this
-  # deliberately when `future-toolchain` reports new lints.
+  # deliberately when `future-toolchain` reports new lints, together with the
+  # channel in rust-toolchain.toml (the clippy job relies on the two matching).
   CLIPPY_TOOLCHAIN: "1.98"
 
 jobs:
   test:
     name: Test (${{ matrix.backend.name }})
+    # Overrides rust-toolchain.toml (the local-dev pin) so this leg runs on the
+    # toolchain it installs below. Every non-clippy job does the same.
+    env:
+      RUSTUP_TOOLCHAIN: stable
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -80,6 +85,8 @@ jobs:
 
   fmt:
     name: Rustfmt
+    env:
+      RUSTUP_TOOLCHAIN: stable
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -94,6 +101,8 @@ jobs:
 
   msrv:
     name: MSRV (${{ matrix.leg.name }})
+    env:
+      RUSTUP_TOOLCHAIN: ${{ matrix.leg.toolchain }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -122,6 +131,8 @@ jobs:
 
   docs:
     name: Docs
+    env:
+      RUSTUP_TOOLCHAIN: stable
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -138,6 +149,8 @@ jobs:
 
   audit:
     name: Security Audit (cargo audit)
+    env:
+      RUSTUP_TOOLCHAIN: stable
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -156,6 +169,8 @@ jobs:
 
   deny:
     name: Supply chain (cargo deny)
+    env:
+      RUSTUP_TOOLCHAIN: stable
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -173,6 +188,8 @@ jobs:
 
   future-toolchain:
     name: Future toolchain (beta, non-gating)
+    env:
+      RUSTUP_TOOLCHAIN: beta
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -204,6 +221,8 @@ jobs:
 
   coverage:
     name: Coverage (llvm-cov, non-gating)
+    env:
+      RUSTUP_TOOLCHAIN: stable
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -223,6 +242,8 @@ jobs:
 
   fuzz-build:
     name: Fuzz Targets (build only)
+    env:
+      RUSTUP_TOOLCHAIN: nightly
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -239,6 +260,8 @@ jobs:
 
   miri:
     name: Miri (unsafe buffer/codec bookkeeping)
+    env:
+      RUSTUP_TOOLCHAIN: nightly
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -260,6 +283,8 @@ jobs:
 
   loom:
     name: Loom (publisher atomic orderings)
+    env:
+      RUSTUP_TOOLCHAIN: stable
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -278,6 +303,8 @@ jobs:
 
   fuzz-run:
     name: Fuzz Targets (run)
+    env:
+      RUSTUP_TOOLCHAIN: nightly
     permissions:
       contents: read
     # Timed run, too slow for every PR: nightly schedule + manual dispatch only.
@@ -305,6 +332,8 @@ jobs:
 
   tsan:
     name: ThreadSanitizer (core handoffs)
+    env:
+      RUSTUP_TOOLCHAIN: nightly
     permissions:
       contents: read
     # Rebuilds std with -Zbuild-std; scheduled + manual dispatch only.

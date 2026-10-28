@@ -213,13 +213,13 @@ cargo run --example runtime_backends --no-default-features --features runtime-sm
 
 ## Safety
 
-`unsafe` is confined to a handful of small, well-contained spots, each behind a documented contract:
+This section is the single inventory of `unsafe` in the workspace; `CONTRIBUTING.md` and the crate docs point here rather than restating it. Every block carries a `SAFETY:` comment stating its contract. There are three kinds:
 
-- `monocoque-core/src/io.rs` - the owned-buffer read helpers shared by every backend. `fill_read` owns the workspace's single `set_buf_init` call (declaring how many bytes a read initialized in a buffer's spare capacity), and `take_read_buffer` hands out read-sized slabs from a reused `BytesMut`. The socket read paths call `take_read_buffer` in documented `unsafe` blocks.
-- `monocoque-core/src/tcp.rs` (and a few socket-tuning call sites) - TCP socket tuning (nodelay, keepalive) through the raw socket handle.
-- `monocoque-zmtp/src/inproc_stream.rs` - the in-process stream adapter that fills an owned buffer.
+- **Owned-buffer reads.** `monocoque-core/src/io.rs` defines them: `fill_read` owns the workspace's single `set_buf_init` call (declaring how many bytes a read initialized in a buffer's spare capacity), and `take_read_buffer` hands out read-sized slabs from a reused `BytesMut`. The ZMTP socket read paths call `take_read_buffer` inside `unsafe` blocks.
+- **Raw-fd socket tuning.** `monocoque-core/src/tcp.rs`, plus the socket-buffer tuning sites in the ZMTP PUSH, PUB, XPUB and XSUB sockets, borrow the stream's raw fd as a `socket2::Socket` to set options (nodelay, keepalive, buffer sizes) and never close it.
+- **The in-process stream adapter** in `monocoque-zmtp/src/inproc_stream.rs`, which fills an owned buffer across an await.
 
-Everything else is safe Rust.
+Everything else is safe Rust. `monocoque-core` denies `unsafe_code` at the crate root and opts back in per module, so a new `unsafe` block outside `io.rs` and `tcp.rs` fails to compile there.
 
 Memory invariants:
 - Buffers are never reused while referenced (tracked via `Bytes` refcounts)
@@ -242,16 +242,6 @@ cargo bench --no-default-features --features runtime-smol,zmq
 ```
 
 Interop testing against libzmq: see [docs/INTEROP_TESTING.md](docs/INTEROP_TESTING.md).
-
-## Roadmap
-
-Core features are complete. Possible future work:
-
-- io_uring fixed buffers (`IORING_OP_READ_FIXED`) - removes the last kernel-boundary copy per read; ~5-15% latency improvement at an already low baseline. (Large *writes* already use vectored `writev`.)
-- Prefix trie for topic matching - the publisher-side prefilter and per-subscriber matching use a linear prefix scan, which is fast for the handful of distinct prefixes a PUB typically holds; a trie would only help when a single PUB accumulates 100+ *distinct* subscription prefixes or deep hierarchies
-- Per-subscriber concurrent writes - PUB fan-out throughput now exceeds libzmq and is sharded across worker threads (each write has a fault-isolation timeout), but writes *within* a worker are sequential, so one slow subscriber can still delay the others on its worker
-
-Long term: high-performance RPC, additional transports (QUIC, shared memory), custom protocol framework.
 
 ## License
 
