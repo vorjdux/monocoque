@@ -317,8 +317,8 @@ pub use unix::{UnixListener, UnixStream};
 #[cfg(unix)]
 mod unix {
     use super::{
-        AsyncRead, AsyncWrite, BufResult, IoBuf, IoBufMut, Pin, TokioAsyncWrite, io, poll_fn,
-        read_into, write_from,
+        AsyncRead, AsyncWrite, BufResult, IoBuf, IoBufMut, IoVectoredBuf, Pin, TokioAsyncWrite, io,
+        poll_fn, read_into, write_from, write_vectored_from,
     };
     use std::os::unix::io::AsRawFd;
     use std::path::Path;
@@ -387,6 +387,13 @@ mod unix {
             write_from(&mut self.inner, buf).await
         }
 
+        // Without this override compio-io's default writes one iovec per call,
+        // so a multi-frame send over IPC degraded to one syscall per header and
+        // body while TCP took a single writev.
+        async fn write_vectored<B: IoVectoredBuf>(&mut self, buf: B) -> BufResult<usize, B> {
+            write_vectored_from(&mut self.inner, buf).await
+        }
+
         async fn flush(&mut self) -> io::Result<()> {
             poll_fn(|cx| Pin::new(&mut self.inner).poll_flush(cx)).await
         }
@@ -399,6 +406,25 @@ mod unix {
     impl AsRawFd for UnixStream {
         fn as_raw_fd(&self) -> std::os::unix::io::RawFd {
             self.inner.as_raw_fd()
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{AsyncWrite, UnixStream};
+
+        // compio-io's default write_vectored writes only the first non-empty
+        // buffer per call. One call returning the full length proves the
+        // override issues a single writev across every iovec.
+        #[test]
+        fn unix_write_vectored_is_one_writev() {
+            crate::rt::LocalRuntime::new().unwrap().block_on(async {
+                let (a, _b) = tokio::net::UnixStream::pair().unwrap();
+                let mut a = UnixStream { inner: a };
+                let bufs = [vec![1u8; 10], vec![2u8; 20], vec![3u8; 30]];
+                let compio_buf::BufResult(n, _) = a.write_vectored(bufs).await;
+                assert_eq!(n.unwrap(), 60);
+            });
         }
     }
 }
