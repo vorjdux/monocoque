@@ -941,3 +941,7 @@ pub type SubSocket = Socket<Sub>;
 pub type XPubSocket = Socket<XPub>;
 /// XSUB socket.
 pub type XSubSocket = Socket<XSub>;
+
+#[cfg(feature = "draft")]
+#[path = "draft.rs"]
+pub mod draft;

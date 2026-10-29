@@ -423,6 +423,9 @@ runtime-smol = [
 
 # Protocol implementations (opt-in)
 zmq = ["dep:monocoque-zmtp", "dep:flume"]
+# The draft ZeroMQ socket types (CLIENT/SERVER, RADIO/DISH, SCATTER/GATHER,
+# CHANNEL), whose API libzmq may still change.
+draft = ["zmq", "monocoque-zmtp/draft"]
 
 # Future protocols
 # mqtt = ["dep:monocoque-mqtt"]

@@ -176,7 +176,7 @@ where
     if first[0] != 0xFF {
         // ZMTP 1.0 opens with its identity frame; a short one has a one-byte
         // length that counts the flags byte.
-        refuse_legacy(mechanism, options)?;
+        refuse_legacy(mechanism, options, local_socket_type)?;
         let len = usize::from(first[0]);
         if len == 0 {
             return Err(ZmtpError::Protocol);
@@ -188,7 +188,7 @@ where
     if sig[8] & 1 == 0 {
         // ZMTP 1.0 with a long identity frame: 0xFF, an 8-byte length that
         // counts the flags byte, then the flags byte just read.
-        refuse_legacy(mechanism, options)?;
+        refuse_legacy(mechanism, options, local_socket_type)?;
         let len = u64::from_be_bytes(sig[..8].try_into().expect("8 bytes"));
         let len = usize::try_from(len)
             .ok()
@@ -206,7 +206,7 @@ where
     .await?;
     let revision = recv(stream, 1, timeout, "greeting version").await?[0];
     if revision < 3 {
-        refuse_legacy(mechanism, options)?;
+        refuse_legacy(mechanism, options, local_socket_type)?;
         let framing = if revision == 0 {
             Framing::V1
         } else {
@@ -676,9 +676,14 @@ where
 
 /// ZMTP 1.0 and 2.0 carry no security handshake, so a peer that offers one
 /// must not be able to talk a secured socket down to it. NULL with a ZAP
-/// domain would also skip authentication, so it refuses them too.
-fn refuse_legacy(mechanism: SecurityMechanism, options: &SocketOptions) -> Result<(), ZmtpError> {
-    if mechanism != SecurityMechanism::Null || !options.zap_domain.is_empty() {
+/// domain would also skip authentication, so it refuses them too, and the
+/// draft socket types do not exist before ZMTP 3.1.
+fn refuse_legacy(
+    mechanism: SecurityMechanism,
+    options: &SocketOptions,
+    local: SocketType,
+) -> Result<(), ZmtpError> {
+    if mechanism != SecurityMechanism::Null || !options.zap_domain.is_empty() || local.is_draft() {
         warn!(
             "[HANDSHAKE] refusing a ZMTP 1.0/2.0 peer: mechanism {:?}, zap domain {:?}",
             mechanism, options.zap_domain
@@ -699,6 +704,14 @@ const fn assumed_peer(local: SocketType) -> SocketType {
         SocketType::Sub | SocketType::Xsub => SocketType::Pub,
         SocketType::Push => SocketType::Pull,
         SocketType::Pull => SocketType::Push,
+        // Refused before the greeting gets this far.
+        SocketType::Server
+        | SocketType::Client
+        | SocketType::Radio
+        | SocketType::Dish
+        | SocketType::Scatter
+        | SocketType::Gather
+        | SocketType::Channel => local,
     }
 }
 
@@ -716,6 +729,14 @@ const fn legacy_type_number(t: SocketType) -> u8 {
         SocketType::Push => 8,
         SocketType::Xpub => 9,
         SocketType::Xsub => 10,
+        // Refused before the greeting gets this far.
+        SocketType::Server
+        | SocketType::Client
+        | SocketType::Radio
+        | SocketType::Dish
+        | SocketType::Scatter
+        | SocketType::Gather
+        | SocketType::Channel => u8::MAX,
     }
 }
 
@@ -1009,26 +1030,13 @@ pub fn parse_ready_metadata(body: &Bytes) -> Result<ReadyMetadata, ZmtpError> {
 
 /// Parse socket type from bytes
 fn parse_socket_type(value: &[u8]) -> Result<SocketType, ZmtpError> {
-    match value {
-        b"PAIR" => Ok(SocketType::Pair),
-        b"DEALER" => Ok(SocketType::Dealer),
-        b"ROUTER" => Ok(SocketType::Router),
-        b"PUB" => Ok(SocketType::Pub),
-        b"SUB" => Ok(SocketType::Sub),
-        b"XPUB" => Ok(SocketType::Xpub),
-        b"XSUB" => Ok(SocketType::Xsub),
-        b"REQ" => Ok(SocketType::Req),
-        b"REP" => Ok(SocketType::Rep),
-        b"PUSH" => Ok(SocketType::Push),
-        b"PULL" => Ok(SocketType::Pull),
-        _ => {
-            warn!(
-                "[HANDSHAKE] ZMTP READY parse: unknown Socket-Type value {:?}",
-                String::from_utf8_lossy(value)
-            );
-            Err(ZmtpError::Protocol)
-        }
-    }
+    SocketType::from_name(value).ok_or_else(|| {
+        warn!(
+            "[HANDSHAKE] ZMTP READY parse: unknown Socket-Type value {:?}",
+            String::from_utf8_lossy(value)
+        );
+        ZmtpError::Protocol
+    })
 }
 
 /// Reject socket-type pairings that ZMQ does not allow (e.g. PUB with REQ).
@@ -1037,10 +1045,20 @@ fn parse_socket_type(value: &[u8]) -> Result<SocketType, ZmtpError> {
 /// mismatched peer completes the handshake and then silently misbehaves. The
 /// rules mirror libzmq: each type lists the peer types it may talk to.
 fn check_socket_type_compatibility(local: SocketType, peer: SocketType) -> Result<(), ZmtpError> {
-    use SocketType::{Dealer, Pair, Pub, Pull, Push, Rep, Req, Router, Sub, Xpub, Xsub};
+    use SocketType::{
+        Channel, Client, Dealer, Dish, Gather, Pair, Pub, Pull, Push, Radio, Rep, Req, Router,
+        Scatter, Server, Sub, Xpub, Xsub,
+    };
 
     let compatible_peers: &[SocketType] = match local {
         Pair => &[Pair],
+        Server => &[Client],
+        Client => &[Server],
+        Radio => &[Dish],
+        Dish => &[Radio],
+        Scatter => &[Gather],
+        Gather => &[Scatter],
+        Channel => &[Channel],
         Pub | Xpub => &[Sub, Xsub],
         Sub | Xsub => &[Pub, Xpub],
         Req => &[Rep, Router],

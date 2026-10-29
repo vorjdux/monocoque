@@ -27,6 +27,8 @@ runtime-compio = ["dep:compio", "monocoque-core/runtime-compio"]
 runtime-tokio = ["dep:tokio", "monocoque-core/runtime-tokio"]
 # Drive the same socket stack on smol instead.
 runtime-smol = ["dep:smol", "monocoque-core/runtime-smol"]
+# The draft socket types: CLIENT/SERVER, RADIO/DISH, SCATTER/GATHER, CHANNEL.
+draft = []
 
 [dependencies]
 bytes.workspace = true

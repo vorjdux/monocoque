@@ -152,19 +152,5 @@ pub fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), 
 }
 
 fn parse_socket_type(bytes: &[u8]) -> Result<SocketType, ZmtpError> {
-    let value = std::str::from_utf8(bytes).map_err(|_| ZmtpError::Protocol)?;
-    match value {
-        "PAIR" => Ok(SocketType::Pair),
-        "DEALER" => Ok(SocketType::Dealer),
-        "ROUTER" => Ok(SocketType::Router),
-        "PUB" => Ok(SocketType::Pub),
-        "SUB" => Ok(SocketType::Sub),
-        "REQ" => Ok(SocketType::Req),
-        "REP" => Ok(SocketType::Rep),
-        "PUSH" => Ok(SocketType::Push),
-        "PULL" => Ok(SocketType::Pull),
-        "XPUB" => Ok(SocketType::Xpub),
-        "XSUB" => Ok(SocketType::Xsub),
-        _ => Err(ZmtpError::Protocol),
-    }
+    SocketType::from_name(bytes).ok_or(ZmtpError::Protocol)
 }

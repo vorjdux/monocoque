@@ -43,6 +43,8 @@ const SUBSCRIBE: &[u8] = b"\x09SUBSCRIBE";
 const CANCEL: &[u8] = b"\x06CANCEL";
 const ERROR: &[u8] = b"\x05ERROR";
 const CURVE_MESSAGE: &[u8] = b"\x07MESSAGE";
+const JOIN: &[u8] = b"\x04JOIN";
+const LEAVE: &[u8] = b"\x05LEAVE";
 
 /// Per-socket ZMTP configuration.
 #[derive(Clone, Copy, Debug)]
@@ -87,6 +89,9 @@ pub struct ZmtpCodec {
     peer_ttl: Option<Duration>,
     framing: Framing,
     subscribe_all: bool,
+    dish: bool,
+    /// ZMTP 1.0 framing or DISH commands: anything but the plain path.
+    unusual_encode: bool,
 }
 
 impl ZmtpCodec {
@@ -102,6 +107,8 @@ impl ZmtpCodec {
             peer_ttl: None,
             framing: Framing::V3,
             subscribe_all: false,
+            dish: false,
+            unusual_encode: false,
         }
     }
 
@@ -112,7 +119,29 @@ impl ZmtpCodec {
     pub fn with_framing(mut self, framing: Framing, publisher: bool) -> Self {
         self.framing = framing;
         self.subscribe_all = publisher && framing == Framing::V1;
+        self.unusual_encode = self.dish || framing == Framing::V1;
         self
+    }
+
+    /// Encode for a DISH socket: everything it sends is a group change,
+    /// which goes out as a JOIN or LEAVE command.
+    #[must_use]
+    pub fn for_dish(mut self) -> Self {
+        self.dish = true;
+        self.unusual_encode = true;
+        self
+    }
+
+    /// `\x01group` becomes JOIN, `\x00group` LEAVE.
+    fn encode_dish(msg: &Msg, out: &mut OutQueue) {
+        let Some((&kind, group)) = msg.first().and_then(<[u8]>::split_first) else {
+            return;
+        };
+        let name = if kind == 1 { JOIN } else { LEAVE };
+        let mut body = BytesMut::with_capacity(name.len() + group.len());
+        body.extend_from_slice(name);
+        body.extend_from_slice(group);
+        put_command(out, &body);
     }
 
     /// Decode ZMTP 1.0 frames: a length counting the flags byte (one byte,
@@ -247,6 +276,17 @@ impl ZmtpCodec {
             m.extend_from_slice(&[1]);
             m.extend_from_slice(topic);
             deliver(Msg::from(m.freeze()));
+        } else if let Some(group) = body.strip_prefix(JOIN) {
+            // A DISH's group changes reach RADIO in subscription form.
+            let mut m = BytesMut::with_capacity(1 + group.len());
+            m.extend_from_slice(&[1]);
+            m.extend_from_slice(group);
+            deliver(Msg::from(m.freeze()));
+        } else if let Some(group) = body.strip_prefix(LEAVE) {
+            let mut m = BytesMut::with_capacity(1 + group.len());
+            m.extend_from_slice(&[0]);
+            m.extend_from_slice(group);
+            deliver(Msg::from(m.freeze()));
         } else if let Some(topic) = body.strip_prefix(CANCEL) {
             let mut m = BytesMut::with_capacity(1 + topic.len());
             m.extend_from_slice(&[0]);
@@ -358,7 +398,11 @@ impl Codec for ZmtpCodec {
     fn encode_prefixed(&mut self, prefix: &[Bytes], msg: &Msg, out: &mut OutQueue) -> Result<()> {
         let n = prefix.len() + msg.len();
         let frames = prefix.iter().map(FrameRef::Bytes).chain(msg.frame_refs());
-        if self.framing == Framing::V1 {
+        if self.unusual_encode {
+            if self.dish {
+                Self::encode_dish(msg, out);
+                return Ok(());
+            }
             Self::encode_v1(out, n, frames);
             return Ok(());
         }
@@ -460,8 +504,15 @@ impl Protocol for Zmtp {
             metadata: Arc::new(metadata),
         };
         let publisher = matches!(cfg.socket_type, SocketType::Pub | SocketType::Xpub);
-        let codec =
+        let dish = cfg.socket_type == SocketType::Dish;
+        if dish && result.curve_cipher.is_some() {
+            return Err(MonocoqueError::Unsupported("DISH over CURVE"));
+        }
+        let mut codec =
             ZmtpCodec::new(result.curve_cipher, &options).with_framing(result.framing, publisher);
+        if dish {
+            codec = codec.for_dish();
+        }
         Ok((codec, info))
     }
 

@@ -50,6 +50,15 @@ pub use monocoque_zmtp::sock::kinds::{
 };
 pub use monocoque_zmtp::sock::stream::StreamSocket;
 
+/// The draft socket types (`draft` feature).
+#[cfg(feature = "draft")]
+pub mod draft {
+    pub use monocoque_zmtp::sock::kinds::draft::{
+        ChannelSocket, ClientSocket, DishSocket, GatherSocket, MAX_GROUP, RadioSocket,
+        ScatterSocket, ServerSocket,
+    };
+}
+
 /// `zmq_poll`: wait on many sockets of any kind at once.
 pub mod poll {
     pub use monocoque_zmtp::sock::poll::{PollEvents, PollItem, Pollable, poll};
