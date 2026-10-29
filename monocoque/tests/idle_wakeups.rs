@@ -22,10 +22,13 @@
 //! All gate cases run inside one `#[test]` so no other test thread of this
 //! binary is scheduled during a window.
 
-use monocoque::rt::{LocalRuntime, TcpListener, TcpStream};
+// Vectors of sockets and parked receives exist only to keep them alive.
+#![allow(clippy::collection_is_never_read)]
+
+use monocoque::rt::LocalRuntime;
 use monocoque::zmq::{
     DealerSocket, PairSocket, PubSocket, PullSocket, PushSocket, RepSocket, ReqSocket,
-    RouterSocket, SocketOptions, SubSocket,
+    RouterSocket, SocketOptions, SubSocket, XPubSocket,
 };
 use std::sync::mpsc;
 use std::thread;
@@ -33,12 +36,12 @@ use std::time::Duration;
 
 /// Length of each measured idle window.
 const IDLE_WINDOW: Duration = Duration::from_millis(500);
-/// Context switches allowed across the whole process in one window. The window
-/// timer accounts for one or two; a 1 ms poll would cost about 500.
+/// Voluntary context switches allowed across the whole process in one window.
+/// The window timer accounts for one or two; a 1 ms poll would cost about 500.
 const SWITCH_BUDGET: u64 = 10;
 
-/// Total context switches of every thread in this process, or `None` where
-/// `/proc/self/task` is unavailable.
+/// Voluntary context switches of every thread in this process, or `None`
+/// where `/proc/self/task` is unavailable.
 fn process_context_switches() -> Option<u64> {
     let mut total = 0u64;
     for task in std::fs::read_dir("/proc/self/task").ok()? {
@@ -62,29 +65,26 @@ async fn idle_switches() -> Option<u64> {
     Some(after - before)
 }
 
-fn opts() -> SocketOptions {
-    SocketOptions::default()
-}
-
-/// Accept one TCP connection on a fresh listener while `connect` runs, and
-/// return both streams.
-async fn tcp_pair() -> (TcpStream, TcpStream) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let accept = monocoque::rt::spawn(async move { listener.accept().await.unwrap().0 });
-    let client = TcpStream::connect(addr).await.unwrap();
-    let server = monocoque::rt::join(accept).await;
-    (server, client)
-}
-
-/// Park a receive on `socket` for the rest of the runtime's life.
+/// Park a receive on `socket`, keeping the task's handle in `$parked`. smol's
+/// executor is thread-local and outlives a `LocalRuntime`, so a detached task
+/// from one case would keep its socket (and its reconnect loop) alive into the
+/// next case's window; dropping the handle at the end of the case cancels it.
 macro_rules! park_recv {
-    ($socket:expr) => {{
+    ($parked:ident, $socket:expr) => {{
         let mut socket = $socket;
-        monocoque::rt::spawn_detached(async move {
+        $parked.push(monocoque::rt::spawn(async move {
             let _ = socket.recv().await;
             drop(socket);
-        });
+        }));
+    }};
+}
+
+/// Wait until `socket` has `n` peers.
+macro_rules! connected {
+    ($socket:expr, $n:expr) => {{
+        while $socket.peer_count() < $n {
+            monocoque::rt::sleep(Duration::from_millis(1)).await;
+        }
     }};
 }
 
@@ -113,112 +113,96 @@ fn idle_connections_do_not_wake_the_process() {
     let mut failures = Vec::new();
 
     let n = in_fresh_runtime(async {
-        let (server, client) = tcp_pair().await;
-        let connect = monocoque::rt::spawn(DealerSocket::from_tcp_with_options(client, opts()));
-        let router = RouterSocket::from_tcp_with_options(server, opts())
-            .await
-            .unwrap();
-        let dealer = monocoque::rt::join(connect).await.unwrap();
-        park_recv!(router);
-        park_recv!(dealer);
+        let mut parked = Vec::new();
+        let mut router = RouterSocket::new();
+        let ep = router.bind("tcp://127.0.0.1:0").await.unwrap();
+        let mut dealer = DealerSocket::new();
+        dealer.connect(&ep).await.unwrap();
+        connected!(router, 1);
+        connected!(dealer, 1);
+        park_recv!(parked, router);
+        park_recv!(parked, dealer);
         idle_switches().await
     });
     check("DEALER <-> ROUTER", n, &mut failures);
 
     let n = in_fresh_runtime(async {
-        let (server, client) = tcp_pair().await;
-        let connect = monocoque::rt::spawn(ReqSocket::from_tcp_with_options(client, opts()));
-        let rep = RepSocket::from_tcp_with_options(server, opts())
-            .await
-            .unwrap();
-        let _req = monocoque::rt::join(connect).await.unwrap();
-        park_recv!(rep);
-        idle_switches().await
+        let mut parked = Vec::new();
+        let mut rep = RepSocket::new();
+        let ep = rep.bind("tcp://127.0.0.1:0").await.unwrap();
+        let mut req = ReqSocket::new();
+        req.connect(&ep).await.unwrap();
+        connected!(rep, 1);
+        park_recv!(parked, rep);
+        let n = idle_switches().await;
+        drop(req);
+        n
     });
     check("REQ <-> REP", n, &mut failures);
 
     let n = in_fresh_runtime(async {
-        let (server, client) = tcp_pair().await;
-        let connect = monocoque::rt::spawn(PushSocket::from_tcp_with_options(client, opts()));
-        let pull = PullSocket::from_tcp_with_options(server, opts())
-            .await
-            .unwrap();
-        let _push = monocoque::rt::join(connect).await.unwrap();
-        park_recv!(pull);
-        idle_switches().await
+        let mut parked = Vec::new();
+        let mut pull = PullSocket::new();
+        let ep = pull.bind("tcp://127.0.0.1:0").await.unwrap();
+        let mut push = PushSocket::new();
+        push.connect(&ep).await.unwrap();
+        connected!(pull, 1);
+        park_recv!(parked, pull);
+        let n = idle_switches().await;
+        drop(push);
+        n
     });
     check("PUSH -> PULL", n, &mut failures);
 
     let n = in_fresh_runtime(async {
-        let (server, client) = tcp_pair().await;
-        let connect = monocoque::rt::spawn(PairSocket::from_tcp_with_options(client, opts()));
-        let a = PairSocket::from_tcp_with_options(server, opts())
-            .await
-            .unwrap();
-        let b = monocoque::rt::join(connect).await.unwrap();
-        park_recv!(a);
-        park_recv!(b);
+        let mut parked = Vec::new();
+        let mut a = PairSocket::new();
+        let ep = a.bind("tcp://127.0.0.1:0").await.unwrap();
+        let mut b = PairSocket::new();
+        b.connect(&ep).await.unwrap();
+        connected!(a, 1);
+        connected!(b, 1);
+        park_recv!(parked, a);
+        park_recv!(parked, b);
         idle_switches().await
     });
     check("PAIR <-> PAIR", n, &mut failures);
 
     let n = in_fresh_runtime(async {
-        let mut publisher = PubSocket::bind("127.0.0.1:0").await.unwrap();
-        let addr = publisher.local_addr().unwrap();
-        let connect = monocoque::rt::spawn(async move {
-            let mut sub = SubSocket::connect_with_options(&addr.to_string(), opts())
-                .await
-                .unwrap();
-            sub.subscribe(b"").await.unwrap();
-            sub
-        });
-        publisher.accept_subscriber().await.unwrap();
-        let sub = monocoque::rt::join(connect).await;
-        park_recv!(sub);
+        let mut parked = Vec::new();
+        let mut publisher = PubSocket::new();
+        let ep = publisher.bind("tcp://127.0.0.1:0").await.unwrap();
+        let mut sub = SubSocket::new();
+        sub.subscribe(b"").await.unwrap();
+        sub.connect(&ep).await.unwrap();
+        connected!(publisher, 1);
+        park_recv!(parked, sub);
         let n = idle_switches().await;
         drop(publisher);
         n
     });
     check("PUB -> SUB", n, &mut failures);
 
+    let n = in_fresh_runtime(async {
+        let mut parked = Vec::new();
+        let mut xpub = XPubSocket::new();
+        let ep = xpub.bind("tcp://127.0.0.1:0").await.unwrap();
+        let mut sub = SubSocket::new();
+        sub.connect(&ep).await.unwrap();
+        connected!(xpub, 1);
+        // An XPUB waiting for a subscription event on an idle subscriber.
+        park_recv!(parked, xpub);
+        let n = idle_switches().await;
+        drop(sub);
+        n
+    });
+    check("XPUB waiting for a subscription", n, &mut failures);
+
     assert!(
         failures.is_empty(),
         "idle sockets woke the process:\n  {}",
         failures.join("\n  ")
     );
-}
-
-/// XPUB waiting for a subscription event on an idle subscriber.
-///
-/// Run it alone (`cargo test --test idle_wakeups idle_xpub -- --ignored`) so no
-/// other test thread runs during its window.
-#[test]
-#[ignore = "XPUB::recv_subscription polls each subscriber under a 1 ms read timeout, so waiting for an event busy-loops; the event-driven driver removes the poll"]
-fn idle_xpub_does_not_wake_the_process() {
-    if process_context_switches().is_none() {
-        return;
-    }
-    let rt = LocalRuntime::new().unwrap();
-    let n = rt.block_on(async {
-        let mut xpub = monocoque::zmq::XPubSocket::bind("127.0.0.1:0")
-            .await
-            .unwrap();
-        let addr = xpub.local_addr().unwrap();
-        let connect = monocoque::rt::spawn(async move {
-            SubSocket::connect_with_options(&addr.to_string(), opts())
-                .await
-                .unwrap()
-        });
-        xpub.accept().await.unwrap();
-        let _sub = monocoque::rt::join(connect).await;
-        monocoque::rt::spawn_detached(async move {
-            while matches!(xpub.recv_subscription().await, Ok(None)) {}
-        });
-        idle_switches().await
-    });
-    let mut failures = Vec::new();
-    check("XPUB waiting for a subscription", n, &mut failures);
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// Read this process's resident set size in bytes from `/proc/self/statm`.
@@ -231,10 +215,6 @@ fn read_rss_bytes() -> Option<usize> {
     let resident_pages: usize = statm.split_whitespace().nth(1)?.parse().ok()?;
     let page_size = 4096usize; // Linux default; good enough for a rough per-conn figure.
     Some(resident_pages * page_size)
-}
-
-fn footprint_options() -> SocketOptions {
-    SocketOptions::default().with_buffer_sizes(4096, 4096)
 }
 
 /// Manual per-connection idle memory measurement. Reports RSS, asserts nothing:
@@ -251,88 +231,57 @@ fn per_connection_idle_footprint() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(1000);
-
     let rss_before = read_rss_bytes();
-
-    let (port_tx, port_rx) = mpsc::channel::<u16>();
-    let (server_ready_tx, server_ready_rx) = mpsc::channel::<()>();
+    let (ep_tx, ep_rx) = mpsc::channel::<String>();
+    let (ready_tx, ready_rx) = mpsc::channel::<()>();
     let (release_tx, release_rx) = mpsc::channel::<()>();
 
-    // Server: accept N connections and hold every ROUTER socket alive, idle.
+    // One ROUTER accepting N DEALERs, all idle.
     let server = thread::spawn(move || {
-        let rt = LocalRuntime::new().unwrap();
-        rt.block_on(async move {
-            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            port_tx.send(listener.local_addr().unwrap().port()).unwrap();
-
-            let mut held = Vec::with_capacity(n);
-            for _ in 0..n {
-                let (stream, _) = listener.accept().await.unwrap();
-                let router = RouterSocket::from_tcp_with_options(stream, footprint_options())
-                    .await
-                    .unwrap();
-                held.push(router);
+        LocalRuntime::new().unwrap().block_on(async move {
+            let mut router = RouterSocket::new();
+            ep_tx
+                .send(router.bind("tcp://127.0.0.1:0").await.unwrap())
+                .unwrap();
+            while router.peer_count() < n {
+                monocoque::rt::sleep(Duration::from_millis(5)).await;
             }
-            server_ready_tx.send(()).unwrap();
-            // Keep the sockets alive and idle until released.
-            release_rx.recv().unwrap();
-            drop(held);
+            ready_tx.send(()).unwrap();
+            while release_rx.try_recv().is_err() {
+                monocoque::rt::sleep(Duration::from_millis(5)).await;
+            }
         });
     });
-
-    let port = port_rx.recv().unwrap();
-
-    // Client: open N connections and hold every DEALER socket alive, idle.
-    let (client_ready_tx, client_ready_rx) = mpsc::channel::<()>();
-    let (client_release_tx, client_release_rx) = mpsc::channel::<()>();
+    let ep = ep_rx.recv().unwrap();
+    let (cli_release_tx, cli_release_rx) = mpsc::channel::<()>();
     let client = thread::spawn(move || {
-        let rt = LocalRuntime::new().unwrap();
-        rt.block_on(async move {
+        LocalRuntime::new().unwrap().block_on(async move {
             let mut held = Vec::with_capacity(n);
             for _ in 0..n {
-                let dealer = DealerSocket::connect_with_options(
-                    &format!("127.0.0.1:{port}"),
-                    footprint_options(),
-                )
-                .await
-                .unwrap();
+                let mut dealer = DealerSocket::new();
+                dealer.connect(&ep).await.unwrap();
                 held.push(dealer);
             }
-            client_ready_tx.send(()).unwrap();
-            client_release_rx.recv().unwrap();
-            drop(held);
+            while cli_release_rx.try_recv().is_err() {
+                monocoque::rt::sleep(Duration::from_millis(5)).await;
+            }
         });
     });
-
-    server_ready_rx.recv().unwrap();
-    client_ready_rx.recv().unwrap();
-
-    let rss_after = read_rss_bytes();
-
-    match (rss_before, rss_after) {
+    ready_rx.recv().unwrap();
+    match (rss_before, read_rss_bytes()) {
         (Some(before), Some(after)) => {
             let delta = after.saturating_sub(before);
-            let per_conn = delta as f64 / n as f64;
-            // Each logical connection is held on both ends (DEALER + ROUTER) in
-            // this process, so `per_conn` is the cost of one connection's two
-            // socket endpoints combined.
             println!(
-                "[C7 idle footprint] connections={n} rss_before={before} bytes \
-                 rss_after={after} bytes delta={delta} bytes \
-                 per_connection(both_ends)={per_conn:.0} bytes"
+                "[C7 idle footprint] connections={n} delta={delta} bytes \
+                 per_connection(both_ends)={:.0} bytes",
+                delta as f64 / n as f64
             );
         }
-        _ => {
-            println!(
-                "[C7 idle footprint] RSS measurement unavailable on this platform; \
-                 established and held {n} idle connections successfully"
-            );
-        }
+        _ => println!("[C7 idle footprint] RSS unavailable; held {n} idle connections"),
     }
-
-    // Release both sides and join.
+    let _ = SocketOptions::default();
     release_tx.send(()).unwrap();
-    client_release_tx.send(()).unwrap();
+    cli_release_tx.send(()).unwrap();
     server.join().unwrap();
     client.join().unwrap();
 }

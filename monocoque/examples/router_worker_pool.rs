@@ -1,89 +1,85 @@
-/// ROUTER Worker Pool Example
-///
-/// This example demonstrates a ROUTER socket acting as a load balancer
-/// distributing work across multiple DEALER workers.
-///
-/// Architecture:
-/// - ROUTER server listens on port 5555
-/// - Multiple DEALER clients connect and request work
-/// - ROUTER distributes tasks in round-robin fashion
-use bytes::Bytes;
-use monocoque::rt::{self, LocalRuntime, TcpListener, TcpStream};
-use monocoque::zmq::RouterSocket;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use tracing::{error, info};
+//! ROUTER Worker Pool Example
+//!
+//! This example demonstrates a ROUTER socket acting as a load balancer
+//! distributing work across multiple DEALER workers.
+//!
+//! Architecture:
+//! - ROUTER server binds an ephemeral TCP port
+//! - Several DEALER workers connect and announce themselves with "READY"
+//! - The ROUTER hands out tasks round-robin by identity and collects results
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+use bytes::Bytes;
+use monocoque::rt::{self, LocalRuntime};
+use monocoque::zmq::{DealerSocket, Msg, Result, RouterSocket};
+use tracing::info;
+
+const WORKERS: usize = 3;
+const TASKS: usize = 10;
+
+fn main() -> Result<()> {
     LocalRuntime::new()?.block_on(async_main())
 }
 
-async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
+async fn async_main() -> Result<()> {
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .init();
 
-    info!("Starting ROUTER worker pool on tcp://127.0.0.1:5555");
+    let mut router = RouterSocket::new();
+    let endpoint = router.bind("tcp://127.0.0.1:0").await?;
+    info!("Starting ROUTER worker pool on {endpoint}");
 
-    let listener = TcpListener::bind("127.0.0.1:5555").await?;
-    let task_counter = Arc::new(AtomicU64::new(0));
+    for i in 0..WORKERS {
+        let endpoint = endpoint.clone();
+        rt::spawn_detached(async move {
+            if let Err(e) = worker(i, &endpoint).await {
+                info!("Worker {i} stopped: {e}");
+            }
+        });
+    }
 
+    // Collect one READY per worker to learn their identities.
     info!("Waiting for worker connections...");
-
-    loop {
-        match listener.accept().await {
-            Ok((stream, addr)) => {
-                info!("Worker connected from {addr}");
-
-                let counter = task_counter.clone();
-                rt::spawn_detached(async move {
-                    handle_worker(stream, counter).await;
-                });
-            }
-            Err(e) => {
-                error!("Accept error: {e}");
-            }
+    let mut workers = Vec::with_capacity(WORKERS);
+    while workers.len() < WORKERS {
+        let msg = router.recv_owned().await?;
+        if msg.get(1) == Some(&b"READY"[..])
+            && let Some(id) = msg.frame_bytes(0)
+        {
+            info!("Worker {:?} ready", String::from_utf8_lossy(&id));
+            workers.push(id);
         }
     }
+
+    // Send tasks round-robin, then collect every result.
+    for task_id in 0..TASKS {
+        let id = workers[task_id % WORKERS].clone();
+        let task = format!("Task #{task_id}");
+        info!("Sending {task} to {:?}", String::from_utf8_lossy(&id));
+        router.send(Msg::from([id, Bytes::from(task)])).await?;
+    }
+    for _ in 0..TASKS {
+        let response = router.recv().await?;
+        if let Some(result) = response.last()
+            && let Ok(s) = std::str::from_utf8(result)
+        {
+            info!("Worker completed: {s}");
+        }
+    }
+
+    info!("Worker pool session complete");
+    Ok(())
 }
 
 #[allow(clippy::future_not_send)]
-async fn handle_worker(stream: TcpStream, task_counter: Arc<AtomicU64>) {
-    let mut socket = RouterSocket::from_tcp(stream).await.unwrap();
-
-    // Send tasks to this worker
-    for _ in 0..10 {
-        let task_id = task_counter.fetch_add(1, Ordering::SeqCst);
-        let task = format!("Task #{task_id}");
-
-        info!("Sending: {task}");
-
-        // In ROUTER mode, first frame is routing ID (handled internally)
-        // We just send the task body
-        match socket.send(vec![Bytes::from(task)]).await {
-            Ok(()) => {
-                // Wait for completion response
-                if let Ok(Some(response)) = socket.recv().await {
-                    if let Some(result) = response.last()
-                        && let Ok(s) = std::str::from_utf8(result)
-                    {
-                        info!("Worker completed: {s}");
-                    }
-                } else {
-                    error!("Connection closed");
-                    break;
-                }
-            }
-            Err(e) => {
-                error!("Send error: {e}");
-                break;
-            }
-        }
-
-        // Small delay between tasks
-        rt::sleep(std::time::Duration::from_millis(100)).await;
+async fn worker(n: usize, endpoint: &str) -> Result<()> {
+    let mut socket = DealerSocket::new();
+    socket.connect(endpoint).await?;
+    socket.send("READY").await?;
+    loop {
+        let task = socket.recv_owned().await?;
+        let text = String::from_utf8_lossy(task.first().unwrap_or_default()).into_owned();
+        socket.send(format!("{text} done by worker {n}")).await?;
     }
-
-    info!("Worker session complete");
 }

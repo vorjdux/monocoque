@@ -15,7 +15,6 @@
 //!   timer stops, so these numbers reflect steady-state RTT, not connection
 //!   setup or teardown. Both monocoque and zmq are measured identically.
 
-use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 
 // Identifies which runtime backend this build benchmarks, so compio, tokio, and smol
@@ -27,8 +26,7 @@ const BENCH_BACKEND: &str = if cfg!(feature = "runtime-tokio") {
 } else {
     "compio"
 };
-use monocoque::rt::TcpListener;
-use monocoque::zmq::{RepSocket, ReqSocket, SocketOptions};
+use monocoque::zmq::{Msg, RepSocket, ReqSocket, SocketOptions};
 use std::hint::black_box;
 use std::sync::mpsc;
 use std::thread;
@@ -51,7 +49,7 @@ fn monocoque_req_rep_latency(c: &mut Criterion) {
     let rt = monocoque::rt::LocalRuntime::new().unwrap();
 
     for &size in MESSAGE_SIZES {
-        let payload = Bytes::from(vec![0u8; size]);
+        let payload = Msg::from(vec![0u8; size]);
 
         group.bench_with_input(
             BenchmarkId::new("round_trip", format!("{size}B")),
@@ -62,60 +60,48 @@ fn monocoque_req_rep_latency(c: &mut Criterion) {
                         WARMUP_ROUNDS + usize::try_from(iters).expect("iteration count fits usize");
 
                     // SETUP (not measured): server echoes `total` messages, then exits.
-                    let (port_tx, port_rx) = mpsc::channel::<u16>();
+                    let (ep_tx, ep_rx) = mpsc::channel::<String>();
 
                     let server_thread = thread::spawn(move || {
                         let rt = monocoque::rt::LocalRuntime::new().unwrap();
                         rt.block_on(async move {
-                            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-                            let port = listener.local_addr().unwrap().port();
-                            port_tx.send(port).unwrap();
-
-                            let (stream, _) = listener.accept().await.unwrap();
-                            let mut rep = RepSocket::from_tcp_with_options(
-                                stream,
+                            let mut rep = RepSocket::with_options(
                                 SocketOptions::default().with_buffer_sizes(4096, 4096),
-                            )
-                            .await
-                            .unwrap();
-
+                            );
+                            ep_tx
+                                .send(rep.bind("tcp://127.0.0.1:0").await.unwrap())
+                                .unwrap();
                             for _ in 0..total {
-                                match rep.recv().await {
-                                    Ok(Some(msg)) => {
-                                        if rep.send(msg).await.is_err() {
-                                            break;
-                                        }
-                                    }
-                                    _ => break,
+                                let Ok(msg) = rep.recv_owned().await else {
+                                    break;
+                                };
+                                if rep.send(msg).await.is_err() {
+                                    break;
                                 }
                             }
+                            let _ = rep.close().await;
                         });
                     });
 
-                    let port = port_rx.recv().unwrap();
+                    let endpoint = ep_rx.recv().unwrap();
                     let payload = payload.clone();
 
                     let elapsed = rt.block_on(async move {
-                        let stream = monocoque::rt::TcpStream::connect(("127.0.0.1", port))
-                            .await
-                            .unwrap();
-                        let mut req = ReqSocket::from_tcp_with_options(
-                            stream,
+                        let mut req = ReqSocket::with_options(
                             SocketOptions::default().with_buffer_sizes(4096, 4096),
-                        )
-                        .await
-                        .unwrap();
+                        );
+                        req.connect(&endpoint).await.unwrap();
 
                         // Warmup: not measured.
                         for _ in 0..WARMUP_ROUNDS {
-                            req.send(vec![payload.clone()]).await.unwrap();
+                            req.send(payload.clone()).await.unwrap();
                             req.recv().await.unwrap();
                         }
 
                         // MEASURED: steady-state round-trips on the live connection.
                         let t0 = Instant::now();
                         for _ in 0..iters {
-                            req.send(vec![black_box(payload.clone())]).await.unwrap();
+                            req.send(black_box(payload.clone())).await.unwrap();
                             let _ = req.recv().await.unwrap();
                         }
                         t0.elapsed()

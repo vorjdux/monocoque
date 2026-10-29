@@ -12,7 +12,6 @@ use monocoque::rt::LocalRuntime;
 use monocoque::zmq::SubSocket;
 use std::env;
 use std::io::Write;
-use std::time::Duration;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     LocalRuntime::new()?.block_on(async_main())
@@ -37,23 +36,18 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // The harness may start this subscriber before the publisher binds, so retry
-    // the connection until the endpoint is up.
-    let endpoint = format!("127.0.0.1:{port}");
-    let mut sub = loop {
-        match SubSocket::connect(&endpoint).await {
-            Ok(s) => break s,
-            Err(_) => monocoque::rt::sleep(Duration::from_millis(100)).await,
-        }
-    };
+    // The harness may start this subscriber before the publisher binds; connect
+    // keeps retrying in the background until the endpoint is up.
+    let mut sub = SubSocket::new();
+    sub.connect(&format!("tcp://127.0.0.1:{port}")).await?;
     sub.subscribe(topic.as_bytes()).await?;
 
     let mut out = std::io::stdout();
-    while let Some(msg) = sub.recv().await? {
-        for frame in &msg {
+    loop {
+        let msg = sub.recv().await?;
+        for frame in msg.frames() {
             writeln!(out, "Received: {}", String::from_utf8_lossy(frame))?;
         }
         out.flush()?;
     }
-    Ok(())
 }

@@ -10,54 +10,40 @@
 //! Architecture:
 //! ```text
 //! Publishers → XSUB (frontend) → Broker → XPUB (backend) → Subscribers
-//!              tcp://*:5555                   tcp://*:5556
 //! ```
 //!
-//! Run this example:
+//! The example runs a publisher, the broker and a subscriber in one process:
 //! ```bash
 //! cargo run --example xpub_xsub_broker --features zmq
 //! ```
 //!
-//! Then in other terminals:
-//!
-//! Publisher:
-//! ```python
-//! import zmq, time
-//! ctx = zmq.Context()
-//! pub = ctx.socket(zmq.PUB)
-//! pub.connect('tcp://127.0.0.1:5555')
-//! time.sleep(0.5)
-//! while True:
-//!     pub.send_multipart([b'weather.temp', b'25C'])
-//!     pub.send_multipart([b'weather.humidity', b'60%'])
-//!     pub.send_multipart([b'alerts.warning', b'Storm approaching'])
-//!     time.sleep(1)
-//! ```
-//!
-//! Subscriber:
+//! External peers can join too, for example a pyzmq subscriber:
 //! ```python
 //! import zmq
 //! ctx = zmq.Context()
 //! sub = ctx.socket(zmq.SUB)
-//! sub.connect('tcp://127.0.0.1:5556')
+//! sub.connect('tcp://127.0.0.1:<backend port printed by the example>')
 //! sub.subscribe(b'weather.')
-//! sub.subscribe(b'alerts.')
 //! while True:
 //!     topic, data = sub.recv_multipart()
 //!     print(f'{topic.decode()}: {data.decode()}')
 //! ```
 
-use monocoque::rt::LocalRuntime;
+use bytes::Bytes;
+use futures::future::{Either, select};
+use monocoque::rt::{self, LocalRuntime};
+use monocoque::zmq::SubscriptionEvent;
 use monocoque::zmq::prelude::*;
 use std::collections::HashSet;
-use std::io;
-use tracing::{Level, info, warn};
+use std::pin::pin;
+use std::time::Duration;
+use tracing::{Level, info};
 
-fn main() -> io::Result<()> {
+fn main() -> Result<()> {
     LocalRuntime::new()?.block_on(async_main())
 }
 
-async fn async_main() -> io::Result<()> {
+async fn async_main() -> Result<()> {
     // Initialize logging
     tracing_subscriber::fmt()
         .with_max_level(Level::INFO)
@@ -65,99 +51,109 @@ async fn async_main() -> io::Result<()> {
         .init();
 
     info!("Starting XPUB/XSUB message broker");
-    info!("Frontend (XSUB): tcp://127.0.0.1:5555 (publishers connect here)");
-    info!("Backend (XPUB): tcp://127.0.0.1:5556 (subscribers connect here)");
 
     // Create XSUB frontend for publishers
-    let mut xsub = XSubSocket::connect("127.0.0.1:5555").await?;
-    info!("XSUB frontend bound on tcp://127.0.0.1:5555");
+    let mut xsub = XSubSocket::new();
+    let frontend = xsub.bind("tcp://127.0.0.1:0").await?;
+    info!("Frontend (XSUB): {} (publishers connect here)", frontend);
 
-    // Create XPUB backend for subscribers
-    let mut xpub = XPubSocket::bind("127.0.0.1:5556").await?;
-    xpub.set_verbose(true); // Receive subscription events
-    info!("XPUB backend bound on tcp://127.0.0.1:5556");
+    // Create XPUB backend for subscribers, reporting every subscription message
+    let mut xpub = XPubSocket::with_options(SocketOptions::default().with_xpub_verbose(true));
+    let backend = xpub.bind("tcp://127.0.0.1:0").await?;
+    info!("Backend (XPUB): {} (subscribers connect here)", backend);
 
-    // Track active subscriptions
-    let mut subscriptions = HashSet::new();
-    let mut subscription_changes = 0u64;
-
-    info!("Broker ready - demonstrating subscription forwarding");
-    info!("");
-    info!("In a real broker, you would:");
-    info!("1. Use async tasks to handle XPUB and XSUB concurrently");
-    info!("2. Forward subscriptions from XPUB backend to XSUB frontend");
-    info!("3. Forward messages from XSUB frontend to XPUB backend");
-    info!("");
-    info!("This example shows the subscription forwarding pattern:");
-
-    // Simulate receiving subscription events from XPUB (from subscribers)
-    loop {
-        // In a real broker, this would run in parallel with message forwarding
-        match xpub.recv_subscription().await {
-            Ok(Some(event)) => {
-                match event {
-                    SubscriptionEvent::Subscribe(prefix) => {
-                        let topic = String::from_utf8_lossy(&prefix);
-                        if subscriptions.insert(prefix.clone()) {
-                            subscription_changes += 1;
-                            info!("→ Subscriber subscribed to '{}'", topic);
-                            info!("  Active subscriptions: {}", subscriptions.len());
-
-                            // Forward subscription upstream to publishers via XSUB
-                            if let Err(e) = xsub.subscribe(prefix.clone()).await {
-                                warn!("Failed to forward subscription: {}", e);
-                            } else {
-                                info!("  ✓ Forwarded subscription to XSUB frontend");
-                            }
-                        }
-                    }
-                    SubscriptionEvent::Unsubscribe(prefix) => {
-                        let topic = String::from_utf8_lossy(&prefix);
-                        if subscriptions.remove(&prefix) {
-                            subscription_changes += 1;
-                            info!("← Subscriber unsubscribed from '{}'", topic);
-                            info!("  Active subscriptions: {}", subscriptions.len());
-
-                            // Forward unsubscription upstream
-                            if let Err(e) = xsub.unsubscribe(prefix.clone()).await {
-                                warn!("Failed to forward unsubscription: {}", e);
-                            } else {
-                                info!("  ✓ Forwarded unsubscription to XSUB frontend");
-                            }
-                        }
-                    }
-                }
-
-                // Show stats periodically
-                if subscription_changes.is_multiple_of(5) && subscription_changes > 0 {
-                    info!("");
-                    info!(
-                        "📊 Broker stats: {} subscription changes",
-                        subscription_changes
-                    );
-                    info!(
-                        "   Active topics: {:?}",
-                        subscriptions
-                            .iter()
-                            .map(|t| String::from_utf8_lossy(t))
-                            .collect::<Vec<_>>()
-                    );
-                    info!("");
-                }
-            }
-            Ok(None) => {
-                info!("No more subscription events");
-                break;
-            }
-            Err(e) => {
-                warn!("Error receiving subscription: {}", e);
-                break;
-            }
+    rt::spawn_detached(async move {
+        if let Err(e) = broker(xsub, xpub).await {
+            info!("Broker stopped: {e}");
         }
+    });
+
+    // A publisher that knows nothing about the subscribers
+    rt::spawn_detached(async move {
+        let mut publisher = PubSocket::new();
+        publisher.connect(&frontend).await.unwrap();
+        let mut n = 0u64;
+        loop {
+            n += 1;
+            for (topic, data) in [
+                ("weather.temp", format!("{}C", 20 + n % 10)),
+                ("weather.humidity", format!("{}%", 50 + n % 30)),
+                ("alerts.warning", "Storm approaching".to_string()),
+            ] {
+                publisher
+                    .send(Msg::from([Bytes::from(topic), Bytes::from(data)]))
+                    .await
+                    .unwrap();
+            }
+            rt::sleep(Duration::from_millis(50)).await;
+        }
+    });
+
+    // A subscriber that only wants weather updates
+    let mut sub = SubSocket::new();
+    sub.connect(&backend).await?;
+    sub.subscribe(b"weather.").await?;
+    for _ in 0..6 {
+        let msg = sub.recv().await?;
+        info!(
+            "[Subscriber] {}: {}",
+            String::from_utf8_lossy(msg.get(0).unwrap_or_default()),
+            String::from_utf8_lossy(msg.get(1).unwrap_or_default())
+        );
     }
 
     info!("Broker demonstration complete");
-    info!("Final stats: {} subscription changes", subscription_changes);
-
     Ok(())
+}
+
+/// Forward subscriptions upstream and messages downstream until an error.
+#[allow(clippy::future_not_send)]
+async fn broker(mut xsub: XSubSocket, mut xpub: XPubSocket) -> Result<()> {
+    // Track active subscriptions
+    let mut subscriptions = HashSet::new();
+
+    loop {
+        // Receives are cancel safe: a message is only taken when it is ready.
+        let next = {
+            let down = pin!(xpub.recv_owned());
+            let up = pin!(xsub.recv_owned());
+            match select(down, up).await {
+                Either::Left((msg, _)) => Either::Left(msg?),
+                Either::Right((msg, _)) => Either::Right(msg?),
+            }
+        };
+
+        match next {
+            // A subscription change from a subscriber
+            Either::Left(msg) => {
+                match msg.first().and_then(SubscriptionEvent::from_message) {
+                    Some(SubscriptionEvent::Subscribe(prefix))
+                        if subscriptions.insert(prefix.clone()) =>
+                    {
+                        info!(
+                            "Subscriber subscribed to '{}' (active: {})",
+                            String::from_utf8_lossy(&prefix),
+                            subscriptions.len()
+                        );
+                    }
+                    Some(SubscriptionEvent::Unsubscribe(prefix))
+                        if subscriptions.remove(&prefix) =>
+                    {
+                        info!(
+                            "Subscriber unsubscribed from '{}' (active: {})",
+                            String::from_utf8_lossy(&prefix),
+                            subscriptions.len()
+                        );
+                    }
+                    _ => {}
+                }
+                // Forward the raw subscription message upstream to publishers
+                xsub.send(msg).await?;
+            }
+            // A published message: fan it out to matching subscribers
+            Either::Right(msg) => {
+                xpub.send(msg).await?;
+            }
+        }
+    }
 }

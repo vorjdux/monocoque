@@ -8,7 +8,7 @@
 //! Each test binary is its own process and the ZAP endpoint is a process-global
 //! inproc name, so this file holds the only ZAP server bound in its process.
 
-use monocoque::rt::{LocalRuntime, TcpListener, TcpStream};
+use monocoque::rt::LocalRuntime;
 use monocoque::zmq::{DealerSocket, SocketOptions};
 use monocoque_zmtp::security::curve::CurveSecretKey;
 use monocoque_zmtp::security::zap::{ZapRequest, ZapResponse};
@@ -39,19 +39,14 @@ fn keypair(seed: u8) -> ([u8; 32], [u8; 32]) {
 /// Accept one connection with `server_opts`, connect with `client_opts`, and
 /// return once both handshakes have completed.
 async fn handshake_pair(server_opts: SocketOptions, client_opts: SocketOptions) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let server = monocoque::rt::spawn(async move {
-        let (stream, _) = listener.accept().await.unwrap();
-        DealerSocket::from_tcp_with_options(stream, server_opts)
-            .await
-            .unwrap()
-    });
-    let stream = TcpStream::connect(addr).await.unwrap();
-    let _client = DealerSocket::from_tcp_with_options(stream, client_opts)
-        .await
-        .unwrap();
-    let _server = monocoque::rt::join(server).await;
+    let mut server = DealerSocket::with_options(server_opts);
+    let ep = server.bind("tcp://127.0.0.1:0").await.unwrap();
+    let mut client = DealerSocket::with_options(client_opts);
+    client.connect(&ep).await.unwrap();
+    // The server only learns of a peer once its handshake, ZAP included, is done.
+    while server.peer_count() == 0 {
+        monocoque::rt::sleep(Duration::from_millis(1)).await;
+    }
 }
 
 #[test]

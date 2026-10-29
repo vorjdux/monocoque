@@ -15,7 +15,6 @@
 //! - 8 threads × 130k msg/sec = 1M+ aggregate throughput
 //! - No contention or lock overhead
 
-use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
 // Identifies which runtime backend this build benchmarks, so compio, tokio, and smol
@@ -27,17 +26,59 @@ const BENCH_BACKEND: &str = if cfg!(feature = "runtime-tokio") {
 } else {
     "compio"
 };
-use monocoque::rt::TcpListener;
-use monocoque::zmq::{DealerSocket, RouterSocket, SocketOptions};
+use monocoque::zmq::{DealerSocket, Msg, RouterSocket, SocketOptions};
 use std::hint::black_box;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 const MESSAGE_SIZE: usize = 64;
 const MESSAGES_PER_THREAD: usize = 1_000; // Reduced to avoid deadlock
 const THREAD_COUNTS: &[usize] = &[1, 2, 4, 8];
 const BATCH_SIZE: usize = 100; // Process in batches to avoid deadlock
+
+/// Coalesced sends are held until `flush`, so each batch goes out in one write.
+fn coalescing() -> SocketOptions {
+    SocketOptions::default().with_write_coalescing(true)
+}
+
+/// Wait until `dealer` has a handshaken peer, so timing starts on a live
+/// connection.
+async fn wait_connected(dealer: &DealerSocket) {
+    while dealer.peer_count() == 0 {
+        monocoque::rt::sleep(Duration::from_millis(1)).await;
+    }
+}
+
+/// Echo `total` messages back to their sender, flushing every `BATCH_SIZE`.
+/// Each received message keeps its identity frame, so sending it back routes
+/// it to the peer it came from.
+async fn echo(mut router: RouterSocket, total: usize) {
+    for echoed in 1..=total {
+        let Ok(msg) = router.recv_owned().await else {
+            break;
+        };
+        router.send(msg).await.ok();
+        if echoed.is_multiple_of(BATCH_SIZE) {
+            router.flush().await.ok();
+        }
+    }
+    router.flush().await.ok();
+}
+
+/// Send `MESSAGES_PER_THREAD` messages in batches, receiving each batch's
+/// echo before the next.
+async fn dealer_rounds(dealer: &mut DealerSocket, payload: &Msg) {
+    for _ in 0..(MESSAGES_PER_THREAD / BATCH_SIZE) {
+        for _ in 0..BATCH_SIZE {
+            dealer.send(black_box(payload.clone())).await.unwrap();
+        }
+        dealer.flush().await.unwrap();
+        for _ in 0..BATCH_SIZE {
+            if dealer.recv().await.is_err() {
+                break;
+            }
+        }
+    }
+}
 
 /// Benchmark multi-threaded DEALER clients against single ROUTER server
 ///
@@ -48,7 +89,7 @@ fn monocoque_multithreaded_dealers(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(20));
     group.sample_size(10); // Minimum required by criterion
 
-    let payload = Bytes::from(vec![0u8; MESSAGE_SIZE]);
+    let payload = Msg::from(vec![0u8; MESSAGE_SIZE]);
 
     for &num_threads in THREAD_COUNTS {
         let total_messages = num_threads * MESSAGES_PER_THREAD;
@@ -63,102 +104,34 @@ fn monocoque_multithreaded_dealers(c: &mut Criterion) {
                     let rt = monocoque::rt::LocalRuntime::new().unwrap();
 
                     rt.block_on(async {
-                        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-                        let server_addr = listener.local_addr().unwrap();
-
-                        let expected_total = num_threads * MESSAGES_PER_THREAD;
-                        let received_count = Arc::new(AtomicUsize::new(0));
-
-                        // Router server task (handles all connections)
-                        let router_task = monocoque::rt::spawn({
-                            let received_count = Arc::clone(&received_count);
-                            async move {
-                                // Accept connections and spawn handler for each
-                                let mut handlers = Vec::new();
-                                for _ in 0..num_threads {
-                                    let (stream, _) = listener.accept().await.unwrap();
-                                    let received_count = Arc::clone(&received_count);
-
-                                    let handler = monocoque::rt::spawn(async move {
-                                        let mut router = RouterSocket::from_tcp_with_options(
-                                            stream,
-                                            SocketOptions::default()
-                                                .with_buffer_sizes(16384, 16384),
-                                        )
-                                        .await
-                                        .unwrap();
-
-                                        while received_count.load(Ordering::Relaxed)
-                                            < expected_total
-                                        {
-                                            if let Ok(Some(msg)) = router.recv().await {
-                                                received_count.fetch_add(1, Ordering::Relaxed);
-                                                router.send(msg).await.ok();
-                                            } else {
-                                                break;
-                                            }
-                                        }
-                                    });
-                                    handlers.push(handler);
-                                }
-
-                                // Wait for all handlers
-                                for handler in handlers {
-                                    monocoque::rt::join(handler).await;
-                                }
-                            }
-                        });
-
-                        // Small delay to ensure server is listening
-                        monocoque::rt::sleep(Duration::from_millis(50)).await;
+                        // One ROUTER serves every DEALER connection.
+                        let mut router = RouterSocket::with_options(coalescing());
+                        let endpoint = router.bind("tcp://127.0.0.1:0").await.unwrap();
+                        let router_task = monocoque::rt::spawn(echo(router, total_messages));
 
                         // Spawn N dealer threads, each with its own runtime
                         let mut dealer_handles = Vec::new();
                         for _i in 0..num_threads {
                             let payload = payload.clone();
+                            let endpoint = endpoint.clone();
 
                             let handle = std::thread::spawn(move || {
-                                // Each thread gets its own compio runtime
                                 let rt = monocoque::rt::LocalRuntime::new().unwrap();
                                 rt.block_on(async {
-                                    let stream = monocoque::rt::TcpStream::connect(server_addr)
-                                        .await
-                                        .unwrap();
-                                    let mut dealer = DealerSocket::from_tcp_with_options(
-                                        stream,
-                                        SocketOptions::default().with_buffer_sizes(16384, 16384),
-                                    )
-                                    .await
-                                    .unwrap();
-
-                                    // Use batched streaming to avoid deadlock
-                                    for _ in 0..(MESSAGES_PER_THREAD / BATCH_SIZE) {
-                                        // Send batch
-                                        for _ in 0..BATCH_SIZE {
-                                            dealer
-                                                .send(vec![black_box(payload.clone())])
-                                                .await
-                                                .unwrap();
-                                        }
-                                        // Receive batch
-                                        for _ in 0..BATCH_SIZE {
-                                            if dealer.recv().await.ok().flatten().is_none() {
-                                                break;
-                                            }
-                                        }
-                                    }
+                                    let mut dealer = DealerSocket::with_options(coalescing());
+                                    dealer.connect(&endpoint).await.unwrap();
+                                    dealer_rounds(&mut dealer, &payload).await;
                                 });
                             });
                             dealer_handles.push(handle);
                         }
 
-                        // Wait for all dealer threads
+                        // The router task runs on this thread, so let it finish
+                        // before blocking on the dealer threads.
+                        monocoque::rt::join(router_task).await;
                         for handle in dealer_handles {
                             handle.join().unwrap();
                         }
-
-                        // Wait for router to finish
-                        monocoque::rt::join(router_task).await;
                     });
                 });
             },
@@ -177,7 +150,7 @@ fn monocoque_multithreaded_independent_pairs(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(20));
     group.sample_size(10);
 
-    let payload = Bytes::from(vec![0u8; MESSAGE_SIZE]);
+    let payload = Msg::from(vec![0u8; MESSAGE_SIZE]);
 
     for &num_threads in THREAD_COUNTS {
         let total_messages = num_threads * MESSAGES_PER_THREAD;
@@ -204,70 +177,28 @@ fn monocoque_multithreaded_independent_pairs(c: &mut Criterion) {
                         let handle = std::thread::spawn(move || {
                             let rt = monocoque::rt::LocalRuntime::new().unwrap();
                             rt.block_on(async {
-                                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-                                let server_addr = listener.local_addr().unwrap();
-
                                 // ROUTER echoes every message across all `iters`
-                                // rounds over the single accepted connection.
+                                // rounds over the single connection.
                                 let total = usize::try_from(iters)
                                     .expect("iteration count fits usize")
                                     * MESSAGES_PER_THREAD;
-                                let router_task = monocoque::rt::spawn(async move {
-                                    let (stream, _) = listener.accept().await.unwrap();
-                                    let mut router = RouterSocket::from_tcp_with_options(
-                                        stream,
-                                        SocketOptions::default().with_write_coalescing(true),
-                                    )
-                                    .await
-                                    .unwrap();
+                                let mut router = RouterSocket::with_options(coalescing());
+                                let endpoint = router.bind("tcp://127.0.0.1:0").await.unwrap();
+                                let router_task = monocoque::rt::spawn(echo(router, total));
 
-                                    let mut buf: Vec<Bytes> = Vec::with_capacity(4);
-                                    let mut echoed = 0usize;
-                                    for _ in 0..total {
-                                        if router.recv_into(&mut buf).await.unwrap_or(false) {
-                                            router.send(buf.clone()).await.ok();
-                                            echoed += 1;
-                                            if echoed.is_multiple_of(BATCH_SIZE) {
-                                                router.flush().await.ok();
-                                            }
-                                        }
-                                    }
-                                    router.flush().await.ok();
-                                });
-
-                                let stream = monocoque::rt::TcpStream::connect(server_addr)
-                                    .await
-                                    .unwrap();
-                                let mut dealer = DealerSocket::from_tcp_with_options(
-                                    stream,
-                                    SocketOptions::default().with_write_coalescing(true),
-                                )
-                                .await
-                                .unwrap();
+                                let mut dealer = DealerSocket::with_options(coalescing());
+                                dealer.connect(&endpoint).await.unwrap();
+                                wait_connected(&dealer).await;
 
                                 // Timed: `iters` rounds over the one connection.
-                                let mut buf: Vec<Bytes> = Vec::with_capacity(4);
                                 let start = std::time::Instant::now();
                                 for _ in 0..iters {
-                                    for _ in 0..(MESSAGES_PER_THREAD / BATCH_SIZE) {
-                                        for _ in 0..BATCH_SIZE {
-                                            dealer
-                                                .send(vec![black_box(payload.clone())])
-                                                .await
-                                                .unwrap();
-                                        }
-                                        dealer.flush().await.unwrap();
-                                        for _ in 0..BATCH_SIZE {
-                                            if !dealer.recv_into(&mut buf).await.unwrap_or(false) {
-                                                break;
-                                            }
-                                        }
-                                    }
+                                    dealer_rounds(&mut dealer, &payload).await;
                                 }
                                 let elapsed = start.elapsed();
 
-                                drop(dealer);
                                 monocoque::rt::join(router_task).await;
+                                drop(dealer);
                                 elapsed
                             })
                         });
@@ -301,7 +232,7 @@ fn monocoque_core_efficiency(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(20));
     group.sample_size(10);
 
-    let payload = Bytes::from(vec![0u8; MESSAGE_SIZE]);
+    let payload = Msg::from(vec![0u8; MESSAGE_SIZE]);
     let num_cores = num_cpus::get();
 
     // Test at 50%, 100%, and 150% of available cores
@@ -328,56 +259,14 @@ fn monocoque_core_efficiency(c: &mut Criterion) {
                         let handle = std::thread::spawn(move || {
                             let rt = monocoque::rt::LocalRuntime::new().unwrap();
                             rt.block_on(async {
-                                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-                                let server_addr = listener.local_addr().unwrap();
+                                let mut router = RouterSocket::with_options(coalescing());
+                                let endpoint = router.bind("tcp://127.0.0.1:0").await.unwrap();
+                                let router_task =
+                                    monocoque::rt::spawn(echo(router, MESSAGES_PER_THREAD));
 
-                                let router_task = monocoque::rt::spawn(async move {
-                                    let (stream, _) = listener.accept().await.unwrap();
-                                    let mut router = RouterSocket::from_tcp_with_options(
-                                        stream,
-                                        SocketOptions::default().with_write_coalescing(true),
-                                    )
-                                    .await
-                                    .unwrap();
-
-                                    let mut buf: Vec<Bytes> = Vec::with_capacity(4);
-                                    let mut echoed = 0usize;
-                                    for _ in 0..MESSAGES_PER_THREAD {
-                                        if router.recv_into(&mut buf).await.unwrap_or(false) {
-                                            router.send(buf.clone()).await.ok();
-                                            echoed += 1;
-                                            if echoed.is_multiple_of(BATCH_SIZE) {
-                                                router.flush().await.ok();
-                                            }
-                                        }
-                                    }
-                                });
-
-                                let stream = monocoque::rt::TcpStream::connect(server_addr)
-                                    .await
-                                    .unwrap();
-                                let mut dealer = DealerSocket::from_tcp_with_options(
-                                    stream,
-                                    SocketOptions::default().with_write_coalescing(true),
-                                )
-                                .await
-                                .unwrap();
-
-                                let mut buf: Vec<Bytes> = Vec::with_capacity(4);
-                                for _ in 0..(MESSAGES_PER_THREAD / BATCH_SIZE) {
-                                    for _ in 0..BATCH_SIZE {
-                                        dealer
-                                            .send(vec![black_box(payload.clone())])
-                                            .await
-                                            .unwrap();
-                                    }
-                                    dealer.flush().await.unwrap();
-                                    for _ in 0..BATCH_SIZE {
-                                        if !dealer.recv_into(&mut buf).await.unwrap_or(false) {
-                                            break;
-                                        }
-                                    }
-                                }
+                                let mut dealer = DealerSocket::with_options(coalescing());
+                                dealer.connect(&endpoint).await.unwrap();
+                                dealer_rounds(&mut dealer, &payload).await;
 
                                 monocoque::rt::join(router_task).await;
                             });

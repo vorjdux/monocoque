@@ -6,8 +6,7 @@
 /// - Receive a response
 ///
 /// Run this after starting a ZMQ ROUTER server on port 5555
-use bytes::Bytes;
-use monocoque::rt::{LocalRuntime, TcpStream};
+use monocoque::rt::LocalRuntime;
 use monocoque::zmq::DealerSocket;
 use tracing::info;
 
@@ -18,26 +17,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Connecting to tcp://127.0.0.1:5555...");
 
-    // Connect to server
-    let stream = TcpStream::connect("127.0.0.1:5555").await?;
+    // Create DEALER socket and start connecting. Dialing happens in the
+    // background, so this returns even if the server is not up yet.
+    let mut socket = DealerSocket::new();
+    socket.connect("tcp://127.0.0.1:5555").await?;
 
-    // Create DEALER socket
-    let mut socket = DealerSocket::from_tcp(stream).await?;
+    info!("Sending message...");
 
-    info!("Connected! Sending message...");
-
-    // Send a simple message
-    socket
-        .send(vec![Bytes::from("Hello from Monocoque!")])
-        .await?;
+    // Send a simple message; it waits for the connection
+    socket.send("Hello from Monocoque!").await?;
 
     info!("Message sent. Waiting for response...");
 
     // Receive response
-    let response = socket.recv().await?.ok_or("Connection closed")?;
+    let response = socket.recv().await?;
 
     info!("Received response: {} frames", response.len());
-    for (i, frame) in response.iter().enumerate() {
+    for (i, frame) in response.frames().enumerate() {
         info!("  Frame {}: {} bytes", i, frame.len());
         if let Ok(s) = std::str::from_utf8(frame) {
             info!("    Content: {s}");

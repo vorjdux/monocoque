@@ -32,7 +32,7 @@ const BENCH_BACKEND: &str = if cfg!(feature = "runtime-tokio") {
 } else {
     "compio"
 };
-use monocoque::zmq::{PubSocket, SocketOptions, SubSocket};
+use monocoque::zmq::{Msg, PubSocket, SocketOptions, SubSocket};
 use std::hint::black_box;
 use std::sync::mpsc;
 use std::thread;
@@ -47,9 +47,7 @@ const MESSAGE_SIZE: usize = 256;
 /// pipeline before timing starts.
 const WARMUP_MSGS: usize = 200;
 /// Brief settle after the subscription is issued, to cut the initial
-/// slow-joiner drop burst (untimed). Uses `thread::sleep`, not
-/// `monocoque::rt::sleep`, which would block on the stalled `io_uring` handshake
-/// timer left behind by `accept_subscriber`.
+/// slow-joiner drop burst (untimed).
 const SETTLE: Duration = Duration::from_millis(50);
 /// Of every `MESSAGE_COUNT` published in the topic-filtering test, this many
 /// match the subscription.
@@ -63,47 +61,40 @@ const MATCHED_PER_ROUND: usize = MESSAGE_COUNT / 10;
 /// while the publisher oversends. Returns the slowest subscriber's elapsed time.
 fn run_monocoque_fanout(num_subs: usize, iters: u64) -> Duration {
     let target = usize::try_from(iters).expect("iteration count fits usize") * MESSAGE_COUNT;
-    let payload = Bytes::from(vec![0u8; MESSAGE_SIZE]);
+    let payload = Msg::from(vec![0u8; MESSAGE_SIZE]);
 
-    let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
+    let (ep_tx, ep_rx) = mpsc::channel::<String>();
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
 
     let pub_handle = thread::spawn(move || {
         let rt = monocoque::rt::LocalRuntime::new().unwrap();
         rt.block_on(async move {
-            let mut pub_socket = PubSocket::bind("127.0.0.1:0").await.unwrap();
-            addr_tx.send(pub_socket.local_addr().unwrap()).unwrap();
-            for _ in 0..num_subs {
-                pub_socket.accept_subscriber().await.unwrap();
-            }
+            let mut pub_socket = PubSocket::new();
+            ep_tx
+                .send(pub_socket.bind("tcp://127.0.0.1:0").await.unwrap())
+                .unwrap();
+            wait_subscribed(&mut pub_socket, &payload, num_subs).await;
             thread::sleep(SETTLE);
             // Oversend until every subscriber has measured its window.
             while stop_rx.try_recv().is_err() {
-                pub_socket
-                    .send_frames(std::slice::from_ref(&payload))
-                    .await
-                    .ok();
+                oversend(&mut pub_socket, &payload, num_subs).await;
             }
         });
     });
 
-    let server_addr = addr_rx.recv().unwrap();
+    let endpoint = ep_rx.recv().unwrap();
 
     let mut sub_handles = Vec::new();
     for _ in 0..num_subs {
+        let endpoint = endpoint.clone();
         sub_handles.push(thread::spawn(move || {
             let rt = monocoque::rt::LocalRuntime::new().unwrap();
             rt.block_on(async move {
-                let stream = monocoque::rt::TcpStream::connect(server_addr)
-                    .await
-                    .unwrap();
-                let mut sub = SubSocket::from_tcp_with_options(
-                    stream,
+                let mut sub = SubSocket::with_options(
                     SocketOptions::default().with_buffer_sizes(16384, 16384),
-                )
-                .await
-                .unwrap();
+                );
                 sub.subscribe(b"").await.unwrap();
+                sub.connect(&endpoint).await.unwrap();
                 recv_n(&mut sub, WARMUP_MSGS).await; // untimed warmup
                 let start = Instant::now();
                 recv_n(&mut sub, target).await;
@@ -124,13 +115,28 @@ fn run_monocoque_fanout(num_subs: usize, iters: u64) -> Duration {
     elapsed
 }
 
-/// Receive exactly `n` messages, returning early only on disconnect.
+/// Publish until `msg` reaches `subs` subscribers, sleeping between attempts
+/// so the connections and subscriptions can complete.
+async fn wait_subscribed(pub_socket: &mut PubSocket, msg: &Msg, subs: usize) {
+    while pub_socket.send(msg.clone()).await.unwrap_or(0) < subs {
+        monocoque::rt::sleep(Duration::from_millis(1)).await;
+    }
+}
+
+/// Publish one message. PUB never waits on a send, so when a subscriber's
+/// queue is full (`msg` reached fewer than `subs`), wait for the queued bytes
+/// to be written; that also hands the runtime its turn to run the I/O.
+async fn oversend(pub_socket: &mut PubSocket, msg: &Msg, subs: usize) {
+    if pub_socket.send(msg.clone()).await.unwrap_or(0) < subs {
+        let _ = pub_socket.flush().await;
+    }
+}
+
+/// Receive exactly `n` messages, returning early only on an error.
 async fn recv_n(sub: &mut SubSocket, n: usize) {
-    let mut count = 0;
-    while count < n {
-        match sub.recv().await {
-            Ok(Some(_)) => count += 1,
-            Ok(None) | Err(_) => return,
+    for _ in 0..n {
+        if sub.recv().await.is_err() {
+            return;
         }
     }
 }
@@ -258,40 +264,41 @@ fn run_monocoque_topic_filtering(iters: u64) -> Duration {
     let target_matches =
         usize::try_from(iters).expect("iteration count fits usize") * MATCHED_PER_ROUND;
     let payload = Bytes::from(vec![0u8; MESSAGE_SIZE]);
+    let matched = Msg::from([Bytes::from_static(b"match.topic"), payload.clone()]);
+    let other = Msg::from([Bytes::from_static(b"other.topic"), payload]);
 
-    let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
+    let (ep_tx, ep_rx) = mpsc::channel::<String>();
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
 
     let pub_handle = thread::spawn(move || {
         let rt = monocoque::rt::LocalRuntime::new().unwrap();
         rt.block_on(async move {
-            let mut pub_socket = PubSocket::bind("127.0.0.1:0").await.unwrap();
-            addr_tx.send(pub_socket.local_addr().unwrap()).unwrap();
-            pub_socket.accept_subscriber().await.unwrap();
+            let mut pub_socket = PubSocket::new();
+            ep_tx
+                .send(pub_socket.bind("tcp://127.0.0.1:0").await.unwrap())
+                .unwrap();
+            wait_subscribed(&mut pub_socket, &matched, 1).await;
             thread::sleep(SETTLE);
             let mut i = 0usize;
             while stop_rx.try_recv().is_err() {
-                let topic = if i.is_multiple_of(10) {
-                    Bytes::from_static(b"match.topic")
+                if i.is_multiple_of(10) {
+                    oversend(&mut pub_socket, &matched, 1).await;
                 } else {
-                    Bytes::from_static(b"other.topic")
-                };
-                pub_socket.send_frames(&[topic, payload.clone()]).await.ok();
+                    oversend(&mut pub_socket, &other, 0).await;
+                }
                 i += 1;
             }
         });
     });
 
-    let server_addr = addr_rx.recv().unwrap();
+    let endpoint = ep_rx.recv().unwrap();
 
     let sub_handle = thread::spawn(move || {
         let rt = monocoque::rt::LocalRuntime::new().unwrap();
         rt.block_on(async move {
-            let stream = monocoque::rt::TcpStream::connect(server_addr)
-                .await
-                .unwrap();
-            let mut sub = SubSocket::from_tcp(stream).await.unwrap();
+            let mut sub = SubSocket::new();
             sub.subscribe(b"match.").await.unwrap();
+            sub.connect(&endpoint).await.unwrap();
             recv_n(&mut sub, MATCHED_PER_ROUND * 2).await; // untimed warmup
             let start = Instant::now();
             recv_n(&mut sub, target_matches).await;

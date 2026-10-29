@@ -1,262 +1,117 @@
-//! REQ Socket State Machine Integration Tests
+//! REQ socket state machine tests.
 //!
-//! Tests strict and relaxed modes for REQ socket enforcement.
+//! Covers strict alternation, relaxed mode (a new request abandons the
+//! pending one) and request correlation.
 
-use bytes::Bytes;
-use monocoque_core::options::SocketOptions;
-use monocoque_zmtp::rep::RepSocket;
-use monocoque_zmtp::req::ReqSocket;
-use std::io;
+use monocoque::rt::LocalRuntime;
+use monocoque::zmq::{MonocoqueError, RepSocket, ReqSocket, SocketOptions};
 
-/// Drive an async test body on whichever runtime backend is active.
-fn block_on<F: std::future::Future<Output = io::Result<()>>>(f: F) -> io::Result<()> {
-    monocoque::rt::LocalRuntime::new()?.block_on(f)
-}
-
-/// Test strict REQ state machine - send→send should fail
-#[test]
-fn test_req_strict_send_send_fails() -> io::Result<()> {
-    block_on(test_req_strict_send_send_fails_impl())
-}
-
-async fn test_req_strict_send_send_fails_impl() -> io::Result<()> {
-    // Setup REP server
-    let listener = monocoque::rt::TcpListener::bind("127.0.0.1:0").await?;
-    let server_addr = listener.local_addr()?;
-
-    let server_task = monocoque::rt::spawn(async move {
-        let (stream, _) = listener.accept().await?;
-        let mut rep_socket = RepSocket::new(stream).await?;
-
-        // Receive first request
-        let _req = rep_socket.recv().await?;
-        rep_socket.send(vec![Bytes::from("reply1")]).await?;
-
-        Ok::<(), io::Error>(())
-    });
-
-    // Give server time to start
-    monocoque::rt::sleep(std::time::Duration::from_millis(50)).await;
-
-    // Create REQ socket with STRICT mode (req_relaxed = false, which is default)
-    let stream = monocoque::rt::TcpStream::connect(server_addr).await?;
-    let options = SocketOptions {
-        req_relaxed: false,
-        ..Default::default()
-    };
-    let mut req_socket = ReqSocket::with_options(stream, options).await?;
-
-    // First send should work
-    req_socket.send(vec![Bytes::from("request1")]).await?;
-
-    // Second send WITHOUT recv should FAIL in strict mode
-    let result = req_socket.send(vec![Bytes::from("request2")]).await;
-    assert!(
-        result.is_err(),
-        "Expected error when sending twice without recv in strict mode"
-    );
-
-    let err = result.unwrap_err();
-    assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
-    assert!(err.to_string().contains("await reply") || err.to_string().contains("recv"));
-
-    // Clean up
-    let _reply = req_socket.recv().await?;
-    monocoque::rt::join(server_task).await?;
-
-    Ok(())
-}
-
-/// Test strict REQ state machine - recv→recv should fail
-#[test]
-fn test_req_strict_recv_recv_fails() -> io::Result<()> {
-    block_on(test_req_strict_recv_recv_fails_impl())
-}
-
-async fn test_req_strict_recv_recv_fails_impl() -> io::Result<()> {
-    // Setup REP server
-    let listener = monocoque::rt::TcpListener::bind("127.0.0.1:0").await?;
-    let server_addr = listener.local_addr()?;
-
-    let server_task = monocoque::rt::spawn(async move {
-        let (stream, _) = listener.accept().await?;
-        let mut rep_socket = RepSocket::new(stream).await?;
-
-        // Receive request and send reply
-        let _req = rep_socket.recv().await?;
-        rep_socket.send(vec![Bytes::from("reply1")]).await?;
-
-        Ok::<(), io::Error>(())
-    });
-
-    monocoque::rt::sleep(std::time::Duration::from_millis(50)).await;
-
-    // Create REQ socket in strict mode
-    let stream = monocoque::rt::TcpStream::connect(server_addr).await?;
-    let mut req_socket = ReqSocket::new(stream).await?; // Default is strict
-
-    // Send and recv - normal flow
-    req_socket.send(vec![Bytes::from("request1")]).await?;
-    let _reply = req_socket.recv().await?;
-
-    // Now socket is in Idle state - recv without send should FAIL
-    let result = req_socket.recv().await;
-    assert!(
-        result.is_err(),
-        "Expected error when receiving twice without send in strict mode"
-    );
-
-    let err = result.unwrap_err();
-    assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
-    assert!(err.to_string().contains("Idle") || err.to_string().contains("send"));
-
-    monocoque::rt::join(server_task).await?;
-    Ok(())
-}
-
-/// Test relaxed REQ mode - send→send→recv→send→recv works
-///
-/// Relaxed mode skips the strict enforcement that prevents send-after-send.
-/// Full request pipelining (N sends then N recvs) is not yet implemented  -
-/// each `recv()` still transitions to Idle, so send/recv still need to interleave.
-#[test]
-fn test_req_relaxed_send_send_succeeds() -> io::Result<()> {
-    block_on(test_req_relaxed_send_send_succeeds_impl())
-}
-
-async fn test_req_relaxed_send_send_succeeds_impl() -> io::Result<()> {
-    // Setup REP server that handles multiple requests
-    let listener = monocoque::rt::TcpListener::bind("127.0.0.1:0").await?;
-    let server_addr = listener.local_addr()?;
-
-    let server_task = monocoque::rt::spawn(async move {
-        let (stream, _) = listener.accept().await?;
-        let mut rep_socket = RepSocket::new(stream).await?;
-
-        let _req1 = rep_socket.recv().await?;
-        rep_socket.send(vec![Bytes::from("reply1")]).await?;
-
-        let _req2 = rep_socket.recv().await?;
-        rep_socket.send(vec![Bytes::from("reply2")]).await?;
-
-        Ok::<(), io::Error>(())
-    });
-
-    monocoque::rt::sleep(std::time::Duration::from_millis(50)).await;
-
-    let stream = monocoque::rt::TcpStream::connect(server_addr).await?;
-    let options = SocketOptions {
-        req_relaxed: true,
-        ..Default::default()
-    };
-    let mut req_socket = ReqSocket::with_options(stream, options).await?;
-
-    // In relaxed mode, the strict state check is skipped.
-    // Each send→recv cycle still needs to alternate because recv() resets state to Idle.
-    req_socket.send(vec![Bytes::from("request1")]).await?;
-    let reply1 = req_socket.recv().await?;
-    assert!(reply1.is_some());
-
-    // After recv, state is Idle; in relaxed mode we can send again
-    req_socket.send(vec![Bytes::from("request2")]).await?;
-    let reply2 = req_socket.recv().await?;
-    assert!(reply2.is_some());
-
-    monocoque::rt::join(server_task).await?;
-    Ok(())
-}
-
-/// Test strict REQ mode - normal alternating send/recv works
-#[test]
-fn test_req_strict_normal_flow() -> io::Result<()> {
-    block_on(test_req_strict_normal_flow_impl())
-}
-
-async fn test_req_strict_normal_flow_impl() -> io::Result<()> {
-    // Setup REP server
-    let listener = monocoque::rt::TcpListener::bind("127.0.0.1:0").await?;
-    let server_addr = listener.local_addr()?;
-
-    let server_task = monocoque::rt::spawn(async move {
-        let (stream, _) = listener.accept().await?;
-        let mut rep_socket = RepSocket::new(stream).await?;
-
-        // Handle 3 request-reply cycles
-        for i in 0..3 {
-            let req = rep_socket.recv().await?.expect("Should receive request");
-            assert_eq!(req[0], Bytes::from(format!("request{i}")));
-
-            rep_socket
-                .send(vec![Bytes::from(format!("reply{i}"))])
-                .await?;
+/// Bind a REP that echoes `count` requests back with a `reply:` prefix on
+/// the first frame, running on the local executor.
+async fn echo_rep(count: usize) -> String {
+    let mut rep = RepSocket::new();
+    let ep = rep.bind("tcp://127.0.0.1:0").await.unwrap();
+    monocoque::rt::spawn_detached(async move {
+        for _ in 0..count {
+            let mut msg = rep.recv_owned().await.unwrap();
+            let body = msg.pop_front().unwrap();
+            let mut reply = b"reply:".to_vec();
+            reply.extend_from_slice(&body);
+            rep.send(reply).await.unwrap();
         }
-
-        Ok::<(), io::Error>(())
+        let _ = rep.close().await;
     });
-
-    monocoque::rt::sleep(std::time::Duration::from_millis(50)).await;
-
-    // Create REQ socket in strict mode
-    let stream = monocoque::rt::TcpStream::connect(server_addr).await?;
-    let mut req_socket = ReqSocket::new(stream).await?;
-
-    // Proper alternating send→recv→send→recv should work
-    for i in 0..3 {
-        req_socket
-            .send(vec![Bytes::from(format!("request{i}"))])
-            .await?;
-        let reply = req_socket.recv().await?.expect("Should receive reply");
-        assert_eq!(reply[0], Bytes::from(format!("reply{i}")));
-    }
-
-    monocoque::rt::join(server_task).await?;
-    Ok(())
+    ep
 }
 
-/// Test REQ correlation mode - request IDs are validated
 #[test]
-fn test_req_correlation_mode() -> io::Result<()> {
-    block_on(test_req_correlation_mode_impl())
+fn strict_send_send_fails() {
+    LocalRuntime::new().unwrap().block_on(async {
+        let ep = echo_rep(1).await;
+        let mut req = ReqSocket::new();
+        req.connect(&ep).await.unwrap();
+        req.send("request1").await.unwrap();
+        assert!(matches!(
+            req.send("request2").await,
+            Err(MonocoqueError::InvalidState(_))
+        ));
+        assert_eq!(req.recv().await.unwrap(), [b"reply:request1"]);
+    });
 }
 
-async fn test_req_correlation_mode_impl() -> io::Result<()> {
-    // Setup REP server that echoes back correlation IDs
-    let listener = monocoque::rt::TcpListener::bind("127.0.0.1:0").await?;
-    let server_addr = listener.local_addr()?;
-
-    let server_task = monocoque::rt::spawn(async move {
-        let (stream, _) = listener.accept().await?;
-        let mut rep_socket = RepSocket::new(stream).await?;
-
-        // Receive request (with correlation ID as first frame)
-        let req = rep_socket.recv().await?.expect("Should receive");
-
-        // Echo back the correlation ID + payload
-        rep_socket.send(req).await?;
-
-        Ok::<(), io::Error>(())
+#[test]
+fn strict_recv_before_send_fails() {
+    LocalRuntime::new().unwrap().block_on(async {
+        let ep = echo_rep(0).await;
+        let mut req = ReqSocket::new();
+        req.connect(&ep).await.unwrap();
+        assert!(matches!(
+            req.recv().await,
+            Err(MonocoqueError::InvalidState(_))
+        ));
+        // A reply has been consumed: a second recv is again out of order.
+        let ep = echo_rep(1).await;
+        let mut req = ReqSocket::new();
+        req.connect(&ep).await.unwrap();
+        req.send("x").await.unwrap();
+        req.recv().await.unwrap();
+        assert!(matches!(
+            req.recv().await,
+            Err(MonocoqueError::InvalidState(_))
+        ));
     });
+}
 
-    monocoque::rt::sleep(std::time::Duration::from_millis(50)).await;
+#[test]
+fn strict_alternation_works() {
+    LocalRuntime::new().unwrap().block_on(async {
+        let ep = echo_rep(3).await;
+        let mut req = ReqSocket::new();
+        req.connect(&ep).await.unwrap();
+        for i in 0..3 {
+            req.send(format!("request{i}")).await.unwrap();
+            let expected = format!("reply:request{i}");
+            assert_eq!(req.recv().await.unwrap(), [expected.as_bytes()]);
+        }
+    });
+}
 
-    // Create REQ socket with correlation enabled
-    let stream = monocoque::rt::TcpStream::connect(server_addr).await?;
-    let options = SocketOptions {
-        req_correlate: true,
-        ..Default::default()
-    };
-    let mut req_socket = ReqSocket::with_options(stream, options).await?;
+/// Relaxed plus correlated: a second request abandons the first, and the
+/// stale reply to the first is discarded instead of being returned.
+#[test]
+fn relaxed_new_request_abandons_pending_one() {
+    LocalRuntime::new().unwrap().block_on(async {
+        let mut rep = RepSocket::new();
+        let ep = rep.bind("tcp://127.0.0.1:0").await.unwrap();
+        let mut req = ReqSocket::with_options(
+            SocketOptions::default()
+                .with_req_relaxed(true)
+                .with_req_correlate(true),
+        );
+        req.connect(&ep).await.unwrap();
+        req.send("request1").await.unwrap();
+        req.send("request2").await.unwrap();
+        for _ in 0..2 {
+            let msg = rep.recv_owned().await.unwrap();
+            rep.send(msg).await.unwrap();
+        }
+        assert_eq!(req.recv().await.unwrap(), [b"request2"]);
+    });
+}
 
-    // Send request - correlation ID will be prepended automatically
-    req_socket.send(vec![Bytes::from("payload")]).await?;
-
-    // Receive reply - correlation ID will be validated and stripped
-    let reply = req_socket.recv().await?.expect("Should receive");
-
-    // Should only contain the payload (correlation ID stripped)
-    assert_eq!(reply.len(), 1);
-    assert_eq!(reply[0], Bytes::from("payload"));
-
-    monocoque::rt::join(server_task).await?;
-    Ok(())
+/// Correlation ids travel in front of the envelope and are stripped again.
+#[test]
+fn correlation_id_is_added_and_stripped() {
+    LocalRuntime::new().unwrap().block_on(async {
+        let mut rep = RepSocket::new();
+        let ep = rep.bind("tcp://127.0.0.1:0").await.unwrap();
+        let mut req =
+            ReqSocket::with_options(SocketOptions::default().with_req_correlate(true));
+        req.connect(&ep).await.unwrap();
+        req.send("payload").await.unwrap();
+        let msg = rep.recv_owned().await.unwrap();
+        assert_eq!(msg, [b"payload"]);
+        rep.send(msg).await.unwrap();
+        assert_eq!(req.recv().await.unwrap(), [b"payload"]);
+    });
 }

@@ -1,9 +1,11 @@
 //! Simple REQ Client for Interop Testing
 //!
-//! This is a standalone example using monocoque-zmtp directly for testing.
+//! Connects to a REP server, sends one request and prints the reply.
+//!
+//! Usage: `simple_req_client --port <PORT>`
 
-use bytes::Bytes;
-use monocoque::rt::{LocalRuntime, TcpStream};
+use monocoque::rt::LocalRuntime;
+use monocoque::zmq::ReqSocket;
 use std::env;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -19,22 +21,24 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         5555
     };
 
-    // Connect to server
-    let addr = format!("127.0.0.1:{port}");
-    let stream = TcpStream::connect(&addr).await?;
-    println!("Connected to {addr}");
-
-    let mut socket = monocoque_zmtp::ReqSocket::new(stream).await?;
+    // Connect to server. The dial runs in the background; the send below waits
+    // for the connection.
+    let addr = format!("tcp://127.0.0.1:{port}");
+    let mut socket = ReqSocket::new();
+    socket.connect(&addr).await?;
+    println!("Connecting to {addr}");
 
     // Send request
-    let msg = vec![Bytes::from("Hello from Monocoque")];
-    socket.send(msg).await?;
+    socket.send("Hello from Monocoque").await?;
     println!("Sent: Hello from Monocoque");
 
     // Receive reply
-    if let Some(reply) = socket.recv().await? {
-        println!("Received: {}", String::from_utf8_lossy(&reply[0]));
-    }
+    let reply = socket.recv_owned().await?;
+    println!(
+        "Received: {}",
+        String::from_utf8_lossy(reply.first().unwrap_or_default())
+    );
 
+    socket.close().await?;
     Ok(())
 }

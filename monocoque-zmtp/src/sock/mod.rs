@@ -10,6 +10,8 @@
 //! background work while no call is in progress.
 
 pub mod kinds;
+pub mod proxy;
+pub mod stream;
 
 use crate::session::SocketType;
 use crate::wire::{Zmtp, ZmtpConfig};
@@ -150,6 +152,12 @@ impl<K: Kind> Socket<K> {
         self.core.borrow().peer_count()
     }
 
+    /// Ids of the connected peers, in connection order.
+    #[must_use]
+    pub fn peer_ids(&self) -> Vec<PeerId> {
+        self.core.borrow().peer_ids().to_vec()
+    }
+
     /// The most recently bound endpoint (`ZMQ_LAST_ENDPOINT`).
     #[must_use]
     pub fn last_endpoint(&self) -> Option<String> {
@@ -211,6 +219,12 @@ impl<K: Kind> Socket<K> {
     #[must_use]
     pub fn has_message(&self) -> bool {
         self.core.borrow_mut().has_ready()
+    }
+
+    /// Wait until a message is queued, without taking it. Dropping this
+    /// future loses nothing, so it is safe to race in a `select`.
+    pub fn poll_readable(&self, cx: &mut std::task::Context<'_>) -> std::task::Poll<()> {
+        self.core.borrow_mut().poll_readable(cx)
     }
 
     /// `true` if a send would be accepted without waiting.
@@ -279,13 +293,28 @@ impl<K: Kind> Socket<K> {
     pub(crate) async fn send_lb_prefixed(&mut self, prefix: &[Bytes], msg: Msg) -> Result<PeerId> {
         let timeout = self.send_timeout();
         let mut slot = Some(msg);
-        with_timeout(
+        let peer = with_timeout(
             op(&self.core, move |c, cx| {
                 c.poll_send_lb_prefixed(cx, prefix, &mut slot)
             }),
             timeout,
         )
-        .await?
+        .await??;
+        self.wait_written(peer).await;
+        Ok(peer)
+    }
+
+    /// Eager delivery: return only once `peer`'s queued bytes are in the
+    /// kernel, so a caller that blocks its thread right after a send still
+    /// gets the message out. Bounded by `send_timeout`; the message is already
+    /// queued, so running out of time here is not a send failure.
+    pub(crate) async fn wait_written(&mut self, peer: PeerId) {
+        let timeout = self.send_timeout();
+        let _ = with_timeout(
+            op(&self.core, move |c, cx| c.poll_written(cx, peer)),
+            timeout,
+        )
+        .await;
     }
 
     /// Send to `peer` with envelope frames ahead of the message, waiting
@@ -304,7 +333,9 @@ impl<K: Kind> Socket<K> {
             }),
             timeout,
         )
-        .await?
+        .await??;
+        self.wait_written(peer).await;
+        Ok(())
     }
 
     /// Queue to `peer` without waiting.

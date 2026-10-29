@@ -1,119 +1,71 @@
-//! ZeroMQ protocol implementation.
+//! ZeroMQ sockets.
 //!
-//! This module provides high-performance ZeroMQ-compatible sockets built on `io_uring`.
+//! Every socket is created unconnected, then bound and/or connected to any
+//! number of `tcp://`, `ipc://` and `inproc://` endpoints. Messages are
+//! [`Msg`]: a single small frame is stored inline, larger frames are shared
+//! `Bytes`, so neither sending nor receiving copies a payload. A receive lends
+//! the message out as a [`MsgRef`]; call [`MsgRef::take`] or `recv_owned` to
+//! keep it. Every operation returns [`Result`] with a [`MonocoqueError`].
 //!
-//! # Socket Types
+//! # Socket types
 //!
-//! - [`DealerSocket`] - Asynchronous request-reply client (load-balanced)
-//! - [`RouterSocket`] - Identity-based routing server
-//! - [`ReqSocket`] - Synchronous request-reply client (strict alternation)
-//! - [`RepSocket`] - Synchronous reply server (stateful envelope tracking)
-//! - [`PubSocket`] - Publisher (broadcast to subscribers)
-//! - [`SubSocket`] - Subscriber (receive filtered messages)
-//! - [`PushSocket`] - Pipeline push (distribute tasks)
-//! - [`PullSocket`] - Pipeline pull (receive tasks)
-//! - [`PushFanOut`] - Ventilator that round-robins tasks across a pool of PULL workers
-//! - [`PullFanIn`] - Sink that merges results from a pool of PUSH workers
-//! - [`PairSocket`] - Exclusive pair connection
-//! - [`XPubSocket`] - Extended publisher (subscription events)
-//! - [`XSubSocket`] - Extended subscriber (subscription forwarding)
-//! - [`StreamSocket`] - Raw TCP bridging (no ZMTP handshake)
+//! - [`DealerSocket`], [`RouterSocket`]: asynchronous request/reply
+//! - [`ReqSocket`], [`RepSocket`]: strict request/reply
+//! - [`PubSocket`], [`SubSocket`], [`XPubSocket`], [`XSubSocket`]: publish/subscribe
+//! - [`PushSocket`], [`PullSocket`]: pipelines
+//! - [`PairSocket`]: one exclusive peer
 //!
-//! # Features
-//!
-//! - **Endpoint Parsing**: Use `Endpoint::parse("tcp://...")` or `Endpoint::parse("ipc://...")`
-//! - **Socket Monitoring**: Subscribe to connection events via `socket.monitor()`
-//! - **IPC Transport**: Unix domain sockets for low-latency local communication (Unix only)
-//!
-//! # Quick Start
-//!
-//! ## DEALER (Client)
+//! # Example
 //!
 //! ```rust,no_run
-//! use monocoque::zmq::DealerSocket;
-//! use bytes::Bytes;
+//! use monocoque::zmq::{RepSocket, ReqSocket};
 //!
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let mut socket = DealerSocket::connect("127.0.0.1:5555").await?;
-//! socket.send(vec![Bytes::from("REQUEST")]).await?;
+//! # async fn example() -> monocoque::zmq::Result<()> {
+//! let mut rep = RepSocket::new();
+//! let endpoint = rep.bind("tcp://127.0.0.1:0").await?;
 //!
-//! if let Ok(Some(reply)) = socket.recv().await {
-//!     println!("Got reply: {:?}", reply);
-//! }
-//! # Ok(())
-//! # }
-//! ```
+//! let mut req = ReqSocket::new();
+//! req.connect(&endpoint).await?;
+//! req.send("hello").await?;
 //!
-//! ## ROUTER (Server)
-//!
-//! ```rust,no_run
-//! use monocoque::zmq::RouterSocket;
-//!
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let (listener, mut socket) = RouterSocket::bind("127.0.0.1:5555").await?;
-//!
-//! while let Ok(Some(msg)) = socket.recv().await {
-//!     socket.send(msg).await?; // Echo back
-//! }
+//! let request = rep.recv_owned().await?;
+//! rep.send(request).await?;
+//! assert_eq!(req.recv().await?, [b"hello"]);
 //! # Ok(())
 //! # }
 //! ```
 
-mod common;
-mod dealer;
-mod publisher;
-mod pull;
-mod pull_fanin;
-mod push;
-mod push_fanout;
-mod rep;
-mod req;
-mod router;
-mod subscriber;
-
-// Re-export socket types
-pub use dealer::DealerSocket;
 pub use monocoque_core::endpoint::{Endpoint, EndpointError};
+pub use monocoque_core::error::{MonocoqueError, Result};
 pub use monocoque_core::monitor::{SocketEvent, SocketMonitor};
+pub use monocoque_core::msg::{Msg, MsgRef};
+pub use monocoque_core::mux::{PeerId, PeerInfo};
 pub use monocoque_core::options::SocketOptions;
-pub use monocoque_core::socket_type::SocketType;
 pub use monocoque_core::subscription::{Subscription, SubscriptionEvent, SubscriptionTrie};
-pub use monocoque_zmtp::proxy;
-pub use monocoque_zmtp::{PairSocket, StreamSocket, XPubSocket, XSubSocket};
-pub use publisher::PubSocket;
-pub use pull::PullSocket;
-pub use pull_fanin::PullFanIn;
-pub use push::PushSocket;
-pub use push_fanout::PushFanOut;
-pub use rep::RepSocket;
-pub use req::ReqSocket;
-pub use router::RouterSocket;
-pub use subscriber::SubSocket;
+pub use monocoque_zmtp::session::SocketType;
+pub use monocoque_zmtp::sock::Socket;
+pub use monocoque_zmtp::sock::kinds::{
+    DealerSocket, PairSocket, PubSocket, PullSocket, PushSocket, RepSocket, ReqSocket,
+    RouterSocket, SubSocket, XPubSocket, XSubSocket,
+};
+pub use monocoque_zmtp::sock::stream::StreamSocket;
+
+/// `zmq_proxy` and `zmq_proxy_steerable`.
+pub mod proxy {
+    pub use monocoque_zmtp::sock::proxy::{
+        NoCapture, ProxyCommand, ProxySocket, proxy, proxy_steerable,
+    };
+}
 
 #[cfg(unix)]
 pub use monocoque_core::ipc;
 
-/// Convenient imports for ZeroMQ protocol.
-///
-/// # Example
-///
-/// ```rust
-/// use monocoque::zmq::prelude::*;
-///
-/// // Now you have:
-/// // - DealerSocket, RouterSocket, ReqSocket, RepSocket
-/// // - PubSocket, SubSocket, XPubSocket, XSubSocket
-/// // - PushSocket, PullSocket, PushFanOut, PullFanIn, PairSocket
-/// // - Bytes for zero-copy messages
-/// // - SocketOptions, SocketType for configuration
-/// ```
+/// Everything needed to write a socket program.
 pub mod prelude {
-    pub use super::proxy::{ProxyCommand, ProxySocket, proxy, proxy_steerable};
     pub use super::{
-        DealerSocket, PairSocket, PubSocket, PullFanIn, PullSocket, PushFanOut, PushSocket,
-        RepSocket, ReqSocket, RouterSocket, SocketOptions, StreamSocket, SubSocket, Subscription,
-        SubscriptionEvent, SubscriptionTrie, XPubSocket, XSubSocket,
+        DealerSocket, MonocoqueError, Msg, MsgRef, PairSocket, PubSocket, PullSocket, PushSocket,
+        RepSocket, ReqSocket, Result, RouterSocket, SocketOptions, SocketType, SubSocket,
+        XPubSocket, XSubSocket,
     };
     pub use bytes::Bytes;
-    pub use monocoque_core::socket_type::SocketType;
 }

@@ -6,8 +6,7 @@
 //!
 //! Usage: `pub_server --port <PORT>`
 
-use bytes::Bytes;
-use monocoque::rt::LocalRuntime;
+use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::PubSocket;
 use std::env;
 use std::time::Duration;
@@ -24,21 +23,16 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         5556
     };
 
-    let mut publisher = PubSocket::bind(format!("127.0.0.1:{port}")).await?;
+    let mut publisher = PubSocket::new();
+    publisher.bind(&format!("tcp://127.0.0.1:{port}")).await?;
 
-    // A PUB does not auto-accept subscribers on send(); accept the one the
-    // interop harness connects, then publish. Oversending covers the slow-joiner
-    // window (the subscription may not be registered when the first sends fire).
-    publisher.accept_subscriber().await?;
-
+    // Subscribers are accepted in the background. Messages published before a
+    // subscription arrives are dropped, so keep publishing to cover the
+    // slow-joiner window.
     let mut n = 0u64;
     loop {
-        publisher
-            .send(vec![Bytes::from(format!("Hello {n}"))])
-            .await?;
+        publisher.send(format!("Hello {n}")).await?;
         n += 1;
-        // A std sleep (not monocoque::rt::sleep) paces the loop without touching
-        // the runtime timer state; delivery runs on the PUB worker threads.
-        std::thread::sleep(Duration::from_millis(50));
+        rt::sleep(Duration::from_millis(50)).await;
     }
 }

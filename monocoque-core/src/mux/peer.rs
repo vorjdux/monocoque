@@ -38,8 +38,12 @@ pub enum Outbound<C> {
         out: OutQueue,
         /// The writer loop, parked while `out` is empty.
         writer_waker: Option<Waker>,
-        /// Hold writes until an explicit flush (`write_coalescing`).
-        hold: bool,
+        /// With `write_coalescing`, the byte threshold below which writes are
+        /// held. Held writes are released early by a flush or by reaching
+        /// the send HWM, so a sender blocked on the HWM always makes progress.
+        hold: Option<usize>,
+        /// A flush asked for everything queued to be written.
+        flushing: bool,
     },
     /// An inproc peer on this thread: messages move with no codec.
     Local(crate::localq::LocalSender<Msg>),
@@ -62,6 +66,8 @@ pub struct PeerState<C> {
     /// Last time any bytes arrived; tracked only when heartbeating.
     pub(crate) last_recv: Option<Instant>,
     pub(crate) ping_outstanding: bool,
+    /// Close the connection once everything queued has been written.
+    pub(crate) close_when_drained: bool,
 }
 
 impl<C: Codec> PeerState<C> {
@@ -85,6 +91,20 @@ impl<C: Codec> PeerState<C> {
             events,
             last_recv: heartbeat.then(Instant::now),
             ping_outstanding: false,
+            close_when_drained: false,
+        }
+    }
+
+    /// Close once drained: wake the writer so it notices.
+    pub(crate) fn close_after_drain(&mut self) {
+        self.close_when_drained = true;
+        match &mut self.outbound {
+            Outbound::Wire { writer_waker, .. } => {
+                if let Some(w) = writer_waker.take() {
+                    w.wake();
+                }
+            }
+            _ => self.close(CloseReason::Local),
         }
     }
 
@@ -138,6 +158,39 @@ impl<C: Codec> PeerState<C> {
         }
     }
 
+    /// `true` while bytes this peer will write on its own are not yet in the
+    /// kernel. Held (coalescing) writes and inproc queues never count: the
+    /// first waits for an explicit flush, the second for the receiver.
+    pub(crate) fn write_pending(&self) -> bool {
+        matches!(&self.outbound, Outbound::Wire { out, hold: None, .. } if out.pending_msgs() > 0)
+    }
+
+    /// `true` if the writer may take queued bytes now.
+    fn released(&self) -> bool {
+        match &self.outbound {
+            Outbound::Wire {
+                out,
+                hold: Some(threshold),
+                flushing,
+                ..
+            } => {
+                *flushing
+                    || out.queued_bytes() >= *threshold
+                    || (self.send_hwm != 0 && out.pending_msgs() >= self.send_hwm)
+            }
+            _ => true,
+        }
+    }
+
+    fn wake_writer_if_released(&mut self) {
+        if self.released()
+            && let Outbound::Wire { writer_waker, .. } = &mut self.outbound
+            && let Some(w) = writer_waker.take()
+        {
+            w.wake();
+        }
+    }
+
     /// `true` if one more message fits under the send HWM.
     pub(crate) fn writable(&self) -> bool {
         if self.closed.is_some() {
@@ -159,17 +212,10 @@ impl<C: Codec> PeerState<C> {
     /// [`writable`]: Self::writable
     pub(crate) fn enqueue(&mut self, msg: &Msg) -> crate::error::Result<()> {
         match &mut self.outbound {
-            Outbound::Wire {
-                codec,
-                out,
-                writer_waker,
-                hold,
-            } => {
+            Outbound::Wire { codec, out, .. } => {
                 codec.encode(msg, out)?;
                 out.note_message();
-                if !*hold && let Some(w) = writer_waker.take() {
-                    w.wake();
-                }
+                self.wake_writer_if_released();
                 Ok(())
             }
             Outbound::Local(tx) => tx
@@ -193,22 +239,14 @@ impl<C: Codec> PeerState<C> {
         prefix: &[Bytes],
         mut msg: Msg,
     ) -> crate::error::Result<()> {
-        if let Outbound::Wire {
-            codec,
-            out,
-            writer_waker,
-            hold,
-        } = &mut self.outbound
-        {
+        if let Outbound::Wire { codec, out, .. } = &mut self.outbound {
             if prefix.is_empty() {
                 codec.encode(&msg, out)?;
             } else {
                 codec.encode_prefixed(prefix, &msg, out)?;
             }
             out.note_message();
-            if !*hold && let Some(w) = writer_waker.take() {
-                w.wake();
-            }
+            self.wake_writer_if_released();
             return Ok(());
         }
         for frame in prefix.iter().rev() {
@@ -258,21 +296,26 @@ impl<C: Codec> PeerState<C> {
     /// Release writes held for coalescing.
     pub(crate) fn flush(&mut self) {
         if let Outbound::Wire {
-            writer_waker, hold, ..
+            out,
+            writer_waker,
+            flushing,
+            ..
         } = &mut self.outbound
+            && out.pending_msgs() > 0
         {
-            *hold = false;
+            *flushing = true;
             if let Some(w) = writer_waker.take() {
                 w.wake();
             }
         }
     }
 
-    /// Set whether writes are held until an explicit flush.
-    pub(crate) fn set_hold(&mut self, hold_writes: bool) {
+    /// Set the coalescing threshold; `None` writes eagerly.
+    pub(crate) fn set_hold(&mut self, threshold: Option<usize>) {
         if let Outbound::Wire { hold, .. } = &mut self.outbound {
-            *hold = hold_writes;
+            *hold = threshold;
         }
+        self.wake_writer_if_released();
     }
 
     /// `true` once everything queued has been written.
@@ -294,25 +337,29 @@ impl<C: Codec> PeerState<C> {
         if self.closed.is_some() {
             return Poll::Ready(None);
         }
+        let released = self.released();
         let Outbound::Wire {
-            out,
-            writer_waker,
-            hold,
-            ..
+            out, writer_waker, ..
         } = &mut self.outbound
         else {
             return Poll::Ready(None);
         };
-        if !*hold && let Some(job) = out.take_job(spare, iov) {
+        if released && let Some(job) = out.take_job(spare, iov) {
             return Poll::Ready(Some(job));
+        }
+        if self.close_when_drained {
+            return Poll::Ready(None);
         }
         *writer_waker = Some(cx.waker().clone());
         Poll::Pending
     }
 
     fn complete_job(&mut self) {
-        if let Outbound::Wire { out, .. } = &mut self.outbound {
+        if let Outbound::Wire { out, flushing, .. } = &mut self.outbound {
             out.complete_job();
+            if out.pending_msgs() == 0 {
+                *flushing = false;
+            }
         }
         self.events.push(super::Event::Writable(self.id));
     }
@@ -413,6 +460,10 @@ pub async fn writer_loop<C: Codec>(peer: Rc<RefCell<PeerState<C>>>, stream: Rc<S
     loop {
         let job = poll_fn(|cx| peer.borrow_mut().poll_job(cx, &mut spare, &mut iov)).await;
         let Some(job) = job else {
+            if peer.borrow().close_when_drained && peer.borrow().closed.is_none() {
+                let _ = stream.shutdown().await;
+                peer.borrow_mut().close(CloseReason::Local);
+            }
             return;
         };
         let mut s = &*stream;

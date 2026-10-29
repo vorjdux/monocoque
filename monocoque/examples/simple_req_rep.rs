@@ -5,105 +5,61 @@
 //! cargo run --example simple_req_rep --features zmq
 //! ```
 
-use bytes::Bytes;
-use monocoque::zmq::{RepSocket, ReqSocket};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
-use std::time::Duration;
+use monocoque::rt::{self, LocalRuntime};
+use monocoque::zmq::{RepSocket, ReqSocket, Result};
 use tracing::info;
 
-fn main() {
+fn main() -> Result<()> {
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .init();
 
-    info!("=== Monocoque REQ ↔ REP Simple Test ===\n");
+    info!("=== Monocoque REQ <-> REP Simple Test ===\n");
 
-    // Shared state
-    let addr = Arc::new(std::sync::Mutex::new(String::new()));
-    let addr_clone = addr.clone();
-    let server_ready = Arc::new(AtomicBool::new(false));
-    let server_ready_clone = server_ready.clone();
+    LocalRuntime::new()?.block_on(async {
+        // Bind on an ephemeral port; bind returns the resolved endpoint.
+        let mut rep = RepSocket::new();
+        let endpoint = rep.bind("tcp://127.0.0.1:0").await?;
+        info!("[REP] Listening on {}", endpoint);
 
-    // Spawn REP server in background thread
-    let server_handle = thread::spawn(move || {
-        monocoque::rt::LocalRuntime::new().unwrap().block_on(async {
-            let listener = monocoque::rt::TcpListener::bind("127.0.0.1:0")
-                .await
-                .expect("Failed to bind");
-            let local_addr = listener.local_addr().expect("Failed to get local addr");
-            info!("[REP] Listening on tcp://{}", local_addr);
-
-            // Share the address with the client thread
-            *addr_clone.lock().unwrap() = local_addr.to_string();
-            server_ready_clone.store(true, Ordering::Release);
-
-            let (stream, _) = listener.accept().await.expect("Failed to accept");
-            let mut socket = RepSocket::from_tcp(stream).await.unwrap();
-            info!("[REP] Client connected");
-
+        let server = rt::spawn(async move {
             // First request-reply cycle
-            if let Ok(Some(request)) = socket.recv().await {
-                info!("[REP] Received request:");
-                for (i, frame) in request.iter().enumerate() {
-                    info!("  Frame {}: {:?}", i, String::from_utf8_lossy(frame));
-                }
-
-                info!("[REP] Sending reply");
-                socket
-                    .send(vec![Bytes::from_static(b"Reply from REP")])
-                    .await
-                    .expect("Failed to send");
+            let request = rep.recv_owned().await?;
+            info!("[REP] Received request:");
+            for (i, frame) in request.frames().enumerate() {
+                info!("  Frame {}: {:?}", i, String::from_utf8_lossy(frame));
             }
 
+            info!("[REP] Sending reply");
+            rep.send("Reply from REP").await?;
+            rep.close().await?;
             info!("[REP] Request-reply cycle complete");
+            Ok::<(), monocoque::zmq::MonocoqueError>(())
         });
-    });
 
-    // Wait for server to be ready
-    while !server_ready.load(Ordering::Acquire) {
-        thread::sleep(Duration::from_millis(10));
-    }
-    thread::sleep(Duration::from_millis(50)); // Extra settling time
+        info!("[REQ] Connecting to {}", endpoint);
+        let mut req = ReqSocket::new();
+        req.connect(&endpoint).await?;
 
-    let server_addr = addr.lock().unwrap().clone();
-
-    // Run REQ client in main thread
-    monocoque::rt::LocalRuntime::new().unwrap().block_on(async {
-        info!("[REQ] Connecting to tcp://{}", server_addr);
-
-        let mut socket = ReqSocket::connect(&server_addr)
-            .await
-            .expect("Failed to connect");
-        info!("[REQ] Connected (handshake complete)");
-
-        // Send request
+        // Send request. It waits for the connection to come up.
         info!("[REQ] Sending request");
-        socket
-            .send(vec![Bytes::from_static(b"Request from REQ")])
-            .await
-            .expect("Failed to send");
+        req.send("Request from REQ").await?;
 
         // Receive reply
         info!("[REQ] Waiting for reply");
-        let response = socket.recv().await;
-        if let Ok(Some(msg)) = response {
-            info!("[REQ] Received response:");
-            for (i, frame) in msg.iter().enumerate() {
-                info!("  Frame {}: {:?}", i, String::from_utf8_lossy(frame));
-            }
-        } else {
-            info!("[REQ] No response received");
+        let msg = req.recv().await?;
+        info!("[REQ] Received response:");
+        for (i, frame) in msg.frames().enumerate() {
+            info!("  Frame {}: {:?}", i, String::from_utf8_lossy(frame));
         }
-
         info!("[REQ] Request-reply cycle complete");
-    });
 
-    // Wait for server thread to complete
-    info!("Waiting for server thread to finish...");
-    server_handle.join().expect("Server thread panicked");
+        info!("Waiting for server task to finish...");
+        rt::join(server).await?;
+        Ok::<(), monocoque::zmq::MonocoqueError>(())
+    })?;
 
-    info!("\n✅ Simple test completed successfully!");
+    info!("\nSimple test completed successfully!");
+    Ok(())
 }

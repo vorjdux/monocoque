@@ -264,7 +264,10 @@ impl Socket<Router> {
             };
         };
         match self.send_to_now(peer, msg) {
-            SendTo::Sent => Ok(()),
+            SendTo::Sent => {
+                self.wait_written(peer).await;
+                Ok(())
+            }
             SendTo::Full(_) if mandatory => Err(MonocoqueError::Again),
             SendTo::Gone(_) if mandatory => Err(MonocoqueError::HostUnreachable),
             SendTo::Full(_) | SendTo::Gone(_) => Ok(()),
@@ -472,9 +475,11 @@ impl FromOptions for XPubHooks {
 
 impl PubHooks {
     fn apply(&mut self, id: PeerId, msg: Msg) -> Option<Msg> {
-        let body = msg.first()?;
-        let (&kind, prefix) = body.split_first()?;
-        let prefix = Bytes::copy_from_slice(prefix);
+        // Slice the subscription out of the received frame: a refcount, no
+        // copy (an inline frame of at most 64 bytes is the only one copied).
+        let frame = msg.frame_bytes(0)?;
+        let kind = *frame.first()?;
+        let prefix = frame.slice(1..);
         match kind {
             1 => {
                 let r = self.index.subscribe(id.as_u64(), prefix);
@@ -676,6 +681,10 @@ impl FromOptions for XSubHooks {
 }
 
 impl Hooks for SubHooks {
+    fn greeting(&self) -> Vec<Msg> {
+        subscription_greeting(&self.subs)
+    }
+
     fn on_inbound(&mut self, _id: PeerId, msg: Msg) -> Option<Msg> {
         if !self.filter {
             return Some(msg);
@@ -686,6 +695,10 @@ impl Hooks for SubHooks {
 }
 
 impl Hooks for XSubHooks {
+    fn greeting(&self) -> Vec<Msg> {
+        subscription_greeting(&self.0.subs)
+    }
+
     fn on_inbound(&mut self, id: PeerId, msg: Msg) -> Option<Msg> {
         self.0.on_inbound(id, msg)
     }
@@ -734,21 +747,24 @@ fn change_subscription<K: Kind>(
     if !changed {
         return;
     }
+    // Peers that connect later get the full set from `Hooks::greeting`; the
+    // ones connected now get the change, never dropped at the HWM.
+    core.broadcast_control(&subscription_message(subscribe, prefix));
+}
+
+/// `\x01prefix` to subscribe, `\x00prefix` to cancel.
+fn subscription_message(subscribe: bool, prefix: &[u8]) -> Msg {
     let mut body = Vec::with_capacity(1 + prefix.len());
     body.push(u8::from(subscribe));
     body.extend_from_slice(prefix);
-    let greeting: Vec<Msg> = subs(core.hooks_mut())
-        .subscriptions()
-        .into_iter()
-        .map(|s| {
-            let mut m = Vec::with_capacity(1 + s.prefix.len());
-            m.push(1);
-            m.extend_from_slice(&s.prefix);
-            Msg::from(m)
-        })
-        .collect();
-    core.set_greeting(greeting);
-    core.fanout(&Msg::from(body), |_, _| true);
+    Msg::from(body)
+}
+
+fn subscription_greeting(subs: &SubscriptionTrie) -> Vec<Msg> {
+    subs.subscriptions()
+        .iter()
+        .map(|s| subscription_message(true, &s.prefix))
+        .collect()
 }
 
 impl Socket<Sub> {

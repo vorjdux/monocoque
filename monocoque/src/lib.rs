@@ -32,17 +32,18 @@
 //! use monocoque::zmq::prelude::*;
 //!
 //! # #[cfg(feature = "zmq")]
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! // Connect to a ZeroMQ peer
-//! let mut socket = DealerSocket::connect("127.0.0.1:5555").await?;
+//! # async fn example() -> Result<()> {
+//! // Connect to a ZeroMQ peer; the connection is made in the background
+//! let mut socket = DealerSocket::new();
+//! socket.connect("tcp://127.0.0.1:5555").await?;
 //!
 //! // Send a multipart message
-//! socket.send(vec![b"Hello".to_vec().into(), b"World".to_vec().into()]).await?;
+//! let frames = [Bytes::from_static(b"Hello"), Bytes::from_static(b"World")];
+//! socket.send(Msg::from_iter(frames)).await?;
 //!
-//! // Receive a reply
-//! if let Ok(Some(msg)) = socket.recv().await {
-//!     println!("Received: {:?}", msg);
-//! }
+//! // Receive a reply, borrowed from the socket without a copy
+//! let msg = socket.recv().await?;
+//! println!("Received {} frames", msg.len());
 //! # Ok(())
 //! # }
 //! ```
@@ -54,12 +55,15 @@
 //! use monocoque::zmq::prelude::*;
 //!
 //! # #[cfg(feature = "zmq")]
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! // Bind and accept first connection
-//! let (listener, mut socket) = RouterSocket::bind("127.0.0.1:5555").await?;
+//! # async fn example() -> Result<()> {
+//! // Bind; any number of peers can connect
+//! let mut socket = RouterSocket::new();
+//! socket.bind("tcp://127.0.0.1:5555").await?;
 //!
-//! // Echo server
-//! while let Ok(Some(msg)) = socket.recv().await {
+//! // Echo server: the first frame is the sender's identity, so sending the
+//! // message back routes it to that peer
+//! loop {
+//!     let msg = socket.recv_owned().await?;
 //!     socket.send(msg).await?;
 //! }
 //! # Ok(())

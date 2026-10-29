@@ -51,6 +51,13 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
+/// The byte threshold below which a wire peer holds writes, if coalescing.
+fn coalesce_threshold(options: &SocketOptions) -> Option<usize> {
+    options
+        .write_coalescing
+        .then_some(options.write_coalesce_threshold)
+}
+
 /// Per-connection framing state of a protocol.
 pub trait Codec: 'static {
     /// Decode every complete message at the front of `buf`, handing each to
@@ -127,6 +134,12 @@ pub trait Hooks: 'static {
 
     /// A peer went away.
     fn on_peer_down(&mut self, _id: PeerId, _info: &PeerInfo) {}
+
+    /// Messages every new peer gets first, built when it comes up (SUB's
+    /// current subscriptions).
+    fn greeting(&self) -> Vec<Msg> {
+        Vec::new()
+    }
 
     /// When `true`, inbound messages are handed to [`on_inbound`] as soon as
     /// they arrive, by whichever task is polling, instead of waiting for a
@@ -313,6 +326,9 @@ struct Bound {
     child: ChildId,
 }
 
+/// Size of the region fan-out encodings are carved from.
+const SHARED_WIRE_REGION: usize = 64 * 1024;
+
 /// A socket core shared between the user's handle and its driver task.
 pub type Shared<P, H> = Rc<RefCell<SocketCore<P, H>>>;
 
@@ -407,7 +423,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             let mut st = entry.state.borrow_mut();
             st.recv_hwm = options.recv_hwm;
             st.send_hwm = options.send_hwm;
-            st.set_hold(options.write_coalescing);
+            st.set_hold(coalesce_threshold(&options));
         }
         self.options = Rc::new(options);
     }
@@ -627,7 +643,8 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
                 codec,
                 out: OutQueue::default(),
                 writer_waker: None,
-                hold: self.options.write_coalescing,
+                hold: coalesce_threshold(&self.options),
+                flushing: false,
             },
             self.options.recv_hwm,
             self.options.send_hwm,
@@ -675,9 +692,9 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         }
         {
             let mut st = state.borrow_mut();
-            for msg in &self.greeting {
-                // Greetings bypass the HWM: they are what makes the peer
-                // useful at all.
+            // Greetings bypass the HWM: they are what makes the peer useful
+            // at all.
+            for msg in self.greeting.iter().chain(&self.hooks.greeting()) {
                 let _ = st.enqueue(msg);
             }
         }
@@ -1164,6 +1181,18 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             })
     }
 
+    /// Wait until a message is queued, without taking it.
+    pub fn poll_readable(&mut self, cx: &mut Context<'_>) -> Poll<()> {
+        loop {
+            if self.has_ready() {
+                return Poll::Ready(());
+            }
+            if self.park(cx) {
+                return Poll::Pending;
+            }
+        }
+    }
+
     /// Park the user task. Returns `false` if work arrived meanwhile and the
     /// caller should look again instead of returning `Pending`.
     fn park(&self, cx: &mut Context<'_>) -> bool {
@@ -1342,9 +1371,16 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         if !st.writable() {
             return false;
         }
-        let share = matches!(&st.outbound, Outbound::Wire { codec, hold: false, .. } if codec.shares_encoding());
+        let share = matches!(&st.outbound, Outbound::Wire { codec, hold: None, .. } if codec.shares_encoding());
         if share {
             let wire = shared.get_or_insert_with(|| {
+                // Encode into a large shared region so successive messages are
+                // carved from one allocation: every peer still holds earlier
+                // encodings, so a buffer sized to one message would be
+                // reallocated on every publish.
+                if self.shared_wire.capacity() < 1024 {
+                    self.shared_wire.reserve(SHARED_WIRE_REGION);
+                }
                 P::encode_shared(&self.cfg, msg, &mut self.shared_wire);
                 self.shared_wire.split().freeze()
             });
@@ -1353,6 +1389,46 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         } else {
             st.enqueue(msg).is_ok()
         }
+    }
+
+    /// Wait until everything queued toward `id` has been written (or the
+    /// peer is gone). A send that waits on this is eager: once it returns,
+    /// the bytes are in the kernel and need no further action from the caller.
+    pub fn poll_written(&mut self, cx: &mut Context<'_>, id: PeerId) -> Poll<()> {
+        loop {
+            self.progress();
+            match self.entry(id) {
+                Some(e) if !e.closed && e.state.borrow().write_pending() => {}
+                _ => return Poll::Ready(()),
+            }
+            if self.park(cx) {
+                return Poll::Pending;
+            }
+        }
+    }
+
+    /// Queue a control message (a subscription change) to every live peer,
+    /// ignoring the send HWM: dropping one would silently change what the
+    /// peer delivers.
+    pub fn broadcast_control(&mut self, msg: &Msg) {
+        self.progress();
+        for k in 0..self.lb.len() {
+            let id = self.lb[k];
+            if let Some(entry) = self.entry(id)
+                && !entry.closed
+            {
+                let _ = entry.state.borrow_mut().enqueue(msg);
+            }
+        }
+        self.progress();
+    }
+
+    /// Close one peer's connection after its queued messages are written.
+    pub fn close_peer(&mut self, id: PeerId) {
+        if let Some(entry) = self.entry(id) {
+            entry.state.borrow_mut().close_after_drain();
+        }
+        self.progress();
     }
 
     /// Release writes held by `write_coalescing` on every peer.

@@ -1,100 +1,94 @@
 //! Demonstration of HWM (High Water Mark) enforcement in `DealerSocket`
 //!
-//! This example shows how `send_hwm` prevents unbounded message buffering by
-//! returning an error when the limit is reached.
+//! This example shows how `send_hwm` prevents unbounded message buffering.
+//! A send to a peer at its HWM waits for room; with a zero `send_timeout` it
+//! fails at once with `MonocoqueError::Again` instead.
 //!
 //! Run with: cargo run --package monocoque --features zmq --example `hwm_enforcement_demo`
 
-use bytes::Bytes;
-use monocoque::rt::{self, LocalRuntime, TcpListener, TcpStream};
-use monocoque::zmq::{DealerSocket, RouterSocket, SocketOptions};
-use std::io::ErrorKind;
+use monocoque::rt::{self, LocalRuntime};
+use monocoque::zmq::{DealerSocket, MonocoqueError, RouterSocket, SocketOptions};
+use std::time::Duration;
 
-fn main() -> std::io::Result<()> {
+const HWM: usize = 5;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     LocalRuntime::new()?.block_on(async_main())
 }
 
-async fn async_main() -> std::io::Result<()> {
-    println!("🔧 HWM Enforcement Demo\n");
+async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("HWM Enforcement Demo\n");
 
-    // Configure socket with MongoDB-style composable options
+    // Composable options: a small HWM, and never wait for room
     let options = SocketOptions::default()
-        .with_send_hwm(5) // Limit: 5 buffered messages
-        .with_buffer_sizes(8192, 8192); // 8KB read/write buffers
+        .with_send_hwm(HWM)
+        .with_send_timeout(Duration::ZERO);
 
-    println!("📊 Configuration:");
+    println!("Configuration:");
     println!("  send_hwm: {} messages", options.send_hwm);
-    println!("  read_buffer: {} bytes", options.read_buffer_size());
-    println!("  write_buffer: {} bytes\n", options.write_buffer_size);
+    println!("  send_timeout: zero (fail with Again instead of waiting)\n");
 
-    // Setup: Create TCP server/client pair
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let addr = listener.local_addr()?;
+    // The inproc transport has no kernel buffers in the way, so the HWM is
+    // the only thing that can hold messages back.
+    let mut router = RouterSocket::with_options(SocketOptions::default().with_recv_hwm(HWM));
+    router.bind("inproc://hwm-demo").await?;
 
-    // Server consumes messages slowly to create backpressure
-    rt::spawn_detached(async move {
-        if let Ok((stream, _)) = listener.accept().await
-            && let Ok(mut router) = RouterSocket::from_tcp(stream).await
-        {
-            let mut count = 0;
-            while let Ok(Some(_)) = router.recv().await {
-                count += 1;
-                if count % 5 == 0 {
-                    println!("   [SERVER] Received {count} messages");
-                }
-                // Simulate slow processing
-                rt::sleep(std::time::Duration::from_millis(200)).await;
-            }
-        }
-    });
+    let mut dealer = DealerSocket::with_options(options);
+    dealer.connect("inproc://hwm-demo").await?;
 
-    rt::sleep(std::time::Duration::from_millis(50)).await;
-
-    // Connect client
-    let client = TcpStream::connect(addr).await?;
-    let mut dealer = DealerSocket::with_options(client, options).await?;
-
-    println!("📤 Sending messages (HWM = 5)...\n");
+    println!("Sending messages (HWM = {HWM}) while the ROUTER is not reading...\n");
 
     let mut sent = 0;
-
-    // Send messages until HWM blocks us
-    for i in 0..15 {
-        let msg = vec![Bytes::from(format!("Message {i}"))];
-
-        match dealer.send_buffered(msg) {
+    for i in 0..50 {
+        match dealer.send(format!("Message {i}")).await {
             Ok(()) => {
                 sent += 1;
-                print!("✓");
-                if sent % 5 == 0 {
-                    println!(" [{sent}]");
-                }
+                print!(".");
             }
-            Err(e) if e.kind() == ErrorKind::WouldBlock || e.to_string().contains("water mark") => {
-                println!("\n\n⚠️  HWM ENFORCED: Blocked after {sent} messages");
-                println!("✅ Socket correctly prevented message #{i} from buffering");
-                println!("\n💡 Application must either:");
-                println!("   - Call flush() to send buffered messages");
+            Err(MonocoqueError::Again) => {
+                println!("\n\nHWM ENFORCED: blocked after {sent} messages");
+                println!("Socket refused message #{i} instead of buffering it");
+                println!("\nApplication must either:");
+                println!("   - Wait (a nonzero or no send_timeout)");
                 println!("   - Drop messages");
-                println!("   - Wait for network to drain");
+                println!("   - Let the peer drain");
                 break;
             }
             Err(e) => {
-                println!("\n❌ Unexpected error: {e}");
+                println!("\nUnexpected error: {e}");
                 break;
             }
         }
     }
 
-    println!("\n📊 Results:");
-    println!("  Messages buffered: {sent}");
-    println!("  HWM limit: 5");
+    // The ROUTER drains the queue, which makes room again
+    let mut drained = 0;
+    while drained < sent {
+        router.recv().await?;
+        drained += 1;
+    }
+    println!("\n[SERVER] Drained {drained} messages");
+    rt::sleep(Duration::from_millis(10)).await;
+
+    let after = dealer.send("after drain").await;
     println!(
-        "  Status: {}",
-        if sent == 5 { "✅ PASS" } else { "❌ FAIL" }
+        "Send after drain: {}",
+        if after.is_ok() { "ok" } else { "refused" }
     );
 
-    println!("\n🎯 Demo complete!");
+    println!("\nResults:");
+    println!("  Messages queued before refusal: {sent}");
+    println!("  HWM limit: {HWM}");
+    println!(
+        "  Status: {}",
+        if sent < 50 && after.is_ok() {
+            "PASS"
+        } else {
+            "FAIL"
+        }
+    );
+
+    println!("\nDemo complete!");
     println!("   HWM enforcement prevents unbounded memory growth");
     println!("   Applications have explicit control over buffering");
 

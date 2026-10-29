@@ -3,85 +3,66 @@
 //! Shows zero-copy bidirectional communication between two PAIR sockets
 //! in the same process using the inproc transport.
 
-use bytes::Bytes;
-use monocoque_core::inproc::{bind_inproc, connect_inproc};
-use std::thread;
-use std::time::Duration;
+use monocoque::rt::{self, LocalRuntime};
+use monocoque::zmq::PairSocket;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Inproc PAIR Pattern Demo ===\n");
 
-    // Create bidirectional channels for PAIR pattern
-    // Server binds and gets (tx_server, rx_server)
-    let (_tx_server, rx_server) = bind_inproc("inproc://pair-endpoint")?;
+    // Server binds, client connects. A PAIR link carries messages both ways.
+    let mut server = PairSocket::new();
+    server.bind("inproc://pair-endpoint").await?;
     println!("1. Server bound to 'inproc://pair-endpoint'");
 
-    // Client connects and creates its own bidirectional channel
-    let tx_client_to_server = connect_inproc("inproc://pair-endpoint")?;
-    let (tx_server_to_client, rx_client) = flume::unbounded();
+    let mut client = PairSocket::new();
+    client.connect("inproc://pair-endpoint").await?;
     println!("2. Client connected\n");
 
-    // For true bidirectional PAIR, we need to exchange the return channel
-    // Send the client's receiver channel to the server
-    tx_client_to_server.send(vec![Bytes::from("__PAIR_HANDSHAKE__")])?;
-
-    // Server thread
-    let server_thread = thread::spawn(move || {
+    // Server task
+    let server_task = rt::spawn(async move {
         println!("[Server] Waiting for messages...");
 
-        // Receive handshake (in real implementation, this would exchange channel info)
-        if let Ok(msg) = rx_server.recv()
-            && msg.len() == 1
-            && msg[0] == "__PAIR_HANDSHAKE__"
-        {
-            println!("[Server] Pair established");
-        }
-
-        // Simulate bidirectional communication
         for i in 1..=3 {
             // Receive from client
-            if let Ok(msg) = rx_server.recv() {
-                println!(
+            match server.recv().await {
+                Ok(msg) => println!(
                     "[Server] Received from client: {:?}",
-                    String::from_utf8_lossy(&msg[0])
-                );
+                    String::from_utf8_lossy(msg.first().unwrap_or_default())
+                ),
+                Err(e) => {
+                    println!("[Server] Receive failed: {e}");
+                    return;
+                }
             }
 
             // Send response to client
-            let response = format!("Server response #{i}");
-            tx_server_to_client.send(vec![Bytes::from(response)]).ok();
+            server.send(format!("Server response #{i}")).await.ok();
         }
 
         println!("[Server] Done");
     });
 
     // Client sends messages
-    thread::sleep(Duration::from_millis(100));
-
     for i in 1..=3 {
         let msg = format!("Client message #{i}");
         println!("[Client] Sending: {msg}");
-        tx_client_to_server.send(vec![Bytes::from(msg)])?;
+        client.send(msg).await?;
 
         // Receive response
-        if let Ok(response) = rx_client.recv() {
-            println!(
-                "[Client] Got response: {:?}",
-                String::from_utf8_lossy(&response[0])
-            );
-        }
-
-        thread::sleep(Duration::from_millis(50));
+        let response = client.recv().await?;
+        println!(
+            "[Client] Got response: {:?}",
+            String::from_utf8_lossy(response.first().unwrap_or_default())
+        );
     }
 
-    server_thread.join().unwrap();
+    rt::join(server_task).await;
 
     println!("\n=== Demo Complete ===");
-    println!("\nNote: This demo shows the challenge of implementing bidirectional");
-    println!("inproc patterns. A full implementation would need:");
-    println!("  - Channel exchange protocol");
-    println!("  - Bidirectional InprocStream adapter");
-    println!("  - Proper PAIR semantics");
 
     Ok(())
 }

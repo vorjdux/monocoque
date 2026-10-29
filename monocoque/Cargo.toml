@@ -131,10 +131,6 @@ name = "pubsub_multi"
 required-features = ["zmq"]
 
 [[example]]
-name = "multi_pub_minimal"
-required-features = ["zmq"]
-
-[[example]]
 name = "router_dealer_basic"
 required-features = ["zmq"]
 
@@ -147,7 +143,7 @@ name = "pipeline_worker_pool"
 required-features = ["zmq"]
 
 [[example]]
-name = "recv_into_zero_alloc"
+name = "borrowed_recv"
 required-features = ["zmq"]
 
 # Interoperability examples (manual verification)
@@ -220,14 +216,6 @@ name = "monitoring"
 required-features = ["zmq"]
 
 [[example]]
-name = "multi_pub_test"
-required-features = ["zmq"]
-
-[[example]]
-name = "multi_sub_client"
-required-features = ["zmq"]
-
-[[example]]
 name = "multi_subscriber"
 required-features = ["zmq"]
 
@@ -244,19 +232,7 @@ name = "paranoid_pirate_simple"
 required-features = ["zmq"]
 
 [[example]]
-name = "poison_guard_demo"
-required-features = ["zmq"]
-
-[[example]]
 name = "reconnection_demo"
-required-features = ["zmq"]
-
-[[example]]
-name = "rep_server"
-required-features = ["zmq"]
-
-[[example]]
-name = "req_client"
 required-features = ["zmq"]
 
 [[example]]
@@ -314,10 +290,6 @@ name = "req_state_machine"
 required-features = ["zmq"]
 
 [[test]]
-name = "interop_load_balance"
-required-features = ["zmq"]
-
-[[test]]
 name = "interop_curve"
 required-features = ["zmq"]
 
@@ -354,14 +326,6 @@ name = "pipeline_fanout_fanin"
 required-features = ["zmq"]
 
 [[test]]
-name = "recv_into"
-required-features = ["zmq"]
-
-[[test]]
-name = "interop_recv_into"
-required-features = ["zmq"]
-
-[[test]]
 name = "fanin_rss_bound"
 required-features = ["zmq"]
 
@@ -383,6 +347,14 @@ required-features = ["zmq"]
 
 [[test]]
 name = "idle_wakeups"
+required-features = ["zmq"]
+
+[[test]]
+name = "fanout_many_subscribers"
+required-features = ["zmq"]
+
+[[test]]
+name = "proxy"
 required-features = ["zmq"]
 
 [lints]

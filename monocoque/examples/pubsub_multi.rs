@@ -1,19 +1,20 @@
-/// Multi-subscriber PUB/SUB example.
-///
-/// This example demonstrates a single PUB socket broadcasting to multiple
-/// SUB sockets with different topic subscriptions.
-///
-/// Architecture:
-/// - 1 PUB socket: Broadcasts events with different topic prefixes
-/// - 3 SUB sockets: Each subscribes to different topics
-///   - SUB1: Subscribes to "news.tech"
-///   - SUB2: Subscribes to "news.finance"  
-///   - SUB3: Subscribes to all news ("news")
-///
-/// Expected behavior:
-/// - SUB1 receives only tech news
-/// - SUB2 receives only finance news
-/// - SUB3 receives all news (tech + finance)
+//! Multi-subscriber PUB/SUB example.
+//!
+//! This example demonstrates a single PUB socket broadcasting to multiple
+//! SUB sockets with different topic subscriptions.
+//!
+//! Architecture:
+//! - 1 PUB socket: Broadcasts events with different topic prefixes
+//! - 3 SUB sockets: Each subscribes to different topics
+//!   - SUB1: Subscribes to "news.tech"
+//!   - SUB2: Subscribes to "news.finance"
+//!   - SUB3: Subscribes to all news ("news")
+//!
+//! Expected behavior:
+//! - SUB1 receives only tech news
+//! - SUB2 receives only finance news
+//! - SUB3 receives all news (tech + finance)
+
 use bytes::Bytes;
 use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::prelude::*;
@@ -21,55 +22,55 @@ use std::time::Duration;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
+const ROUNDS: usize = 5;
+
 #[allow(clippy::future_not_send)]
-async fn publisher_task(port: u16) -> Result<(), Box<dyn std::error::Error>> {
-    info!("[PUB] Starting publisher on port {}", port);
-
-    let mut pub_socket = PubSocket::bind(format!("127.0.0.1:{port}")).await?;
-
-    // Wait for all 3 subscribers to connect
+async fn publisher_task(mut pub_socket: PubSocket, subscribers: usize) -> Result<()> {
+    // Wait until every subscriber has connected and its subscription has
+    // arrived; anything published before that would be dropped.
     info!("[PUB] Waiting for subscribers...");
-    for i in 1..=2 {
-        let id = pub_socket.accept_subscriber().await?;
-        info!("[PUB] Subscriber {} connected (id={})", i, id);
+    loop {
+        let ready = pub_socket
+            .peer_ids()
+            .into_iter()
+            .filter(|&peer| pub_socket.subscriber_prefixes(peer) > 0)
+            .count();
+        if ready == subscribers {
+            break;
+        }
+        rt::sleep(Duration::from_millis(10)).await;
     }
-
-    // Give subscribers time to send subscriptions (blocking sleep to avoid runtime issues)
-    // Note: In real applications, use a coordination mechanism instead of fixed delays
-    std::thread::sleep(Duration::from_millis(100));
 
     info!(
         "[PUB] Ready to broadcast to {} subscribers",
-        pub_socket.subscriber_count()
+        pub_socket.peer_count()
     );
 
     // Send messages with different topics
     info!("[PUB] Broadcasting messages...");
 
-    for i in 0..5 {
+    for i in 0..ROUNDS {
         // Tech news
-        pub_socket
-            .send(vec![
+        let n = pub_socket
+            .send(Msg::from([
                 Bytes::from("news.tech"),
                 Bytes::from(format!("Tech update #{i}")),
-            ])
+            ]))
             .await?;
-        info!("[PUB] Sent tech news #{}", i);
+        info!("[PUB] Sent tech news #{} to {} subscribers", i, n);
 
         // Finance news
-        pub_socket
-            .send(vec![
+        let n = pub_socket
+            .send(Msg::from([
                 Bytes::from("news.finance"),
                 Bytes::from(format!("Finance update #{i}")),
-            ])
+            ]))
             .await?;
-        info!("[PUB] Sent finance news #{}", i);
+        info!("[PUB] Sent finance news #{} to {} subscribers", i, n);
     }
 
     info!("[PUB] All messages sent");
-    // Give time for messages to be received
-    std::thread::sleep(Duration::from_millis(200));
-
+    pub_socket.close().await?;
     info!("[PUB] Publisher complete");
     Ok(())
 }
@@ -77,78 +78,41 @@ async fn publisher_task(port: u16) -> Result<(), Box<dyn std::error::Error>> {
 #[allow(clippy::future_not_send)]
 async fn subscriber_task(
     name: &str,
-    port: u16,
+    endpoint: &str,
     topic: &str,
     expected_count: usize,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let start = std::time::Instant::now();
-    info!("[{}] Connecting to publisher on port {}", name, port);
+) -> Result<()> {
+    info!("[{}] Connecting to {}", name, endpoint);
 
-    let mut sub_socket = SubSocket::connect(&format!("127.0.0.1:{port}")).await?;
-    info!(
-        "[{}] Connected in {:?}, subscribing to '{}'",
-        name,
-        start.elapsed(),
-        topic
-    );
-
-    let sub_start = std::time::Instant::now();
+    let mut sub_socket = SubSocket::new();
+    sub_socket.connect(endpoint).await?;
     sub_socket.subscribe(topic.as_bytes()).await?;
-    info!("[{}] Subscribed in {:?}!", name, sub_start.elapsed());
+    info!("[{}] Subscribed to '{}'", name, topic);
 
-    // Receive messages (with simple loop, messages arrive quickly)
     let mut received = 0;
-    info!("[{}] Starting to receive messages...", name);
     while received < expected_count {
+        let msg = sub_socket.recv().await?;
+        let topic = String::from_utf8_lossy(msg.get(0).unwrap_or_default());
+        let content = String::from_utf8_lossy(msg.get(1).unwrap_or_default());
         info!(
-            "[{}] Calling recv() (received {}/{})",
-            name, received, expected_count
+            "[{}] Received: topic='{}' content='{}'",
+            name, topic, content
         );
-        match sub_socket.recv().await {
-            Ok(Some(msg)) => {
-                let topic = String::from_utf8_lossy(&msg[0]);
-                let content = String::from_utf8_lossy(&msg[1]);
-                info!(
-                    "[{}] ✓ Received: topic='{}' content='{}'",
-                    name, topic, content
-                );
-                received += 1;
-            }
-            Ok(None) => {
-                error!("[{}] Connection closed", name);
-                break;
-            }
-            Err(e) => {
-                error!("[{}] Receive error: {}", name, e);
-                break;
-            }
-        }
-        // Yield to allow other tasks to run
-        if received >= expected_count {
-            break;
-        }
+        received += 1;
     }
 
-    if received == expected_count {
-        info!(
-            "[{}] ✓ Successfully received all {} messages",
-            name, expected_count
-        );
-    } else {
-        error!(
-            "[{}] ✗ Expected {} messages, received {}",
-            name, expected_count, received
-        );
-    }
-
+    info!(
+        "[{}] Successfully received all {} messages",
+        name, expected_count
+    );
     Ok(())
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<()> {
     LocalRuntime::new()?.block_on(async_main())
 }
 
-async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
+async fn async_main() -> Result<()> {
     // Initialize logging
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -156,42 +120,42 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    // Use a random available port to avoid conflicts
-    let port = portpicker::pick_unused_port().expect("No ports available");
-    info!("Using port {}", port);
+    // Bind the publisher first on an ephemeral port
+    let mut pub_socket = PubSocket::new();
+    let endpoint = pub_socket.bind("tcp://127.0.0.1:0").await?;
+    info!("[PUB] Bound to {}", endpoint);
 
-    // Start publisher first (binding to port)
-    let pub_handle = rt::spawn(async move { publisher_task(port).await });
+    let pub_handle = rt::spawn(async move { publisher_task(pub_socket, 3).await });
 
-    // Small delay to ensure publisher is bound
-    std::thread::sleep(Duration::from_millis(50));
-
-    // Now spawn subscriber tasks (they will connect quickly)
-    let sub1_handle = rt::spawn(async move { subscriber_task("SUB1", port, "news.tech", 5).await });
-
-    let sub2_handle =
-        rt::spawn(async move { subscriber_task("SUB2", port, "news.finance", 5).await });
+    let subs = [
+        ("SUB1", "news.tech", ROUNDS),
+        ("SUB2", "news.finance", ROUNDS),
+        ("SUB3", "news", ROUNDS * 2),
+    ];
+    let handles: Vec<_> = subs
+        .into_iter()
+        .map(|(name, topic, count)| {
+            let endpoint = endpoint.clone();
+            let handle =
+                rt::spawn(async move { subscriber_task(name, &endpoint, topic, count).await });
+            (name, handle)
+        })
+        .collect();
 
     // Wait for publisher to complete
     let pub_result = rt::join(pub_handle).await;
 
-    // Wait for subscribers to complete
-    let sub1_result = rt::join(sub1_handle).await;
-    let sub2_result = rt::join(sub2_handle).await;
-
     // Report results
     info!("=== Results ===");
     match pub_result {
-        Ok(()) => info!("Publisher: ✓ Success"),
-        Err(e) => error!("Publisher: ✗ Error: {:?}", e),
+        Ok(()) => info!("Publisher: success"),
+        Err(e) => error!("Publisher: error: {:?}", e),
     }
-    match sub1_result {
-        Ok(()) => info!("SUB1 (tech): ✓ Success"),
-        Err(e) => error!("SUB1 (tech): ✗ Error: {:?}", e),
-    }
-    match sub2_result {
-        Ok(()) => info!("SUB2 (finance): ✓ Success"),
-        Err(e) => error!("SUB2 (finance): ✗ Error: {:?}", e),
+    for (name, handle) in handles {
+        match rt::join(handle).await {
+            Ok(()) => info!("{name}: success"),
+            Err(e) => error!("{name}: error: {:?}", e),
+        }
     }
 
     Ok(())
