@@ -81,3 +81,46 @@ fn coalesced_sends_past_the_hwm_make_progress() {
         futures::join!(sender, receiver);
     });
 }
+
+/// Coalescing with bodies above the vectored-write threshold builds batches
+/// longer than one vectored write takes. Every message must stay counted
+/// until its last segment is written: otherwise the HWM stops pushing back
+/// and `close` returns with most of the batch unwritten, losing it.
+#[test]
+fn coalesced_large_messages_all_arrive_before_close() {
+    const COUNT: usize = 2000;
+    const SIZE: usize = 64 * 1024;
+    let (ep_tx, ep_rx) = mpsc::channel::<String>();
+    let receiver = thread::spawn(move || {
+        LocalRuntime::new().unwrap().block_on(async move {
+            let mut pull = PullSocket::with_options(
+                SocketOptions::default().with_recv_timeout(Duration::from_secs(10)),
+            );
+            ep_tx
+                .send(pull.bind("tcp://127.0.0.1:0").await.unwrap())
+                .unwrap();
+            for i in 0..COUNT {
+                let msg = pull
+                    .recv()
+                    .await
+                    .unwrap_or_else(|e| panic!("message {i} of {COUNT} never arrived: {e}"));
+                assert_eq!(msg.first().map(<[u8]>::len), Some(SIZE));
+            }
+        });
+    });
+    let endpoint = ep_rx.recv().unwrap();
+    LocalRuntime::new().unwrap().block_on(async move {
+        let mut push = PushSocket::with_options(
+            SocketOptions::default()
+                .with_write_coalescing(true)
+                .with_vectored_write_threshold(1024),
+        );
+        push.connect(&endpoint).await.unwrap();
+        let payload = monocoque::zmq::Msg::from(vec![3u8; SIZE]);
+        for _ in 0..COUNT {
+            push.send(payload.clone()).await.unwrap();
+        }
+        push.close().await.unwrap();
+    });
+    receiver.join().unwrap();
+}

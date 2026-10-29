@@ -80,9 +80,8 @@ impl OutQueue {
         if self.is_empty() {
             return None;
         }
-        self.in_flight_msgs += self.queued_msgs;
-        self.queued_msgs = 0;
         if self.segs.is_empty() {
+            self.take_queued_msgs();
             spare.clear();
             let job = std::mem::replace(&mut self.tail, std::mem::take(spare));
             return Some(WriteJob::Contiguous(job));
@@ -93,14 +92,22 @@ impl OutQueue {
         iov.clear();
         let n = self.segs.len().min(MAX_IOV);
         iov.extend(self.segs.drain(..n));
+        // A job cut at MAX_IOV leaves segments of queued messages behind.
+        // Those messages stay counted as queued until the job that takes their
+        // last segment, so the HWM and `drained` never see them as written.
+        if self.segs.is_empty() {
+            self.take_queued_msgs();
+        }
         Some(WriteJob::Vectored(std::mem::take(iov)))
+    }
+
+    const fn take_queued_msgs(&mut self) {
+        self.in_flight_msgs += self.queued_msgs;
+        self.queued_msgs = 0;
     }
 
     /// The job handed out by [`take_job`](Self::take_job) has completed.
     pub const fn complete_job(&mut self) {
-        // Messages straddling a MAX_IOV split are released when the job holding
-        // their last segment completes; counting them on the first is an
-        // approximation that only ever releases HWM room early by one job.
         self.in_flight_msgs = 0;
     }
 
@@ -154,6 +161,33 @@ mod tests {
         assert!(matches!(job, WriteJob::Vectored(_)));
         assert_eq!(flatten(job), b"h1BODY1h2BODY2end");
         assert!(q.is_empty());
+    }
+
+    /// A batch longer than MAX_IOV goes out over several jobs; until the last
+    /// one completes its messages are still pending, or a sender at its HWM
+    /// would be let through and `close` would drop the rest unwritten.
+    #[test]
+    fn messages_stay_pending_until_their_last_segment_is_written() {
+        let mut q = OutQueue::default();
+        let messages = MAX_IOV;
+        for _ in 0..messages {
+            q.buf().extend_from_slice(b"hdr");
+            q.push_segment(Bytes::from_static(b"body"));
+            q.note_message();
+        }
+        let (mut spare, mut iov) = (BytesMut::new(), Vec::new());
+        let mut written = Vec::new();
+        let first = q.take_job(&mut spare, &mut iov).unwrap();
+        written.extend(flatten(first));
+        q.complete_job();
+        assert!(!q.is_empty(), "the batch should not fit one job");
+        assert_eq!(q.pending_msgs(), messages, "written early");
+        while let Some(job) = q.take_job(&mut spare, &mut iov) {
+            written.extend(flatten(job));
+            q.complete_job();
+        }
+        assert_eq!(q.pending_msgs(), 0);
+        assert_eq!(written, b"hdrbody".repeat(messages));
     }
 
     #[test]
