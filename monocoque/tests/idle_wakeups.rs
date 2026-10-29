@@ -30,6 +30,7 @@ use monocoque::zmq::{
     DealerSocket, PairSocket, PubSocket, PullSocket, PushSocket, RepSocket, ReqSocket,
     RouterSocket, SocketOptions, SubSocket, XPubSocket,
 };
+use std::collections::BTreeMap;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -38,31 +39,69 @@ use std::time::Duration;
 const IDLE_WINDOW: Duration = Duration::from_millis(500);
 /// Voluntary context switches allowed across the whole process in one window.
 /// The window timer accounts for one or two; a 1 ms poll would cost about 500.
-const SWITCH_BUDGET: u64 = 10;
+///
+/// smol adds a bounded cost of its own: while a `block_on` runs, async-io's
+/// reactor thread answers each reactor tick with up to ten timed sleeps
+/// (50 us to 10 ms) before it blocks, so the window's one timer wake can show
+/// up as about a dozen switches on that thread. That is per wake, not polling.
+const SWITCH_BUDGET: u64 = if cfg!(feature = "runtime-smol") {
+    10 + 12
+} else {
+    10
+};
 
-/// Voluntary context switches of every thread in this process, or `None`
-/// where `/proc/self/task` is unavailable.
-fn process_context_switches() -> Option<u64> {
-    let mut total = 0u64;
+/// Voluntary context switches of each thread in this process, by thread id,
+/// with the thread's name, or `None` where `/proc/self/task` is unavailable.
+fn thread_switches() -> Option<BTreeMap<String, (String, u64)>> {
+    let mut threads = BTreeMap::new();
     for task in std::fs::read_dir("/proc/self/task").ok()? {
-        let status = std::fs::read_to_string(task.ok()?.path().join("status")).ok()?;
+        let path = task.ok()?.path();
+        let status = std::fs::read_to_string(path.join("status")).ok()?;
+        let mut name = String::new();
+        let mut switches = 0;
         for line in status.lines() {
-            if let Some(rest) = line.strip_prefix("voluntary_ctxt_switches:") {
-                total += rest.trim().parse::<u64>().ok()?;
+            if let Some(rest) = line.strip_prefix("Name:") {
+                name = rest.trim().to_string();
+            } else if let Some(rest) = line.strip_prefix("voluntary_ctxt_switches:") {
+                switches = rest.trim().parse::<u64>().ok()?;
             }
         }
+        let tid = path.file_name()?.to_string_lossy().into_owned();
+        threads.insert(tid, (name, switches));
     }
-    Some(total)
+    Some(threads)
+}
+
+fn process_context_switches() -> Option<u64> {
+    thread_switches().map(|t| t.values().map(|(_, n)| n).sum())
+}
+
+/// Switches over one idle window: the total, and which threads made them.
+struct Window {
+    total: u64,
+    by_thread: String,
 }
 
 /// Count context switches while the runtime sits idle for [`IDLE_WINDOW`].
-async fn idle_switches() -> Option<u64> {
+async fn idle_switches() -> Option<Window> {
     // Let the parked receives and any just-spawned tasks settle first.
     monocoque::rt::sleep(Duration::from_millis(50)).await;
-    let before = process_context_switches()?;
+    let before = thread_switches()?;
     monocoque::rt::sleep(IDLE_WINDOW).await;
-    let after = process_context_switches()?;
-    Some(after - before)
+    let after = thread_switches()?;
+    let mut total = 0;
+    let mut by_thread = Vec::new();
+    for (tid, (name, n)) in &after {
+        let delta = n - before.get(tid).map_or(0, |(_, b)| *b);
+        if delta > 0 {
+            total += delta;
+            by_thread.push(format!("{name}[{tid}]={delta}"));
+        }
+    }
+    Some(Window {
+        total,
+        by_thread: by_thread.join(" "),
+    })
 }
 
 /// Park a receive on `socket`, keeping the task's handle in `$parked`. smol's
@@ -90,16 +129,20 @@ macro_rules! connected {
 
 /// Run one case on its own runtime, so a detached receive from one case can
 /// never run during another case's window. The runtime is torn down on return.
-fn in_fresh_runtime(case: impl std::future::Future<Output = Option<u64>>) -> Option<u64> {
+fn in_fresh_runtime(case: impl std::future::Future<Output = Option<Window>>) -> Option<Window> {
     LocalRuntime::new().unwrap().block_on(case)
 }
 
-fn check(case: &str, switches: Option<u64>, failures: &mut Vec<String>) {
+fn check(case: &str, switches: Option<Window>, failures: &mut Vec<String>) {
     match switches {
-        Some(n) if n > SWITCH_BUDGET => failures.push(format!(
-            "{case}: {n} context switches in {IDLE_WINDOW:?} idle (budget {SWITCH_BUDGET})"
+        Some(w) if w.total > SWITCH_BUDGET => failures.push(format!(
+            "{case}: {} context switches in {IDLE_WINDOW:?} idle (budget {SWITCH_BUDGET}): {}",
+            w.total, w.by_thread
         )),
-        Some(n) => println!("[idle wakeups] {case}: {n} switches in {IDLE_WINDOW:?}"),
+        Some(w) => println!(
+            "[idle wakeups] {case}: {} switches in {IDLE_WINDOW:?}: {}",
+            w.total, w.by_thread
+        ),
         None => println!("[idle wakeups] {case}: counters unavailable, skipped"),
     }
 }
