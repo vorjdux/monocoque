@@ -432,8 +432,17 @@ pub(crate) async fn with_timeout<T>(
             })
             .await
         }
-        Some(d) => monocoque_core::rt::timeout(d, fut)
-            .await
-            .map_err(|_| MonocoqueError::TimedOut),
+        Some(d) => {
+            // Try once before arming a timer: when the message is already
+            // queued (the common case under load) no timer is created at all.
+            let mut fut = pin!(fut);
+            let ready = poll_fn(|cx| Poll::Ready(fut.as_mut().poll(cx))).await;
+            if let Poll::Ready(v) = ready {
+                return Ok(v);
+            }
+            monocoque_core::rt::timeout(d, fut)
+                .await
+                .map_err(|_| MonocoqueError::TimedOut)
+        }
     }
 }
