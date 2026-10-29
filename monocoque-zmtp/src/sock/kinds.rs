@@ -5,7 +5,8 @@ use crate::session::SocketType;
 use bytes::Bytes;
 use monocoque_core::error::{MonocoqueError, Result};
 use monocoque_core::msg::{Msg, MsgRef};
-use monocoque_core::mux::{Hooks, PeerId, PeerInfo, SendTo};
+use crate::wire::Zmtp;
+use monocoque_core::mux::{Hooks, PeerId, PeerInfo, SendTo, SocketCore};
 use monocoque_core::options::SocketOptions;
 use monocoque_core::subscription::{
     Subscribed, SubscriptionEvent, SubscriptionIndex, SubscriptionTrie, Unsubscribed,
@@ -21,7 +22,7 @@ pub struct Plain;
 impl Hooks for Plain {}
 
 macro_rules! kind {
-    ($(#[$doc:meta])* $name:ident, $ty:expr, $hooks:ty, $ext:ty) => {
+    ($(#[$doc:meta])* $name:ident, $ty:expr, $hooks:ty, $ext:ty $(, { $($extra:item)* })?) => {
         $(#[$doc])*
         pub struct $name;
         impl Kind for $name {
@@ -31,9 +32,13 @@ macro_rules! kind {
             fn hooks(options: &SocketOptions) -> $hooks {
                 <$hooks>::from_options(options)
             }
+            $($($extra)*)?
         }
     };
 }
+
+/// The core type every ZMTP kind's readiness checks receive.
+type Core<H> = SocketCore<Zmtp, H>;
 
 trait FromOptions {
     fn from_options(options: &SocketOptions) -> Self;
@@ -130,7 +135,9 @@ impl Socket<Dealer> {
 
 kind!(
     /// PUSH: round-robin sends to PULL peers; cannot receive.
-    Push, SocketType::Push, Plain, ()
+    Push, SocketType::Push, Plain, (), {
+        fn readable((): &(), _: &mut Core<Plain>) -> bool { false }
+    }
 );
 
 impl Socket<Push> {
@@ -142,7 +149,9 @@ impl Socket<Push> {
 
 kind!(
     /// PULL: fair-queued receives from PUSH peers; cannot send.
-    Pull, SocketType::Pull, Plain, ()
+    Pull, SocketType::Pull, Plain, (), {
+        fn writable((): &(), _: &mut Core<Plain>) -> bool { false }
+    }
 );
 
 impl Socket<Pull> {
@@ -242,7 +251,14 @@ impl Hooks for RouterHooks {
 kind!(
     /// ROUTER: receives are prefixed with the sender's identity; sends are
     /// routed by their first frame.
-    Router, SocketType::Router, RouterHooks, ()
+    Router, SocketType::Router, RouterHooks, (), {
+        // As in libzmq: a send never waits (it drops, or fails under
+        // `router_mandatory`), so ROUTER is writable unless mandatory with no
+        // peer room.
+        fn writable((): &(), c: &mut Core<RouterHooks>) -> bool {
+            !c.options().router_mandatory || c.any_writable()
+        }
+    }
 );
 
 impl Socket<Router> {
@@ -327,7 +343,17 @@ pub struct ReqState {
 
 kind!(
     /// REQ: strict send-then-receive with one peer per request.
-    Req, SocketType::Req, Plain, ReqState
+    Req, SocketType::Req, Plain, ReqState, {
+        // Readable only for the reply to the outstanding request.
+        fn readable(ext: &ReqState, c: &mut Core<Plain>) -> bool {
+            ext.waiting_on.is_some_and(|p| c.has_ready_from(p))
+        }
+        // Writable only when no reply is owed (or `req_relaxed` lets a new
+        // request abandon it).
+        fn writable(ext: &ReqState, c: &mut Core<Plain>) -> bool {
+            (ext.waiting_on.is_none() || c.options().req_relaxed) && c.any_writable()
+        }
+    }
 );
 
 impl Socket<Req> {
@@ -397,7 +423,16 @@ pub struct RepState {
 
 kind!(
     /// REP: strict receive-then-reply, routing each reply to its requester.
-    Rep, SocketType::Rep, Plain, RepState
+    Rep, SocketType::Rep, Plain, RepState, {
+        // Readable only while no reply is owed; writable only while one is.
+        fn readable(ext: &RepState, c: &mut Core<Plain>) -> bool {
+            ext.pending.is_none() && c.peek_ready()
+        }
+        fn writable(ext: &RepState, c: &mut Core<Plain>) -> bool {
+            c.progress();
+            ext.pending.is_some()
+        }
+    }
 );
 
 impl Socket<Rep> {
@@ -560,12 +595,18 @@ impl Hooks for XPubHooks {
 kind!(
     /// PUB: each message goes to every subscriber whose subscriptions match
     /// its first frame; cannot receive.
-    Pub, SocketType::Pub, PubHooks, PubExt
+    Pub, SocketType::Pub, PubHooks, PubExt, {
+        fn readable(_: &PubExt, _: &mut Core<PubHooks>) -> bool { false }
+        // Publishing never waits: a subscriber at its HWM misses the message.
+        fn writable(_: &PubExt, _: &mut Core<PubHooks>) -> bool { true }
+    }
 );
 
 kind!(
     /// XPUB: PUB that also delivers subscription messages to the user.
-    XPub, SocketType::Xpub, XPubHooks, PubExt
+    XPub, SocketType::Xpub, XPubHooks, PubExt, {
+        fn writable(_: &PubExt, _: &mut Core<XPubHooks>) -> bool { true }
+    }
 );
 
 /// Scratch space a publisher reuses for each message's matching peers.
@@ -744,11 +785,18 @@ impl Kind for Sub {
             change_subscription(socket, |h| &mut h.subs, true, &prefix);
         }
     }
+
+    fn writable((): &(), _: &mut Core<SubHooks>) -> bool {
+        false
+    }
 }
 
 kind!(
     /// XSUB: sends subscription messages upstream and receives everything.
-    XSub, SocketType::Xsub, XSubHooks, ()
+    XSub, SocketType::Xsub, XSubHooks, (), {
+        // Subscription messages go to every peer and never wait.
+        fn writable((): &(), _: &mut Core<XSubHooks>) -> bool { true }
+    }
 );
 
 /// Subscription bookkeeping shared by SUB and XSUB.

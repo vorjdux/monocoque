@@ -36,7 +36,7 @@ pub use out::{OutQueue, WriteJob};
 use crate::endpoint::Endpoint;
 use crate::error::{MonocoqueError, Result};
 use crate::monitor::{SocketEvent, SocketEventSender};
-use crate::msg::Msg;
+use crate::msg::{Metadata, Msg};
 use crate::options::SocketOptions;
 use crate::transport::{Listener, Stream};
 use bytes::{Bytes, BytesMut};
@@ -201,19 +201,37 @@ pub struct PeerInfo {
     pub address: String,
     /// The endpoint the connection was made through, when known.
     pub endpoint: Option<Endpoint>,
-    /// Connection metadata (handshake properties, the ZAP user id), exposed to
-    /// the user per message.
-    pub metadata: Vec<(String, Bytes)>,
+    /// Connection metadata (handshake properties, the ZAP user id), built once
+    /// per connection and shared with every message received from it.
+    pub metadata: Arc<Metadata>,
 }
 
 impl PeerInfo {
     /// Look up one metadata property by name (ASCII case-insensitive).
     #[must_use]
     pub fn property(&self, name: &str) -> Option<&Bytes> {
-        self.metadata
-            .iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case(name))
-            .map(|(_, v)| v)
+        self.metadata.get(name)
+    }
+
+    /// Describe a peer on this host (inproc): its socket type, its identity
+    /// and the custom properties it announces.
+    #[must_use]
+    pub fn local(socket_type: &'static str, options: &SocketOptions) -> Self {
+        let identity = options.routing_id.clone();
+        let mut meta = Metadata::new();
+        meta.insert("Socket-Type", Bytes::from_static(socket_type.as_bytes()));
+        if let Some(id) = identity.as_ref().filter(|id| !id.is_empty()) {
+            meta.insert("Identity", id.clone());
+        }
+        for (k, v) in &options.metadata {
+            meta.insert(k.clone(), v.clone());
+        }
+        Self {
+            socket_type,
+            identity,
+            metadata: Arc::new(meta),
+            ..Self::default()
+        }
     }
 }
 
@@ -889,10 +907,8 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             let info = {
                 let core = this.borrow();
                 PeerInfo {
-                    socket_type: P::socket_type(&core.cfg),
-                    identity: core.options.routing_id.clone(),
                     endpoint: Some(endpoint.clone()),
-                    ..PeerInfo::default()
+                    ..PeerInfo::local(P::socket_type(&core.cfg), &core.options)
                 }
             };
             let binding = inproc::bind(name, info)?;
@@ -946,10 +962,8 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         let mut core = this.borrow_mut();
         if let Endpoint::Inproc(name) = &endpoint {
             let info = PeerInfo {
-                socket_type: P::socket_type(&core.cfg),
-                identity: core.options.routing_id.clone(),
                 endpoint: Some(endpoint.clone()),
-                ..PeerInfo::default()
+                ..PeerInfo::local(P::socket_type(&core.cfg), &core.options)
             };
             let hwm = core.options.send_hwm;
             let (link, mut binder) = inproc::connect(name, info, hwm)?;
@@ -1191,6 +1205,61 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
                 return Poll::Pending;
             }
         }
+    }
+
+    /// `true` if a fair-queued receive would return a message now. Unlike
+    /// [`has_ready`](Self::has_ready) this runs the inbound hook on the next
+    /// message, so one a filter would drop (SUB) does not count. A message
+    /// that passes stays queued, at the front, for the next receive.
+    pub fn peek_ready(&mut self) -> bool {
+        self.progress();
+        if !self.inbox.is_empty() {
+            return true;
+        }
+        if let Some(m) = self.take_ready() {
+            self.inbox.push_front(m);
+            return true;
+        }
+        false
+    }
+
+    /// `true` if `id` has a message queued.
+    pub fn has_ready_from(&mut self, id: PeerId) -> bool {
+        self.progress();
+        self.entry(id)
+            .is_some_and(|e| !e.state.borrow().ready.is_empty())
+    }
+
+    /// Wait until some live peer has send room, without sending.
+    pub fn poll_writable(&mut self, cx: &mut Context<'_>) -> Poll<()> {
+        loop {
+            if self.any_writable() {
+                return Poll::Ready(());
+            }
+            self.watch_send_room(cx);
+            if self.park(cx) {
+                return Poll::Pending;
+            }
+        }
+    }
+
+    /// Ask the same-thread inproc peers that are full to wake `cx` once
+    /// their receiver makes room. Wire peers report room through their writer
+    /// and need nothing here.
+    pub fn watch_send_room(&self, cx: &mut Context<'_>) {
+        for id in &self.lb {
+            if let Some(e) = self.entry(*id) {
+                e.state.borrow().watch_send_room(cx);
+            }
+        }
+    }
+
+    /// Park the user task for a readiness wait spanning several sockets.
+    /// Returns `false` if work arrived meanwhile and the caller should look
+    /// again before returning `Pending`. The caller must
+    /// [`Wakeups::unpark_user`] once it stops waiting.
+    pub fn park_poll(&self, cx: &mut Context<'_>) -> bool {
+        self.park(cx)
     }
 
     /// Park the user task. Returns `false` if work arrived meanwhile and the

@@ -141,8 +141,13 @@ impl Hooks for StreamHooks {
 
 /// A STREAM socket. See the [module docs](self).
 pub struct StreamSocket {
-    core: Shared<Raw, StreamHooks>,
+    pub(crate) core: Shared<Raw, StreamHooks>,
     slot: Msg,
+}
+
+/// `true` if a connect or disconnect notification is waiting to be received.
+pub(crate) fn has_notification(core: &SocketCore<Raw, StreamHooks>) -> bool {
+    !core.hooks().notifications.is_empty()
 }
 
 impl Default for StreamSocket {

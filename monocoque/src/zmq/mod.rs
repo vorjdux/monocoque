@@ -38,7 +38,7 @@
 pub use monocoque_core::endpoint::{Endpoint, EndpointError};
 pub use monocoque_core::error::{MonocoqueError, Result};
 pub use monocoque_core::monitor::{SocketEvent, SocketMonitor};
-pub use monocoque_core::msg::{Msg, MsgRef};
+pub use monocoque_core::msg::{Metadata, Msg, MsgRef};
 pub use monocoque_core::mux::{PeerId, PeerInfo};
 pub use monocoque_core::options::SocketOptions;
 pub use monocoque_core::subscription::{Subscription, SubscriptionEvent, SubscriptionTrie};
@@ -49,6 +49,11 @@ pub use monocoque_zmtp::sock::kinds::{
     RouterSocket, SubSocket, XPubSocket, XSubSocket,
 };
 pub use monocoque_zmtp::sock::stream::StreamSocket;
+
+/// `zmq_poll`: wait on many sockets of any kind at once.
+pub mod poll {
+    pub use monocoque_zmtp::sock::poll::{PollEvents, PollItem, Pollable, poll};
+}
 
 /// `zmq_proxy` and `zmq_proxy_steerable`.
 pub mod proxy {

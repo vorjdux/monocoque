@@ -10,6 +10,7 @@
 //! background work while no call is in progress.
 
 pub mod kinds;
+pub mod poll;
 pub mod proxy;
 pub mod stream;
 
@@ -18,7 +19,7 @@ use crate::wire::{Zmtp, ZmtpConfig};
 use bytes::Bytes;
 use monocoque_core::error::{MonocoqueError, Result};
 use monocoque_core::monitor::{SocketMonitor, create_monitor};
-use monocoque_core::msg::{Msg, MsgRef};
+use monocoque_core::msg::{Metadata, Msg, MsgRef};
 use monocoque_core::mux::{Hooks, PeerId, PeerInfo, SendTo, Shared, SocketCore, op};
 use monocoque_core::options::SocketOptions;
 use monocoque_core::transport::Stream;
@@ -42,6 +43,17 @@ pub trait Kind: Sized + 'static {
 
     /// Finish setting up a new socket (SUB applies `options.subscriptions`).
     fn init(_socket: &mut Socket<Self>) {}
+
+    /// `true` if a receive would return a message without waiting
+    /// (`ZMQ_POLLIN`). Must not take the message.
+    fn readable(_ext: &Self::Ext, core: &mut SocketCore<Zmtp, Self::Hooks>) -> bool {
+        core.peek_ready()
+    }
+
+    /// `true` if a send would be accepted without waiting (`ZMQ_POLLOUT`).
+    fn writable(_ext: &Self::Ext, core: &mut SocketCore<Zmtp, Self::Hooks>) -> bool {
+        core.any_writable()
+    }
 }
 
 /// One ZeroMQ socket. See the [module docs](self).
@@ -49,6 +61,9 @@ pub struct Socket<K: Kind> {
     pub(crate) core: Shared<Zmtp, K::Hooks>,
     slot: Msg,
     slot_peer: Option<PeerId>,
+    /// Metadata of `slot_peer`'s connection, refreshed only when the sending
+    /// peer changes, so consecutive messages from one connection pay nothing.
+    slot_meta: Option<Arc<Metadata>>,
     pub(crate) ext: K::Ext,
 }
 
@@ -80,6 +95,7 @@ impl<K: Kind> Socket<K> {
             core,
             slot: Msg::new(),
             slot_peer: None,
+            slot_meta: None,
             ext: K::Ext::default(),
         };
         K::init(&mut socket);
@@ -173,8 +189,15 @@ impl<K: Kind> Socket<K> {
     /// property the handshake carried.
     #[must_use]
     pub fn peer_property(&self, name: &str) -> Option<Bytes> {
-        let id = self.slot_peer?;
-        self.core.borrow().peer_info(id)?.property(name).cloned()
+        self.slot_meta.as_ref()?.get(name).cloned()
+    }
+
+    /// The connection metadata of the last received message, kept even after
+    /// that peer has gone. Use this for a message taken out with
+    /// [`MsgRef::take`] or `recv_owned`, which carry none themselves.
+    #[must_use]
+    pub fn last_metadata(&self) -> Option<Arc<Metadata>> {
+        self.slot_meta.clone()
     }
 
     /// Everything known about the peer the last received message came from.
@@ -233,6 +256,11 @@ impl<K: Kind> Socket<K> {
         self.core.borrow_mut().any_writable()
     }
 
+    /// Wait until some peer has send room, without sending. Safe to drop.
+    pub fn poll_writable(&self, cx: &mut std::task::Context<'_>) -> std::task::Poll<()> {
+        self.core.borrow_mut().poll_writable(cx)
+    }
+
     // ── shared building blocks for the kinds ─────────────────────────────
 
     fn recv_timeout(&self) -> Option<Duration> {
@@ -252,8 +280,29 @@ impl<K: Kind> Socket<K> {
             timeout,
         )
         .await?;
-        self.slot_peer = Some(peer);
+        self.note_peer(peer);
         Ok(peer)
+    }
+
+    /// Record which peer the slot's message came from. Only a change of peer
+    /// touches the metadata, so a run of messages from one connection costs a
+    /// compare each.
+    #[allow(clippy::inline_always)] // on every receive
+    #[inline(always)]
+    fn note_peer(&mut self, peer: PeerId) {
+        if self.slot_peer != Some(peer) {
+            self.refresh_meta(peer);
+        }
+    }
+
+    #[cold]
+    fn refresh_meta(&mut self, peer: PeerId) {
+        self.slot_peer = Some(peer);
+        self.slot_meta = self
+            .core
+            .borrow()
+            .peer_info(peer)
+            .map(|i| Arc::clone(&i.metadata));
     }
 
     /// The receive slot, filled by `next_into_slot`.
@@ -261,9 +310,11 @@ impl<K: Kind> Socket<K> {
         &mut self.slot
     }
 
-    /// Lend out the receive slot.
+    /// Lend out the receive slot, with its connection's metadata.
+    #[allow(clippy::inline_always)] // on every receive
+    #[inline(always)]
     pub(crate) fn lend(&mut self) -> MsgRef<'_> {
-        MsgRef::new(&mut self.slot)
+        MsgRef::with_metadata(&mut self.slot, self.slot_meta.as_deref())
     }
 
     /// Next message from `peer` only, into the receive slot. `Ok(false)` once
@@ -279,7 +330,7 @@ impl<K: Kind> Socket<K> {
         )
         .await?;
         if got {
-            self.slot_peer = Some(peer);
+            self.note_peer(peer);
         }
         Ok(got)
     }

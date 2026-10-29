@@ -42,21 +42,22 @@ pub fn encode_frame(flags: u8, body: &Bytes) -> Bytes {
 ///
 /// Optional:
 /// - Identity
+#[cfg(test)]
 pub fn build_ready(socket_type: &str, identity: Option<&[u8]>) -> Bytes {
-    build_metadata_command("READY", socket_type, identity)
+    build_metadata_command_with("READY", socket_type, identity, &[])
 }
 
-/// Build the PLAIN `INITIATE` command (client side).
-///
-/// Identical metadata to `READY`; only the command name differs. ZMTP PLAIN has
-/// the client send INITIATE after WELCOME and the server reply READY, so a PLAIN
-/// client must not send a bare READY (libzmq rejects it).
-pub fn build_initiate(socket_type: &str, identity: Option<&[u8]>) -> Bytes {
-    build_metadata_command("INITIATE", socket_type, identity)
-}
-
-/// Build a metadata-carrying command (`READY` or `INITIATE`) body.
-fn build_metadata_command(command: &str, socket_type: &str, identity: Option<&[u8]>) -> Bytes {
+/// Build a metadata-carrying command body: `READY`, or the PLAIN client's
+/// `INITIATE` (identical metadata; ZMTP PLAIN has the client send INITIATE
+/// after WELCOME, and libzmq rejects a bare READY there). `extra` custom
+/// properties follow the standard ones; one whose name exceeds 255 bytes is
+/// skipped.
+pub fn build_metadata_command_with(
+    command: &str,
+    socket_type: &str,
+    identity: Option<&[u8]>,
+    extra: &[(String, Bytes)],
+) -> Bytes {
     let mut body = BytesMut::new();
 
     // Command name (length-prefixed). Only the fixed READY/INITIATE names reach here.
@@ -69,6 +70,12 @@ fn build_metadata_command(command: &str, socket_type: &str, identity: Option<&[u
     // Optional: Identity
     if let Some(id) = identity {
         put_property(&mut body, "Identity", id);
+    }
+
+    for (name, value) in extra {
+        if name.len() <= 255 {
+            put_property(&mut body, name, value);
+        }
     }
 
     body.freeze()

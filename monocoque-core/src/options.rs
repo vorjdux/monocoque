@@ -165,6 +165,15 @@ pub struct SocketOptions {
     /// - Consumed after each connect operation
     pub connect_routing_id: Option<bytes::Bytes>,
 
+    /// Custom handshake properties (`ZMQ_METADATA`)
+    ///
+    /// Sent in this socket's `READY` (or PLAIN `INITIATE`) command, so the
+    /// peer sees them as message metadata. libzmq expects names starting with
+    /// `X-`. Peers reject a `READY` above 512 bytes, so keep these short.
+    /// Not sent over CURVE.
+    /// - Default: none
+    pub metadata: Vec<(String, bytes::Bytes)>,
+
     /// ROUTER mandatory mode (`ZMQ_ROUTER_MANDATORY`)
     ///
     /// - `false` (default): Silently drop messages to unknown peers
@@ -591,6 +600,7 @@ impl Default for SocketOptions {
             write_buffer_size: 8192, // 8KB - balanced default
             routing_id: None,
             connect_routing_id: None,
+            metadata: Vec::new(),
             router_mandatory: false,
             router_handover: false,
             probe_router: false,
@@ -874,6 +884,14 @@ impl SocketOptions {
     /// ```
     pub fn with_routing_id(mut self, id: bytes::Bytes) -> Self {
         self.routing_id = Some(id);
+        self
+    }
+
+    /// Announce a custom handshake property (`ZMQ_METADATA`), such as
+    /// `X-Service`. See [`metadata`](Self::metadata).
+    #[must_use]
+    pub fn with_metadata(mut self, name: impl Into<String>, value: impl Into<bytes::Bytes>) -> Self {
+        self.metadata.push((name.into(), value.into()));
         self
     }
 

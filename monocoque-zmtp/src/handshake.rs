@@ -21,7 +21,7 @@
 use crate::error::ZmtpError;
 use crate::security::curve::CurveHandshakeResult;
 use crate::session::SocketType;
-use crate::utils::{FLAG_COMMAND, build_ready, encode_frame};
+use crate::utils::{FLAG_COMMAND, encode_frame};
 use bytes::{BufMut, Bytes, BytesMut};
 use compio_buf::BufResult;
 use compio_io::{AsyncRead, AsyncWrite};
@@ -37,6 +37,11 @@ pub struct HandshakeResult {
     pub peer_identity: Option<Bytes>,
     pub peer_socket_type: SocketType,
     pub curve_cipher: Option<crate::security::curve::CurveMessageCipher>,
+    /// The user id the ZAP handler returned when it admitted this peer.
+    pub user_id: Option<String>,
+    /// Further connection properties: the peer's handshake metadata beyond
+    /// `Socket-Type` and `Identity`, then any metadata the ZAP reply carried.
+    pub properties: Vec<(String, Bytes)>,
 }
 
 /// Security mechanism to use for the ZMTP handshake.
@@ -232,12 +237,13 @@ where
 
     // Step 3: Run security-mechanism-specific exchange (between greeting and READY)
     let curve_cipher: Option<crate::security::curve::CurveMessageCipher> = None;
+    let mut zap = ZapOutcome::default();
     match mechanism {
         SecurityMechanism::Null => {
             // No mechanism-level exchange for NULL; proceed directly to READY.
         }
         SecurityMechanism::Plain => {
-            run_plain_exchange(stream, options, timeout).await?;
+            zap = run_plain_exchange(stream, options, timeout).await?;
         }
         SecurityMechanism::Curve => {
             // CURVE handshake carries all metadata internally (no separate READY needed).
@@ -249,6 +255,8 @@ where
                 peer_identity: cr.peer_identity,
                 peer_socket_type,
                 curve_cipher: cr.cipher,
+                user_id: cr.user_id,
+                properties: cr.zap_metadata,
             });
         }
     }
@@ -261,11 +269,12 @@ where
         "[HANDSHAKE] Step 4: Sending {} command...",
         if plain_client { "INITIATE" } else { "READY" }
     );
-    let ready_body = if plain_client {
-        crate::utils::build_initiate(local_socket_type.as_str(), identity)
-    } else {
-        build_ready(local_socket_type.as_str(), identity)
-    };
+    let ready_body = crate::utils::build_metadata_command_with(
+        if plain_client { "INITIATE" } else { "READY" },
+        local_socket_type.as_str(),
+        identity,
+        &options.metadata,
+    );
     let ready_frame = encode_frame(FLAG_COMMAND, &ready_body);
     let BufResult(write_res, _) = write_all_with_timeout(stream, ready_frame.clone(), timeout)
         .await
@@ -387,19 +396,43 @@ where
 
     // Parse READY command
     let ready_bytes = Bytes::from(body_buf);
-    let (peer_socket_type, peer_identity) = parse_ready_command(&ready_bytes)?;
-    check_socket_type_compatibility(local_socket_type, peer_socket_type)?;
+    let ready = parse_ready_metadata(&ready_bytes)?;
+    check_socket_type_compatibility(local_socket_type, ready.socket_type)?;
 
     debug!(
         "[HANDSHAKE] Handshake complete! Peer is {}",
-        peer_socket_type.as_str()
+        ready.socket_type.as_str()
     );
 
+    let mut properties = ready.properties;
+    properties.extend(zap.metadata);
     Ok(HandshakeResult {
-        peer_identity,
-        peer_socket_type,
+        peer_identity: ready.identity,
+        peer_socket_type: ready.socket_type,
         curve_cipher,
+        user_id: zap.user_id,
+        properties,
     })
+}
+
+/// What a ZAP handler said about an admitted peer.
+#[derive(Default)]
+pub struct ZapOutcome {
+    pub user_id: Option<String>,
+    pub metadata: Vec<(String, Bytes)>,
+}
+
+impl ZapOutcome {
+    pub fn from_response(r: crate::security::zap::ZapResponse) -> Self {
+        Self {
+            user_id: Some(r.user_id).filter(|u| !u.is_empty()),
+            metadata: r
+                .metadata
+                .into_iter()
+                .map(|(k, v)| (k, Bytes::from(v)))
+                .collect(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -414,7 +447,7 @@ async fn run_plain_exchange<S>(
     stream: &mut S,
     options: &SocketOptions,
     timeout: Option<Duration>,
-) -> Result<(), ZmtpError>
+) -> Result<ZapOutcome, ZmtpError>
 where
     S: AsyncRead + AsyncWrite + PeerAddress + Unpin,
 {
@@ -424,17 +457,23 @@ where
         debug!("[HANDSHAKE] Running PLAIN server exchange");
         let domain = options.zap_domain.as_str();
         let peer_address = stream.zap_address();
-        crate::security::plain::plain_server_handshake_zap(stream, domain, &peer_address, timeout)
-            .await
-            .map(|_| ())
+        crate::security::plain::plain_server_handshake_zap_response(
+            stream,
+            domain,
+            &peer_address,
+            timeout,
+        )
+        .await
+        .map(ZapOutcome::from_response)
     } else if let Some(ref username) = options.plain_username {
         debug!("[HANDSHAKE] Running PLAIN client exchange");
         let password = options.plain_password().unwrap_or("");
         let credentials = PlainCredentials::new(username.clone(), password);
-        plain_client_handshake(stream, &credentials, timeout).await
+        plain_client_handshake(stream, &credentials, timeout).await?;
+        Ok(ZapOutcome::default())
     } else {
         // Should not happen (mechanism detection guards this), but be safe.
-        Ok(())
+        Ok(ZapOutcome::default())
     }
 }
 
@@ -573,6 +612,23 @@ fn parse_greeting_mechanism(field: &[u8]) -> Result<SecurityMechanism, ZmtpError
 
 /// Parse READY command to extract socket type and identity
 pub fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), ZmtpError> {
+    parse_ready_metadata(body).map(|r| (r.socket_type, r.identity))
+}
+
+/// Everything a peer's `READY` (or PLAIN `INITIATE`) command announced.
+#[derive(Debug)]
+pub struct ReadyMetadata {
+    /// The mandatory `Socket-Type`.
+    pub socket_type: SocketType,
+    /// The optional `Identity`.
+    pub identity: Option<Bytes>,
+    /// Every other property, in wire order. Values share the command body.
+    pub properties: Vec<(String, Bytes)>,
+}
+
+/// Parse a `READY` or `INITIATE` body, keeping every property.
+#[allow(clippy::too_many_lines)] // one linear pass over the property list
+pub fn parse_ready_metadata(body: &Bytes) -> Result<ReadyMetadata, ZmtpError> {
     // READY format:
     // - 1 byte: command name length
     // - N bytes: "READY"
@@ -602,6 +658,7 @@ pub fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), 
     let mut offset = 1 + name_len;
     let mut socket_type = None;
     let mut identity = None;
+    let mut properties = Vec::new();
 
     while offset < body.len() {
         if offset + 1 > body.len() {
@@ -685,7 +742,11 @@ pub fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), 
                 identity = Some(body.slice(value_start..value_end));
             }
             _ => {
-                // Ignore unknown properties
+                // Any other property becomes connection metadata. RFC 23 names
+                // are ASCII; one that is not text is skipped, not fatal.
+                if let Ok(name) = std::str::from_utf8(key) {
+                    properties.push((name.to_string(), body.slice(value_start..value_end)));
+                }
             }
         }
     }
@@ -694,7 +755,11 @@ pub fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), 
         warn!("[HANDSHAKE] ZMTP READY parse: peer READY command is missing the required \"Socket-Type\" property");
         ZmtpError::Protocol
     })?;
-    Ok((socket_type, identity))
+    Ok(ReadyMetadata {
+        socket_type,
+        identity,
+        properties,
+    })
 }
 
 /// Parse socket type from bytes
@@ -807,6 +872,19 @@ mod tests {
         let (socket_type, identity) = parse_ready_command(&body).unwrap();
         assert_eq!(socket_type, SocketType::Dealer);
         assert_eq!(identity.as_deref(), Some(&b"client-1"[..]));
+    }
+
+    #[test]
+    fn parse_ready_keeps_custom_properties() {
+        let extra = [
+            ("X-Service".to_string(), Bytes::from_static(b"billing")),
+            ("X-Empty".to_string(), Bytes::new()),
+        ];
+        let body = crate::utils::build_metadata_command_with("READY", "PUSH", None, &extra);
+        let ready = parse_ready_metadata(&body).unwrap();
+        assert_eq!(ready.socket_type, SocketType::Push);
+        assert_eq!(ready.identity, None);
+        assert_eq!(ready.properties, extra);
     }
 
     #[test]

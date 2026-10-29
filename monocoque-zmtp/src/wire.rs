@@ -17,12 +17,13 @@ use crate::security::curve::CurveMessageCipher;
 use crate::session::SocketType;
 use bytes::{Buf, Bytes, BytesMut};
 use monocoque_core::error::{MonocoqueError, Result};
-use monocoque_core::msg::{FrameRef, INLINE_CAP, Msg};
+use monocoque_core::msg::{FrameRef, INLINE_CAP, Metadata, Msg};
 use monocoque_core::mux::{Codec, OutQueue, PeerInfo, Protocol};
 use monocoque_core::options::SocketOptions;
 use monocoque_core::rt::PeerAddress;
 use monocoque_core::transport::Stream;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 const FLAG_MORE: u8 = 0x01;
@@ -333,22 +334,28 @@ impl Protocol for Zmtp {
         })?;
         let peer_type = result.peer_socket_type.as_str();
         let address = stream.zap_address();
-        let mut metadata = vec![(
-            "Socket-Type".to_string(),
-            Bytes::from_static(peer_type.as_bytes()),
-        )];
-        if let Some(id) = &result.peer_identity {
-            metadata.push(("Identity".to_string(), id.clone()));
+        // Built once per connection; every message received from this peer
+        // shares it through the socket's receive slot.
+        let mut metadata = Metadata::new();
+        for (k, v) in result.properties {
+            metadata.insert(k, v);
+        }
+        metadata.insert("Socket-Type", Bytes::from_static(peer_type.as_bytes()));
+        if let Some(id) = result.peer_identity.as_ref().filter(|id| !id.is_empty()) {
+            metadata.insert("Identity", id.clone());
         }
         if !address.is_empty() {
-            metadata.push(("Peer-Address".to_string(), Bytes::from(address.clone())));
+            metadata.insert("Peer-Address", Bytes::from(address.clone()));
+        }
+        if let Some(user) = result.user_id {
+            metadata.insert("User-Id", Bytes::from(user));
         }
         let info = PeerInfo {
             socket_type: peer_type,
             identity: result.peer_identity.filter(|id| !id.is_empty()),
             address,
             endpoint: None,
-            metadata,
+            metadata: Arc::new(metadata),
         };
         Ok((ZmtpCodec::new(result.curve_cipher, &options), info))
     }

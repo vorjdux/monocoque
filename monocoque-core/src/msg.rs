@@ -433,25 +433,140 @@ impl DoubleEndedIterator for Frames<'_> {
 
 impl ExactSizeIterator for Frames<'_> {}
 
+/// Properties of the connection a message arrived on (`zmq_msg_gets`).
+///
+/// Built once per connection when its handshake completes and shared by every
+/// message from it, so receiving costs nothing extra. Names compare ASCII
+/// case-insensitively, as in libzmq. Typical properties are `Socket-Type`,
+/// `Identity` (also reachable as `Routing-Id`), `Peer-Address`, `User-Id` (the
+/// user id a ZAP handler returned) and whatever the peer put in its handshake
+/// metadata.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Metadata {
+    props: Vec<(String, Bytes)>,
+}
+
+impl Metadata {
+    /// An empty property set.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self { props: Vec::new() }
+    }
+
+    /// Set `name` to `value`, replacing an existing property of that name.
+    pub fn insert(&mut self, name: impl Into<String>, value: impl Into<Bytes>) {
+        let name = name.into();
+        let value = value.into();
+        if let Some(slot) = self
+            .props
+            .iter_mut()
+            .find(|(k, _)| k.eq_ignore_ascii_case(&name))
+        {
+            slot.1 = value;
+        } else {
+            self.props.push((name, value));
+        }
+    }
+
+    /// The raw value of `name`. `Routing-Id` is an alias for `Identity`.
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<&Bytes> {
+        let find = |n: &str| {
+            self.props
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(n))
+                .map(|(_, v)| v)
+        };
+        find(name).or_else(|| {
+            if name.eq_ignore_ascii_case("Routing-Id") {
+                find("Identity")
+            } else {
+                None
+            }
+        })
+    }
+
+    /// The value of `name` as text, like `zmq_msg_gets`. `None` if absent or
+    /// not UTF-8.
+    #[must_use]
+    pub fn gets(&self, name: &str) -> Option<&str> {
+        self.get(name).and_then(|v| std::str::from_utf8(v).ok())
+    }
+
+    /// Every property, in the order it was set.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &Bytes)> {
+        self.props.iter().map(|(k, v)| (k.as_str(), v))
+    }
+
+    /// Number of properties.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.props.len()
+    }
+
+    /// `true` if there are no properties.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.props.is_empty()
+    }
+}
+
 /// A received message borrowed from the socket.
 ///
 /// It derefs to [`Msg`]. Dropping it releases the socket's slot; nothing is
 /// copied or refcounted to hand it out. [`take`](Self::take) moves the message
 /// out when the caller needs to keep it past the next receive.
+///
+/// [`gets`](Self::gets) and [`metadata`](Self::metadata) read the properties
+/// of the connection the message came from. They point at the socket's copy of
+/// that connection's [`Metadata`]; a message does not carry it, so an owned
+/// [`Msg`] taken out of a `MsgRef` has none (ask the socket instead).
 pub struct MsgRef<'a> {
     msg: &'a mut Msg,
+    meta: Option<&'a Metadata>,
 }
 
+// The whole-message wrappers sit on every receive; forcing them inline keeps
+// the metadata pointer from costing a call on the hot path.
+#[allow(clippy::inline_always)]
 impl<'a> MsgRef<'a> {
     /// Wrap the socket's current message slot.
+    #[inline(always)]
     pub const fn new(msg: &'a mut Msg) -> Self {
-        Self { msg }
+        Self { msg, meta: None }
+    }
+
+    /// Wrap the socket's current message slot along with the metadata of the
+    /// connection it arrived on.
+    #[inline(always)]
+    pub const fn with_metadata(msg: &'a mut Msg, meta: Option<&'a Metadata>) -> Self {
+        Self { msg, meta }
     }
 
     /// Move the message out, leaving the socket's slot empty.
     #[must_use]
+    #[inline(always)]
     pub fn take(self) -> Msg {
         std::mem::take(self.msg)
+    }
+
+    /// The properties of the connection this message arrived on.
+    #[must_use]
+    #[inline]
+    pub const fn metadata(&self) -> Option<&'a Metadata> {
+        self.meta
+    }
+
+    /// One connection property as text (`zmq_msg_gets`).
+    #[must_use]
+    pub fn gets(&self, name: &str) -> Option<&'a str> {
+        self.meta?.gets(name)
+    }
+
+    /// One connection property as raw bytes.
+    #[must_use]
+    pub fn property(&self, name: &str) -> Option<&'a Bytes> {
+        self.meta?.get(name)
     }
 }
 
@@ -487,6 +602,25 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metadata_lookup_ignores_case_aliases_routing_id_and_replaces() {
+        let mut m = Metadata::new();
+        m.insert("Identity", Bytes::from_static(b"a"));
+        m.insert("X-Key", Bytes::from_static(b"1"));
+        m.insert("x-key", Bytes::from_static(b"2"));
+        assert_eq!(m.len(), 2);
+        assert_eq!(m.gets("X-KEY"), Some("2"));
+        assert_eq!(m.gets("Routing-Id"), Some("a"));
+        assert_eq!(m.gets("Nope"), None);
+
+        let mut slot = Msg::from("x");
+        assert_eq!(MsgRef::new(&mut slot).gets("Identity"), None);
+        assert_eq!(
+            MsgRef::with_metadata(&mut slot, Some(&m)).gets("Identity"),
+            Some("a")
+        );
+    }
 
     #[test]
     fn small_copy_is_inline_and_large_is_single() {

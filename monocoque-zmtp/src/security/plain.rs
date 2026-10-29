@@ -37,7 +37,7 @@
 
 use crate::error::ZmtpError;
 use crate::security::protocol::reject_immediately_available_trailing_bytes;
-use crate::security::zap::{ZapMechanism, ZapRequest, ZapStatus};
+use crate::security::zap::{ZapMechanism, ZapRequest, ZapResponse, ZapStatus};
 use bytes::{Bytes, BytesMut};
 use compio_io::{AsyncRead, AsyncWrite};
 use std::fmt;
@@ -365,6 +365,22 @@ pub async fn plain_server_handshake_zap<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    plain_server_handshake_zap_response(stream, domain, peer_address, timeout)
+        .await
+        .map(|r| r.user_id)
+}
+
+/// [`plain_server_handshake_zap`], returning the whole successful ZAP reply
+/// so its user id and metadata can become connection metadata.
+pub async fn plain_server_handshake_zap_response<S>(
+    stream: &mut S,
+    domain: &str,
+    peer_address: &str,
+    timeout: Option<Duration>,
+) -> Result<ZapResponse, ZmtpError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     use crate::security::zap_client::ZapClient;
 
     debug!(
@@ -400,7 +416,7 @@ where
         );
 
         write_plain_cmd(stream, PLAIN_WELCOME, timeout).await?;
-        Ok(zap_response.user_id)
+        Ok(zap_response)
     } else {
         warn!(
             "[PLAIN SERVER ZAP] Authentication failed: {}",

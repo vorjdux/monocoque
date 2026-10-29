@@ -207,6 +207,16 @@ impl<C: Codec> PeerState<C> {
         }
     }
 
+    /// For a full same-thread inproc peer, have its receiver wake `cx` when it
+    /// takes a message.
+    pub(crate) fn watch_send_room(&self, cx: &mut Context<'_>) {
+        if let Outbound::Local(tx) = &self.outbound
+            && !self.writable()
+        {
+            let _ = tx.poll_ready(cx);
+        }
+    }
+
     /// Queue `msg` toward this peer. The caller has checked [`writable`].
     ///
     /// [`writable`]: Self::writable

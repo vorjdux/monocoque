@@ -618,6 +618,10 @@ pub struct CurveHandshakeResult {
     pub peer_public_key: Option<CurvePublicKey>,
     /// Post-handshake cipher for encrypting/decrypting application messages.
     pub cipher: Option<CurveMessageCipher>,
+    /// The user id the ZAP handler returned (server side, with ZAP only).
+    pub user_id: Option<String>,
+    /// Metadata the ZAP reply carried (server side, with ZAP only).
+    pub zap_metadata: Vec<(String, Bytes)>,
 }
 
 // ── CurveClient ───────────────────────────────────────────────────────────────
@@ -694,6 +698,8 @@ impl CurveClient {
             peer_identity: self.peer_identity_recv.clone(),
             peer_public_key: None,
             cipher: Some(cipher),
+            user_id: None,
+            zap_metadata: Vec::new(),
         })
     }
 
@@ -1034,6 +1040,8 @@ impl CurveServer {
             peer_identity: self.peer_identity_recv.clone(),
             peer_public_key: self.client_public,
             cipher: Some(cipher),
+            user_id: None,
+            zap_metadata: Vec::new(),
         })
     }
 
@@ -1469,6 +1477,7 @@ where
     }
 
     debug!("[CURVE SERVER ZAP] Authorized; sending READY");
+    let zap = crate::handshake::ZapOutcome::from_response(zap_response);
 
     // Authorized: finish the handshake by sending READY and build the message
     // cipher from the server state.
@@ -1487,6 +1496,8 @@ where
         peer_identity: curve_server.peer_identity_recv.clone(),
         peer_public_key: Some(client_public_key),
         cipher: Some(cipher),
+        user_id: zap.user_id,
+        zap_metadata: zap.metadata,
     })
 }
 

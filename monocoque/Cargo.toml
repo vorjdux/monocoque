@@ -196,6 +196,10 @@ name = "inproc_demo"
 required-features = ["zmq"]
 
 [[example]]
+name = "poll_demo"
+required-features = ["zmq"]
+
+[[example]]
 name = "inproc_pair_demo"
 required-features = ["zmq"]
 
@@ -283,6 +287,14 @@ required-features = ["zmq"]
 
 [[test]]
 name = "zap_peer_address"
+required-features = ["zmq"]
+
+[[test]]
+name = "poll"
+required-features = ["zmq"]
+
+[[test]]
+name = "msg_metadata"
 required-features = ["zmq"]
 
 [[test]]
