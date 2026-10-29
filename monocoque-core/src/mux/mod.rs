@@ -1254,22 +1254,29 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             if self.any_writable() {
                 return Poll::Ready(());
             }
-            self.watch_send_room(cx);
+            if self.watch_send_room(cx) {
+                continue;
+            }
             if self.park(cx) {
                 return Poll::Pending;
             }
         }
     }
 
-    /// Ask the same-thread inproc peers that are full to wake `cx` once
-    /// their receiver makes room. Wire peers report room through their writer
-    /// and need nothing here.
-    pub fn watch_send_room(&self, cx: &mut Context<'_>) {
+    /// Ask the inproc peers that are full to wake `cx` once their receiver
+    /// makes room. Wire peers report room through their writer and need
+    /// nothing here. Returns `true` if some peer has room by now, in which
+    /// case the caller must retry rather than park.
+    pub fn watch_send_room(&self, cx: &mut Context<'_>) -> bool {
+        let mut room = false;
         for id in &self.lb {
-            if let Some(e) = self.entry(*id) {
-                e.state.borrow().watch_send_room(cx);
+            if let Some(e) = self.entry(*id)
+                && !e.closed
+            {
+                room |= e.state.borrow().watch_send_room(cx);
             }
         }
+        room
     }
 
     /// Park the user task for a readiness wait spanning several sockets.
@@ -1320,6 +1327,11 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             }
             if self.closing {
                 return Poll::Ready(Err(MonocoqueError::Closed));
+            }
+            // A peer on another thread can make room between the pick above
+            // and here; parking then would wait for a wakeup never armed.
+            if self.watch_send_room(cx) {
+                continue;
             }
             if self.park(cx) {
                 return Poll::Pending;
@@ -1403,6 +1415,9 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
                 let result = entry.state.borrow_mut().enqueue_prefixed(prefix, m);
                 self.progress();
                 return Poll::Ready(result);
+            }
+            if entry.state.borrow().watch_send_room(cx) {
+                continue;
             }
             if self.park(cx) {
                 return Poll::Pending;

@@ -48,7 +48,7 @@ pub enum Outbound<C> {
     /// An inproc peer on this thread: messages move with no codec.
     Local(crate::localq::LocalSender<Msg>),
     /// An inproc peer on another thread.
-    Remote(flume::Sender<Msg>),
+    Remote(super::inproc::RemoteTx),
 }
 
 /// Mutable state of one peer, shared by its loops and the socket core.
@@ -219,14 +219,21 @@ impl<C: Codec> PeerState<C> {
         }
     }
 
-    /// For a full same-thread inproc peer, have its receiver wake `cx` when it
-    /// takes a message.
-    pub(crate) fn watch_send_room(&self, cx: &mut Context<'_>) {
-        if let Outbound::Local(tx) = &self.outbound
-            && !self.writable()
-        {
-            let _ = tx.poll_ready(cx);
+    /// For a full inproc peer, have its receiver wake `cx` when it takes a
+    /// message. Returns `true` if the peer has room after all (its receiver
+    /// may run on another thread), so the caller retries instead of parking.
+    pub(crate) fn watch_send_room(&self, cx: &mut Context<'_>) -> bool {
+        if self.writable() {
+            return true;
         }
+        match &self.outbound {
+            Outbound::Local(tx) => {
+                let _ = tx.poll_ready(cx);
+            }
+            Outbound::Remote(tx) => tx.watch_room(cx, self.send_hwm),
+            Outbound::Wire { .. } => {}
+        }
+        self.writable()
     }
 
     /// Queue `msg` toward this peer. The caller has checked [`writable`].
@@ -243,9 +250,13 @@ impl<C: Codec> PeerState<C> {
             Outbound::Local(tx) => tx
                 .try_send(msg.clone())
                 .map_err(|_| crate::error::MonocoqueError::Again),
-            Outbound::Remote(tx) => tx
-                .try_send(msg.clone())
-                .map_err(|_| crate::error::MonocoqueError::Again),
+            Outbound::Remote(tx) => {
+                if tx.try_send(msg.clone()) {
+                    Ok(())
+                } else {
+                    Err(crate::error::MonocoqueError::Again)
+                }
+            }
         }
     }
 
@@ -278,9 +289,13 @@ impl<C: Codec> PeerState<C> {
             Outbound::Local(tx) => tx
                 .try_send(msg)
                 .map_err(|_| crate::error::MonocoqueError::Again),
-            Outbound::Remote(tx) => tx
-                .try_send(msg)
-                .map_err(|_| crate::error::MonocoqueError::Again),
+            Outbound::Remote(tx) => {
+                if tx.try_send(msg) {
+                    Ok(())
+                } else {
+                    Err(crate::error::MonocoqueError::Again)
+                }
+            }
             Outbound::Wire { .. } => self.enqueue(&msg),
         }
     }
@@ -549,14 +564,14 @@ pub async fn local_reader_loop<C: Codec>(
 /// Move messages from an inproc peer on another thread into the ready queue.
 pub async fn remote_reader_loop<C: Codec>(
     peer: Rc<RefCell<PeerState<C>>>,
-    rx: flume::Receiver<Msg>,
+    rx: super::inproc::RemoteRx,
 ) {
     loop {
         poll_fn(|cx| peer.borrow_mut().poll_reader_room(cx)).await;
         if peer.borrow().closed.is_some() {
             return;
         }
-        if let Ok(msg) = rx.recv_async().await {
+        if let Some(msg) = rx.recv().await {
             peer.borrow_mut().deliver(msg);
         } else {
             peer.borrow_mut().close(CloseReason::Eof);

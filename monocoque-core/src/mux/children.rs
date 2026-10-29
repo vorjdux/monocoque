@@ -17,6 +17,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Wake, Waker};
+use std::thread::ThreadId;
 
 /// A child future in a [`Children`] set.
 ///
@@ -42,12 +43,31 @@ struct WakeState {
 /// set) so the hot paths that usually find nothing to do skip the lock. They
 /// are only written under the lock, which orders them with the state they
 /// describe.
-#[derive(Default)]
+///
+/// The socket's thread writes these flags on every operation while wakers on
+/// other threads read them, so the struct gets cache lines of its own (128
+/// bytes covers adjacent-line prefetch) rather than sharing one with whatever
+/// the allocator put next to it.
+#[repr(align(128))]
 pub struct Wakeups {
     state: Mutex<WakeState>,
     pending: AtomicBool,
     user_parked: AtomicBool,
     active: AtomicBool,
+    /// The socket's thread, the only one that runs its operations.
+    owner: ThreadId,
+}
+
+impl Default for Wakeups {
+    fn default() -> Self {
+        Self {
+            state: Mutex::default(),
+            pending: AtomicBool::new(false),
+            user_parked: AtomicBool::new(false),
+            active: AtomicBool::new(false),
+            owner: std::thread::current().id(),
+        }
+    }
 }
 
 // The guards here are held across the flag stores on purpose: a flag written
@@ -64,6 +84,9 @@ impl Wakeups {
     /// The operation is returning. Anything still queued goes to the driver
     /// unless the user parked for it.
     pub fn exit(&self) {
+        // Only a `notify` on this thread trusts `active` (see there), and this
+        // thread's own stores and loads are already in program order, so no
+        // fence is needed here.
         self.active.store(false, Ordering::Release);
         if !self.pending.load(Ordering::Acquire) {
             return;
@@ -164,7 +187,14 @@ impl Wakeups {
             let mut s = self.lock();
             s.woken.push(id);
             self.pending.store(true, Ordering::Release);
-            if self.active.load(Ordering::Acquire) {
+            // An operation in progress drains woken children before it
+            // returns, so a wakeup raised on this thread during one needs only
+            // queueing. From another thread that shortcut can lose the wakeup:
+            // the operation may be storing `active = false` and loading
+            // `pending` at this very moment, and without a fence on both
+            // sides each can miss the other's store. A foreign wakeup always
+            // delivers instead; at worst the driver polls once for nothing.
+            if self.active.load(Ordering::Acquire) && std::thread::current().id() == self.owner {
                 return;
             }
             let user = s.user.take();
