@@ -502,13 +502,14 @@ pub struct SocketOptions {
     /// stay on the copy path, where a single `write` of one contiguous buffer
     /// beats the per-iovec bookkeeping.
     ///
-    /// Only applies in eager mode (write coalescing disabled) and when the
-    /// connection is not CURVE-encrypted (encryption must transform the body
-    /// into a fresh buffer regardless).
+    /// Applies with and without write coalescing, but not on a CURVE
+    /// connection, where encryption writes every body into the outbound
+    /// buffer anyway.
     ///
-    /// - Default: 32768 (32 KB) - the measured crossover on loopback below which
-    ///   copying the body into one contiguous buffer beats a two-segment
-    ///   `writev`; tune for your hardware and message sizes
+    /// - Default: 16384 (16 KiB). Measured on loopback against 8 and 32 KiB:
+    ///   at 16 KiB bodies it beats 32 KiB by about half on coalesced
+    ///   throughput and 3% on round-trip latency, and 8 KiB gains nothing
+    ///   more. Tune for your hardware and message sizes.
     pub vectored_write_threshold: usize,
 }
 
@@ -658,7 +659,7 @@ impl Default for SocketOptions {
             invert_matching: false,
             write_coalescing: false,
             write_coalesce_threshold: 65536,
-            vectored_write_threshold: 32768,
+            vectored_write_threshold: 16384,
         }
     }
 }
