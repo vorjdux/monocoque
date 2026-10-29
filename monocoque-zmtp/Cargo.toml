@@ -42,7 +42,6 @@ smol = { workspace = true, optional = true }
 monocoque-core = { version = "0.4.2", path = "../monocoque-core", package = "monocoque-rs-core", default-features = false }
 smallvec.workspace = true
 tracing.workspace = true
-async-trait.workspace = true
 
 # Security / Cryptography
 x25519-dalek.workspace = true

@@ -403,7 +403,6 @@ tokio.workspace = true
 num_cpus.workspace = true
 portpicker.workspace = true
 hex.workspace = true
-async-trait.workspace = true
 
 [features]
 default = ["runtime-compio"]

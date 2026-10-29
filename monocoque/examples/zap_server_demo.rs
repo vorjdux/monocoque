@@ -10,7 +10,7 @@
 //! - A PLAIN REQ/REP pair authenticated through that handler
 
 use monocoque::zmq::{RepSocket, ReqSocket, Result, SocketOptions};
-use monocoque_zmtp::security::plain::StaticPlainHandler;
+use monocoque_zmtp::security::plain::{PlainAuthHandler, StaticPlainHandler};
 use monocoque_zmtp::security::zap::{ZapMechanism, ZapRequest, ZapResponse, ZapStatus};
 use monocoque_zmtp::security::zap_handler::{ZapHandler, spawn_zap_server};
 use std::collections::HashMap;
@@ -22,10 +22,9 @@ struct CustomZapHandler {
     /// Allowed IP addresses
     allowed_ips: Vec<String>,
     /// PLAIN authentication handler
-    plain_handler: Arc<dyn monocoque_zmtp::security::plain::PlainAuthHandler + Send + Sync>,
+    plain_handler: Arc<StaticPlainHandler>,
 }
 
-#[async_trait::async_trait(?Send)]
 impl ZapHandler for CustomZapHandler {
     #[allow(clippy::too_many_lines)]
     async fn authenticate(&self, request: &ZapRequest) -> ZapResponse {

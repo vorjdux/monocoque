@@ -21,7 +21,6 @@ struct RecordingHandler {
     addresses: Mutex<Vec<String>>,
 }
 
-#[async_trait::async_trait(?Send)]
 impl ZapHandler for RecordingHandler {
     async fn authenticate(&self, request: &ZapRequest) -> ZapResponse {
         self.addresses.lock().unwrap().push(request.address.clone());

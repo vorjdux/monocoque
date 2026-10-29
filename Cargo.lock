@@ -168,17 +168,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b75356056920673b02621b35afd0f7dda9306d03c79a30f5c56c44cf256e3de"
 
 [[package]]
-name = "async-trait"
-version = "0.1.92"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82f6aeea286b8eb4dd3431a1be1b59d290ace00f5bfd8e2a159bc2a05e2c1667"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 3.0.3",
-]
-
-[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1305,7 +1294,6 @@ checksum = "21909324aa58f5c284d91cac514c6d081210901dc372d7c8ea6a9d7e0406097a"
 name = "monocoque-rs"
 version = "0.4.2"
 dependencies = [
- "async-trait",
  "bytes",
  "compio",
  "compio-buf",
@@ -1350,7 +1338,6 @@ dependencies = [
 name = "monocoque-rs-zmtp"
 version = "0.4.2"
 dependencies = [
- "async-trait",
  "bytes",
  "chacha20poly1305",
  "compio",

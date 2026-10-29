@@ -78,7 +78,6 @@ fn inproc_messages_carry_socket_type_and_custom_properties() {
 
 struct UserIdHandler;
 
-#[async_trait::async_trait(?Send)]
 impl ZapHandler for UserIdHandler {
     async fn authenticate(&self, request: &ZapRequest) -> ZapResponse {
         let mut reply = ZapResponse::success(request.request_id.clone(), "uid-alice");

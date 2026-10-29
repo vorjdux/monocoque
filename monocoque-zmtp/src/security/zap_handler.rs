@@ -17,7 +17,10 @@ use tracing::warn;
 ///
 /// Implement this trait to provide custom authentication logic
 /// that handles requests from all security mechanisms.
-#[async_trait::async_trait(?Send)]
+///
+/// The returned future need not be `Send`: ZAP runs on the socket's own
+/// single-threaded runtime.
+#[allow(async_fn_in_trait)]
 pub trait ZapHandler {
     /// Process a ZAP authentication request
     ///
@@ -76,7 +79,6 @@ impl<H: PlainAuthHandler> DefaultZapHandler<H> {
     }
 }
 
-#[async_trait::async_trait(?Send)]
 impl<H: PlainAuthHandler> ZapHandler for DefaultZapHandler<H> {
     async fn authenticate(&self, request: &ZapRequest) -> ZapResponse {
         if request.version != ZAP_VERSION {
@@ -643,7 +645,6 @@ mod tests {
         }
     }
 
-    #[async_trait::async_trait(?Send)]
     impl ZapHandler for IpDenyListHandler {
         async fn authenticate(&self, request: &ZapRequest) -> ZapResponse {
             // Reject if the peer address starts with any denied IP prefix

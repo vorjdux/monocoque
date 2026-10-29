@@ -143,7 +143,10 @@ impl PlainCredentials {
 ///
 /// Implement this to provide custom credential validation.
 /// The default implementation rejects all connections.
-#[async_trait::async_trait(?Send)]
+///
+/// The returned future need not be `Send`: authentication runs on the
+/// socket's own single-threaded runtime.
+#[allow(async_fn_in_trait)]
 pub trait PlainAuthHandler {
     /// Validate username and password
     ///
@@ -206,7 +209,6 @@ impl Default for StaticPlainHandler {
     }
 }
 
-#[async_trait::async_trait(?Send)]
 impl PlainAuthHandler for StaticPlainHandler {
     async fn authenticate(
         &self,
