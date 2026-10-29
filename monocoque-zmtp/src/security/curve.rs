@@ -44,7 +44,7 @@ use chacha20poly1305::{
 use compio_io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use crypto_box::{
     PublicKey as SalsaPublicKey, SalsaBox, SecretKey as SalsaSecretKey,
-    aead::generic_array::GenericArray,
+    aead::{AeadInPlace, generic_array::GenericArray},
 };
 use rand::Rng;
 use std::time::Duration;
@@ -57,6 +57,9 @@ use crate::security::zap::{ZapMechanism, ZapRequest, ZapStatus};
 
 /// CURVE command identifiers
 const CURVE_HELLO: &[u8] = b"\x05HELLO";
+/// HELLO body length (RFC 26): name, 2-byte version, 72 bytes of padding,
+/// the client's transient key, an 8-byte nonce and the 80-byte box.
+const HELLO_LEN: usize = 200;
 const CURVE_WELCOME: &[u8] = b"\x07WELCOME";
 const CURVE_INITIATE: &[u8] = b"\x08INITIATE";
 const CURVE_READY: &[u8] = b"\x05READY";
@@ -67,8 +70,8 @@ const CURVE_MESSAGE_NONCE_SIZE: usize = 8;
 const MAX_INITIATE_BODY: usize = 4096;
 /// Maximum body size for other CURVE commands (HELLO, WELCOME, READY).
 const MAX_CURVE_BODY: usize = 512;
-/// 16-byte nonce prefix for CURVE READY: "READY" + 11 NULs
-const CURVE_READY_NONCE_PREFIX: &[u8; 16] = b"READY\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+/// 16-byte nonce prefix for the CURVE READY box (RFC 26).
+const CURVE_READY_NONCE_PREFIX: &[u8; 16] = b"CurveZMQREADY---";
 
 /// CURVE key sizes
 pub const CURVE_KEY_SIZE: usize = 32;
@@ -257,6 +260,7 @@ impl CurveBox {
         }
     }
 
+    #[cfg(test)]
     fn encrypt(
         &self,
         plaintext: &[u8],
@@ -268,6 +272,7 @@ impl CurveBox {
             .map_err(|_| CurveError::EncryptionFailed)
     }
 
+    #[cfg(test)]
     fn decrypt(
         &self,
         ciphertext: &[u8],
@@ -278,12 +283,46 @@ impl CurveBox {
             .decrypt(&nonce, ciphertext)
             .map_err(|_| CurveError::DecryptionFailed)
     }
+
+    /// Encrypt `buf` in place and return its tag.
+    fn seal(
+        &self,
+        buf: &mut [u8],
+        nonce: &[u8; CURVE_NONCE_SIZE],
+    ) -> Result<[u8; MESSAGE_TAG], CurveError> {
+        let nonce = GenericArray::from(*nonce);
+        self.box_
+            .encrypt_in_place_detached(&nonce, b"", buf)
+            .map(Into::into)
+            .map_err(|_| CurveError::EncryptionFailed)
+    }
+
+    /// Verify `tag` over `buf` and decrypt it in place.
+    fn open(
+        &self,
+        buf: &mut [u8],
+        tag: &[u8; MESSAGE_TAG],
+        nonce: &[u8; CURVE_NONCE_SIZE],
+    ) -> Result<(), CurveError> {
+        let nonce = GenericArray::from(*nonce);
+        self.box_
+            .decrypt_in_place_detached(&nonce, b"", buf, GenericArray::from_slice(tag))
+            .map_err(|_| CurveError::DecryptionFailed)
+    }
 }
+
+/// Size of the Poly1305 tag that opens every MESSAGE box.
+const MESSAGE_TAG: usize = 16;
+/// Inner flags bit: more frames of this message follow.
+pub const MESSAGE_FLAG_MORE: u8 = 0x01;
+/// Inner flags bit: the box carries a command (PING, PONG), not data.
+pub const MESSAGE_FLAG_COMMAND: u8 = 0x02;
 
 // ── Message parsing ───────────────────────────────────────────────────────────
 
 struct CurveMessageParts<'a> {
     short_nonce: &'a [u8],
+    #[cfg_attr(not(test), allow(dead_code))]
     ciphertext: &'a [u8],
 }
 
@@ -498,6 +537,46 @@ impl CurveMessageCipher {
     /// Returns the CURVE MESSAGE command body (starting with `\x07MESSAGE`), ready to be
     /// wrapped in a ZMTP command frame.
     pub fn encrypt_frame(&mut self, payload: &[u8], more: bool) -> Result<Bytes, CurveError> {
+        let mut body = BytesMut::with_capacity(Self::message_len(payload.len()));
+        self.encrypt_frame_into(payload, more, &mut body)?;
+        Ok(body.freeze())
+    }
+
+    /// Length of the MESSAGE command body that carries a `payload_len` frame.
+    #[must_use]
+    pub const fn message_len(payload_len: usize) -> usize {
+        CURVE_MESSAGE.len() + CURVE_MESSAGE_NONCE_SIZE + MESSAGE_TAG + 1 + payload_len
+    }
+
+    /// Append the MESSAGE command body for one frame to `out`, encrypting it
+    /// where it lies: the payload is copied once, into `out`, and nothing is
+    /// allocated beyond `out`'s own growth.
+    pub fn encrypt_frame_into(
+        &mut self,
+        payload: &[u8],
+        more: bool,
+        out: &mut BytesMut,
+    ) -> Result<(), CurveError> {
+        self.seal_into(payload, u8::from(more), out)
+    }
+
+    /// Append an encrypted command (a PING or PONG body) to `out`. After the
+    /// handshake libzmq carries commands inside MESSAGE boxes with the
+    /// command bit set, never in the clear.
+    pub fn encrypt_command_into(
+        &mut self,
+        command: &[u8],
+        out: &mut BytesMut,
+    ) -> Result<(), CurveError> {
+        self.seal_into(command, MESSAGE_FLAG_COMMAND, out)
+    }
+
+    fn seal_into(
+        &mut self,
+        payload: &[u8],
+        flags: u8,
+        out: &mut BytesMut,
+    ) -> Result<(), CurveError> {
         let prefix: &[u8; 16] = if self.is_client {
             b"CurveZMQMESSAGEC"
         } else {
@@ -511,35 +590,52 @@ impl CurveMessageCipher {
             .checked_add(1)
             .ok_or(CurveError::ProtocolViolation)?;
 
-        let mut pt = Vec::with_capacity(1 + payload.len());
-        pt.push(u8::from(more));
-        pt.extend_from_slice(payload);
-
-        let ciphertext = self.cipher.encrypt(&pt, &nonce)?;
-
-        let body_len = CURVE_MESSAGE.len() + 8 + ciphertext.len();
-        let mut body = BytesMut::with_capacity(body_len);
-        body.extend_from_slice(CURVE_MESSAGE);
-        body.extend_from_slice(&nonce[16..]);
-        body.extend_from_slice(&ciphertext);
-        Ok(body.freeze())
+        out.reserve(Self::message_len(payload.len()));
+        let start = out.len();
+        out.extend_from_slice(CURVE_MESSAGE);
+        out.extend_from_slice(&nonce[16..]);
+        let tag_at = out.len();
+        out.extend_from_slice(&[0u8; MESSAGE_TAG]);
+        out.extend_from_slice(&[flags]);
+        out.extend_from_slice(payload);
+        match self.cipher.seal(&mut out[tag_at + MESSAGE_TAG..], &nonce) {
+            Ok(tag) => {
+                out[tag_at..tag_at + MESSAGE_TAG].copy_from_slice(&tag);
+                Ok(())
+            }
+            Err(e) => {
+                out.truncate(start);
+                Err(e)
+            }
+        }
     }
 
     /// Decrypt a CURVE MESSAGE command body. `cmd_body` starts with `\x07MESSAGE`.
     /// Returns (more_flag, payload).
     pub fn decrypt_frame(&mut self, cmd_body: &[u8]) -> Result<(bool, Bytes), CurveError> {
-        let parts = parse_curve_message(cmd_body)?;
+        let (flags, payload) = self.decrypt_frame_in_place(BytesMut::from(cmd_body))?;
+        Ok((flags & MESSAGE_FLAG_MORE != 0, payload))
+    }
+
+    /// Decrypt a CURVE MESSAGE body in its own buffer, returning the inner
+    /// flags byte ([`MESSAGE_FLAG_MORE`], [`MESSAGE_FLAG_COMMAND`]) and the
+    /// payload as a view of that buffer: no allocation and no copy.
+    pub fn decrypt_frame_in_place(
+        &mut self,
+        mut body: BytesMut,
+    ) -> Result<(u8, Bytes), CurveError> {
+        let parts = parse_curve_message(&body)?;
         let counter = u64::from_be_bytes(
             parts
                 .short_nonce
                 .try_into()
                 .map_err(|_| CurveError::InvalidNonce)?,
         );
-        // Strict in-order counter over reliable TCP: the next frame must carry
-        // exactly the expected counter. This rejects replays and reordering, and
-        // it does NOT mutate replay state (that only advances after the tag
-        // verifies below), so attacker bytes cannot desync the counter.
-        if counter != self.recv_nonce {
+        // The counter must exceed the last one accepted, as libzmq requires:
+        // that rejects replays and reordering, and allows the gap libzmq leaves
+        // by continuing its handshake counter. Replay state only advances after
+        // the tag verifies below, so attacker bytes cannot desync it.
+        if counter < self.recv_nonce {
             return Err(CurveError::ProtocolViolation);
         }
 
@@ -552,21 +648,22 @@ impl CurveMessageCipher {
         nonce[..16].copy_from_slice(prefix);
         nonce[16..].copy_from_slice(parts.short_nonce);
 
-        let plaintext = self.cipher.decrypt(parts.ciphertext, &nonce)?;
+        let tag_at = CURVE_MESSAGE.len() + CURVE_MESSAGE_NONCE_SIZE;
+        // The box must hold the tag and the flags byte.
+        if body.len() < tag_at + MESSAGE_TAG + 1 {
+            return Err(CurveError::ProtocolViolation);
+        }
+        let mut tag = [0u8; MESSAGE_TAG];
+        tag.copy_from_slice(&body[tag_at..tag_at + MESSAGE_TAG]);
+        self.cipher
+            .open(&mut body[tag_at + MESSAGE_TAG..], &tag, &nonce)?;
         // Tag verified: only now advance replay state.
         self.recv_nonce = counter
             .checked_add(1)
             .ok_or(CurveError::ProtocolViolation)?;
-        if plaintext.is_empty() {
-            return Err(CurveError::ProtocolViolation);
-        }
-        let more = (plaintext[0] & 0x01) != 0;
-        // Convert the owned plaintext into `Bytes` (O(1), no copy) and slice off
-        // the 1-byte flags prefix by advancing the view (also O(1)). The prior
-        // `plaintext[1..].to_vec()` re-copied the whole payload per frame.
-        let mut body = Bytes::from(plaintext);
-        body.advance(1);
-        Ok((more, body))
+        let flags = body[tag_at + MESSAGE_TAG];
+        body.advance(tag_at + MESSAGE_TAG + 1);
+        Ok((flags, body.freeze()))
     }
 }
 
@@ -672,7 +769,9 @@ impl CurveClient {
             local_identity,
             peer_socket_type: None,
             peer_identity_recv: None,
-            send_nonce: 1,
+            // HELLO and INITIATE take nonces 1 and 2, so messages start at 3,
+            // as in libzmq.
+            send_nonce: 3,
             recv_nonce: 1,
             message_box: None,
         }
@@ -732,14 +831,13 @@ impl CurveClient {
         .map_err(|_| ZmtpError::Protocol)?;
         // hello_box = 64 + 16 = 80 bytes
 
-        let mut frame = BytesMut::with_capacity(198);
+        let mut frame = BytesMut::with_capacity(HELLO_LEN);
         frame.extend_from_slice(CURVE_HELLO); //  6
-        frame.extend_from_slice(&[1u8]); //  1  version
-        frame.extend_from_slice(&[0u8; 71]); // 71  padding
+        frame.extend_from_slice(&[1u8, 0]); //  2  version 1.0
+        frame.extend_from_slice(&[0u8; 72]); // 72  padding
         frame.extend_from_slice(self.client_short_keypair.public.as_bytes()); // 32  c'.pk
         frame.extend_from_slice(&nonce_counter.to_be_bytes()); //  8  nonce
         frame.extend_from_slice(&hello_box); // 80  box
-        // total = 198
 
         write_zmtp_cmd(stream, &frame, timeout).await
     }
@@ -822,7 +920,8 @@ impl CurveClient {
         let server_short_public = self.server_short_public.ok_or(ZmtpError::Protocol)?;
         let cookie = self.cookie.as_ref().ok_or(ZmtpError::Protocol)?;
 
-        // Build vouch: Box[c'.pk ‖ s'.pk](C→S)
+        // RFC 26 vouch: Box[C' ‖ S](C→S'), proving the long-term key C holds
+        // the transient key C' for a session with this server.
         let mut vouch_nonce_16 = [0u8; 16];
         rand::rng().fill_bytes(&mut vouch_nonce_16);
         let mut vouch_nonce_24 = [0u8; 24];
@@ -830,11 +929,11 @@ impl CurveClient {
         vouch_nonce_24[8..].copy_from_slice(&vouch_nonce_16);
 
         let mut vouch_pt = [0u8; 64];
-        vouch_pt[..32].copy_from_slice(self.client_short_keypair.public.as_bytes()); // c'.pk
-        vouch_pt[32..].copy_from_slice(server_short_public.as_bytes()); // s'.pk
+        vouch_pt[..32].copy_from_slice(self.client_short_keypair.public.as_bytes()); // C'
+        vouch_pt[32..].copy_from_slice(self.server_public.as_bytes()); // S
 
         let vouch_ct = salsa_encrypt(
-            self.server_public.as_bytes(),
+            server_short_public.as_bytes(),
             &self.client_keypair.secret.to_raw_bytes(),
             &vouch_nonce_24,
             &vouch_pt,
@@ -842,20 +941,17 @@ impl CurveClient {
         .map_err(|_| ZmtpError::Protocol)?;
         // vouch_ct = 64 + 16 = 80 bytes
 
-        // vouch = vouch_nonce_16(16) + vouch_ct(80) = 96 bytes
-        let mut vouch = Vec::with_capacity(96);
-        vouch.extend_from_slice(&vouch_nonce_16);
-        vouch.extend_from_slice(&vouch_ct);
-
-        // Append ZMTP properties (Socket-Type + optional Identity)
+        // INITIATE box plaintext: C(32) ‖ vouch nonce(16) ‖ vouch box(80) ‖ metadata.
         let local_props =
             encode_zmtp_props(&self.local_socket_type, self.local_identity.as_deref());
-        let mut initiate_pt = Vec::with_capacity(96 + local_props.len());
-        initiate_pt.extend_from_slice(&vouch);
+        let mut initiate_pt = Vec::with_capacity(128 + local_props.len());
+        initiate_pt.extend_from_slice(self.client_keypair.public.as_bytes());
+        initiate_pt.extend_from_slice(&vouch_nonce_16);
+        initiate_pt.extend_from_slice(&vouch_ct);
         initiate_pt.extend_from_slice(&local_props);
 
         // Build initiate_box: Box[vouch ‖ metadata](c'→s')
-        let initiate_counter: u64 = 1;
+        let initiate_counter: u64 = 2;
         let mut initiate_nonce_24 = [0u8; 24];
         initiate_nonce_24[..16].copy_from_slice(b"CurveZMQINITIATE");
         initiate_nonce_24[16..].copy_from_slice(&initiate_counter.to_be_bytes());
@@ -868,10 +964,9 @@ impl CurveClient {
         )
         .map_err(|_| ZmtpError::Protocol)?;
 
-        let mut frame = BytesMut::with_capacity(9 + 96 + 32 + 8 + initiate_box.len());
+        let mut frame = BytesMut::with_capacity(9 + 96 + 8 + initiate_box.len());
         frame.extend_from_slice(CURVE_INITIATE); //   9
         frame.extend_from_slice(cookie); //  96
-        frame.extend_from_slice(self.client_keypair.public.as_bytes()); //  32  C
         frame.extend_from_slice(&initiate_counter.to_be_bytes()); //   8
         frame.extend_from_slice(&initiate_box); // variable
 
@@ -1014,7 +1109,8 @@ impl CurveServer {
             local_socket_type: local_socket_type.into(),
             peer_socket_type: None,
             peer_identity_recv: None,
-            send_nonce: 1,
+            // READY takes nonce 1, so messages start at 2, as in libzmq.
+            send_nonce: 2,
             recv_nonce: 1,
             message_box: None,
         }
@@ -1057,8 +1153,8 @@ impl CurveServer {
         debug!("[CURVE SERVER] Waiting for HELLO");
 
         let body = read_zmtp_cmd(stream, timeout, MAX_CURVE_BODY).await?;
-        // body = \x05HELLO(6) + version(1) + padding(71) + c'.pk(32) + nonce_8(8) + hello_box(80) = 198
-        if body.len() != 198 || &body[..6] != CURVE_HELLO {
+        // body = \x05HELLO(6) + version(2) + padding(72) + c'.pk(32) + nonce_8(8) + hello_box(80)
+        if body.len() != HELLO_LEN || &body[..6] != CURVE_HELLO {
             warn!("[CURVE SERVER] Invalid HELLO frame (len={})", body.len());
             return Err(ZmtpError::Protocol);
         }
@@ -1067,10 +1163,10 @@ impl CurveServer {
             return Err(ZmtpError::Protocol);
         }
 
-        // c'.pk at [78..110], nonce_8 at [110..118], hello_box at [118..198]
-        let c_prime_pk_bytes: [u8; 32] = body[78..110].try_into().unwrap();
-        let nonce_suffix = &body[110..118];
-        let hello_box = &body[118..198];
+        // c'.pk at [80..112], nonce_8 at [112..120], hello_box at [120..200]
+        let c_prime_pk_bytes: [u8; 32] = body[80..112].try_into().unwrap();
+        let nonce_suffix = &body[112..120];
+        let hello_box = &body[120..HELLO_LEN];
 
         // Validate nonce >= 1 (RFC 26 §5.2)
         if u64::from_be_bytes(nonce_suffix.try_into().unwrap_or([0u8; 8])) == 0 {
@@ -1190,17 +1286,16 @@ impl CurveServer {
         debug!("[CURVE SERVER] Waiting for INITIATE");
 
         let body = read_zmtp_cmd(stream, timeout, MAX_INITIATE_BODY).await?;
-        // body = \x08INITIATE(9) + cookie(96) + C(32) + nonce_8(8) + initiate_box(rest)
-        // 9 + 96 + 32 + 8 = 145 minimum before initiate_box
-        if body.len() < 145 || &body[..9] != CURVE_INITIATE {
+        // body = \x08INITIATE(9) + cookie(96) + nonce_8(8) + initiate_box(rest)
+        // The box holds C(32) + vouch(96) + metadata, plus its 16-byte tag.
+        if body.len() < 113 + 16 + 128 || &body[..9] != CURVE_INITIATE {
             warn!("[CURVE SERVER] Invalid INITIATE frame (len={})", body.len());
             return Err(ZmtpError::Protocol);
         }
 
         let cookie_bytes = &body[9..105]; // 96 bytes
-        let c_pk_buf = &body[105..137]; // 32 bytes C
-        let nonce_suffix = &body[137..145]; // 8 bytes
-        let initiate_box = &body[145..]; // variable
+        let nonce_suffix = &body[105..113]; // 8 bytes
+        let initiate_box = &body[113..]; // variable
 
         // Decrypt cookie to recover (c'.pk ‖ s'.sk_bytes)
         let cookie_nonce_16 = &cookie_bytes[..16];
@@ -1232,9 +1327,6 @@ impl CurveServer {
             return Err(ZmtpError::AuthenticationFailed);
         }
 
-        let mut c_pk = [0u8; 32];
-        c_pk.copy_from_slice(c_pk_buf);
-
         // Decrypt initiate_box: SalsaBox(c'→s') using s'_sk (from cookie) + c'_pk
         let mut initiate_nonce_24 = [0u8; 24];
         initiate_nonce_24[..16].copy_from_slice(b"CurveZMQINITIATE");
@@ -1251,35 +1343,31 @@ impl CurveServer {
             ZmtpError::AuthenticationFailed
         })?;
 
-        // initiate_pt = vouch(96) + metadata(0+)
-        if initiate_pt.len() < 96 {
+        // initiate_pt = C(32) + vouch_nonce_16(16) + vouch_box(80) + metadata(0+)
+        if initiate_pt.len() < 128 {
             warn!(
                 "[CURVE SERVER] INITIATE plaintext too short: {}",
                 initiate_pt.len()
             );
             return Err(ZmtpError::Protocol);
         }
+        let mut c_pk = [0u8; 32];
+        c_pk.copy_from_slice(&initiate_pt[..32]);
 
-        // Extract and verify vouch: vouch_nonce_16(16) + vouch_ct(80) = 96 bytes
-        let vouch_nonce_16 = &initiate_pt[..16];
-        let vouch_ct = &initiate_pt[16..96];
+        let vouch_nonce_16 = &initiate_pt[32..48];
+        let vouch_ct = &initiate_pt[48..128];
         let mut vouch_nonce_24 = [0u8; 24];
         vouch_nonce_24[..8].copy_from_slice(b"VOUCH---");
         vouch_nonce_24[8..].copy_from_slice(vouch_nonce_16);
 
-        // Decrypt vouch: SalsaBox(C→S) using S_sk + C_pk
-        let vouch_pt = salsa_decrypt(
-            &c_pk,
-            &self.server_keypair.secret.to_raw_bytes(),
-            &vouch_nonce_24,
-            vouch_ct,
-        )
-        .map_err(|_| {
-            warn!("[CURVE SERVER] Vouch verification failed");
-            ZmtpError::AuthenticationFailed
-        })?;
+        // Decrypt vouch: Box[C' ‖ S](C→S'), opened with s' and C.
+        let vouch_pt = salsa_decrypt(&c_pk, &recovered_s_prime_sk, &vouch_nonce_24, vouch_ct)
+            .map_err(|_| {
+                warn!("[CURVE SERVER] Vouch verification failed");
+                ZmtpError::AuthenticationFailed
+            })?;
 
-        // vouch plaintext must be c'.pk(32) + s'.pk(32)
+        // vouch plaintext must be C'(32) + S(32)
         if vouch_pt.len() != 64 {
             warn!(
                 "[CURVE SERVER] Vouch plaintext wrong size: {}",
@@ -1291,13 +1379,12 @@ impl CurveServer {
             warn!("[CURVE SERVER] Vouch c'.pk mismatch");
             return Err(ZmtpError::AuthenticationFailed);
         }
-        if &vouch_pt[32..] != self.server_short_keypair.public.as_bytes() {
-            warn!("[CURVE SERVER] Vouch s'.pk mismatch");
+        if vouch_pt[32..] != self.server_keypair.public.as_bytes()[..] {
+            warn!("[CURVE SERVER] Vouch names a different server key");
             return Err(ZmtpError::AuthenticationFailed);
         }
 
-        // Parse metadata from initiate_pt[96..]
-        let metadata = &initiate_pt[96..];
+        let metadata = &initiate_pt[128..];
         let (peer_st, peer_id) = decode_zmtp_props(metadata)?;
         if peer_st.is_none() {
             warn!("[CURVE SERVER] INITIATE missing Socket-Type in metadata");

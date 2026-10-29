@@ -13,7 +13,7 @@
 //! CURVE encrypts every frame into a `MESSAGE` command.
 
 use crate::handshake::{Framing, perform_handshake_with_options};
-use crate::security::curve::CurveMessageCipher;
+use crate::security::curve::{CurveMessageCipher, MESSAGE_FLAG_COMMAND, MESSAGE_FLAG_MORE};
 use crate::session::SocketType;
 use bytes::{Buf, Bytes, BytesMut};
 use monocoque_core::error::{MonocoqueError, Result};
@@ -133,15 +133,15 @@ impl ZmtpCodec {
     }
 
     /// `\x01group` becomes JOIN, `\x00group` LEAVE.
-    fn encode_dish(msg: &Msg, out: &mut OutQueue) {
+    fn encode_dish(&mut self, msg: &Msg, out: &mut OutQueue) -> Result<()> {
         let Some((&kind, group)) = msg.first().and_then(<[u8]>::split_first) else {
-            return;
+            return Ok(());
         };
         let name = if kind == 1 { JOIN } else { LEAVE };
         let mut body = BytesMut::with_capacity(name.len() + group.len());
         body.extend_from_slice(name);
         body.extend_from_slice(group);
-        put_command(out, &body);
+        self.send_command(out, &body)
     }
 
     /// Decode ZMTP 1.0 frames: a length counting the flags byte (one byte,
@@ -240,20 +240,44 @@ impl ZmtpCodec {
         Ok(())
     }
 
+    /// Decrypt one CURVE MESSAGE where it was read; the payload is a view of
+    /// the read buffer.
+    fn open_message(
+        &mut self,
+        body: BytesMut,
+        deliver: &mut dyn FnMut(Msg),
+        replies: &mut OutQueue,
+    ) -> Result<()> {
+        let Some(cipher) = self.cipher.as_mut() else {
+            return Err(MonocoqueError::Protocol("MESSAGE without CURVE".into()));
+        };
+        let (flags, payload) = cipher
+            .decrypt_frame_in_place(body)
+            .map_err(|e| MonocoqueError::Protocol(e.to_string()))?;
+        if flags & MESSAGE_FLAG_COMMAND != 0 {
+            return self.on_command(&payload, deliver, replies);
+        }
+        self.push_frame(payload, flags & MESSAGE_FLAG_MORE != 0, deliver)
+    }
+
+    /// Queue one command, inside a MESSAGE box on a CURVE connection.
+    fn send_command(&mut self, out: &mut OutQueue, body: &[u8]) -> Result<()> {
+        let Some(cipher) = self.cipher.as_mut() else {
+            put_command(out, body);
+            return Ok(());
+        };
+        put_header(out.buf(), 0, CurveMessageCipher::message_len(body.len()));
+        cipher
+            .encrypt_command_into(body, out.buf())
+            .map_err(|e| MonocoqueError::Protocol(e.to_string()))
+    }
+
     fn on_command(
         &mut self,
         body: &[u8],
         deliver: &mut dyn FnMut(Msg),
         replies: &mut OutQueue,
     ) -> Result<()> {
-        if let Some(cipher) = self.cipher.as_mut()
-            && body.starts_with(CURVE_MESSAGE)
-        {
-            let (more, payload) = cipher
-                .decrypt_frame(body)
-                .map_err(|e| MonocoqueError::Protocol(e.to_string()))?;
-            return self.push_frame(payload, more, deliver);
-        }
         if let Some(rest) = body.strip_prefix(PING) {
             // PING: 2-byte TTL in tenths of a second, then up to 16 bytes of
             // context the PONG must echo (RFC 37).
@@ -266,7 +290,7 @@ impl ZmtpCodec {
             let mut pong = BytesMut::with_capacity(PONG.len() + context.len());
             pong.extend_from_slice(PONG);
             pong.extend_from_slice(context);
-            put_command(replies, &pong);
+            self.send_command(replies, &pong)?;
         } else if body.starts_with(PONG) {
             // Any inbound traffic already refreshed the heartbeat timer.
         } else if let Some(topic) = body.strip_prefix(SUBSCRIBE) {
@@ -299,8 +323,7 @@ impl ZmtpCodec {
     }
 }
 
-/// Queue one command frame. Heartbeat commands travel unencrypted even on a
-/// CURVE connection, as in libzmq.
+/// Queue one command frame in the clear (no CURVE; see `send_command`).
 fn put_command(out: &mut OutQueue, body: &[u8]) {
     put_header(out.buf(), FLAG_COMMAND, body.len());
     out.buf().extend_from_slice(body);
@@ -366,14 +389,34 @@ impl Codec for ZmtpCodec {
                         "command frame from a ZMTP 2.0 peer".into(),
                     ));
                 }
-                let body = buf.split_to(total);
-                self.on_command(&body[header..], deliver, replies)?;
+                let mut body = buf.split_to(total);
+                body.advance(header);
+                if self.cipher.is_some() {
+                    // Everything after a CURVE handshake is boxed; a command
+                    // in the clear would be unauthenticated.
+                    if !body.starts_with(CURVE_MESSAGE) {
+                        return Err(MonocoqueError::Protocol(
+                            "plaintext command on a CURVE connection".into(),
+                        ));
+                    }
+                    self.open_message(body, deliver, replies)?;
+                    continue;
+                }
+                self.on_command(&body, deliver, replies)?;
                 continue;
             }
             if self.cipher.is_some() {
-                return Err(MonocoqueError::Protocol(
-                    "plaintext data frame on a CURVE connection".into(),
-                ));
+                // libzmq sends MESSAGE as a data frame; its own flags byte,
+                // inside the box, says whether more frames follow.
+                let mut body = buf.split_to(total);
+                body.advance(header);
+                if !body.starts_with(CURVE_MESSAGE) {
+                    return Err(MonocoqueError::Protocol(
+                        "plaintext data frame on a CURVE connection".into(),
+                    ));
+                }
+                self.open_message(body, deliver, replies)?;
+                continue;
             }
             if !more && self.partial.is_empty() {
                 if len <= INLINE_CAP {
@@ -400,19 +443,21 @@ impl Codec for ZmtpCodec {
         let frames = prefix.iter().map(FrameRef::Bytes).chain(msg.frame_refs());
         if self.unusual_encode {
             if self.dish {
-                Self::encode_dish(msg, out);
-                return Ok(());
+                return self.encode_dish(msg, out);
             }
             Self::encode_v1(out, n, frames);
             return Ok(());
         }
         if let Some(cipher) = self.cipher.as_mut() {
             for (i, frame) in frames.enumerate() {
-                let body = cipher
-                    .encrypt_frame(frame.as_slice(), i + 1 < n)
+                let body = frame.as_slice();
+                // A data frame, as libzmq sends it, flagged MORE like the
+                // frame it carries.
+                let more = if i + 1 < n { FLAG_MORE } else { 0 };
+                put_header(out.buf(), more, CurveMessageCipher::message_len(body.len()));
+                cipher
+                    .encrypt_frame_into(body, i + 1 < n, out.buf())
                     .map_err(|e| MonocoqueError::Protocol(e.to_string()))?;
-                put_header(out.buf(), FLAG_COMMAND, body.len());
-                out.buf().extend_from_slice(&body);
             }
             return Ok(());
         }
@@ -447,7 +492,9 @@ impl Codec for ZmtpCodec {
         let mut body = [0u8; 7];
         body[..5].copy_from_slice(PING);
         body[5..].copy_from_slice(&tenths.to_be_bytes());
-        put_command(out, &body);
+        // Only fails when the CURVE send nonce is exhausted, and the next
+        // data send reports that.
+        let _ = self.send_command(out, &body);
     }
 
     fn peer_ttl(&self) -> Option<Duration> {
@@ -505,9 +552,6 @@ impl Protocol for Zmtp {
         };
         let publisher = matches!(cfg.socket_type, SocketType::Pub | SocketType::Xpub);
         let dish = cfg.socket_type == SocketType::Dish;
-        if dish && result.curve_cipher.is_some() {
-            return Err(MonocoqueError::Unsupported("DISH over CURVE"));
-        }
         let mut codec =
             ZmtpCodec::new(result.curve_cipher, &options).with_framing(result.framing, publisher);
         if dish {

@@ -66,6 +66,7 @@ jobs:
           cargo build -p monocoque-rs --features zmq
           --example simple_req_client --example simple_rep_server
           --example sub_client --example pub_server
+          --example curve_echo
       # The `|| echo skipping` mask is removed: this job now fails honestly when a
       # Python interop test fails, per the Phase 0 gate. The tests drive the built
       # examples themselves and do not need a manually-started server.
@@ -74,4 +75,5 @@ jobs:
         run: |
           python3 -m pytest test_req_rep_interop.py \
                             test_pub_sub_interop.py \
+                            test_curve_interop.py \
                             -v --timeout=30

@@ -180,6 +180,10 @@ name = "curve_demo"
 required-features = ["zmq"]
 
 [[example]]
+name = "curve_echo"
+required-features = ["zmq"]
+
+[[example]]
 name = "authenticated_req_rep"
 required-features = ["zmq"]
 
