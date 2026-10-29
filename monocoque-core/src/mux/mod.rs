@@ -444,13 +444,22 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
     /// Replace socket options. Applies to connections made from now on, and
     /// to the HWMs of existing peers.
     pub fn set_options(&mut self, options: SocketOptions) {
+        self.options = Rc::new(options);
+        let conflate = self.conflates();
         for entry in self.peers.iter().flatten() {
             let mut st = entry.state.borrow_mut();
-            st.recv_hwm = options.recv_hwm;
-            st.send_hwm = options.send_hwm;
-            st.set_hold(coalesce_threshold(&options));
+            st.recv_hwm = self.options.recv_hwm;
+            st.send_hwm = self.options.send_hwm;
+            st.conflate = conflate;
+            st.set_hold(coalesce_threshold(&self.options));
         }
-        self.options = Rc::new(options);
+    }
+
+    /// Whether peers keep only their newest inbound message. A socket that
+    /// consumes inbound traffic as protocol (a publisher's subscriptions)
+    /// never conflates it.
+    fn conflates(&self) -> bool {
+        self.options.conflate && !self.hooks.eager_inbound()
     }
 
     /// The socket pattern's state.
@@ -676,6 +685,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             Rc::clone(&self.events),
             self.options.heartbeat_ivl.is_some(),
         )));
+        state.borrow_mut().conflate = self.conflates();
         let reader = self.children.spawn(peer::reader_loop(
             Rc::clone(&state),
             Rc::clone(&stream),
@@ -771,6 +781,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             Rc::clone(&self.events),
             false,
         )));
+        state.borrow_mut().conflate = self.conflates();
         let child = match reader {
             Ok(rx) => self
                 .children

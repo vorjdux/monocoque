@@ -58,6 +58,8 @@ pub struct PeerState<C> {
     pub(crate) ready: VecDeque<Msg>,
     pub(crate) recv_hwm: usize,
     pub(crate) send_hwm: usize,
+    /// Keep only the newest inbound message (`ZMQ_CONFLATE`).
+    pub(crate) conflate: bool,
     reader_waker: Option<Waker>,
     pub(crate) outbound: Outbound<C>,
     readable_signaled: bool,
@@ -84,6 +86,7 @@ impl<C: Codec> PeerState<C> {
             ready: VecDeque::new(),
             recv_hwm,
             send_hwm,
+            conflate: false,
             reader_waker: None,
             outbound,
             readable_signaled: false,
@@ -108,8 +111,17 @@ impl<C: Codec> PeerState<C> {
         }
     }
 
+    /// A conflating peer never fills: each message replaces the last.
     fn ready_full(&self) -> bool {
-        self.recv_hwm != 0 && self.ready.len() >= self.recv_hwm
+        !self.conflate && self.recv_hwm != 0 && self.ready.len() >= self.recv_hwm
+    }
+
+    #[inline]
+    fn push_ready(&mut self, msg: Msg) {
+        if self.conflate {
+            self.ready.clear();
+        }
+        self.ready.push_back(msg);
     }
 
     /// Reader side: wait while the ready queue is at the receive HWM.
@@ -124,7 +136,7 @@ impl<C: Codec> PeerState<C> {
 
     /// Queue an inbound message and tell the core once per batch.
     pub(crate) fn deliver(&mut self, msg: Msg) {
-        self.ready.push_back(msg);
+        self.push_ready(msg);
         self.signal_readable();
     }
 
@@ -401,7 +413,7 @@ pub async fn reader_loop<C: Codec>(
             _ => None,
         };
         if let Some(msg) = initial {
-            st.ready.push_back(msg);
+            st.push_ready(msg);
             st.signal_readable();
         }
     }
@@ -448,9 +460,13 @@ pub async fn reader_loop<C: Codec>(
         };
         let replies_before = out.queued_bytes();
         let mut delivered = false;
+        let conflate = st.conflate;
         let result = codec.decode(
             &mut buf,
             &mut |msg| {
+                if conflate {
+                    st.ready.clear();
+                }
                 st.ready.push_back(msg);
                 delivered = true;
             },

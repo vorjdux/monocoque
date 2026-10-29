@@ -124,16 +124,24 @@ pub struct SocketOptions {
 
     /// High water mark for receiving (`ZMQ_RCVHWM`)
     ///
-    /// Maximum number of messages to queue for receiving.
-    /// When reached, socket will block or drop messages depending on socket type.
+    /// Complete messages queued per peer and not yet received. A peer at the
+    /// mark is not read from until the application receives, so TCP flow
+    /// control (or the inproc queue) pushes back on that sender alone; the
+    /// socket's other peers keep flowing. Ignored under [`conflate`].
     /// - Default: 1000 messages
+    /// - `0`: unbounded, as in libzmq. A peer that outpaces the application
+    ///   then grows memory without limit.
+    ///
+    /// [`conflate`]: Self::conflate
     pub recv_hwm: usize,
 
     /// High water mark for sending (`ZMQ_SNDHWM`)
     ///
-    /// Maximum number of messages to queue for sending.
-    /// When reached, socket will block or drop messages depending on socket type.
+    /// Messages queued per peer and not yet written. At the mark, a socket
+    /// whose pattern waits (PUSH, DEALER, REQ, PAIR) waits for room, and one
+    /// whose pattern drops (PUB, XPUB, ROUTER) drops the message for that peer.
     /// - Default: 1000 messages
+    /// - `0`: unbounded, as in libzmq.
     pub send_hwm: usize,
 
     /// Enable immediate connect mode (`ZMQ_IMMEDIATE`)
@@ -219,7 +227,11 @@ pub struct SocketOptions {
     /// Conflate messages (`ZMQ_CONFLATE`)
     ///
     /// - `false` (default): Queue all messages
-    /// - `true`: Keep only last message (overwrite queue)
+    /// - `true`: Keep only the newest inbound message from each peer; each
+    ///   arrival replaces the one waiting. A multipart message is kept or
+    ///   replaced whole. [`recv_hwm`](Self::recv_hwm) no longer applies.
+    ///   Publishers (PUB, XPUB) ignore it, since what they receive is
+    ///   subscriptions, which must all be applied.
     pub conflate: bool,
 
     /// TCP keepalive (`ZMQ_TCP_KEEPALIVE`)
@@ -956,7 +968,8 @@ impl SocketOptions {
         self
     }
 
-    /// Enable message conflation (keep only last message).
+    /// Keep only the newest inbound message from each peer. See
+    /// [`conflate`](Self::conflate).
     pub const fn with_conflate(mut self, enabled: bool) -> Self {
         self.conflate = enabled;
         self
