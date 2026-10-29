@@ -41,7 +41,23 @@ const WARMUP_ROUNDS: usize = 200;
 /// messages. The bench thread connects and warms up (not measured), then times
 /// `iters` round-trips on the persistent connection.
 fn monocoque_req_rep_latency(c: &mut Criterion) {
-    let mut group = c.benchmark_group(format!("latency/monocoque-{BENCH_BACKEND}/req_rep"));
+    monocoque_latency(c, "req_rep", || "tcp://127.0.0.1:0".to_string());
+}
+
+/// The same steady-state REQ/REP round trip over a Unix domain socket.
+#[cfg(unix)]
+fn monocoque_req_rep_ipc_latency(c: &mut Criterion) {
+    monocoque_latency(c, "req_rep_ipc", || {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("monocoque-lat-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        format!("ipc://{}", path.display())
+    });
+}
+
+fn monocoque_latency(c: &mut Criterion, name: &str, endpoint: fn() -> String) {
+    let mut group = c.benchmark_group(format!("latency/monocoque-{BENCH_BACKEND}/{name}"));
     group.measurement_time(Duration::from_secs(10));
     group.sample_size(100);
 
@@ -61,6 +77,7 @@ fn monocoque_req_rep_latency(c: &mut Criterion) {
 
                     // SETUP (not measured): server echoes `total` messages, then exits.
                     let (ep_tx, ep_rx) = mpsc::channel::<String>();
+                    let bind_to = endpoint();
 
                     let server_thread = thread::spawn(move || {
                         let rt = monocoque::rt::LocalRuntime::new().unwrap();
@@ -68,9 +85,7 @@ fn monocoque_req_rep_latency(c: &mut Criterion) {
                             let mut rep = RepSocket::with_options(
                                 SocketOptions::default().with_buffer_sizes(4096, 4096),
                             );
-                            ep_tx
-                                .send(rep.bind("tcp://127.0.0.1:0").await.unwrap())
-                                .unwrap();
+                            ep_tx.send(rep.bind(&bind_to).await.unwrap()).unwrap();
                             for _ in 0..total {
                                 let Ok(msg) = rep.recv_owned().await else {
                                     break;
@@ -190,5 +205,13 @@ fn zmq_req_rep_latency(c: &mut Criterion) {
     group.finish();
 }
 
+#[cfg(unix)]
+criterion_group!(
+    benches,
+    monocoque_req_rep_latency,
+    monocoque_req_rep_ipc_latency,
+    zmq_req_rep_latency
+);
+#[cfg(not(unix))]
 criterion_group!(benches, monocoque_req_rep_latency, zmq_req_rep_latency);
 criterion_main!(benches);

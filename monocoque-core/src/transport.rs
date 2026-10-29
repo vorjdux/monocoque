@@ -119,8 +119,38 @@ impl AsyncRead for &Stream {
     }
 }
 
+/// On io_uring, a write the socket buffer can take right away is cheaper as a
+/// plain non-blocking `send` than as a ring submission and completion: it
+/// costs one syscall and no wakeup. `None` means the buffer is full (or the
+/// call failed in a way the ring path should report), so submit to the ring.
+#[cfg(all(feature = "runtime-compio", target_os = "linux"))]
+fn send_now(stream: &Stream, bufs: &[io::IoSlice<'_>]) -> Option<usize> {
+    use std::os::fd::AsFd;
+    // Past this a coalesced batch is cheaper handed to the ring than copied
+    // into the socket buffer inline (measured on PUSH/PULL 4 KiB coalesced).
+    const SEND_NOW_MAX: usize = 64 * 1024;
+    if bufs.iter().map(|b| b.len()).sum::<usize>() > SEND_NOW_MAX {
+        return None;
+    }
+    const MSG_DONTWAIT: i32 = 0x40;
+    const MSG_NOSIGNAL: i32 = 0x4000;
+    let fd = match stream {
+        Stream::Tcp(s) => s.as_fd(),
+        Stream::Ipc(s) => s.as_fd(),
+    };
+    let sock = socket2::SockRef::from(&fd);
+    match sock.send_vectored_with_flags(bufs, MSG_DONTWAIT | MSG_NOSIGNAL) {
+        Ok(n) if n > 0 => Some(n),
+        _ => None,
+    }
+}
+
 impl AsyncWrite for &Stream {
     async fn write<B: IoBuf>(&mut self, buf: B) -> BufResult<usize, B> {
+        #[cfg(all(feature = "runtime-compio", target_os = "linux"))]
+        if let Some(n) = send_now(self, &[io::IoSlice::new(buf.as_init())]) {
+            return BufResult(Ok(n), buf);
+        }
         match *self {
             Stream::Tcp(s) => {
                 let mut s = s;
@@ -135,6 +165,15 @@ impl AsyncWrite for &Stream {
     }
 
     async fn write_vectored<B: IoVectoredBuf>(&mut self, buf: B) -> BufResult<usize, B> {
+        #[cfg(all(feature = "runtime-compio", target_os = "linux"))]
+        {
+            let slices: smallvec::SmallVec<[io::IoSlice<'_>; 8]> =
+                buf.iter_slice().map(io::IoSlice::new).collect();
+            if let Some(n) = send_now(self, &slices) {
+                drop(slices);
+                return BufResult(Ok(n), buf);
+            }
+        }
         match *self {
             Stream::Tcp(s) => {
                 let mut s = s;
