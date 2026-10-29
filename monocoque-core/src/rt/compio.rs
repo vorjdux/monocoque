@@ -84,10 +84,27 @@ pub struct LocalRuntime {
 
 impl LocalRuntime {
     /// Build a new single-threaded runtime.
+    ///
+    /// A ring needs physically contiguous kernel memory, so with many rings
+    /// alive and memory fragmented `io_uring_setup` can fail with `ENOMEM`.
+    /// Rather than fail, this retries with smaller rings: a socket keeps only
+    /// a few operations in flight per peer, and ring size does not change the
+    /// cost of an operation.
     pub fn new() -> std::io::Result<Self> {
-        Ok(Self {
-            inner: compio::runtime::Runtime::new()?,
-        })
+        let mut result = compio::runtime::Runtime::new();
+        for entries in [256, 64] {
+            match &result {
+                Err(e) if e.kind() == std::io::ErrorKind::OutOfMemory => {
+                    let mut proactor = compio::driver::ProactorBuilder::new();
+                    proactor.capacity(entries);
+                    result = compio::runtime::RuntimeBuilder::new()
+                        .with_proactor(proactor)
+                        .build();
+                }
+                _ => break,
+            }
+        }
+        Ok(Self { inner: result? })
     }
 
     /// Run a future to completion on this runtime, blocking the thread.
