@@ -35,7 +35,7 @@
 //! WELCOME (if 200) or ERROR (if not 200)
 //! ```
 
-use crate::codec::ZmtpError;
+use crate::error::ZmtpError;
 use crate::security::protocol::reject_immediately_available_trailing_bytes;
 use crate::security::zap::{ZapMechanism, ZapRequest, ZapStatus};
 use bytes::{Bytes, BytesMut};
@@ -104,7 +104,7 @@ where
     use compio_buf::BufResult;
     use monocoque_core::timeout::write_all_with_timeout;
     let mut framed = BytesMut::new();
-    crate::base::append_zmtp_cmd_frame(&mut framed, body);
+    crate::security::protocol::append_zmtp_cmd_frame(&mut framed, body);
     let BufResult(result, _) =
         write_all_with_timeout(stream, framed.freeze().to_vec(), timeout).await?;
     result?;
@@ -283,7 +283,7 @@ where
     // libzmq peer can parse it. (Previously the raw command body was written
     // with no frame header, which only interoperated with monocoque itself.)
     let mut framed = BytesMut::new();
-    crate::base::append_zmtp_cmd_frame(&mut framed, &hello);
+    crate::security::protocol::append_zmtp_cmd_frame(&mut framed, &hello);
     let buf_result = write_all_with_timeout(stream, framed.freeze().to_vec(), timeout).await?;
     let BufResult(result, _) = buf_result;
     result?;
@@ -379,7 +379,7 @@ where
     debug!("[PLAIN SERVER ZAP] Received credentials, sending ZAP request");
 
     // Create ZAP client and send authentication request
-    let mut zap_client = ZapClient::new(Duration::from_secs(5)).map_err(|_| {
+    let mut zap_client = ZapClient::new(Duration::from_secs(5)).await.map_err(|_| {
         warn!("[PLAIN SERVER ZAP] Failed to connect to ZAP handler");
         ZmtpError::AuthenticationFailed
     })?;

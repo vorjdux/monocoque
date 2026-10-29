@@ -18,8 +18,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Wake, Waker};
 
-/// Index of a child future in a [`Children`] set.
-pub type ChildId = usize;
+/// A child future in a [`Children`] set.
+///
+/// It names a slot and which occupant of that slot it is. Slots are reused,
+/// so an id kept after its child finished on its own (a reader that hit EOF)
+/// must not reach the slot's next occupant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChildId {
+    slot: usize,
+    generation: u32,
+}
 
 #[derive(Default)]
 struct WakeState {
@@ -212,7 +220,9 @@ struct Child {
 /// The set of child futures owned by one socket.
 pub struct Children {
     slots: Vec<Option<Child>>,
-    free: Vec<ChildId>,
+    /// The current occupant's generation, per slot.
+    generations: Vec<u32>,
+    free: Vec<usize>,
     wakeups: Arc<Wakeups>,
     scratch: Vec<ChildId>,
 }
@@ -222,10 +232,19 @@ impl Children {
     pub fn new(wakeups: Arc<Wakeups>) -> Self {
         Self {
             slots: Vec::new(),
+            generations: Vec::new(),
             free: Vec::new(),
             wakeups,
             scratch: Vec::new(),
         }
+    }
+
+    /// The live child `id` names, if it is still the slot's occupant.
+    fn get_mut(&mut self, id: ChildId) -> Option<&mut Child> {
+        if self.generations.get(id.slot) != Some(&id.generation) {
+            return None;
+        }
+        self.slots.get_mut(id.slot).and_then(Option::as_mut)
     }
 
     /// The wake routing this set reports to.
@@ -235,37 +254,41 @@ impl Children {
 
     /// Add a child. It is polled on the next [`poll_woken`](Self::poll_woken).
     pub fn spawn(&mut self, fut: impl Future<Output = ()> + 'static) -> ChildId {
-        let id = self.free.pop().unwrap_or(self.slots.len());
+        let id = if let Some(slot) = self.free.pop() {
+            self.generations[slot] = self.generations[slot].wrapping_add(1);
+            ChildId {
+                slot,
+                generation: self.generations[slot],
+            }
+        } else {
+            self.slots.push(None);
+            self.generations.push(0);
+            ChildId {
+                slot: self.slots.len() - 1,
+                generation: 0,
+            }
+        };
         let flag = Arc::new(ChildWaker {
             id,
             queued: AtomicBool::new(false),
             wakeups: Arc::clone(&self.wakeups),
         });
         let waker = Waker::from(Arc::clone(&flag));
-        let child = Child {
+        let child = self.slots[id.slot].insert(Child {
             fut: Box::pin(fut),
             flag,
             waker,
-        };
-        if id == self.slots.len() {
-            self.slots.push(Some(child));
-        } else {
-            self.slots[id] = Some(child);
-        }
-        self.slots[id]
-            .as_ref()
-            .expect("just stored")
-            .waker
-            .wake_by_ref();
+        });
+        child.waker.wake_by_ref();
         id
     }
 
-    /// Drop a child without polling it again.
+    /// Drop a child without polling it again. An id whose child already
+    /// finished is ignored, even if its slot has a new occupant.
     pub fn cancel(&mut self, id: ChildId) {
-        if let Some(slot) = self.slots.get_mut(id)
-            && slot.take().is_some()
-        {
-            self.free.push(id);
+        if self.get_mut(id).is_some() {
+            self.slots[id.slot] = None;
+            self.free.push(id.slot);
         }
     }
 
@@ -292,7 +315,7 @@ impl Children {
             }
             any = true;
             for &id in &woken {
-                let done = match self.slots.get_mut(id).and_then(Option::as_mut) {
+                let done = match self.get_mut(id) {
                     Some(child) => {
                         // Clear first, so a wakeup raised during this poll
                         // queues the child again.
@@ -342,6 +365,25 @@ mod tests {
         assert!(set.poll_woken());
         assert!(ran.get());
         assert!(set.is_empty());
+    }
+
+    #[test]
+    fn stale_id_of_a_finished_child_does_not_cancel_the_slots_next_occupant() {
+        let mut set = Children::new(Arc::default());
+        // Finishes on its first poll, freeing its slot, like a reader at EOF.
+        let done = set.spawn(async {});
+        set.poll_woken();
+        assert!(set.is_empty());
+
+        let ran = Rc::new(Cell::new(false));
+        let r = Rc::clone(&ran);
+        let next = set.spawn(async move { r.set(true) });
+        assert_ne!(done, next);
+        // The owner of the finished child cancels its id late.
+        set.cancel(done);
+        assert_eq!(set.len(), 1, "the new occupant must survive");
+        set.poll_woken();
+        assert!(ran.get());
     }
 
     #[test]

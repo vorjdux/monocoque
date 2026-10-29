@@ -52,7 +52,7 @@ use thiserror::Error;
 use tracing::{debug, warn};
 use x25519_dalek::{PublicKey, StaticSecret};
 
-use crate::codec::ZmtpError;
+use crate::error::ZmtpError;
 use crate::security::zap::{ZapMechanism, ZapRequest, ZapStatus};
 
 /// CURVE command identifiers
@@ -374,7 +374,7 @@ where
     use monocoque_core::timeout::write_all_with_timeout;
 
     let mut frame = BytesMut::with_capacity(9 + body.len());
-    crate::base::append_zmtp_cmd_frame(&mut frame, body);
+    crate::security::protocol::append_zmtp_cmd_frame(&mut frame, body);
 
     let BufResult(r, _) = write_all_with_timeout(stream, frame, timeout)
         .await
@@ -1443,7 +1443,7 @@ where
     debug!("[CURVE SERVER ZAP] INITIATE received; authorizing client key before READY");
 
     let zap_timeout = timeout.unwrap_or(Duration::from_secs(5));
-    let mut zap_client = ZapClient::new(zap_timeout).map_err(|e| {
+    let mut zap_client = ZapClient::new(zap_timeout).await.map_err(|e| {
         warn!("[CURVE SERVER ZAP] Failed to create ZAP client: {}", e);
         ZmtpError::AuthenticationFailed
     })?;
@@ -1508,7 +1508,7 @@ where
     body.extend_from_slice(&reason_bytes[..reason_len]);
 
     let mut frame = BytesMut::with_capacity(2 + body.len());
-    crate::base::append_zmtp_cmd_frame(&mut frame, &body);
+    crate::security::protocol::append_zmtp_cmd_frame(&mut frame, &body);
 
     let BufResult(_, _) = stream.write_all(frame.freeze()).await;
 }

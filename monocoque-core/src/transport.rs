@@ -236,6 +236,25 @@ mod tests {
     use super::*;
     use compio_buf::{IntoInner, IoBuf};
 
+    #[cfg(unix)]
+    #[test]
+    fn fd_exhaustion_errnos_are_recognized() {
+        // EMFILE (24) and ENFILE (23) are fd exhaustion.
+        assert!(is_fd_exhaustion(&io::Error::from_raw_os_error(24)));
+        assert!(is_fd_exhaustion(&io::Error::from_raw_os_error(23)));
+    }
+
+    #[test]
+    fn other_errors_are_not_fd_exhaustion() {
+        assert!(!is_fd_exhaustion(&io::Error::from_raw_os_error(104))); // ECONNRESET
+        assert!(!is_fd_exhaustion(&io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "would block"
+        )));
+        // An error with no OS errno (e.g. a synthetic one) is not fd exhaustion.
+        assert!(!is_fd_exhaustion(&io::Error::other("synthetic")));
+    }
+
     #[test]
     fn concurrent_read_and_write_through_shared_refs() {
         crate::rt::LocalRuntime::new().unwrap().block_on(async {

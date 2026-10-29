@@ -18,7 +18,7 @@
 //!
 //! After handshake completes, the main data path uses the `core::io` read slab for zero-copy IO.
 
-use crate::codec::ZmtpError;
+use crate::error::ZmtpError;
 use crate::security::curve::CurveHandshakeResult;
 use crate::session::SocketType;
 use crate::utils::{FLAG_COMMAND, build_ready, encode_frame};
@@ -783,6 +783,30 @@ mod tests {
         }
 
         Bytes::from(body)
+    }
+
+    #[test]
+    fn parse_ready_rejects_a_non_ready_command() {
+        assert!(matches!(
+            parse_ready_command(&Bytes::from_static(b"\x04PING")),
+            Err(ZmtpError::Protocol)
+        ));
+    }
+
+    #[test]
+    fn parse_ready_rejects_ready_without_socket_type() {
+        assert!(matches!(
+            parse_ready_command(&Bytes::from_static(b"\x05READY")),
+            Err(ZmtpError::Protocol)
+        ));
+    }
+
+    #[test]
+    fn parse_ready_reads_socket_type_and_identity() {
+        let body = crate::utils::build_ready("DEALER", Some(b"client-1"));
+        let (socket_type, identity) = parse_ready_command(&body).unwrap();
+        assert_eq!(socket_type, SocketType::Dealer);
+        assert_eq!(identity.as_deref(), Some(&b"client-1"[..]));
     }
 
     #[test]

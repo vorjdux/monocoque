@@ -284,3 +284,23 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ProxyCommand;
+
+    #[test]
+    fn commands_round_trip_through_their_wire_form() {
+        for cmd in [
+            ProxyCommand::Pause,
+            ProxyCommand::Resume,
+            ProxyCommand::Terminate,
+            ProxyCommand::Statistics,
+        ] {
+            assert_eq!(ProxyCommand::from_bytes(cmd.as_bytes()), Some(cmd));
+        }
+        assert_eq!(ProxyCommand::from_bytes(b"UNKNOWN"), None);
+        assert_eq!(ProxyCommand::from_bytes(b""), None);
+        assert_eq!(ProxyCommand::from_bytes(b"pause"), None);
+    }
+}

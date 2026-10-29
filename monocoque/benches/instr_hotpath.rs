@@ -5,11 +5,11 @@
 //! This bench pins the CPU hot path under callgrind, which counts instructions
 //! deterministically (no timing noise), so a regression shows as a hard number.
 //!
-//! It covers only the IO-free work: frame encode, frame decode, the segmented
-//! read buffer's take/advance, and the vectored-write slice builder. Socket
-//! send/recv is deliberately excluded: syscalls under valgrind are slow and
-//! their counts are noisy, which is exactly what the wall-clock benches measure
-//! instead.
+//! It covers only the IO-free work: frame encode, frame decode straight out of
+//! a read buffer (inline small frames and zero-copy large ones), and the
+//! vectored-write slice builder. Socket send/recv is deliberately excluded:
+//! syscalls under valgrind are slow and their counts are noisy, which is
+//! exactly what the wall-clock benches measure instead.
 //!
 //! Run under valgrind (not part of the default `cargo bench`):
 //! `cargo bench --bench instr_hotpath --features zmq`
@@ -20,20 +20,23 @@ use bytes::{Bytes, BytesMut};
 use gungraun::{
     Callgrind, EventKind, LibraryBenchmarkConfig, library_benchmark, library_benchmark_group, main,
 };
-use monocoque_core::buffer::SegmentedBuffer;
 use monocoque_core::io::with_vectored_slices;
-use monocoque_zmtp::codec::{ZmtpDecoder, encode_multipart, encode_single};
+use monocoque_core::msg::Msg;
+use monocoque_core::mux::{Codec, OutQueue};
+use monocoque_core::options::SocketOptions;
+use monocoque_zmtp::wire::{ZmtpCodec, encode_plain};
 use std::hint::black_box;
 
 // ── setup helpers (run outside the counted region) ──────────────────────────
 
-/// A payload of `len` zero bytes.
-fn payload(len: usize) -> Bytes {
-    Bytes::from(vec![0u8; len])
+/// A single-frame message of `len` zero bytes.
+fn payload(len: usize) -> Msg {
+    Msg::from(Bytes::from(vec![0u8; len]))
 }
 
-/// A three-frame multipart message (MORE flags + a long middle frame).
-fn multipart_msg() -> Vec<Bytes> {
+/// The frames of a three-frame multipart message (MORE flags + a long middle
+/// frame).
+fn multipart_frames() -> Vec<Bytes> {
     vec![
         Bytes::from_static(b"topic"),
         Bytes::from(vec![0xAB; 300]),
@@ -41,26 +44,20 @@ fn multipart_msg() -> Vec<Bytes> {
     ]
 }
 
-/// A decoder plus a segmented buffer preloaded with `count` encoded 64-byte
-/// frames, ready to be drained.
-fn decode_input(count: usize) -> (ZmtpDecoder, SegmentedBuffer) {
-    let mut wire = BytesMut::new();
-    let part = Bytes::from(vec![0u8; 64]);
-    for _ in 0..count {
-        encode_single(&part, &mut wire);
-    }
-    let mut src = SegmentedBuffer::new();
-    src.push(wire.freeze());
-    (ZmtpDecoder::new(), src)
+/// A three-frame multipart message.
+fn multipart_msg() -> Msg {
+    multipart_frames().into_iter().collect()
 }
 
-/// A segmented buffer holding `chunks` pushed 1 KiB segments.
-fn segmented(chunks: usize) -> SegmentedBuffer {
-    let mut src = SegmentedBuffer::new();
-    for _ in 0..chunks {
-        src.push(Bytes::from(vec![0u8; 1024]));
+/// A codec plus a read buffer preloaded with `count` encoded frames of `len`
+/// bytes each, ready to be drained.
+fn decode_input(count: usize, len: usize) -> (ZmtpCodec, BytesMut) {
+    let mut wire = BytesMut::new();
+    let part = payload(len);
+    for _ in 0..count {
+        encode_plain(&part, &mut wire);
     }
-    src
+    (ZmtpCodec::new(None, &SocketOptions::default()), wire)
 }
 
 // ── benchmarks (function body is the counted region) ────────────────────────
@@ -69,60 +66,41 @@ fn segmented(chunks: usize) -> SegmentedBuffer {
 #[library_benchmark]
 #[bench::short(args = (64), setup = payload)]
 #[bench::long(args = (300), setup = payload)]
-fn encode_one(part: Bytes) -> BytesMut {
-    let mut buf = BytesMut::with_capacity(part.len() + 9);
-    encode_single(black_box(&part), &mut buf);
+fn encode_one(msg: Msg) -> BytesMut {
+    let mut buf = BytesMut::with_capacity(msg.byte_len() + 9);
+    encode_plain(black_box(&msg), &mut buf);
     black_box(buf)
 }
 
 // Encode a three-frame multipart message.
 #[library_benchmark]
 #[bench::three(setup = multipart_msg)]
-fn encode_multi(msg: Vec<Bytes>) -> BytesMut {
+fn encode_multi(msg: Msg) -> BytesMut {
     let mut buf = BytesMut::with_capacity(512);
-    encode_multipart(black_box(&msg), &mut buf);
+    encode_plain(black_box(&msg), &mut buf);
     black_box(buf)
 }
 
-// Decode every frame out of a preloaded segmented buffer.
+// Decode every message out of a preloaded read buffer. 16-byte frames are
+// copied inline into the message; 1 KiB frames are split off without a copy.
 #[library_benchmark]
-#[bench::frames(args = (64), setup = decode_input)]
-fn decode_frames(input: (ZmtpDecoder, SegmentedBuffer)) -> usize {
-    let (mut decoder, mut src) = input;
+#[bench::inline(args = (64, 16), setup = decode_input)]
+#[bench::shared(args = (16, 1024), setup = decode_input)]
+fn decode_frames(input: (ZmtpCodec, BytesMut)) -> usize {
+    let (mut codec, mut src) = input;
+    let mut replies = OutQueue::default();
     let mut n = 0usize;
-    while let Ok(Some(frame)) = decoder.decode(&mut src) {
-        n += black_box(frame.payload.len());
-    }
+    let _ = codec.decode(
+        &mut src,
+        &mut |msg| n += black_box(msg.byte_len()),
+        &mut replies,
+    );
     black_box(n)
-}
-
-// Take 64-byte slices off the front until the buffer drains (zero-copy slice
-// bookkeeping across segment boundaries).
-#[library_benchmark]
-#[bench::take(args = (16), setup = segmented)]
-fn segbuf_take(mut src: SegmentedBuffer) -> usize {
-    let mut taken = 0usize;
-    while let Some(bytes) = src.take_bytes(64) {
-        taken += black_box(bytes.len());
-    }
-    black_box(taken)
-}
-
-// Advance past the buffer in 64-byte steps (drop bookkeeping without slicing).
-#[library_benchmark]
-#[bench::advance(args = (16), setup = segmented)]
-fn segbuf_advance(mut src: SegmentedBuffer) -> usize {
-    let mut steps = 0usize;
-    while src.len() >= 64 {
-        src.advance(64);
-        steps += 1;
-    }
-    black_box(steps)
 }
 
 // Build `IoSlice`s over an owned vectored buffer for one writev.
 #[library_benchmark]
-#[bench::frames(setup = multipart_msg)]
+#[bench::frames(setup = multipart_frames)]
 fn vectored_slices(bufs: Vec<Bytes>) -> usize {
     with_vectored_slices(black_box(&bufs), |slices| {
         black_box(slices.iter().map(|s| s.len()).sum())
@@ -135,8 +113,6 @@ library_benchmark_group!(
         encode_one,
         encode_multi,
         decode_frames,
-        segbuf_take,
-        segbuf_advance,
         vectored_slices,
 );
 

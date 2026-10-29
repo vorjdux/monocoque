@@ -5,8 +5,10 @@
 /// requests from server sockets.
 use crate::security::plain::PlainAuthHandler;
 use crate::security::zap::{ZAP_VERSION, ZapMechanism, ZapRequest, ZapResponse};
-use crate::{DealerSocket, inproc_stream::InprocStream};
-use monocoque_core::options::SocketOptions;
+use crate::security::zap_client::ZAP_ENDPOINT;
+use crate::sock::kinds::RouterSocket;
+use futures::FutureExt;
+use monocoque_core::msg::Msg;
 use std::io;
 use std::sync::Arc;
 use tracing::warn;
@@ -199,7 +201,7 @@ impl<H: PlainAuthHandler> ZapHandler for DefaultZapHandler<H> {
 /// This is the standard ZAP endpoint that server sockets send
 /// authentication requests to.
 pub struct ZapServer<H: ZapHandler> {
-    socket: DealerSocket<InprocStream>,
+    socket: RouterSocket,
     handler: Arc<H>,
 }
 
@@ -234,11 +236,14 @@ impl<H: ZapHandler> ZapServer<H> {
     /// }
     /// ```
     pub fn new(handler: Arc<H>) -> io::Result<Self> {
-        // Bind to the standard ZAP endpoint. ZAP is request/reply, so the bind
-        // must be bidirectional: the client (ZapClient::connect_inproc) needs a
-        // reply channel to receive the WELCOME/ERROR response.
-        let socket =
-            DealerSocket::bind_inproc_bidi("inproc://zeromq.zap.01", SocketOptions::default())?;
+        // A ROUTER, so each reply goes back to the client that asked. An
+        // inproc bind registers the name before its first await, so polling
+        // the future once completes it; a pending bind means it went async.
+        let mut socket = RouterSocket::new();
+        socket
+            .bind(ZAP_ENDPOINT)
+            .now_or_never()
+            .ok_or_else(|| io::Error::other("inproc bind did not complete synchronously"))??;
 
         Ok(Self { socket, handler })
     }
@@ -252,28 +257,24 @@ impl<H: ZapHandler> ZapServer<H> {
     /// and sends back responses on inproc://zeromq.zap.01.
     pub async fn start(&mut self) -> io::Result<()> {
         loop {
-            // Receive ZAP request
-            let Some(msg) = self.socket.recv().await? else {
+            // A request arrives as [client identity, request frames...].
+            let mut frames = self.socket.recv_owned().await?.into_frames();
+            if frames.is_empty() {
+                continue;
+            }
+            let identity = frames.remove(0);
+
+            let Ok(request) = ZapRequest::decode(&frames) else {
                 continue;
             };
 
-            // Decode the request
-            let request = match ZapRequest::decode(&msg) {
-                Ok(req) => req,
-                Err(_e) => {
-                    // Failed to decode ZAP request
-                    continue;
-                }
-            };
-
-            // Process the request
             let response = self.handler.authenticate(&request).await;
 
-            // Send the response
-            let frames = response.encode();
-            if let Err(_e) = self.socket.send(frames).await {
-                // Failed to send ZAP response
-            }
+            let reply: Msg = std::iter::once(identity)
+                .chain(response.encode())
+                .collect();
+            // The client may be gone already; that is its loss, not ours.
+            let _ = self.socket.send(reply).await;
         }
     }
 }

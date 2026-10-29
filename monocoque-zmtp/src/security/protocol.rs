@@ -1,13 +1,25 @@
 //! Shared protocol parsing helpers for ZMTP security handshakes.
 
-use crate::codec::ZmtpError;
+use crate::error::ZmtpError;
 use crate::session::SocketType;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use compio_buf::BufResult;
 use compio_io::AsyncRead;
 use monocoque_core::timeout::read_exact_with_timeout;
 use std::time::Duration;
 use tracing::warn;
+
+/// Append `body` to `buf` as one ZMTP command frame (short or long header).
+pub fn append_zmtp_cmd_frame(buf: &mut BytesMut, body: &[u8]) {
+    let len = body.len();
+    if let Ok(short) = u8::try_from(len) {
+        buf.extend_from_slice(&[0x04, short]);
+    } else {
+        buf.extend_from_slice(&[0x06]);
+        buf.extend_from_slice(&(len as u64).to_be_bytes());
+    }
+    buf.extend_from_slice(body);
+}
 
 /// Read a fixed command prefix and verify it matches the expected bytes.
 pub async fn read_command_prefix<S>(

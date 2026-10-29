@@ -30,17 +30,12 @@ runtime-tokio = ["dep:tokio"]
 runtime-smol = ["dep:smol"]
 
 [dependencies]
-async-lock.workspace = true
 bytes.workspace = true
 compio-io.workspace = true
 compio-buf.workspace = true
 compio = { workspace = true, optional = true }
-dashmap.workspace = true
 flume.workspace = true
 futures.workspace = true
-hashbrown.workspace = true
-once_cell.workspace = true
-parking_lot.workspace = true
 rand.workspace = true
 smallvec.workspace = true
 socket2.workspace = true

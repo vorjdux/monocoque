@@ -229,6 +229,12 @@ impl Codec for ZmtpCodec {
 
             let more = flags & FLAG_MORE != 0;
             if flags & FLAG_COMMAND != 0 {
+                // A command is always a single frame.
+                if more {
+                    return Err(MonocoqueError::Protocol(
+                        "command frame with the MORE flag set".into(),
+                    ));
+                }
                 let body = buf.split_to(total);
                 self.on_command(&body[header..], deliver, replies)?;
                 continue;
@@ -322,7 +328,7 @@ impl Protocol for Zmtp {
         )
         .await
         .map_err(|e| match e {
-            crate::codec::ZmtpError::AuthenticationFailed => MonocoqueError::AuthenticationFailed,
+            crate::error::ZmtpError::AuthenticationFailed => MonocoqueError::AuthenticationFailed,
             other => MonocoqueError::Protocol(format!("handshake failed: {other}")),
         })?;
         let peer_type = result.peer_socket_type.as_str();
@@ -473,6 +479,28 @@ mod tests {
         assert!(matches!(
             decode_all(&mut c, &wire),
             Err(MonocoqueError::MessageTooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_long_length_that_would_truncate_past_the_cap() {
+        // (1 << 32) | 100 narrows to 100 on a 32-bit usize; the length must be
+        // rejected before it is narrowed, or framing desyncs.
+        let mut c = ZmtpCodec::new(None, &SocketOptions::default().with_max_msg_size(Some(1000)));
+        let mut wire = vec![FLAG_LONG];
+        wire.extend_from_slice(&((1u64 << 32) + 100).to_be_bytes());
+        assert!(matches!(
+            decode_all(&mut c, &wire),
+            Err(MonocoqueError::MessageTooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_command_frame_with_more_flag() {
+        let wire = b"\x05\x06\x05READY";
+        assert!(matches!(
+            decode_all(&mut codec(), wire),
+            Err(MonocoqueError::Protocol(_))
         ));
     }
 

@@ -5,9 +5,9 @@
 //!
 //! Run with: `cargo bench --package monocoque -F zmq --bench allocation`
 
-use bytes::{Bytes, BytesMut};
+use bytes::{Buf, Bytes, BytesMut};
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
-use monocoque_core::buffer::SegmentedBuffer;
+use monocoque_core::msg::Msg;
 use std::hint::black_box;
 
 /// `Bytes::copy_from_slice` vs `Bytes::from` (moves ownership)
@@ -77,37 +77,30 @@ fn bench_bytesmut_reuse(c: &mut Criterion) {
     group.finish();
 }
 
-/// `SegmentedBuffer` push/drain cycle (mimics the codec read path)
-fn bench_segmented_buffer(c: &mut Criterion) {
-    let mut group = c.benchmark_group("segmented_buffer");
+/// Read-buffer drain cycle (mimics the codec read path: skip a frame header,
+/// then split the body off without copying it)
+fn bench_read_buffer(c: &mut Criterion) {
+    let mut group = c.benchmark_group("read_buffer");
 
     group.throughput(Throughput::Bytes(1024));
-    group.bench_function("push_1kb", |b| {
+    group.bench_function("header_then_split_1kb", |b| {
         b.iter_batched(
-            || (SegmentedBuffer::new(), Bytes::from(vec![0u8; 1024])),
-            |(mut buf, data)| {
-                buf.push(data);
-                black_box(buf.len());
+            || BytesMut::from(&[0u8; 1024][..]),
+            |mut buf| {
+                buf.advance(2);
+                let body = buf.split_to(1022).freeze();
+                black_box(body.len());
             },
             BatchSize::SmallInput,
         );
     });
 
-    group.bench_function("push_drain_cycle_1kb", |b| {
-        b.iter_batched(
-            || {
-                let mut buf = SegmentedBuffer::new();
-                buf.push(Bytes::from(vec![0u8; 1024]));
-                buf
-            },
-            |mut buf| {
-                // Simulate draining 2 bytes (frame header) then the rest
-                buf.advance(2);
-                buf.advance(1022);
-                black_box(buf.len());
-            },
-            BatchSize::SmallInput,
-        );
+    group.bench_function("small_frame_into_inline_msg", |b| {
+        let wire = [0u8; 64];
+        b.iter(|| {
+            let msg = Msg::copy_from_slice(black_box(&wire));
+            black_box(msg);
+        });
     });
 
     group.finish();
@@ -155,7 +148,7 @@ criterion_group!(
     benches,
     bench_bytes_construction,
     bench_bytesmut_reuse,
-    bench_segmented_buffer,
+    bench_read_buffer,
     bench_multipart_alloc,
 );
 criterion_main!(benches);

@@ -164,6 +164,10 @@ impl Socket<Pull> {
 pub struct RouterHooks {
     by_identity: HashMap<Bytes, PeerId, RandomState>,
     identity_of: HashMap<PeerId, Bytes, RandomState>,
+    /// Identities of peers that went away, by slot index, so the messages
+    /// they sent before leaving are still delivered with their envelope. An
+    /// entry lives until its slot is reused by a new peer.
+    departed: HashMap<u32, (PeerId, Bytes)>,
     next_generated: u32,
     handover: bool,
 }
@@ -173,6 +177,7 @@ impl FromOptions for RouterHooks {
         Self {
             by_identity: HashMap::default(),
             identity_of: HashMap::default(),
+            departed: HashMap::new(),
             next_generated: rand::random(),
             handover: options.router_handover,
         }
@@ -180,6 +185,20 @@ impl FromOptions for RouterHooks {
 }
 
 impl RouterHooks {
+    /// The identity `id` was routed by, live or departed.
+    fn envelope_of(&self, id: PeerId) -> Option<Bytes> {
+        self.identity_of.get(&id).cloned().or_else(|| {
+            self.departed
+                .get(&id.index())
+                .filter(|(p, _)| *p == id)
+                .map(|(_, identity)| identity.clone())
+        })
+    }
+
+    fn depart(&mut self, id: PeerId, identity: Bytes) {
+        self.departed.insert(id.index(), (id, identity));
+    }
+
     fn generate(&mut self) -> Bytes {
         // libzmq's form: a zero byte, then a 32-bit counter. Peer-chosen
         // identities may not start with zero, so the two never collide.
@@ -200,18 +219,22 @@ impl Hooks for RouterHooks {
             if !self.handover {
                 return false;
             }
-            self.identity_of.remove(&old);
+            if let Some(identity) = self.identity_of.remove(&old) {
+                self.depart(old, identity);
+            }
         }
+        self.departed.remove(&id.index());
         self.by_identity.insert(identity.clone(), id);
         self.identity_of.insert(id, identity);
         true
     }
 
     fn on_peer_down(&mut self, id: PeerId, _info: &PeerInfo) {
-        if let Some(identity) = self.identity_of.remove(&id)
-            && self.by_identity.get(&identity) == Some(&id)
-        {
-            self.by_identity.remove(&identity);
+        if let Some(identity) = self.identity_of.remove(&id) {
+            if self.by_identity.get(&identity) == Some(&id) {
+                self.by_identity.remove(&identity);
+            }
+            self.depart(id, identity);
         }
     }
 }
@@ -227,7 +250,7 @@ impl Socket<Router> {
     pub async fn recv(&mut self) -> Result<MsgRef<'_>> {
         loop {
             let peer = self.next_into_slot().await?;
-            let identity = self.core.borrow().hooks().identity_of.get(&peer).cloned();
+            let identity = self.core.borrow().hooks().envelope_of(peer);
             if let Some(identity) = identity {
                 self.slot_mut().push_front(identity);
                 return Ok(self.lend());

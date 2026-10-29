@@ -89,7 +89,6 @@
 pub use bytes::Bytes;
 pub use monocoque_core::options::SocketOptions;
 pub use monocoque_core::reconnect::{ReconnectError, ReconnectState};
-pub use monocoque_core::socket_type::SocketType;
 
 /// Runtime-agnostic networking types (TCP/Unix streams, listeners).
 ///

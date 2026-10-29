@@ -31,7 +31,6 @@ runtime-smol = ["dep:smol", "monocoque-core/runtime-smol"]
 [dependencies]
 bytes.workspace = true
 thiserror.workspace = true
-flume.workspace = true
 futures.workspace = true
 compio-io.workspace = true
 compio-buf.workspace = true
@@ -41,10 +40,6 @@ smol = { workspace = true, optional = true }
 monocoque-core = { version = "0.4.2", path = "../monocoque-core", package = "monocoque-rs-core", default-features = false }
 smallvec.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
-socket2.workspace = true
-parking_lot.workspace = true
-num_cpus.workspace = true
 async-trait.workspace = true
 
 # Security / Cryptography

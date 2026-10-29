@@ -192,3 +192,26 @@ pub async fn linger_timer(linger: Duration, events: Rc<EventQueue>) {
     crate::rt::sleep(linger).await;
     events.push(Event::LingerExpired);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::jittered;
+    use std::time::Duration;
+
+    #[test]
+    fn jittered_backoff_stays_within_half_to_full_range() {
+        assert_eq!(jittered(Duration::ZERO), Duration::ZERO);
+
+        // Sample enough draws to exercise the range without a fixed seed.
+        let delay = Duration::from_millis(100);
+        for _ in 0..1000 {
+            let j = jittered(delay);
+            assert!(
+                j >= delay / 2 && j <= delay,
+                "jittered delay {j:?} out of [{:?}, {:?}]",
+                delay / 2,
+                delay
+            );
+        }
+    }
+}
