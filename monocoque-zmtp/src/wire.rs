@@ -12,7 +12,7 @@
 //! peer's outbound buffer; larger bodies go to the kernel as their own iovec.
 //! CURVE encrypts every frame into a `MESSAGE` command.
 
-use crate::handshake::perform_handshake_with_options;
+use crate::handshake::{Framing, perform_handshake_with_options};
 use crate::security::curve::CurveMessageCipher;
 use crate::session::SocketType;
 use bytes::{Buf, Bytes, BytesMut};
@@ -85,6 +85,8 @@ pub struct ZmtpCodec {
     max_frame: usize,
     vectored_threshold: usize,
     peer_ttl: Option<Duration>,
+    framing: Framing,
+    subscribe_all: bool,
 }
 
 impl ZmtpCodec {
@@ -98,6 +100,86 @@ impl ZmtpCodec {
             max_frame: options.max_msg_size.unwrap_or(DEFAULT_MAX_FRAME),
             vectored_threshold: options.vectored_write_threshold,
             peer_ttl: None,
+            framing: Framing::V3,
+            subscribe_all: false,
+        }
+    }
+
+    /// Speak `framing` to a pre-ZMTP-3 peer. A ZMTP 1.0 subscriber filters
+    /// for itself and sends no subscriptions, so a publisher (`publisher`)
+    /// subscribes it to everything.
+    #[must_use]
+    pub fn with_framing(mut self, framing: Framing, publisher: bool) -> Self {
+        self.framing = framing;
+        self.subscribe_all = publisher && framing == Framing::V1;
+        self
+    }
+
+    /// Decode ZMTP 1.0 frames: a length counting the flags byte (one byte,
+    /// or 0xFF and eight), then the flags byte, then the body.
+    fn decode_v1(&mut self, buf: &mut BytesMut, deliver: &mut dyn FnMut(Msg)) -> Result<()> {
+        loop {
+            let (header, counted, flags) = match buf.first() {
+                None => return Ok(()),
+                Some(0xFF) => {
+                    if buf.len() < 10 {
+                        return Ok(());
+                    }
+                    let raw = u64::from_be_bytes(buf[1..9].try_into().expect("8 bytes"));
+                    let len =
+                        usize::try_from(raw).map_err(|_| MonocoqueError::MessageTooLarge {
+                            size: usize::MAX,
+                            max: self.max_frame,
+                        })?;
+                    (10, len, buf[9])
+                }
+                Some(&len) => {
+                    if buf.len() < 2 {
+                        return Ok(());
+                    }
+                    (2, usize::from(len), buf[1])
+                }
+            };
+            let len = counted
+                .checked_sub(1)
+                .ok_or_else(|| MonocoqueError::Protocol("ZMTP 1.0 frame without flags".into()))?;
+            if len > self.max_frame {
+                return Err(MonocoqueError::MessageTooLarge {
+                    size: len,
+                    max: self.max_frame,
+                });
+            }
+            let total = header + len;
+            if buf.len() < total {
+                buf.reserve(total - buf.len());
+                return Ok(());
+            }
+            let more = flags & FLAG_MORE != 0;
+            if !more && self.partial.is_empty() && len <= INLINE_CAP {
+                deliver(Msg::copy_from_slice(&buf[header..total]));
+                buf.advance(total);
+                continue;
+            }
+            buf.advance(header);
+            let frame = buf.split_to(len).freeze();
+            self.push_frame(frame, more, deliver)?;
+        }
+    }
+
+    fn encode_v1<'a>(out: &mut OutQueue, n: usize, frames: impl Iterator<Item = FrameRef<'a>>) {
+        for (i, frame) in frames.enumerate() {
+            let flags = if i + 1 < n { FLAG_MORE } else { 0 };
+            let body = frame.as_slice();
+            let buf = out.buf();
+            match u8::try_from(body.len() + 1) {
+                Ok(short) if short < 0xFF => buf.extend_from_slice(&[short, flags]),
+                _ => {
+                    buf.extend_from_slice(&[0xFF]);
+                    buf.extend_from_slice(&(body.len() as u64 + 1).to_be_bytes());
+                    buf.extend_from_slice(&[flags]);
+                }
+            }
+            buf.extend_from_slice(body);
         }
     }
 
@@ -191,6 +273,9 @@ impl Codec for ZmtpCodec {
         deliver: &mut dyn FnMut(Msg),
         replies: &mut OutQueue,
     ) -> Result<()> {
+        if self.framing == Framing::V1 {
+            return self.decode_v1(buf, deliver);
+        }
         loop {
             if buf.len() < 2 {
                 return Ok(());
@@ -236,6 +321,11 @@ impl Codec for ZmtpCodec {
                         "command frame with the MORE flag set".into(),
                     ));
                 }
+                if self.framing == Framing::V2 {
+                    return Err(MonocoqueError::Protocol(
+                        "command frame from a ZMTP 2.0 peer".into(),
+                    ));
+                }
                 let body = buf.split_to(total);
                 self.on_command(&body[header..], deliver, replies)?;
                 continue;
@@ -268,6 +358,10 @@ impl Codec for ZmtpCodec {
     fn encode_prefixed(&mut self, prefix: &[Bytes], msg: &Msg, out: &mut OutQueue) -> Result<()> {
         let n = prefix.len() + msg.len();
         let frames = prefix.iter().map(FrameRef::Bytes).chain(msg.frame_refs());
+        if self.framing == Framing::V1 {
+            Self::encode_v1(out, n, frames);
+            return Ok(());
+        }
         if let Some(cipher) = self.cipher.as_mut() {
             for (i, frame) in frames.enumerate() {
                 let body = cipher
@@ -293,10 +387,18 @@ impl Codec for ZmtpCodec {
     }
 
     fn shares_encoding(&self) -> bool {
-        self.cipher.is_none()
+        self.cipher.is_none() && self.framing != Framing::V1
+    }
+
+    fn initial_message(&mut self) -> Option<Msg> {
+        std::mem::take(&mut self.subscribe_all).then(|| Msg::from(Bytes::from_static(b"\x01")))
     }
 
     fn encode_ping(&mut self, ttl: Duration, out: &mut OutQueue) {
+        // ZMTP 1.0 and 2.0 have no heartbeat commands.
+        if self.framing != Framing::V3 {
+            return;
+        }
         let tenths = u16::try_from(ttl.as_millis() / 100).unwrap_or(u16::MAX);
         let mut body = [0u8; 7];
         body[..5].copy_from_slice(PING);
@@ -357,7 +459,10 @@ impl Protocol for Zmtp {
             endpoint: None,
             metadata: Arc::new(metadata),
         };
-        Ok((ZmtpCodec::new(result.curve_cipher, &options), info))
+        let publisher = matches!(cfg.socket_type, SocketType::Pub | SocketType::Xpub);
+        let codec =
+            ZmtpCodec::new(result.curve_cipher, &options).with_framing(result.framing, publisher);
+        Ok((codec, info))
     }
 
     fn socket_type(cfg: &ZmtpConfig) -> &'static str {
@@ -493,7 +598,10 @@ mod tests {
     fn rejects_long_length_that_would_truncate_past_the_cap() {
         // (1 << 32) | 100 narrows to 100 on a 32-bit usize; the length must be
         // rejected before it is narrowed, or framing desyncs.
-        let mut c = ZmtpCodec::new(None, &SocketOptions::default().with_max_msg_size(Some(1000)));
+        let mut c = ZmtpCodec::new(
+            None,
+            &SocketOptions::default().with_max_msg_size(Some(1000)),
+        );
         let mut wire = vec![FLAG_LONG];
         wire.extend_from_slice(&((1u64 << 32) + 100).to_be_bytes());
         assert!(matches!(

@@ -394,6 +394,17 @@ pub async fn reader_loop<C: Codec>(
 ) {
     let read_size = read_size.max(MIN_READ);
     let mut buf = BytesMut::new();
+    {
+        let mut st = peer.borrow_mut();
+        let initial = match &mut st.outbound {
+            Outbound::Wire { codec, .. } => codec.initial_message(),
+            _ => None,
+        };
+        if let Some(msg) = initial {
+            st.ready.push_back(msg);
+            st.signal_readable();
+        }
+    }
     loop {
         poll_fn(|cx| peer.borrow_mut().poll_reader_room(cx)).await;
         if peer.borrow().closed.is_some() {

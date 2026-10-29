@@ -96,6 +96,13 @@ pub trait Codec: 'static {
     fn peer_ttl(&self) -> Option<Duration> {
         None
     }
+
+    /// A message to receive from the peer before anything it sends, standing
+    /// in for something its protocol version does not say (a ZMTP 1.0
+    /// subscriber's implicit subscription to everything).
+    fn initial_message(&mut self) -> Option<Msg> {
+        None
+    }
 }
 
 /// A wire protocol: how to handshake and how to frame.
