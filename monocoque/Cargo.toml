@@ -437,3 +437,7 @@ draft = ["zmq", "monocoque-zmtp/draft"]
 [[test]]
 name = "auth_backoff"
 required-features = ["zmq"]
+
+[[example]]
+name = "atomics_probe"
+required-features = ["zmq"]

@@ -418,43 +418,47 @@ ergonomic convenience rather than a guaranteed speedup, and measure it against
 
 ---
 
-## Allocation-free receive (`recv_into`)
+## Borrowed receive
 
-`recv()` allocates a fresh `Vec<Bytes>` for every message. At small message
-sizes that allocation is the dominant per-message cost. `recv_into(&mut out)`
-writes the frames into a caller-owned buffer instead, so a recv loop that reuses
-one buffer allocates nothing per message. `try_recv_into` is the non-blocking
-drain counterpart, for emptying everything decoded from one kernel read.
-
-As of 0.4.0 the allocation-free receive API is available on every recv-capable
-socket (DEALER, ROUTER, REQ, REP, PAIR, SUB), not just PULL, and the
-single-frame pipeline sockets (PULL, DEALER, PAIR) also expose `recv_one` for
-messages known to be one frame. Each socket keeps its receive semantics: ROUTER
-still prefixes the peer identity, REQ strips the reply envelope, REP stashes the
-routing envelope, and SUB drops filtered messages without allocating them.
-Measured over 256 DEALER messages, `recv()` charges 261 allocations and
-`recv_into()` charges 1.
+`recv()` returns a `MsgRef<'_>` that borrows the socket's receive slot, so a
+receive loop allocates nothing per message and copies nothing: a frame of at
+most 64 bytes lives inline in the `Msg`, and a longer one is a slice of the
+buffer it was read into. Call `recv_owned()` (or `MsgRef::take`) only for a
+message that has to outlive the next receive. A message already in the queue
+is taken before any I/O work, so a receive never pays for reading.
 
 ```rust
-use bytes::Bytes;
 use monocoque::zmq::PullSocket;
 
-let mut pull = PullSocket::connect("127.0.0.1:5555").await?;
-let mut buf: Vec<Bytes> = Vec::with_capacity(4);
-while pull.recv_into(&mut buf).await? {
-    handle(&buf);
-    while pull.try_recv_into(&mut buf)? {
-        handle(&buf);
-    }
+let mut pull = PullSocket::new();
+pull.connect("tcp://127.0.0.1:5555").await?;
+loop {
+    let msg = pull.recv().await?;
+    handle(msg.first().unwrap_or_default());
 }
 ```
 
-On the coalesced PUSH/PULL throughput bench this lifts 64 B from 14.1 M to 15.6 M
-msg/s on compio (about 1.10x) and from 18.0 M to 19.1 M on tokio, plus a few
-percent at 256 B; the gain tapers as messages grow and the path becomes
-bandwidth-bound. `recv()` and `try_recv()` are unchanged for callers
-that want an owned `Vec`. A runnable example lives at
-`examples/recv_into_zero_alloc.rs`.
+The allocation gate (`monocoque/tests/hotpath_alloc.rs`) holds every socket
+type to that. On tokio it measures zero. compio's driver allocates its own op
+record per read and write, and smol's reactor one per readiness wait; those
+are the runtime's allocations, not the socket's.
+
+### Atomics
+
+`scripts/count_atomics.sh <backend>` counts the atomic (lock-prefixed)
+instructions executed per message under callgrind, by function. 64 B messages
+over TCP on one thread, every call counted:
+
+| | compio | tokio | smol |
+|---|---|---|---|
+| borrowed receive of a queued message | 0 | 0 | 0 |
+| a whole PUSH -> PULL message | 26.4 | 46.4 | 55.9 |
+
+The second row covers sending, waking the reader and writer tasks, and the
+runtime's own bookkeeping. About 18 of those per message are monocoque's task
+wakeups (`ChildWaker`, `progress`); the rest are the runtime's (tokio's
+readiness and scheduler, smol's reactor and parker) and two for the probe's
+own `Bytes` payload clone on the send side.
 
 ---
 
