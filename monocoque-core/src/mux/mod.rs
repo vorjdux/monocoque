@@ -350,6 +350,9 @@ struct Connector {
     child: ChildId,
     down: Rc<Signal>,
     peer: Option<PeerId>,
+    /// `connect_routing_id`: the identity this connection's peers are routed
+    /// by, in place of the one they announce.
+    routing_id: Option<Bytes>,
 }
 
 struct Bound {
@@ -394,6 +397,8 @@ pub struct SocketCore<P: Protocol, H: Hooks> {
     listeners: Vec<Option<Bound>>,
     connectors: Vec<Option<Connector>>,
     greeting: Vec<Msg>,
+    /// `connect_routing_id`, until the first connect takes it.
+    connect_routing_id: Option<Bytes>,
     monitor: Option<SocketEventSender>,
     heartbeat: Option<ChildId>,
     shared_wire: BytesMut,
@@ -407,6 +412,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
     /// attach starts the driver.
     pub fn new(cfg: P::Config, options: SocketOptions, hooks: H) -> Shared<P, H> {
         let wakeups: Arc<Wakeups> = Arc::default();
+        let connect_routing_id = options.connect_routing_id.clone();
         Rc::new(RefCell::new(Self {
             cfg: Rc::new(cfg),
             options: Rc::new(options),
@@ -426,6 +432,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             listeners: Vec::new(),
             connectors: Vec::new(),
             greeting: Vec::new(),
+            connect_routing_id,
             monitor: None,
             heartbeat: None,
             shared_wire: BytesMut::new(),
@@ -624,6 +631,14 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         match h.result {
             Ok((codec, mut info)) if !self.closing => {
                 info.endpoint.clone_from(&endpoint);
+                if let Origin::Connector(i) = h.origin
+                    && let Some(Some(Connector {
+                        routing_id: Some(id),
+                        ..
+                    })) = self.connectors.get(i)
+                {
+                    info.identity = Some(id.clone());
+                }
                 let id = self.add_wire_peer(h.origin, h.stream, codec, info);
                 if let Origin::Connector(i) = h.origin
                     && let Some(Some(c)) = self.connectors.get_mut(i)
@@ -1004,6 +1019,9 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
                 )));
             }
             binder.endpoint = Some(endpoint.clone());
+            if let Some(id) = core.connect_routing_id.take() {
+                binder.identity = Some(id);
+            }
             core.add_link_peer(Origin::Attached, link, binder);
             core.emit(SocketEvent::Connected(endpoint));
             return Ok(());
@@ -1019,11 +1037,13 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             Rc::clone(&down),
             options,
         ));
+        let routing_id = core.connect_routing_id.take();
         core.connectors.push(Some(Connector {
             endpoint,
             child,
             down,
             peer: None,
+            routing_id,
         }));
         drop(core);
         // Run the connector once now so the dial is submitted immediately.

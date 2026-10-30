@@ -246,6 +246,47 @@ fn xpub_reports_subscriptions_and_xsub_forwards_them() {
 }
 
 #[test]
+fn xpub_welcomes_each_subscriber() {
+    rt().block_on(async {
+        let mut xpub = XPubSocket::with_options(
+            timeout_opts().with_xpub_welcome_msg(Bytes::from_static(b"WELCOME")),
+        );
+        let ep = xpub.bind("tcp://127.0.0.1:0").await.unwrap();
+        for _ in 0..2 {
+            let mut sub = SubSocket::with_options(timeout_opts());
+            sub.subscribe(b"WELCOME").await.unwrap();
+            sub.connect(&ep).await.unwrap();
+            assert_eq!(sub.recv().await.unwrap(), [b"WELCOME"]);
+        }
+    });
+}
+
+#[test]
+fn router_routes_a_connection_by_connect_routing_id() {
+    rt().block_on(async {
+        for ep in transports("connect-rid") {
+            let mut dealer = DealerSocket::with_options(timeout_opts());
+            let ep = dealer.bind(&ep).await.unwrap();
+            let mut router = RouterSocket::with_options(
+                timeout_opts().with_connect_routing_id(Bytes::from_static(b"dealer-1")),
+            );
+            router.connect(&ep).await.unwrap();
+            while router.peer_count() == 0 {
+                sleep(Duration::from_millis(1)).await;
+            }
+            router
+                .send(Msg::from([
+                    Bytes::from_static(b"dealer-1"),
+                    Bytes::from_static(b"hi"),
+                ]))
+                .await
+                .unwrap();
+            assert_eq!(dealer.recv().await.unwrap(), [b"hi"]);
+        }
+    });
+}
+
+#[test]
 fn pair_refuses_a_second_peer() {
     rt().block_on(async {
         let mut a = PairSocket::with_options(timeout_opts());

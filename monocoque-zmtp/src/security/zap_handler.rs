@@ -272,9 +272,7 @@ impl<H: ZapHandler> ZapServer<H> {
 
             let response = self.handler.authenticate(&request).await;
 
-            let reply: Msg = std::iter::once(identity)
-                .chain(response.encode())
-                .collect();
+            let reply: Msg = std::iter::once(identity).chain(response.encode()).collect();
             // The client may be gone already; that is its loss, not ours.
             let _ = self.socket.send(reply).await;
         }

@@ -166,11 +166,10 @@ pub struct SocketOptions {
 
     /// Connect routing ID (`ZMQ_CONNECT_ROUTING_ID`)
     ///
-    /// Identity to assign to the next outgoing connection.
-    /// Used by ROUTER sockets to assign a specific identity to a peer.
-    /// - Default: None (auto-generate)
-    /// - Custom: Assign explicit identity to next connection
-    /// - Consumed after each connect operation
+    /// The routing id a ROUTER gives the peer of its first `connect`, in place
+    /// of the identity that peer announces. It is used by that connection
+    /// only; later connects route by the announced identity as usual.
+    /// - Default: None
     pub connect_routing_id: Option<bytes::Bytes>,
 
     /// Custom handshake properties (`ZMQ_METADATA`)

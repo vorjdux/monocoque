@@ -2,10 +2,10 @@
 
 use super::{Kind, Socket};
 use crate::session::SocketType;
+use crate::wire::Zmtp;
 use bytes::Bytes;
 use monocoque_core::error::{MonocoqueError, Result};
 use monocoque_core::msg::{Msg, MsgRef};
-use crate::wire::Zmtp;
 use monocoque_core::mux::{Hooks, PeerId, PeerInfo, SendTo, SocketCore};
 use monocoque_core::options::SocketOptions;
 use monocoque_core::subscription::{
@@ -523,11 +523,14 @@ impl FromOptions for PubHooks {
 }
 
 /// XPUB's hooks: PUB's, plus subscription messages are delivered to the user.
-pub struct XPubHooks(PubHooks);
+pub struct XPubHooks(PubHooks, Option<Msg>);
 
 impl FromOptions for XPubHooks {
     fn from_options(options: &SocketOptions) -> Self {
-        Self(PubHooks::new(options, true))
+        Self(
+            PubHooks::new(options, true),
+            options.xpub_welcome_msg.clone().map(Msg::from),
+        )
     }
 }
 
@@ -589,6 +592,11 @@ impl Hooks for XPubHooks {
 
     fn on_peer_down(&mut self, id: PeerId, _info: &PeerInfo) {
         self.0.drop_peer(id);
+    }
+
+    /// `xpub_welcome_msg`, sent to each subscriber as it connects.
+    fn greeting(&self) -> Vec<Msg> {
+        self.1.iter().cloned().collect()
     }
 }
 

@@ -321,8 +321,7 @@ fn pub_fans_out_overlapping_prefixes() {
             let m = recv_skipping(&mut narrow, b"weather.temp.probe").await;
             assert_eq!(m.first(), Some(&b"weather.temp"[..]));
         }
-        narrow
-            .update_options(|o| o.with_recv_timeout(Duration::from_millis(100)));
+        narrow.update_options(|o| o.with_recv_timeout(Duration::from_millis(100)));
         assert!(
             narrow.recv().await.unwrap_err().is_timeout(),
             "the narrow prefix sees nothing else"
@@ -490,8 +489,9 @@ fn push_close_flushes_queued_messages_within_linger() {
     });
     let ep = ep_rx.recv().unwrap();
     rt().block_on(async {
-        let mut push =
-            PushSocket::with_options(SocketOptions::default().with_linger(Some(Duration::from_secs(5))));
+        let mut push = PushSocket::with_options(
+            SocketOptions::default().with_linger(Some(Duration::from_secs(5))),
+        );
         push.connect(&ep).await.unwrap();
         let body = Bytes::from(vec![3u8; 32 * 1024]);
         for i in 0..MSGS {
