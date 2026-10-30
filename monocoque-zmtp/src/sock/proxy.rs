@@ -258,10 +258,10 @@ where
         front_first = !front_first;
         match ready {
             Ready::Frontend => {
-                forward(frontend, backend, &mut capture, (&mut front, &mut back)).await?
+                forward(frontend, backend, &mut capture, (&mut front, &mut back)).await?;
             }
             Ready::Backend => {
-                forward(backend, frontend, &mut capture, (&mut back, &mut front)).await?
+                forward(backend, frontend, &mut capture, (&mut back, &mut front)).await?;
             }
             Ready::Control => {
                 let Some(ctl) = control.as_deref_mut() else {
