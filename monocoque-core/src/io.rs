@@ -19,7 +19,6 @@
 //! opts back into `unsafe_code` that the crate otherwise denies.
 #![allow(unsafe_code)]
 
-use bytes::BytesMut;
 use compio_buf::{BufResult, IoBufMut, IoVectoredBuf};
 use smallvec::SmallVec;
 use std::io::{self, IoSlice};
@@ -105,12 +104,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytes::BytesMut;
 
-    fn write_cdef(spare: &mut [MaybeUninit<u8>]) -> io::Result<usize> {
+    fn write_cdef(spare: &mut [MaybeUninit<u8>]) -> usize {
         for (slot, b) in spare.iter_mut().zip(b"cdef") {
             slot.write(*b);
         }
-        Ok(4)
+        4
     }
 
     /// `fill_read` declares exactly the bytes the read wrote. Runs under
@@ -120,7 +120,7 @@ mod tests {
         let buf = BytesMut::with_capacity(32);
         let BufResult(res, buf) = futures::executor::block_on(fill_read(
             buf,
-            async |s: &mut [MaybeUninit<u8>]| write_cdef(s),
+            async |s: &mut [MaybeUninit<u8>]| Ok(write_cdef(s)),
         ));
         assert_eq!(res.unwrap(), 4);
         assert_eq!(&buf[..], b"cdef");
@@ -136,7 +136,7 @@ mod tests {
         let len = buf.len();
         let BufResult(res, slice) = futures::executor::block_on(fill_read(
             buf.slice(len..),
-            async |s: &mut [MaybeUninit<u8>]| write_cdef(s),
+            async |s: &mut [MaybeUninit<u8>]| Ok(write_cdef(s)),
         ));
         assert_eq!(res.unwrap(), 4);
         assert_eq!(&slice.into_inner()[..], b"abcdef");

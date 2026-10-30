@@ -46,7 +46,7 @@ Apply without reboot: `sysctl -p`
 Match buffer sizes to your typical message size:
 
 ```rust
-// Default (32 KB read / 8 KB write) suits most workloads
+// Default (32 KB read) suits most workloads
 let options = SocketOptions::default();
 
 // Small messages (<1 KB), trading throughput for latency
@@ -56,7 +56,7 @@ let options = SocketOptions::default().with_read_buffer_size(4096);
 let options = SocketOptions::default().with_read_buffer_size(65_536);
 ```
 
-The read buffer is clamped to the 64 KB read slab and floored at 64 bytes.
+The read buffer is clamped to the 64 KB read slab and floored at 64 bytes. There is no write buffer setting: the outbound buffer grows on demand and is reused.
 
 ### TCP Options
 
@@ -95,31 +95,35 @@ options.tcp_keepalive_idle = 120;
 
 ### Retry with Backoff
 
-```rust
-use backoff::{ExponentialBackoff, backoff::Backoff};
+Connected endpoints redial on their own, with exponential backoff and jitter, so
+there is no retry loop to write. Tune it with options:
 
-async fn connect_with_retry(addr: &str) -> io::Result<ReqSocket> {
-    let mut backoff = ExponentialBackoff::default();
-    loop {
-        match TcpStream::connect(addr).await {
-            Ok(stream) => return ReqSocket::new(stream).await,
-            Err(e) => match backoff.next_backoff() {
-                Some(d) => monocoque::rt::sleep(d).await,
-                None => return Err(e),
-            },
-        }
-    }
-}
+```rust
+let options = SocketOptions::default()
+    .with_reconnect_ivl(Duration::from_millis(100))
+    .with_reconnect_ivl_max(Duration::from_secs(10))
+    .with_max_reconnect_attempts(None); // None retries indefinitely
+
+let mut socket = ReqSocket::with_options(options);
+socket.connect("tcp://server:5555").await?;
 ```
+
+See [RELIABILITY_AND_RESILIENCE.md](RELIABILITY_AND_RESILIENCE.md) for details.
 
 ### Send/Receive Timeouts
 
-```rust
-use monocoque::rt::timeout;
+Set timeouts on the socket rather than wrapping each call. An elapsed timeout
+returns `MonocoqueError::TimedOut` and leaves the socket usable:
 
-monocoque::rt::timeout(Duration::from_secs(5), socket.send(msg))
-    .await
-    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "send timeout"))??;
+```rust
+let options = SocketOptions::default()
+    .with_send_timeout(Duration::from_secs(5))
+    .with_recv_timeout(Duration::from_secs(5));
+
+match socket.send(msg).await {
+    Err(MonocoqueError::TimedOut) => { /* no peer had room in time */ }
+    other => other?,
+}
 ```
 
 ## Monitoring
@@ -155,7 +159,7 @@ Set `RUST_LOG=info,monocoque_zmtp=debug` during rollout. Drop to `info` once sta
 
 **Connections hang or time out** - check firewall rules (`ss -tlnp`, `iptables -L`), verify the server is listening, and increase `handshake_timeout` for slow networks.
 
-**Low throughput** - check buffer sizes match your message sizes, consider disabling `tcp_nodelay` for PUB/SUB to allow batching.
+**Low throughput** - check buffer sizes match your message sizes, and consider `with_write_coalescing(true)` for small-message PUB/SUB bursts to batch writes.
 
 **High CPU from CURVE** - this is expected at connection time; per-message overhead is small. If the handshake cost matters, pool connections.
 
@@ -165,7 +169,7 @@ Set `RUST_LOG=info,monocoque_zmtp=debug` during rollout. Drop to `info` once sta
 - [ ] Kernel network buffers tuned (`sysctl net.core.rmem_max`)
 - [ ] Buffer sizes match typical message size
 - [ ] TCP keepalive configured (especially for long-idle connections)
-- [ ] Retry/backoff logic in place for all connection sites
+- [ ] Reconnect interval and attempt limit reviewed for all connection sites
 - [ ] Metrics collection wired up
 - [ ] `RUST_LOG` set appropriately (not `trace` in production)
 - [ ] Load tested under realistic message rates
