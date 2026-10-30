@@ -1,125 +1,156 @@
 # Migration Guide
 
-This covers migrating to monocoque from libzmq (C) or rust-zmq.
+Two audiences: users of libzmq or rust-zmq moving to monocoque, and users of
+monocoque 0.4 moving to the unified message and multiplexer release. Both are
+covered below; the second section lists every source-breaking change.
 
 ---
 
-## Dependency change
+## From libzmq or rust-zmq
 
-Remove `zmq` from your `Cargo.toml` and add:
+### Dependency
+
+Remove `zmq` and add:
 
 ```toml
 [dependencies]
 monocoque-rs = "0.4"
-bytes = "1.0"
-compio = { version = "0.19", features = ["runtime", "macros"] }
 ```
 
-You no longer need libzmq installed on the system. Monocoque is pure Rust.
+No system libzmq is needed. The default backend is compio (io_uring on Linux).
+For tokio build with `default-features = false, features = ["runtime-tokio", "zmq"]`,
+for smol with `features = ["runtime-smol", "zmq"]`.
 
----
+### No context, async everywhere
 
-## The big differences
-
-**No context.** libzmq and rust-zmq require a `Context` object that owns all sockets. Monocoque sockets are independent - just create them directly.
-
-**Async everywhere.** All socket operations are `async`. On the default backend you run them on a compio runtime: add `#[compio::main]` to your entry point. If you would rather stay on tokio, build with `default-features = false, features = ["runtime-tokio", "zmq"]` and run on a current-thread tokio runtime inside a `LocalSet`. There is also a smol backend: build with `default-features = false, features = ["runtime-smol", "zmq"]` to run on a single-threaded smol executor. Either way there is no blocking API.
-
-**`recv()` returns `Result<Option<Vec<Bytes>>>`.** This is the change that will touch the most code. In rust-zmq, `recv_msg(0)` returns `Result<Message>` where the error encodes both I/O problems and timeouts (via errno). In monocoque, `Ok(None)` means the connection closed or a timeout elapsed - it's not an error. `Err(e)` is an actual I/O problem. Update all your recv callsites:
+Sockets are created directly; there is no `Context`. Every operation is
+`async` and runs on a single-threaded runtime. `monocoque::rt::LocalRuntime`
+starts the right one for the selected backend:
 
 ```rust
-// rust-zmq
-let msg = socket.recv_msg(0)?;
+use monocoque::rt::LocalRuntime;
+use monocoque::zmq::DealerSocket;
 
-// monocoque - handle the None case
-match socket.recv().await {
-    Ok(Some(msg)) => { /* use msg */ }
-    Ok(None) => { /* timeout or peer closed */ }
-    Err(e) => { /* I/O error */ }
+fn main() -> monocoque::zmq::Result<()> {
+    LocalRuntime::new()?.block_on(async {
+        let mut socket = DealerSocket::new();
+        socket.connect("tcp://127.0.0.1:5555").await?;
+        socket.send("hello").await?;
+        let reply = socket.recv().await?;
+        println!("{:?}", reply.get(0));
+        Ok(())
+    })
 }
 ```
 
-If you're confident the socket is live and you just want to unwrap, `socket.recv().await.expect("connection closed")` is the common idiom in examples, but you probably want proper error handling in production.
+Endpoints use the libzmq syntax: `tcp://host:port`, `ipc:///path`,
+`inproc://name`. `bind` returns the endpoint actually bound, so
+`tcp://127.0.0.1:0` reports its assigned port.
 
-**Multipart messages are `Vec<Bytes>`.** Instead of calling `send` multiple times with `ZMQ_SNDMORE`, or building up frames with `recv` + `get_more()`, you send and receive the entire multipart message at once. Frame 0 is frame 0 in the vec, etc.
+### Messages
+
+A multipart message is one `Msg`, sent and received whole. There is no
+`SNDMORE` and no `get_more()`.
 
 ```rust
-// rust-zmq multipart send
+// rust-zmq
 socket.send("part1", zmq::SNDMORE)?;
 socket.send("part2", 0)?;
 
 // monocoque
-socket.send(vec![Bytes::from("part1"), Bytes::from("part2")]).await?;
+socket.send(Msg::from([Bytes::from("part1"), Bytes::from("part2")])).await?;
 ```
 
-**Socket options use a builder.** Instead of individual setter calls, build a `SocketOptions` and pass it at construction:
+`recv()` returns a `MsgRef<'_>` that borrows a slot inside the socket, so a
+receive allocates nothing. Use `recv_owned()` when the message must outlive the
+next call. Errors are `MonocoqueError`: `Again` when a non-blocking operation
+would block, `TimedOut` when `recv_timeout` or `send_timeout` elapses,
+`HostUnreachable` for ROUTER/SERVER/STREAM sends to an unknown peer.
+
+### Options
+
+Options are set once, through a builder, at construction:
 
 ```rust
-// rust-zmq
-socket.set_rcvtimeo(5000)?;
-socket.set_rcvhwm(1000)?;
-
-// monocoque
-let options = SocketOptions::new()
-    .with_recv_timeout(Duration::from_millis(5000))
-    .with_recv_hwm(1000);
-let socket = DealerSocket::connect_with_options("127.0.0.1:5555", options).await?;
+let socket = DealerSocket::with_options(
+    SocketOptions::default()
+        .with_recv_timeout(Duration::from_secs(5))
+        .with_recv_hwm(1000),
+);
 ```
 
-**Transport strings.** Monocoque currently only supports TCP and IPC. The address format for TCP is a bare host:port string, not `tcp://...`:
+### poll, proxy, metadata
 
-```rust
-// libzmq / rust-zmq
-socket.connect("tcp://localhost:5555")?;
+`monocoque::zmq::poll::poll` is `zmq_poll` over any mix of socket kinds.
+`proxy` and `proxy_steerable` match libzmq's. A received message exposes its
+connection's properties with `gets("Socket-Type")`, `gets("User-Id")` and so on,
+like `zmq_msg_gets`.
 
-// monocoque
-DealerSocket::connect("127.0.0.1:5555").await?;
-```
+### Checklist
 
-**Socket type names.** `ZMQ_DEALER` becomes `DealerSocket`, `ZMQ_ROUTER` becomes `RouterSocket`, and so on. The pattern is consistent for all 11 socket types.
-
----
-
-## What's not there yet
-
-- **inproc transport** - partially supported via a channel bridge, but not the same as libzmq inproc.
-- **`zmq_poll()`** - use `futures::select!` to multiplex across sockets.
-- **`ZMQ_STREAM`** - `StreamSocket` exists but check current docs for limitations.
-
-Everything else - DEALER/ROUTER, PUB/SUB, PUSH/PULL, PAIR, XPUB/XSUB, PLAIN/CURVE security, ZAP, socket monitor, proxy - is supported.
+- Replace `zmq` with `monocoque-rs`; drop the system libzmq.
+- Run socket code inside `LocalRuntime::block_on` (or your backend's runtime).
+- Remove `Context`; create sockets directly.
+- Replace `SNDMORE` sequences with one `Msg`.
+- Replace setters with the `SocketOptions` builder.
+- Call `recv_owned()` wherever a received message is kept.
 
 ---
 
-## Migration checklist
+## From monocoque 0.4
 
-- Remove libzmq system dependency
-- Replace `zmq` crate with `monocoque` + `bytes` + `compio`
-- Add `#[compio::main]` to entry points
-- Remove `Context::new()`, create sockets directly
-- Convert all recv callsites to handle `Result<Option<Vec<Bytes>>>`
-- Replace `SNDMORE` multi-send with `Vec<Bytes>` single send
-- Replace `recv` + `get_more()` loops with single `recv()` returning all frames
-- Convert socket option setters to `SocketOptions` builder
-- Strip `tcp://` prefix from addresses (use bare `host:port`)
-- Replace `zmq_poll()` with `futures::select!`
+This release replaces the per-socket I/O code with one multiplexer and one
+message type. It is a single break with no compatibility shims.
 
----
+### Messages
 
-## Upgrading from monocoque 0.1
+- `Vec<Bytes>` is gone from every signature; `Msg` replaces it. There is no
+  `From<Vec<Bytes>>` bridge. Build messages with `Msg::from(bytes)`,
+  `Msg::from([a, b])`, `Msg::from("text")`, or collect an iterator of `Bytes`.
+- `message_builder::Message` and the `message` module are removed.
+- `recv()` returns `Result<MsgRef<'_>>` instead of `Result<Option<Vec<Bytes>>>`.
+  A closed connection or a timeout is an error (`TimedOut`), not `Ok(None)`.
+  Code that keeps the message calls `recv_owned()`.
+- `recv_into` and `try_recv_into` are removed; the borrowed `recv` supersedes
+  them. `send_one` is removed; `send(Msg::from(frame))` no longer allocates.
 
-The 0.2 release is source-compatible for anyone using the socket API (`PushSocket`,
-`PullSocket`, `recv`, `recv_into`, `send`, and friends). Two things changed under
-the hood that only matter if you reached into internal buffer plumbing:
+### Errors
 
-- **`IoArena` and `SlabMut` are gone**, along with the `monocoque_core::alloc`
-  module and their `monocoque_core::prelude` re-exports. The read path now takes
-  buffers from a reused `BytesMut` slab via `monocoque_core::io::take_read_buffer`.
-  If you referenced these types (very rare outside the crate itself), switch to the
-  `core::io` helpers or a plain `BytesMut`.
-- **New zero-allocation send.** `send_one(frame: Bytes)` sends a single frame
-  without allocating the `Vec` that `send(vec![frame])` needs. Optional, but for a
-  hot single-frame PUSH path it removes the last per-message allocation when paired
-  with `recv_into`.
+- Every public method returns `Result<_, MonocoqueError>`; nothing returns
+  `io::Result`. I/O errors arrive as `MonocoqueError::Io`.
 
-Everything else, including all socket options and the three runtime backends, is
-unchanged.
+### Sockets
+
+- "bind accepts exactly one peer" is gone: every socket type is multi-peer, on
+  bind and on connect, and may bind and connect several endpoints.
+- `PushFanOut` and `PullFanIn` are removed; `PushSocket` and `PullSocket` load
+  balance and fair-queue natively.
+- `connect` returns once the dial is started. Sends wait for a peer (or fail
+  with `Again`/`TimedOut` per the options), as in libzmq.
+
+### Options
+
+- The `small()` and `large()` presets are removed.
+- `with_conflate()` now takes effect: a conflating socket keeps only the newest
+  message. Code that set it and relied on it being ignored changes behaviour.
+- `recv_hwm` applies to every socket type, not only STREAM.
+- `hwm == 0` means unbounded, as in libzmq.
+- `vectored_write_threshold` defaults to 16 KiB (was 32 KiB).
+
+### inproc
+
+- inproc is bounded by the HWM in each direction instead of unbounded, and it
+  works across threads as well as within one.
+
+### Security
+
+- CURVE now speaks RFC 26 and interoperates with libzmq. A 0.4 peer cannot
+  complete a CURVE handshake with this release; upgrade both ends together.
+- `ZapHandler` and `PlainAuthHandler` use native `async fn`. They can no longer
+  be used as `dyn` trait objects; store a concrete type, for example
+  `Arc<StaticPlainHandler>`. The `async-trait` dependency is gone.
+
+### Draft sockets
+
+- CLIENT/SERVER, RADIO/DISH, SCATTER/GATHER and CHANNEL exist behind the
+  `draft` feature.
