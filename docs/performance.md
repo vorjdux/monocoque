@@ -573,10 +573,29 @@ the full benefit; older kernels fall back to thread-pool I/O.
 - **SQPOLL**: Enables kernel-side submission polling, eliminating `io_uring_enter`
   syscalls at the cost of a dedicated CPU core. Useful only for
   sustained > 500 K msg/s workloads.
-- **Fixed buffers**: reads go through a reused per-socket `BytesMut` slab
-  (`core::io::take_read_buffer`), so the read path already avoids a fresh
-  allocation on most reads. Registering those slabs as io_uring fixed buffers is
-  future work; see the roadmap.
+- **Fixed buffers**: reads go through a reused per-connection `BytesMut`, so
+  the read path does not allocate on most reads. Registering those buffers as
+  io_uring fixed buffers is future work.
+
+### Spinning before sleeping
+
+Sleeping in `io_uring_enter` and being woken by a completion costs more than a
+whole round trip on a local socket. A bare io_uring ping-pong over a Unix
+socket measured 8.3 µs per round trip when it slept for each completion and
+4.0 µs when it polled the completion queue, against 6.3 µs for tokio's epoll.
+
+So `monocoque::rt::LocalRuntime::block_on` on the compio backend polls for
+completions for up to 20 µs, yielding the CPU between polls, before it
+sleeps. A 64 B REQ/REP round trip over IPC went from 8.4 µs to 6.4 µs, level
+with or ahead of tokio, and over TCP from 11.1 µs to 10.5 µs.
+
+- Spinning is off when the thread can run on one CPU only (affinity mask or
+  cgroup quota), where it would only delay the peer it waits for.
+- After eight spins in a row that find nothing, the runtime sleeps straight
+  away for the next 64 waits, so an idle socket does not keep a core busy.
+- `MONOCOQUE_SPIN_US` sets the budget in microseconds; `0` turns it off.
+- Code that runs on `#[compio::main]` or its own compio runtime instead of
+  `LocalRuntime` does not spin.
 
 ---
 

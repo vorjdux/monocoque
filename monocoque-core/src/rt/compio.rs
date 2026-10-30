@@ -3,6 +3,10 @@
 //! See [`super`](crate::rt) for the facade contract this implements.
 
 use std::future::Future;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::{Context, Poll, Wake, Waker};
+use std::time::{Duration, Instant};
 
 pub use compio::net::{TcpListener, TcpStream, ToSocketAddrsAsync as ToSocketAddrs};
 pub use compio::time::{sleep, timeout};
@@ -109,6 +113,136 @@ impl LocalRuntime {
 
     /// Run a future to completion on this runtime, blocking the thread.
     pub fn block_on<F: Future>(&self, fut: F) -> F::Output {
-        self.inner.block_on(fut)
+        let spin = spin_budget();
+        if spin.is_zero() {
+            return self.inner.block_on(fut);
+        }
+        let rt = &self.inner;
+        rt.enter(|| {
+            let flag = Arc::new(WokenFlag {
+                woken: AtomicBool::new(true),
+                driver: rt.waker(),
+            });
+            let waker = Waker::from(Arc::clone(&flag));
+            let mut cx = Context::from_waker(&waker);
+            let mut fut = std::pin::pin!(fut);
+            let mut backoff = SpinBackoff { misses: 0, skip: 0 };
+            loop {
+                if flag.woken.swap(false, Ordering::Acquire)
+                    && let Poll::Ready(out) = fut.as_mut().poll(&mut cx)
+                {
+                    rt.run();
+                    return out;
+                }
+                if rt.run() {
+                    rt.poll_with(Some(Duration::ZERO));
+                    continue;
+                }
+                if !backoff.should_spin() {
+                    rt.poll();
+                    continue;
+                }
+                // Nothing runnable. Reap completions without entering the
+                // kernel's wait for a while: sleeping in io_uring_enter and
+                // being woken costs more than a round trip on a local socket.
+                // Yielding lets a peer that shares this core run meanwhile.
+                let deadline = Instant::now() + spin;
+                loop {
+                    rt.poll_with(Some(Duration::ZERO));
+                    let more = rt.run();
+                    if more || flag.woken.load(Ordering::Acquire) {
+                        backoff.hit();
+                        break;
+                    }
+                    if Instant::now() >= deadline {
+                        backoff.miss();
+                        rt.poll();
+                        break;
+                    }
+                    std::thread::yield_now();
+                }
+            }
+        })
+    }
+}
+
+/// Default for how long [`LocalRuntime::block_on`] polls for completions
+/// before it sleeps. On a Unix socket REQ/REP round trip (64 B, two cores)
+/// 5 µs and 20 µs measured alike, 7.0 µs against 10.0 without spinning;
+/// 20 µs leaves room for a slower peer.
+const DEFAULT_SPIN: Duration = Duration::from_micros(20);
+
+/// The spin budget: `MONOCOQUE_SPIN_US` if set (0 disables), otherwise
+/// [`DEFAULT_SPIN`], or none when this thread may run on one CPU only, where
+/// spinning only delays the peer it waits for.
+fn spin_budget() -> Duration {
+    if let Some(us) = std::env::var("MONOCOQUE_SPIN_US")
+        .ok()
+        .and_then(|v| v.parse().ok())
+    {
+        return Duration::from_micros(us);
+    }
+    if single_cpu() {
+        Duration::ZERO
+    } else {
+        DEFAULT_SPIN
+    }
+}
+
+/// `true` when this thread has one CPU to run on. On Linux the count honours
+/// the affinity mask and the cgroup CPU quota.
+fn single_cpu() -> bool {
+    std::thread::available_parallelism().map_or(true, |n| n.get() <= 1)
+}
+
+/// Stops spinning while it keeps finding nothing (an idle socket, or a peer
+/// starved of CPU), and tries again after a while.
+struct SpinBackoff {
+    misses: u32,
+    skip: u32,
+}
+
+impl SpinBackoff {
+    /// Spins that find nothing, in a row, before spinning pauses.
+    const MAX_MISSES: u32 = 8;
+    /// Sleeps without spinning before trying again.
+    const PAUSE: u32 = 64;
+
+    fn should_spin(&mut self) -> bool {
+        if self.skip > 0 {
+            self.skip -= 1;
+            return false;
+        }
+        true
+    }
+
+    fn hit(&mut self) {
+        self.misses = 0;
+    }
+
+    fn miss(&mut self) {
+        self.misses += 1;
+        if self.misses >= Self::MAX_MISSES {
+            self.misses = 0;
+            self.skip = Self::PAUSE;
+        }
+    }
+}
+
+/// The waker of the future `block_on` drives: records that it needs polling,
+/// then wakes the driver in case the thread is asleep in it.
+struct WokenFlag {
+    woken: AtomicBool,
+    driver: Waker,
+}
+
+impl Wake for WokenFlag {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.woken.store(true, Ordering::Release);
+        self.driver.wake_by_ref();
     }
 }
