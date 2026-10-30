@@ -262,6 +262,29 @@ fn xpub_welcomes_each_subscriber() {
 }
 
 #[test]
+fn xpub_manual_applies_only_the_subscriptions_it_is_told() {
+    rt().block_on(async {
+        let mut xpub = XPubSocket::with_options(timeout_opts().with_xpub_manual(true));
+        let ep = xpub.bind("tcp://127.0.0.1:0").await.unwrap();
+        let mut sub = SubSocket::with_options(timeout_opts());
+        sub.connect(&ep).await.unwrap();
+        sub.subscribe(b"asked").await.unwrap();
+        // Reported, but not applied: nothing published reaches the peer.
+        let ev = xpub.recv_subscription().await.unwrap();
+        assert_eq!(&ev.prefix()[..], b"asked");
+        assert_eq!(xpub.send(Msg::from("asked.1")).await.unwrap(), 0);
+        // The application grants a different topic instead.
+        xpub.subscribe(b"granted").await.unwrap();
+        assert_eq!(xpub.send(Msg::from("asked.2")).await.unwrap(), 0);
+        assert_eq!(xpub.send(Msg::from("granted.1")).await.unwrap(), 1);
+        // SUB filters for itself, so it sees the granted message once it
+        // asks for that topic too.
+        sub.subscribe(b"granted").await.unwrap();
+        assert_eq!(sub.recv().await.unwrap(), [b"granted.1"]);
+    });
+}
+
+#[test]
 fn router_routes_a_connection_by_connect_routing_id() {
     rt().block_on(async {
         for ep in transports("connect-rid") {

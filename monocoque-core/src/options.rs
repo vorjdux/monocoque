@@ -207,8 +207,11 @@ pub struct SocketOptions {
 
     /// XPUB manual mode (`ZMQ_XPUB_MANUAL`)
     ///
-    /// - `false` (default): Automatic subscription management
-    /// - `true`: Manual subscription control via `send()`
+    /// - `false` (default): subscriptions from peers take effect as they
+    ///   arrive
+    /// - `true`: they are only reported; `XPubSocket::subscribe` and
+    ///   `unsubscribe` apply a prefix to the peer whose subscription message
+    ///   was received last
     pub xpub_manual: bool,
 
     /// XPUB welcome message (`ZMQ_XPUB_WELCOME_MSG`)

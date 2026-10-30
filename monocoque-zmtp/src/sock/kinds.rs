@@ -497,6 +497,10 @@ pub struct PubHooks {
     xpub: bool,
     verbose: bool,
     verbose_unsubs: bool,
+    /// `xpub_manual`: subscriptions are reported but applied only by
+    /// [`Socket::<XPub>::subscribe`], to the peer that sent the last one.
+    manual: bool,
+    last_peer: Option<PeerId>,
 }
 
 impl PubHooks {
@@ -506,6 +510,8 @@ impl PubHooks {
             xpub,
             verbose: options.xpub_verbose,
             verbose_unsubs: options.xsub_verbose_unsubs,
+            manual: xpub && options.xpub_manual,
+            last_peer: None,
         }
     }
 
@@ -540,6 +546,12 @@ impl PubHooks {
         // copy (an inline frame of at most 64 bytes is the only one copied).
         let frame = msg.frame_bytes(0)?;
         let kind = *frame.first()?;
+        if self.manual {
+            if kind <= 1 {
+                self.last_peer = Some(id);
+            }
+            return Some(msg);
+        }
         let prefix = frame.slice(1..);
         match kind {
             1 => {
@@ -563,6 +575,9 @@ impl PubHooks {
     }
 
     fn drop_peer(&mut self, id: PeerId) -> Vec<Bytes> {
+        if self.last_peer == Some(id) {
+            self.last_peer = None;
+        }
         self.index.remove_peer(id.as_u64())
     }
 }
@@ -671,6 +686,41 @@ impl Socket<XPub> {
     /// Receive and keep the next subscription message.
     pub async fn recv_owned(&mut self) -> Result<Msg> {
         self.recv_fair().await.map(MsgRef::take)
+    }
+
+    /// With `xpub_manual`, subscribe the peer whose subscription message was
+    /// received last to `prefix` (`ZMQ_SUBSCRIBE` on an XPUB). Fails with
+    /// `InvalidState` without `xpub_manual`, and when no peer that sent a
+    /// subscription message is still connected.
+    pub async fn subscribe(&mut self, prefix: impl AsRef<[u8]>) -> Result<()> {
+        self.manual_change(prefix.as_ref(), true)
+    }
+
+    /// With `xpub_manual`, drop `prefix` from the peer whose subscription
+    /// message was received last (`ZMQ_UNSUBSCRIBE` on an XPUB).
+    pub async fn unsubscribe(&mut self, prefix: impl AsRef<[u8]>) -> Result<()> {
+        self.manual_change(prefix.as_ref(), false)
+    }
+
+    fn manual_change(&mut self, prefix: &[u8], subscribe: bool) -> Result<()> {
+        let mut core = self.core.borrow_mut();
+        let hooks = &mut core.hooks_mut().0;
+        if !hooks.manual {
+            return Err(MonocoqueError::InvalidState(
+                "XPUB subscribe needs xpub_manual",
+            ));
+        }
+        let peer = hooks
+            .last_peer
+            .ok_or(MonocoqueError::InvalidState("no subscription received yet"))?;
+        if subscribe {
+            hooks
+                .index
+                .subscribe(peer.as_u64(), Bytes::copy_from_slice(prefix));
+        } else {
+            hooks.index.unsubscribe(peer.as_u64(), prefix);
+        }
+        Ok(())
     }
 
     /// Receive the next subscription change, decoded.

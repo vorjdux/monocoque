@@ -5,10 +5,8 @@
 //! Forwarding moves the [`Msg`] itself; a capture socket gets a refcounted
 //! clone, never a copy of the payload.
 
-use super::kinds::{
-    Dealer, Pair, Pub, Pull, Push, Rep, Req, Router, Sub, XPub, XSub,
-};
 use super::Socket;
+use super::kinds::{Dealer, Pair, Pub, Pull, Push, Rep, Req, Router, Sub, XPub, XSub};
 use monocoque_core::error::{MonocoqueError, Result};
 use monocoque_core::msg::Msg;
 use std::future::poll_fn;
@@ -259,8 +257,12 @@ where
         .await;
         front_first = !front_first;
         match ready {
-            Ready::Frontend => forward(frontend, backend, &mut capture, (&mut front, &mut back)).await?,
-            Ready::Backend => forward(backend, frontend, &mut capture, (&mut back, &mut front)).await?,
+            Ready::Frontend => {
+                forward(frontend, backend, &mut capture, (&mut front, &mut back)).await?
+            }
+            Ready::Backend => {
+                forward(backend, frontend, &mut capture, (&mut back, &mut front)).await?
+            }
             Ready::Control => {
                 let Some(ctl) = control.as_deref_mut() else {
                     continue;
