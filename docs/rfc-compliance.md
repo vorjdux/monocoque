@@ -95,7 +95,10 @@ peer's IP address in the Address field for TCP connections, and 200/300/400/500
 status codes.
 
 - The handlers use native `async fn`, so a ZAP handler may do I/O.
-- **Gap:** no per-address backoff after failed authentications.
+- **Beyond libzmq:** after two failed authentications in a row from one IP,
+  each new connection from it waits before its handshake starts, from 100 ms
+  doubling up to 10 s. A success clears the address, and one quiet for a
+  minute is forgotten. libzmq has no such delay.
 
 ## RFC 28: REQ/REP
 

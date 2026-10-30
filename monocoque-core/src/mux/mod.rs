@@ -21,6 +21,7 @@
 //! the borrow; never hold it across an `.await`. Every operation here is a
 //! poll function, so the rule holds by construction.
 
+mod auth_backoff;
 pub mod children;
 mod driver;
 pub mod inproc;
@@ -38,6 +39,7 @@ use crate::error::{MonocoqueError, Result};
 use crate::monitor::{SocketEvent, SocketEventSender};
 use crate::msg::{Metadata, Msg};
 use crate::options::SocketOptions;
+use crate::rt::PeerAddress;
 use crate::transport::{Listener, Stream};
 use bytes::{Bytes, BytesMut};
 use peer::{Outbound, PeerState};
@@ -391,6 +393,7 @@ pub struct SocketCore<P: Protocol, H: Hooks> {
     wakeups: Arc<Wakeups>,
     events: Rc<EventQueue>,
     handshaken: Rc<RefCell<VecDeque<Handshaken<P>>>>,
+    auth_backoff: auth_backoff::AuthBackoff,
     peers: Vec<Option<PeerEntry<P::Codec>>>,
     generations: Vec<u32>,
     free_peers: Vec<u32>,
@@ -426,6 +429,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             wakeups,
             events: Rc::default(),
             handshaken: Rc::default(),
+            auth_backoff: auth_backoff::AuthBackoff::default(),
             peers: Vec::new(),
             generations: Vec::new(),
             free_peers: Vec::new(),
@@ -607,9 +611,18 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         }
         let cfg = Rc::clone(&self.cfg);
         let options = Rc::clone(&self.options);
+        let delay = match origin {
+            Origin::Listener(_) => self
+                .auth_backoff
+                .delay(&stream.zap_address(), Instant::now()),
+            _ => Duration::ZERO,
+        };
         let stream = Rc::new(stream);
         let done = Rc::clone(&self.handshaken);
         self.children.spawn(async move {
+            if !delay.is_zero() {
+                crate::rt::sleep(delay).await;
+            }
             let result = P::handshake(cfg, options, Rc::clone(&stream), outgoing).await;
             done.borrow_mut().push_back(Handshaken {
                 origin,
@@ -633,6 +646,15 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
                 .map(|b| b.endpoint.clone()),
             Origin::Attached => None,
         };
+        if let Origin::Listener(_) = h.origin {
+            match &h.result {
+                Ok(_) => self.auth_backoff.succeeded(&h.stream.zap_address()),
+                Err(MonocoqueError::AuthenticationFailed) => self
+                    .auth_backoff
+                    .failed(&h.stream.zap_address(), Instant::now()),
+                Err(_) => {}
+            }
+        }
         match h.result {
             Ok((codec, mut info)) if !self.closing => {
                 info.endpoint.clone_from(&endpoint);

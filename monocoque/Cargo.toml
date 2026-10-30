@@ -433,3 +433,7 @@ draft = ["zmq", "monocoque-zmtp/draft"]
 # Future protocols
 # mqtt = ["dep:monocoque-mqtt"]
 # amqp = ["dep:monocoque-amqp"]
+
+[[test]]
+name = "auth_backoff"
+required-features = ["zmq"]
