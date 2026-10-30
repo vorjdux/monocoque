@@ -272,14 +272,24 @@ jobs:
           toolchain: nightly
           components: miri
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
-      # Miri proves the owned-buffer unsafe in io.rs (set_buf_init /
-      # take_read_buffer) and the buffer/codec byte bookkeeping are sound. The
-      # IO-dependent unsafe (tcp from_raw_fd, the inproc_stream cross-await
-      # pointer) needs a real runtime/syscalls and cannot run under Miri.
-      - name: Miri (core io + buffer)
-        run: "cargo miri test -p monocoque-rs-core --lib -- io:: buffer::"
-      - name: Miri (zmtp codec)
-        run: "cargo miri test -p monocoque-rs-zmtp --lib -- codec::"
+      # Miri checks the owned-buffer unsafe in io.rs (fill_read's set_len), the
+      # message type, the same-thread queue and the ZMTP codec's buffer
+      # bookkeeping. The other unsafe (tcp.rs, raw fds) needs real syscalls and
+      # cannot run under Miri.
+      #
+      # Tree Borrows, not the default Stacked Borrows: compio-buf's
+      # `IoBufMut::as_uninit` for `BytesMut` widens a pointer taken from the
+      # initialized slice to the whole capacity, which Stacked Borrows rejects
+      # and Tree Borrows accepts. That code is upstream, on every read through
+      # the tokio and smol backends.
+      - name: Miri (core io, msg, localq)
+        env:
+          MIRIFLAGS: -Zmiri-tree-borrows
+        run: "cargo miri test -p monocoque-rs-core --lib -- io:: msg:: localq::"
+      - name: Miri (zmtp wire codec)
+        env:
+          MIRIFLAGS: -Zmiri-tree-borrows
+        run: "cargo miri test -p monocoque-rs-zmtp --lib -- wire::"
 
   loom:
     name: Loom (publisher atomic orderings)
