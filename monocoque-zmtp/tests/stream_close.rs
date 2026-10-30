@@ -81,3 +81,24 @@ fn close_after_send_writes_everything_first() {
         }
     });
 }
+
+#[test]
+fn messages_and_notifications_carry_the_peer_address() {
+    LocalRuntime::new().unwrap().block_on(async {
+        let mut s = StreamSocket::with_options(
+            SocketOptions::default().with_recv_timeout(Duration::from_secs(5)),
+        );
+        let ep = s.bind("tcp://127.0.0.1:0").await.unwrap();
+        let addr = ep.trim_start_matches("tcp://").to_string();
+        let client = std::thread::spawn(move || {
+            let mut c = std::net::TcpStream::connect(addr).unwrap();
+            c.write_all(b"hello").unwrap();
+        });
+        // Connect, data, disconnect: every one says who it is about.
+        for _ in 0..3 {
+            let m = s.recv().await.unwrap();
+            assert_eq!(m.gets("Peer-Address"), Some("127.0.0.1"));
+        }
+        client.join().unwrap();
+    });
+}

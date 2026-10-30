@@ -141,7 +141,8 @@ closes that connection. Identities are 5 bytes: `0x00` and a 32-bit counter.
 - Data a peer sent before closing is delivered before its disconnect
   notification, and a close requested with `[identity, ""]` writes everything
   queued first.
-- **Gap:** STREAM messages carry no connection metadata.
+- Data and notifications carry the connection's `Peer-Address` metadata, as
+  in libzmq.
 
 ## Transports
 

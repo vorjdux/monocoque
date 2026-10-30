@@ -10,7 +10,7 @@
 
 use bytes::{Bytes, BytesMut};
 use monocoque_core::error::{MonocoqueError, Result};
-use monocoque_core::msg::{FrameRef, Msg, MsgRef};
+use monocoque_core::msg::{FrameRef, Metadata, Msg, MsgRef};
 use monocoque_core::mux::{
     Codec, Hooks, OutQueue, PeerId, PeerInfo, Protocol, SendTo, Shared, SocketCore, op,
 };
@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::task::Poll;
 
 /// Raw byte streams: no handshake, no framing.
@@ -73,6 +74,10 @@ impl Protocol for Raw {
         _outgoing: bool,
     ) -> Result<(RawCodec, PeerInfo)> {
         let address = stream.zap_address();
+        let mut metadata = Metadata::new();
+        if !address.is_empty() {
+            metadata.insert("Peer-Address", Bytes::from(address.clone()));
+        }
         Ok((
             RawCodec {
                 vectored_threshold: options.vectored_write_threshold,
@@ -80,6 +85,7 @@ impl Protocol for Raw {
             PeerInfo {
                 socket_type: "STREAM",
                 address,
+                metadata: Arc::new(metadata),
                 ..PeerInfo::default()
             },
         ))
@@ -136,71 +142,105 @@ fn identity_key(identity: &[u8]) -> Option<u32> {
     }
 }
 
+/// What STREAM knows of one connection.
+struct Known {
+    identity: Bytes,
+    /// Its metadata (`Peer-Address`), for messages and notifications alike.
+    meta: Arc<Metadata>,
+}
+
+/// A message waiting in front of the core's queues, with its connection.
+struct Pending {
+    msg: Msg,
+    peer: PeerId,
+    meta: Arc<Metadata>,
+}
+
 /// STREAM's identity table and its pending connect/disconnect notifications.
 pub struct StreamHooks {
     by_identity: IntMap<u32, PeerId>,
-    identity_of: IntMap<PeerId, Bytes>,
+    known: IntMap<PeerId, Known>,
     next: u32,
     notify: bool,
-    notifications: VecDeque<Msg>,
+    notifications: VecDeque<Pending>,
     /// The peer freed most recently. The core frees a departed peer as it
     /// hands over that peer's last message, before this socket addresses it.
-    retired: Option<(PeerId, Bytes)>,
+    retired: Option<(PeerId, Known)>,
 }
 
 impl StreamHooks {
-    fn notification(identity: &Bytes) -> Msg {
-        Msg::from([identity.clone(), Bytes::new()])
+    fn notify(&mut self, peer: PeerId, known: &Known) {
+        if self.notify {
+            self.notifications.push_back(Pending {
+                msg: Msg::from([known.identity.clone(), Bytes::new()]),
+                peer,
+                meta: Arc::clone(&known.meta),
+            });
+        }
     }
 
-    /// The identity `id` is addressed by, including a peer freed as its last
-    /// message was taken.
-    fn identity(&self, id: PeerId) -> Option<&Bytes> {
-        self.identity_of.get(&id).or_else(|| match &self.retired {
-            Some((r, identity)) if *r == id => Some(identity),
+    /// What is known of `id`, including a peer freed as its last message was
+    /// taken.
+    fn known(&self, id: PeerId) -> Option<&Known> {
+        self.known.get(&id).or_else(|| match &self.retired {
+            Some((r, known)) if *r == id => Some(known),
             _ => None,
         })
     }
 
     /// `true` until `id` goes away, while its identity is still routable.
     fn is_live(&self, id: PeerId) -> bool {
-        self.identity_of
+        self.known
             .get(&id)
-            .and_then(|i| identity_key(i))
+            .and_then(|k| identity_key(&k.identity))
             .is_some_and(|key| self.by_identity.get(&key) == Some(&id))
     }
 }
 
 impl Hooks for StreamHooks {
-    fn on_peer_up(&mut self, id: PeerId, _info: &PeerInfo) -> bool {
+    fn on_peer_up(&mut self, id: PeerId, info: &PeerInfo) -> bool {
         self.next = self.next.wrapping_add(1);
         let mut raw = [0u8; 5];
         raw[1..].copy_from_slice(&self.next.to_be_bytes());
-        let identity = Bytes::copy_from_slice(&raw);
-        if self.notify {
-            self.notifications.push_back(Self::notification(&identity));
-        }
+        let known = Known {
+            identity: Bytes::copy_from_slice(&raw),
+            meta: Arc::clone(&info.metadata),
+        };
+        self.notify(id, &known);
         self.by_identity.insert(self.next, id);
-        self.identity_of.insert(id, identity);
+        self.known.insert(id, known);
         true
     }
 
     /// Sends to the peer fail from here on, but the identity stays known so
     /// the data it sent before closing is still delivered addressed.
     fn on_peer_down(&mut self, id: PeerId, _info: &PeerInfo) {
-        if let Some(key) = self.identity_of.get(&id).and_then(|i| identity_key(i)) {
+        if let Some(key) = self.known.get(&id).and_then(|k| identity_key(&k.identity)) {
             self.by_identity.remove(&key);
         }
     }
 
     /// The peer's last data has been received: report the disconnect after it.
     fn on_peer_freed(&mut self, id: PeerId) {
-        if let Some(identity) = self.identity_of.remove(&id) {
-            if self.notify {
-                self.notifications.push_back(Self::notification(&identity));
-            }
-            self.retired = Some((id, identity));
+        if let Some(known) = self.known.remove(&id) {
+            self.notify(id, &known);
+            self.retired = Some((id, known));
         }
+    }
+}
+
+/// The receive slot and its connection, borrowed for one receive.
+struct Slot<'a> {
+    msg: &'a mut Msg,
+    peer: &'a mut Option<PeerId>,
+    meta: &'a mut Option<Arc<Metadata>>,
+}
+
+impl Slot<'_> {
+    fn fill(&mut self, p: Pending) {
+        *self.msg = p.msg;
+        *self.peer = Some(p.peer);
+        *self.meta = Some(p.meta);
     }
 }
 
@@ -208,6 +248,10 @@ impl Hooks for StreamHooks {
 pub struct StreamSocket {
     pub(crate) core: Shared<Raw, StreamHooks>,
     slot: Msg,
+    /// The connection the slot's message came from, and its metadata. Only a
+    /// change of connection touches the refcount.
+    slot_peer: Option<PeerId>,
+    slot_meta: Option<Arc<Metadata>>,
 }
 
 /// `true` if a connect or disconnect notification is waiting to be received.
@@ -233,7 +277,7 @@ impl StreamSocket {
     pub fn with_options(options: SocketOptions) -> Self {
         let hooks = StreamHooks {
             by_identity: HashMap::default(),
-            identity_of: HashMap::default(),
+            known: HashMap::default(),
             next: rand::random(),
             notify: options.stream_notify,
             notifications: VecDeque::new(),
@@ -242,6 +286,8 @@ impl StreamSocket {
         Self {
             core: SocketCore::new((), options, hooks),
             slot: Msg::new(),
+            slot_peer: None,
+            slot_meta: None,
         }
     }
 
@@ -267,33 +313,48 @@ impl StreamSocket {
     /// disconnect.
     pub async fn recv(&mut self) -> Result<MsgRef<'_>> {
         let timeout = self.core.borrow().options().recv_timeout;
-        let slot = &mut self.slot;
+        let mut out = Slot {
+            msg: &mut self.slot,
+            peer: &mut self.slot_peer,
+            meta: &mut self.slot_meta,
+        };
         super::with_timeout(
             op(&self.core, move |c, cx| {
                 loop {
                     c.progress();
                     if let Some(n) = c.hooks_mut().notifications.pop_front() {
-                        *slot = n;
+                        out.fill(n);
                         return Poll::Ready(());
                     }
                     match c.poll_recv(cx) {
-                        Poll::Ready((peer, data)) => {
+                        Poll::Ready((peer, mut data)) => {
                             // A connect raised while that receive ran comes
                             // first, so it is reported before its data. A
                             // disconnect raised by taking a departed peer's last
                             // message stays queued behind it.
-                            if let Some(identity) = c.hooks().identity(peer).cloned() {
-                                let mut m = data;
-                                m.push_front(identity);
-                                let live = c.hooks().is_live(peer);
-                                if live && let Some(n) = c.hooks_mut().notifications.pop_front() {
-                                    c.hooks_mut().notifications.push_back(m);
-                                    *slot = n;
-                                } else {
-                                    *slot = m;
+                            let hooks = c.hooks_mut();
+                            let Some(known) = hooks.known(peer) else {
+                                continue;
+                            };
+                            data.push_front(known.identity.clone());
+                            if hooks.is_live(peer)
+                                && let Some(n) = hooks.notifications.pop_front()
+                            {
+                                let meta = Arc::clone(&hooks.known[&peer].meta);
+                                hooks.notifications.push_back(Pending {
+                                    msg: data,
+                                    peer,
+                                    meta,
+                                });
+                                out.fill(n);
+                            } else {
+                                if *out.peer != Some(peer) {
+                                    *out.peer = Some(peer);
+                                    *out.meta = hooks.known(peer).map(|k| Arc::clone(&k.meta));
                                 }
-                                return Poll::Ready(());
+                                *out.msg = data;
                             }
+                            return Poll::Ready(());
                         }
                         Poll::Pending => {
                             if c.hooks().notifications.is_empty() {
@@ -306,7 +367,10 @@ impl StreamSocket {
             timeout,
         )
         .await?;
-        Ok(MsgRef::new(&mut self.slot))
+        Ok(MsgRef::with_metadata(
+            &mut self.slot,
+            self.slot_meta.as_deref(),
+        ))
     }
 
     /// Receive and keep the next message.
