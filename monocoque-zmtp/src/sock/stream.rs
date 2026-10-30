@@ -19,7 +19,7 @@ use monocoque_core::rt::PeerAddress;
 use monocoque_core::transport::Stream;
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::collections::hash_map::RandomState;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::rc::Rc;
 use std::task::Poll;
 
@@ -100,10 +100,46 @@ impl Protocol for Raw {
     }
 }
 
+/// Hashes the integer keys of STREAM's tables with one multiply. The keys
+/// are chosen by this socket, never by a peer, so SipHash buys nothing.
+#[derive(Default)]
+struct IntHasher(u64);
+
+impl Hasher for IntHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.write_u64(u64::from(b));
+        }
+    }
+
+    fn write_u32(&mut self, n: u32) {
+        self.write_u64(u64::from(n));
+    }
+
+    fn write_u64(&mut self, n: u64) {
+        self.0 = (self.0.rotate_left(5) ^ n).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    }
+}
+
+type IntMap<K, V> = HashMap<K, V, BuildHasherDefault<IntHasher>>;
+
+/// The counter inside a STREAM identity, `None` for bytes this socket never
+/// handed out.
+fn identity_key(identity: &[u8]) -> Option<u32> {
+    match identity {
+        [0, a, b, c, d] => Some(u32::from_be_bytes([*a, *b, *c, *d])),
+        _ => None,
+    }
+}
+
 /// STREAM's identity table and its pending connect/disconnect notifications.
 pub struct StreamHooks {
-    by_identity: HashMap<Bytes, PeerId, RandomState>,
-    identity_of: HashMap<PeerId, Bytes, RandomState>,
+    by_identity: IntMap<u32, PeerId>,
+    identity_of: IntMap<PeerId, Bytes>,
     next: u32,
     notify: bool,
     notifications: VecDeque<Msg>,
@@ -124,14 +160,16 @@ impl Hooks for StreamHooks {
         if self.notify {
             self.notifications.push_back(Self::notification(&identity));
         }
-        self.by_identity.insert(identity.clone(), id);
+        self.by_identity.insert(self.next, id);
         self.identity_of.insert(id, identity);
         true
     }
 
     fn on_peer_down(&mut self, id: PeerId, _info: &PeerInfo) {
         if let Some(identity) = self.identity_of.remove(&id) {
-            self.by_identity.remove(&identity);
+            if let Some(key) = identity_key(&identity) {
+                self.by_identity.remove(&key);
+            }
             if self.notify {
                 self.notifications.push_back(Self::notification(&identity));
             }
@@ -250,13 +288,8 @@ impl StreamSocket {
     pub async fn send(&mut self, msg: impl Into<Msg>) -> Result<()> {
         let mut msg = msg.into();
         let identity = msg.pop_front().ok_or(MonocoqueError::InvalidRoutingId)?;
-        let peer = self
-            .core
-            .borrow()
-            .hooks()
-            .by_identity
-            .get(&identity)
-            .copied()
+        let peer = identity_key(&identity)
+            .and_then(|key| self.core.borrow().hooks().by_identity.get(&key).copied())
             .ok_or(MonocoqueError::HostUnreachable)?;
         if msg.byte_len() == 0 {
             self.core.borrow_mut().close_peer(peer);
