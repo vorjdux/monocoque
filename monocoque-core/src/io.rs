@@ -118,10 +118,10 @@ mod tests {
     #[test]
     fn fill_read_exposes_exactly_the_bytes_read() {
         let buf = BytesMut::with_capacity(32);
-        let BufResult(res, buf) = futures::executor::block_on(fill_read(
-            buf,
-            async |s: &mut [MaybeUninit<u8>]| Ok(write_cdef(s)),
-        ));
+        let BufResult(res, buf) =
+            futures::executor::block_on(fill_read(buf, async |s: &mut [MaybeUninit<u8>]| {
+                Ok(write_cdef(s))
+            }));
         assert_eq!(res.unwrap(), 4);
         assert_eq!(&buf[..], b"cdef");
     }
@@ -146,10 +146,10 @@ mod tests {
     fn fill_read_leaves_the_buffer_alone_on_error() {
         let mut buf = BytesMut::with_capacity(8);
         buf.extend_from_slice(b"x");
-        let BufResult(res, buf) = futures::executor::block_on(fill_read(
-            buf,
-            async |_: &mut [MaybeUninit<u8>]| Err(io::Error::other("no")),
-        ));
+        let BufResult(res, buf) =
+            futures::executor::block_on(fill_read(buf, async |_: &mut [MaybeUninit<u8>]| {
+                Err(io::Error::other("no"))
+            }));
         assert!(res.is_err());
         assert_eq!(&buf[..], b"x");
     }

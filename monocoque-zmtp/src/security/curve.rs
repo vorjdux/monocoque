@@ -549,6 +549,27 @@ impl CurveMessageCipher {
         }
     }
 
+    /// A matched (client, server) pair over fixed transient keys, in the
+    /// state a completed handshake leaves them in. For the instruction-count
+    /// bench, which measures framing and crypto without a handshake; not a
+    /// way to set up a real connection.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn bench_pair() -> (Self, Self) {
+        let client = CurveSecretKey::from_bytes([1; CURVE_KEY_SIZE]);
+        let server = CurveSecretKey::from_bytes([2; CURVE_KEY_SIZE]);
+        let to_server =
+            CurveBox::from_transient_keys(server.public_key().as_bytes(), &client.to_raw_bytes());
+        let to_client =
+            CurveBox::from_transient_keys(client.public_key().as_bytes(), &server.to_raw_bytes());
+        // HELLO and INITIATE used the client's nonces 1 and 2, READY the
+        // server's 1, as in a real handshake.
+        (
+            Self::new_client(to_server, 3, 2),
+            Self::new_server(to_client, 2, 3),
+        )
+    }
+
     /// Returns true if `bytes` starts with the CURVE MESSAGE command name.
     pub fn is_curve_message(bytes: &[u8]) -> bool {
         bytes.starts_with(CURVE_MESSAGE)
@@ -2073,6 +2094,23 @@ mod tests {
 
     async fn test_send_zmtp_error_retries_short_body_writes_impl() {
         assert_zmtp_error_survives_partial_writes([9, 2]).await;
+    }
+
+    #[test]
+    fn bench_pair_round_trips_both_ways() {
+        let (mut client, mut server) = CurveMessageCipher::bench_pair();
+        for i in 0..3u8 {
+            let up = client.encrypt_frame(&[i; 40], i == 1).unwrap();
+            assert_eq!(
+                server.decrypt_frame(&up).unwrap(),
+                (i == 1, Bytes::from(vec![i; 40]))
+            );
+            let down = server.encrypt_frame(&[i; 8], false).unwrap();
+            assert_eq!(
+                client.decrypt_frame(&down).unwrap(),
+                (false, Bytes::from(vec![i; 8]))
+            );
+        }
     }
 
     #[test]

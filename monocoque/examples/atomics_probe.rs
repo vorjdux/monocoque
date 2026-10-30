@@ -17,7 +17,9 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mode = args[1].clone();
     let n: usize = args[2].parse().expect("n is a number");
-    let take: usize = args.get(3).map_or(n, |s| s.parse().expect("take is a number"));
+    let take: usize = args
+        .get(3)
+        .map_or(n, |s| s.parse().expect("take is a number"));
     monocoque::rt::LocalRuntime::new()
         .unwrap()
         .block_on(async move {
