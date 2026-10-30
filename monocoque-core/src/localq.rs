@@ -149,6 +149,17 @@ impl<T> LocalSender<T> {
         Poll::Ready(true)
     }
 
+    /// Wait until the receiver has taken everything queued (or is gone).
+    pub fn poll_empty(&self, cx: &mut Context<'_>) -> Poll<()> {
+        let mut inner = self.inner.borrow_mut();
+        if inner.buf.is_empty() || !inner.receiver_alive {
+            return Poll::Ready(());
+        }
+        // Every take wakes the sender, so this is re-checked as it drains.
+        inner.send_waker = Some(cx.waker().clone());
+        Poll::Pending
+    }
+
     /// Enqueue `value`, waiting while the queue is at its high-water mark.
     pub async fn send(&self, value: T) -> Result<(), T> {
         if !poll_fn(|cx| self.poll_ready(cx)).await {

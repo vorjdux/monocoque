@@ -1613,6 +1613,11 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             if drained {
                 return Poll::Ready(());
             }
+            // An inproc peer on another thread drains with no event here, so
+            // its link has to be asked to wake this flush.
+            for e in self.peers.iter().flatten().filter(|e| !e.closed) {
+                e.state.borrow().watch_drained(cx);
+            }
             if self.park(cx) {
                 return Poll::Pending;
             }

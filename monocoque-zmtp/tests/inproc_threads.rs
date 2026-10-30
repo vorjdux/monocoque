@@ -106,3 +106,70 @@ fn traffic_both_ways_across_threads_never_stalls() {
     a.join().unwrap();
     b.join().unwrap();
 }
+
+/// `flush` waits for an inproc peer to take what was queued. With the peer on
+/// another thread nothing on the sender's side signals that, so the link has
+/// to wake the flush itself; a missing wakeup parks the sender for good.
+#[test]
+fn flush_completes_while_a_peer_on_another_thread_drains() {
+    for coalesce in [false, true] {
+        let name = format!("inproc://threads-flush-{coalesce}");
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let bind = name.clone();
+        let pull = thread::spawn(move || {
+            LocalRuntime::new().unwrap().block_on(async move {
+                let mut pull = PullSocket::with_options(opts());
+                pull.bind(&bind).await.unwrap();
+                ready_tx.send(()).unwrap();
+                for i in 0..20_000 {
+                    pull.recv()
+                        .await
+                        .unwrap_or_else(|e| panic!("coalesce={coalesce}: stalled at {i}: {e}"));
+                }
+            });
+        });
+        ready_rx.recv().unwrap();
+        LocalRuntime::new().unwrap().block_on(async move {
+            let mut push = PushSocket::with_options(opts().with_write_coalescing(coalesce));
+            push.connect(&name).await.unwrap();
+            let msg = Msg::from(vec![1u8; 64]);
+            for i in 1..=20_000u64 {
+                push.send(msg.clone()).await.unwrap();
+                if i % 64 == 0 {
+                    push.flush().await.unwrap();
+                }
+            }
+            push.close().await.unwrap();
+        });
+        pull.join().unwrap();
+    }
+}
+
+/// The same on one thread: the receiver only runs while the flush waits, and
+/// each take must wake the flush to look again.
+#[test]
+fn flush_completes_while_a_peer_on_the_same_thread_drains() {
+    LocalRuntime::new().unwrap().block_on(async {
+        let mut pull = PullSocket::with_options(opts());
+        pull.bind("inproc://threads-flush-local").await.unwrap();
+        let mut push = PushSocket::with_options(opts());
+        push.connect("inproc://threads-flush-local").await.unwrap();
+        let msg = Msg::from(vec![1u8; 64]);
+        let send = async {
+            for i in 1..=20_000u64 {
+                push.send(msg.clone()).await.unwrap();
+                if i % 64 == 0 {
+                    push.flush().await.unwrap();
+                }
+            }
+        };
+        let recv = async {
+            for i in 0..20_000 {
+                pull.recv()
+                    .await
+                    .unwrap_or_else(|e| panic!("stalled at {i}: {e}"));
+            }
+        };
+        futures::join!(send, recv);
+    });
+}

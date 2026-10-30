@@ -96,6 +96,17 @@ impl RemoteTx {
             cx.waker().wake_by_ref();
         }
     }
+
+    /// Have the receiver wake `cx` when it next takes a message, for a sender
+    /// waiting for the channel to drain. Wakes it right away if it already
+    /// has.
+    pub fn watch_drained(&self, cx: &mut Context<'_>) {
+        self.room.waker.register(cx.waker());
+        self.room.waiting.store(true, Ordering::SeqCst);
+        if self.tx.is_disconnected() || self.tx.is_empty() {
+            cx.waker().wake_by_ref();
+        }
+    }
 }
 
 impl RemoteRx {

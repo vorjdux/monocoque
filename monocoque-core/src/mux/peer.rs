@@ -368,6 +368,18 @@ impl<C: Codec> PeerState<C> {
         }
     }
 
+    /// Arrange for `cx` to be woken as an inproc peer drains what was queued
+    /// toward it. A wire peer's writer wakes the socket itself.
+    pub(crate) fn watch_drained(&self, cx: &mut Context<'_>) {
+        match &self.outbound {
+            Outbound::Local(tx) => {
+                let _ = tx.poll_empty(cx);
+            }
+            Outbound::Remote(tx) => tx.watch_drained(cx),
+            Outbound::Wire { .. } => {}
+        }
+    }
+
     /// Writer side: take the next job, or park until there is one.
     fn poll_job(
         &mut self,
