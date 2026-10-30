@@ -75,9 +75,8 @@ pub async fn join<T>(handle: JoinHandle<T>) -> T {
 
 /// A self-contained runtime owned by a single thread.
 ///
-/// Used by worker threads that drive their own event loop independently of
-/// the caller's runtime (for example the publisher's fan-out workers). A
-/// current-thread tokio runtime matches the single-threaded compio one and
+/// For a thread that drives its own event loop, such as a test or a helper
+/// thread that runs a socket outside the caller's runtime. A current-thread tokio runtime matches the single-threaded compio one and
 /// lets `spawn`/`spawn_detached` run within `block_on`.
 pub struct LocalRuntime {
     inner: tokio::runtime::Runtime,
@@ -110,7 +109,7 @@ impl LocalRuntime {
 /// Mirrors compio's owned-buffer read contract: bytes land in the buffer's
 /// backing memory (no intermediate copy) and the count read is reported back
 /// through `set_buf_init`. `ReadBuf::uninit` keeps this sound over the read
-/// slab's spare capacity, which is not yet initialized.
+/// buffer's spare capacity, which is not yet initialized.
 async fn read_into<R, B>(reader: &mut R, buf: B) -> BufResult<usize, B>
 where
     R: tokio::io::AsyncRead + Unpin,
@@ -319,9 +318,8 @@ impl TcpStream {
 
     /// Adopt a `std::net::TcpStream`, attaching it to the current runtime.
     ///
-    /// Mirrors compio's `TcpStream::from_std`; used to re-attach a handed-off
-    /// fd to a worker's runtime (see the publisher fan-out). tokio requires the
-    /// stream to be non-blocking.
+    /// Mirrors compio's `TcpStream::from_std`. tokio requires the stream to be
+    /// non-blocking, so this sets it.
     pub fn from_std(stream: std::net::TcpStream) -> io::Result<Self> {
         stream.set_nonblocking(true)?;
         Ok(Self {

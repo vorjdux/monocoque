@@ -13,7 +13,7 @@
 //! # Run
 //!
 //! ```sh
-//! cargo run --example inproc_demo
+//! cargo run --example inproc_demo --features zmq
 //! ```
 
 use bytes::Bytes;

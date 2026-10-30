@@ -292,7 +292,7 @@ jobs:
         run: "cargo miri test -p monocoque-rs-zmtp --lib -- wire::"
 
   loom:
-    name: Loom (publisher atomic orderings)
+    name: Loom (cross-thread wakeup protocols)
     env:
       RUSTUP_TOOLCHAIN: stable
     runs-on: ubuntu-latest
@@ -332,7 +332,7 @@ jobs:
         run: |
           set -euo pipefail
           for t in fuzz_decoder fuzz_frame_codec fuzz_security_plain \
-                   fuzz_subscription_trie fuzz_curve_handshake \
+                   fuzz_subscription_trie fuzz_curve_handshake fuzz_curve_decode \
                    fuzz_greeting fuzz_command fuzz_zap_request; do
             echo "::group::$t"
             cargo fuzz run --fuzz-dir monocoque-fuzz "$t" -- \
@@ -357,7 +357,7 @@ jobs:
           components: rust-src
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
       # ThreadSanitizer over the core crate's thread/channel handoffs
-      # (byte-backpressure Condvar, flume monitor/hub channels). Run on the
+      # (flume monitor and inproc channels). Run on the
       # tokio backend because TSan cannot instrument compio's io_uring path.
       - name: cargo test under ThreadSanitizer
         run: >

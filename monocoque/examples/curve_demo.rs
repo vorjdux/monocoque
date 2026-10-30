@@ -13,22 +13,22 @@
 //!
 //! Terminal 1 (generate keys):
 //! ```bash
-//! cargo run --example curve_demo keygen
+//! cargo run --example curve_demo --features zmq keygen
 //! ```
 //!
 //! Terminal 2 (server with generated keys):
 //! ```bash
-//! cargo run --example curve_demo server <server_secret_key_hex>
+//! cargo run --example curve_demo --features zmq server <server_secret_key_hex>
 //! ```
 //!
 //! Terminal 3 (client with server's public key):
 //! ```bash
-//! cargo run --example curve_demo client <server_public_key_hex>
+//! cargo run --example curve_demo --features zmq client <server_public_key_hex>
 //! ```
 //!
 //! Or run both ends in one process:
 //! ```bash
-//! cargo run --example curve_demo demo
+//! cargo run --example curve_demo --features zmq demo
 //! ```
 
 use monocoque::rt::{self, LocalRuntime};
@@ -156,8 +156,8 @@ fn generate_keys() {
     info!("Usage:");
     info!("   1. Save server secret key securely");
     info!("   2. Share server PUBLIC key with clients");
-    info!("   3. Run server: cargo run --example curve_demo server <server_secret>");
-    info!("   4. Run client: cargo run --example curve_demo client <server_public>");
+    info!("   3. Run server: cargo run --example curve_demo --features zmq server <server_secret>");
+    info!("   4. Run client: cargo run --example curve_demo --features zmq client <server_public>");
 }
 
 async fn bind_server(secret_array: [u8; CURVE_KEY_SIZE]) -> RepSocket {

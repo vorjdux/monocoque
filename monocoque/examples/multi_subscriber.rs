@@ -1,7 +1,10 @@
-/// Multi-subscriber PUB/SUB example demonstrating:
-/// - Multiple SUB sockets connecting to a single PUB socket
-/// - Topic-based filtering per subscriber
-/// - High-performance broadcast with minimal overhead
+//! Multi-subscriber PUB/SUB example demonstrating:
+//! - Multiple SUB sockets connecting to a single PUB socket
+//! - Topic-based filtering per subscriber
+//! - High-performance broadcast with minimal overhead
+//!
+//! Run with: `cargo run --example multi_subscriber --features zmq`
+
 use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::prelude::{Bytes, MonocoqueError, Msg, PubSocket, SocketOptions, SubSocket};
 use std::time::Duration;

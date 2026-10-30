@@ -102,8 +102,7 @@ thread_local! {
 /// Handle to a spawned task.
 ///
 /// Unlike compio and tokio, dropping a smol `Task` **cancels** it. All call
-/// sites either detach explicitly ([`spawn_detached`]) or await via [`join`];
-/// the one place that stores handles (`PullFanIn`) wants cancel-on-drop.
+/// sites either detach explicitly ([`spawn_detached`]) or await via [`join`].
 pub type JoinHandle<T> = smol::Task<T>;
 
 /// Spawn a task on the current thread's executor and return its handle.
@@ -243,9 +242,8 @@ impl TcpStream {
 
     /// Adopt a `std::net::TcpStream`, attaching it to the async reactor.
     ///
-    /// Mirrors compio's `TcpStream::from_std`; used to re-attach a handed-off fd
-    /// to a worker's runtime (see the publisher fan-out). `Async::new` puts the
-    /// stream into non-blocking mode.
+    /// Mirrors compio's `TcpStream::from_std`. `Async::new` puts the stream
+    /// into non-blocking mode.
     pub fn from_std(stream: std::net::TcpStream) -> io::Result<Self> {
         Ok(Self {
             inner: Arc::new(Async::new(stream)?),

@@ -61,7 +61,8 @@ fn monocoque_latency(c: &mut Criterion, name: &str, endpoint: fn() -> String) {
     group.measurement_time(Duration::from_secs(10));
     group.sample_size(100);
 
-    // Single runtime reused across all iterations to avoid io_uring resource exhaustion.
+    // One runtime reused across all iterations: creating a runtime per
+    // iteration would time its setup (an io_uring ring on compio) too.
     let rt = monocoque::rt::LocalRuntime::new().unwrap();
 
     for &size in MESSAGE_SIZES {

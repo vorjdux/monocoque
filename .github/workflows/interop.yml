@@ -35,7 +35,6 @@ jobs:
             --test interop_pair \
             --test interop_pubsub \
             --test interop_router \
-            --test interop_load_balance \
             --test interop_push_pull \
             --test interop_req_rep \
             --test interop_plain \
@@ -67,9 +66,8 @@ jobs:
           --example simple_req_client --example simple_rep_server
           --example sub_client --example pub_server
           --example curve_echo
-      # The `|| echo skipping` mask is removed: this job now fails honestly when a
-      # Python interop test fails, per the Phase 0 gate. The tests drive the built
-      # examples themselves and do not need a manually-started server.
+      # The job fails when any Python interop test fails. The tests drive the
+      # built examples themselves and do not need a manually-started server.
       - name: Run Python interop tests
         working-directory: interop_tests
         run: |

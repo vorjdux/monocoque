@@ -4,7 +4,7 @@
 //! A send to a peer at its HWM waits for room; with a zero `send_timeout` it
 //! fails at once with `MonocoqueError::Again` instead.
 //!
-//! Run with: cargo run --package monocoque --features zmq --example `hwm_enforcement_demo`
+//! Run with: `cargo run --package monocoque-rs --example hwm_enforcement_demo --features zmq`
 
 use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::{DealerSocket, MonocoqueError, RouterSocket, SocketOptions};

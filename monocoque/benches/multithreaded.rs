@@ -5,15 +5,14 @@
 //!
 //! ## Architecture
 //!
-//! - Lock-free design: Each socket has its own `io_uring` context
-//! - No shared mutable state in hot paths
-//! - Independent TCP connections per thread
+//! - Each thread runs its own runtime; sockets on a thread share that
+//!   thread's runtime, and each socket is driven by one multiplexer.
+//! - No shared mutable state between threads in the hot path.
+//! - Independent TCP connections per thread.
 //!
-//! ## Expected Results
-//!
-//! - Linear scaling up to # of CPU cores
-//! - 8 threads × 130k msg/sec = 1M+ aggregate throughput
-//! - No contention or lock overhead
+//! Only `monocoque_multithreaded_independent_pairs` is registered: N threads,
+//! each with its own DEALER/ROUTER pair, so aggregate throughput should scale
+//! with cores until the machine runs out of them.
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
@@ -31,9 +30,11 @@ use std::hint::black_box;
 use std::time::Duration;
 
 const MESSAGE_SIZE: usize = 64;
-const MESSAGES_PER_THREAD: usize = 1_000; // Reduced to avoid deadlock
+const MESSAGES_PER_THREAD: usize = 1_000;
 const THREAD_COUNTS: &[usize] = &[1, 2, 4, 8];
-const BATCH_SIZE: usize = 100; // Process in batches to avoid deadlock
+/// Messages in flight per round: each side sends a batch, then receives the
+/// echoes, so neither side's HWM fills while the other waits on it.
+const BATCH_SIZE: usize = 100;
 
 /// Coalesced sends are held until `flush`, so each batch goes out in one write.
 fn coalescing() -> SocketOptions {

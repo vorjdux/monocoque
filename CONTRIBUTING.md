@@ -19,8 +19,8 @@ If you are planning a larger change, open an issue first so we can agree on the 
 The workspace has three crates plus a separate fuzzing crate.
 
 - `monocoque` is the public crate. It is the only API surface users depend on, and where the examples, benches, and interop tests live.
-- `monocoque-core` is internal. It is the protocol-agnostic kernel: transports, buffers, backpressure, and the runtime facade (`rt`) that selects the io_uring, tokio, or smol I/O engine.
-- `monocoque-zmtp` is internal. It is the ZMTP 3.1 implementation. Do not depend on it directly, the public API goes through `monocoque`.
+- `monocoque-core` is internal. It is the protocol-agnostic kernel: the socket multiplexer (one per socket, over any number of peers), the `Msg` type, transports, backpressure, and the runtime facade (`rt`) that selects the io_uring, tokio, or smol I/O engine.
+- `monocoque-zmtp` is internal. It is the ZMTP implementation and the socket types built on the multiplexer. Do not depend on it directly, the public API goes through `monocoque`.
 - `monocoque-fuzz` holds the fuzz targets and is excluded from the workspace.
 
 The [documentation index](docs/README.md) links the guides for each area, and

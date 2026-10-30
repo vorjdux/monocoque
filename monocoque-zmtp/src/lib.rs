@@ -4,10 +4,11 @@
 //!
 //! ⚠️ **This is an internal implementation detail. Use the `monocoque` crate for the public API.**
 //!
-//! This crate provides the ZMTP 3.1 protocol (greeting, handshake, NULL/PLAIN/CURVE
+//! This crate provides the ZMTP protocol (greeting, handshake, NULL/PLAIN/CURVE
 //! security, framing) and the ZeroMQ socket types built on the socket
-//! multiplexer in `monocoque-core`. For application development, use
-//! `monocoque::zmq::*`.
+//! multiplexer in `monocoque-core`. It speaks ZMTP 3.1 and 3.0, and falls back
+//! to ZMTP 1.0 and 2.0 framing for legacy peers. For application development,
+//! use `monocoque::zmq::*`.
 //!
 //! ## Socket Types (Internal API)
 //!
@@ -21,6 +22,10 @@
 //! - **PULL**: Pipeline pull for task reception
 //! - **PAIR**: Exclusive peer-to-peer communication
 //! - **STREAM**: Raw TCP peers
+//!
+//! With the `draft` feature: **CLIENT** / **SERVER**, **RADIO** / **DISH**,
+//! **SCATTER** / **GATHER** and **CHANNEL**. These need ZMTP 3.1 and carry
+//! single-part messages.
 //!
 //! ## For Application Development
 //!

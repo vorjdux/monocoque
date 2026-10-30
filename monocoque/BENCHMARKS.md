@@ -26,7 +26,10 @@ Hardware: Intel Core i7-1355U (12 threads), Linux 6.17, release build, `rustc 1.
 
 ## Measured Results
 
-### Throughput - `cargo bench --bench throughput`
+Each heading names the bench target; the full commands are under
+[Running the Benchmarks](#running-the-benchmarks).
+
+### Throughput - `--bench throughput`
 
 PUSH/PULL one-way pipeline, 10 000 messages per iteration.
 
@@ -74,12 +77,16 @@ connection (one warmup message before the clock), the same as the monocoque path
 an earlier version started the zmq timer before the sender connected, which
 understated libzmq at small sizes.
 
-The PULL side allocates a `Vec<Bytes>` per message by default. Receiving into a
-reused buffer with `recv_into` removes that allocation; the
-`push_pull_coalesced_recv_into` bench case shows ~1.10x at 64 B (14.1 M to 15.6 M
-on compio, 18.0 M to 19.1 M on tokio) and ~9% at 256 B over the `recv()` path
-(the gain tapers as messages grow and the path becomes bandwidth-bound). See
-`docs/performance.md` for details.
+`recv()` now returns a borrowed `MsgRef` and does not allocate; `recv_owned()`
+returns an owned `Msg`. The `push_pull_coalesced_owned` case measures the cost
+of taking ownership against `push_pull_coalesced`.
+
+Measured on 0.4 with the removed `recv_into` API: there the PULL side allocated
+a `Vec<Bytes>` per message, and the `push_pull_coalesced_recv_into` case
+(receiving into a reused buffer) showed ~1.10x at 64 B (14.1 M to 15.6 M on
+compio, 18.0 M to 19.1 M on tokio) and ~9% at 256 B over `recv()` (the gain
+tapered as messages grew and the path became bandwidth-bound). That case no
+longer exists. See `docs/performance.md` for details.
 
 ---
 
@@ -134,7 +141,7 @@ handoff on the round-trip path.
 
 ---
 
-### Latency - `cargo bench --bench latency`
+### Latency - `--bench latency`
 
 REQ/REP steady-state round-trip on TCP loopback. The connection is established
 once (plus 200 warmup rounds) outside the timer, then N back-to-back round-trips
@@ -155,7 +162,7 @@ just under an epoll wakeup.
 
 ---
 
-### IPC vs TCP - `cargo bench --bench ipc_vs_tcp`
+### IPC vs TCP - `--bench ipc_vs_tcp`
 
 **Latency (REQ/REP, including teardown):**
 
@@ -188,10 +195,13 @@ trip. That op cost is amortized away here on throughput, where compio IPC leads.
 
 ---
 
-### Pipelined batch API - `cargo bench --bench pipelined_throughput`
+### Pipelined coalesced batches - `--bench pipelined_throughput`
 
-DEALER/ROUTER with `send_buffered() + flush()`, batches of 100, 10 000 total
-messages. This is a monocoque-only benchmark demonstrating the explicit batch API.
+DEALER/ROUTER with write coalescing, a batch of 100 `send()` calls then one
+`flush()`, 10 000 total messages. This is a monocoque-only benchmark.
+
+Measured on 0.4 with the removed `send_buffered()` API; the bench now uses
+coalesced `send()` plus `flush()`.
 
 | Message size | compio | tokio | smol |
 |---|---|---|---|
@@ -203,16 +213,20 @@ messages. This is a monocoque-only benchmark demonstrating the explicit batch AP
 
 ---
 
-### Fan-out / fan-in worker pools - `cargo bench --bench fanout_fanin`
+### Fan-out / fan-in worker pools - `--bench fanout_fanin`
 
 Monocoque-only throughput for the two pool topologies, `WORKERS = 4`, 10 000
-messages per iteration split evenly across the pool. `fanout` is one `PushFanOut`
-ventilator round-robining to four PULL workers (timed across the workers, so the
-cost is when the last message lands); `fanin` is four PUSH workers merged by one
-`PullFanIn` sink (timed on the sink). This is the in-process counterpart to the
-bench peer's `push-fanout` / `pull-fanin` subcommands. The msg/s figure is
-aggregate delivered throughput across the pool; bandwidth is the matching payload
-rate.
+messages per iteration split evenly across the pool. `fanout` is one PUSH socket
+with four peers, round-robining to four PULL workers (timed across the workers,
+so the cost is when the last message lands); `fanin` is four PUSH workers merged
+by one PULL socket with four peers (timed on the sink). This is the in-process
+counterpart to the bench peer's `push-fanout` / `pull-fanin` subcommands. The
+msg/s figure is aggregate delivered throughput across the pool; bandwidth is the
+matching payload rate.
+
+The tables below were measured on 0.4 with the removed `PushFanOut` and
+`PullFanIn` types. `PushSocket` and `PullSocket` now load balance and fair-queue
+across peers natively, and the bench uses them.
 
 Fan-out (one ventilator, four PULL workers), coalescing senders (msg/s;
 bandwidth is msg/s x frame size):
@@ -230,16 +244,6 @@ in one batched write instead serializes the pool (worker 1 waits for worker 0's
 entire share) and is markedly slower at large messages, so the per-message path
 is the one kept.
 
-Fan-in merges four sources into one sink. The sink's bottleneck is the per-message
-cross-task hop into its merge channel plus one `.await` per message, all on one
-runtime. `PullFanIn` removes most of that by batching: each reader forwards its
-kernel-read batch in bounded-size chunks and the sink drains a local buffer, so
-`recv_batch` pays about one channel hop and one `.await` per chunk instead of per
-message. The per-chunk cap also bounds how many messages (and the 64 KB slab pages
-they pin) can queue while the sink lags its readers, so peak memory stays flat
-instead of growing with worker count. Throughput is unchanged by the cap: the
-coalesced 64 B sink stays around 10 M msg/s (14 M on tokio).
-
 Fan-in, coalescing senders (large kernel-read batches):
 
 | Message size | compio | tokio | smol |
@@ -248,8 +252,7 @@ Fan-in, coalescing senders (large kernel-read batches):
 | 1 KB | 2.83 M | 2.99 M | 2.88 M |
 | 16 KB | 317 K | 310 K | 291 K |
 
-The reader-side batching keeps the coalesced 64 B sink around 11 M msg/s; at larger
-sizes the path is bandwidth-bound, so the sender mode matters less.
+At larger sizes the path is bandwidth-bound, so the sender mode matters less.
 
 Fan-in, eager senders (one write per message):
 
@@ -260,18 +263,17 @@ Fan-in, eager senders (one write per message):
 | 16 KB | 263 K | 290 K | 279 K |
 
 With eager senders the four PUSH workers cap throughput at their per-message write
-rate, well below what the sink can drain, so the sink is no longer the bottleneck
-and the same batched path neither helps nor hurts. The batch size simply follows
-what each kernel read delivers, so there is one code path for both sender modes.
+rate, well below what the sink can drain, so the sink is no longer the bottleneck.
 The 1 KB eager row is noisy run to run (the workers and sink trade the
 bottleneck), so treat it as approximate.
 
 ---
 
-### Vectored writes, recv_batch, PUB coalescing
+### Vectored writes, PUB coalescing
 
-These paths were measured with a one-off harness (not part of the criterion
-suite) that toggled each change via its public knob so the effect was isolated. Numbers below are a
+These paths were measured on 0.4 with a one-off harness (not part of the
+criterion suite) that toggled each change via its public knob so the effect was
+isolated. Numbers below are a
 separate loopback run; treat them as relative (they show the direction of each
 change), not directly comparable to the criterion tables above.
 
@@ -286,11 +288,9 @@ change), not directly comparable to the criterion tables above.
 | 256 KB | 1.82 GB/s | 2.22 GB/s | 1.22x |
 | 1 MB | 1.24 GB/s | 1.48 GB/s | 1.19x |
 
-The crossover is ~32 KB (hence the default `vectored_write_threshold`); below it
-the contiguous copy plus one `write` beats a two-segment `writev`.
-
-**`recv_batch` vs `recv`** (64 B, `send_batch(256)`): 6.1 M vs 7.8 M msg/s, no
-win on loopback; kept as an ergonomic API.
+On 0.4 the crossover was ~32 KB, which set that release's 32 KiB
+`vectored_write_threshold`; below it the contiguous copy plus one `write` beat a
+two-segment `writev`. The default is now 16 KiB.
 
 **PUB→SUB delivered broadcast, 1 subscriber** (coalescing on): 64 B ~174 K
 msg/s, 1 KB ~161 K msg/s.
@@ -302,7 +302,7 @@ msg/s, 1 KB ~161 K msg/s.
 ### Why these designs are fair
 
 **Separate OS threads**: both sides run on different threads with different
-`compio` runtimes. There is genuine TCP between them - messages pass through
+runtimes of the selected backend. There is genuine TCP between them - messages pass through
 the kernel network stack and loopback device.
 
 **Same work per message**: zmq PUSH/PULL does one `send` / one `recv_bytes`
@@ -313,7 +313,7 @@ asymmetry.
 connecting the PUSH socket so the PULL socket registers with the kernel first, but
 the PULL receives one warmup message before starting its timer, so that sleep and
 the connection setup fall outside the measured window. This matches the monocoque
-path, which starts its timer only after `accept()` and the ZMTP handshake. (An
+path, which starts its timer only after the ZMTP handshake and one warmup message. (An
 earlier version started the zmq timer before the PUSH connected, folding connect
 plus the 5 ms into the measurement and understating libzmq at small sizes; that
 is fixed.)
@@ -380,9 +380,9 @@ cargo build --release
 
 ### What is not (yet) benchmarked
 
-- PUB fan-out to **many** subscribers (single-subscriber delivered throughput is
-  measured above; the coalescing path is designed to amortize syscalls across
-  subscribers under load, which still needs an N-SUB benchmark)
+- Published numbers for PUB fan-out to **many** subscribers (single-subscriber
+  delivered throughput is measured above; the `fanout_slow_subscriber` bench
+  drives 100 SUB peers but its results are not collected here yet)
 - Fan-out / fan-in worker pools **against other implementations**: the
   in-process `fanout_fanin` criterion bench covers monocoque, and the
   `push-fanout` / `pull-fanin` bench-peer subcommands exist, but a measured
@@ -395,33 +395,38 @@ cargo build --release
 ## Running the Benchmarks
 
 All commands below work from either the workspace root or the `monocoque/`
-subdirectory. Use `-p monocoque` when running from the workspace root to
-avoid also running the allocator micro-benchmarks (`allocation` bench has no
-`required-features`, so `cargo bench` without `-p` picks it up separately).
+subdirectory. The package is `monocoque-rs`. Every bench except `allocation`
+needs the `zmq` feature (`allocation` has no `required-features`).
 
 ```bash
 # Run the comparison suites (throughput, latency, IPC, pipelined, patterns)
-# Takes ~20 minutes; add -p monocoque if running from the workspace root.
-cargo bench -p monocoque --features zmq \
+# Takes ~20 minutes.
+cargo bench -p monocoque-rs --features zmq \
     --bench throughput --bench latency --bench ipc_vs_tcp \
     --bench pipelined_throughput --bench patterns
 
 # Run the allocator micro-benchmarks (no zmq dependency)
-cargo bench -p monocoque --bench allocation
+cargo bench -p monocoque-rs --bench allocation
 
 # Individual comparison suite
-cargo bench -p monocoque --bench throughput --features zmq
-cargo bench -p monocoque --bench latency --features zmq
-cargo bench -p monocoque --bench ipc_vs_tcp --features zmq
-cargo bench -p monocoque --bench pipelined_throughput --features zmq
-cargo bench -p monocoque --bench patterns --features zmq
-cargo bench -p monocoque --bench fanout_fanin --features zmq
+cargo bench -p monocoque-rs --bench throughput --features zmq
+cargo bench -p monocoque-rs --bench latency --features zmq
+cargo bench -p monocoque-rs --bench ipc_vs_tcp --features zmq
+cargo bench -p monocoque-rs --bench pipelined_throughput --features zmq
+cargo bench -p monocoque-rs --bench patterns --features zmq
+cargo bench -p monocoque-rs --bench fanout_fanin --features zmq
+
+# Other benches
+cargo bench -p monocoque-rs --bench fanout_slow_subscriber --features zmq
+cargo bench -p monocoque-rs --bench router_n_peers --features zmq
+cargo bench -p monocoque-rs --bench inproc_socket --features zmq
+cargo bench -p monocoque-rs --bench multithreaded --features zmq
 
 # Filter to a specific case
-cargo bench -p monocoque --bench throughput --features zmq -- "throughput/monocoque/push_pull_coalesced"
+cargo bench -p monocoque-rs --bench throughput --features zmq -- "throughput/monocoque-compio/push_pull_coalesced"
 
 # Quick smoke-test (no timing, just checks nothing panics)
-cargo bench -p monocoque --bench throughput --features zmq -- --test
+cargo bench -p monocoque-rs --bench throughput --features zmq -- --test
 
 # Cross-implementation comparison bench peer
 cd scripts/monocoque_bench_peer && cargo build --release
@@ -432,7 +437,7 @@ CPU frequency scaling if available:
 
 ```bash
 sudo cpupower frequency-set --governor performance
-cargo bench -p monocoque --features zmq \
+cargo bench -p monocoque-rs --features zmq \
     --bench throughput --bench latency --bench ipc_vs_tcp \
     --bench pipelined_throughput --bench patterns
 ```

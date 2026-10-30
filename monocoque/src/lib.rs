@@ -93,10 +93,9 @@ pub use monocoque_core::reconnect::{ReconnectError, ReconnectState};
 /// Runtime-agnostic networking types (TCP/Unix streams, listeners).
 ///
 /// These resolve to the active backend (compio by default, tokio with the
-/// `runtime-tokio` feature, smol with the `runtime-smol` feature). Socket
-/// constructors such as `from_unix_stream`
-/// accept the types re-exported here, so application code never names a runtime
-/// crate directly.
+/// `runtime-tokio` feature, smol with the `runtime-smol` feature). `Socket::attach` accepts the
+/// streams re-exported here, so application code never names a runtime crate
+/// directly.
 pub use monocoque_core::rt;
 
 // Protocol modules (opt-in via features)

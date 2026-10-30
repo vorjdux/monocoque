@@ -2,7 +2,7 @@
 
 **⚠️ Internal Implementation Crate**
 
-This crate is an internal implementation detail of the Monocoque project. It provides the low-level ZMTP 3.1 protocol implementation with direct stream I/O.
+This crate is an internal implementation detail of the Monocoque project. It provides the ZMTP protocol (ZMTP 3.1 and 3.0, plus ZMTP 1.0 and 2.0 framing for legacy peers), its security mechanisms, and the ZeroMQ socket types built on the socket multiplexer in `monocoque-core`.
 
 ## For Application Development
 
@@ -14,14 +14,18 @@ monocoque-rs = { version = "0.4", features = ["zmq"] }
 ```
 
 ```rust
+use monocoque::rt::LocalRuntime;
 use monocoque::zmq::DealerSocket;
 
-#[compio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut socket = DealerSocket::connect("127.0.0.1:5555").await?;
-    socket.send(vec![b"Hello!".into()]).await?;
-    let response = socket.recv().await;
-    Ok(())
+fn main() -> monocoque::zmq::Result<()> {
+    LocalRuntime::new()?.block_on(async {
+        let mut socket = DealerSocket::new();
+        socket.connect("tcp://127.0.0.1:5555").await?;
+        socket.send("hello").await?;
+        let reply = socket.recv().await?;
+        println!("{:?}", reply.get(0));
+        Ok(())
+    })
 }
 ```
 
@@ -31,24 +35,23 @@ The Monocoque project is organized as:
 
 -   **`monocoque`** - Public API crate (use this)
 
-    -   High-level socket constructors (`connect()`, `bind()`)
-    -   Ergonomic error handling
-    -   Feature-gated protocols (`zmq`, future: `http`, `redis`, etc.)
+    -   The `monocoque::zmq` namespace and runtime facade
+    -   Feature-gated protocols (`zmq`, `draft`)
 
 -   **`monocoque-zmtp`** - Internal protocol implementation (internal)
 
-    -   Low-level ZMTP 3.1 protocol logic
-    -   Direct stream I/O operations
+    -   Greeting, handshake, NULL / PLAIN / CURVE security, ZAP
+    -   The ZMTP codec the multiplexer drives
+    -   Socket types; the draft types sit behind the `draft` feature
     -   Not intended for direct consumption
 
--   **`monocoque-core`** - Internal runtime primitives (internal)
-    -   Zero-copy allocators and buffers
-    -   Generic networking primitives
-    -   io_uring integration layer
+-   **`monocoque-core`** - Internal kernel (internal)
+    -   Socket multiplexer and the `Msg` type
+    -   Owned-buffer I/O over compio / tokio / smol
 
 ## Examples
 
-All user-facing examples are in the `monocoque/examples/` directory. This crate contains only internal performance benchmarks in `benches/`.
+All user-facing examples are in the `monocoque/examples/` directory.
 
 ## Documentation
 

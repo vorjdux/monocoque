@@ -1,16 +1,21 @@
-/// Hello DEALER Example
-///
-/// This example demonstrates basic DEALER socket usage:
-/// - Connect to a server
-/// - Send a simple message
-/// - Receive a response
-///
-/// Run this after starting a ZMQ ROUTER server on port 5555
+//! Hello DEALER Example
+//!
+//! This example demonstrates basic DEALER socket usage:
+//! - Connect to a server
+//! - Send a simple message
+//! - Receive a response
+//!
+//! It needs a peer: start a ROUTER that replies on tcp://127.0.0.1:5555
+//! first, then run `cargo run --example hello_dealer --features zmq`.
+
 use monocoque::rt::LocalRuntime;
 use monocoque::zmq::DealerSocket;
 use tracing::info;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .init();
     LocalRuntime::new()?.block_on(async_main())
 }
 

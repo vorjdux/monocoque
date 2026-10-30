@@ -231,9 +231,12 @@ Everything else is safe Rust. `monocoque-core` denies `unsafe_code` at the crate
 
 Memory invariants:
 - Buffers are never reused while referenced (tracked via `Bytes` refcounts)
-- A read slab is frozen to `Bytes` in a one-way transition; no mutation after freeze
-- The read slab is allocated lazily on the first read, so an idle socket holds none
-- PUB fanout is refcount-based (`Bytes::clone()`), never copies payloads
+- Received bytes are split off a connection's read buffer and frozen to `Bytes`
+  in a one-way transition; no mutation after freeze
+- A connection's read buffer is allocated on its first read, so an idle
+  connection holds none
+- PUB encodes a message once and shares the bytes among subscribers by refcount;
+  payloads are never copied per subscriber
 
 ## Development
 

@@ -1,8 +1,9 @@
-//! Monocoque batch send API throughput benchmark
+//! DEALER/ROUTER pipelined throughput with write coalescing.
 //!
-//! This benchmark shows the speedup from monocoque's explicit batching API
-//! (`send()` with write coalescing, then `flush()`) compared to naive
-//! one-send-per-message.
+//! Both sides enable write coalescing, issue a batch of `send()` calls and
+//! then one `flush()`, so each batch goes out in one kernel write. This
+//! measures that coalesced batch pattern; compare it with the one-send-per-
+//! message benches.
 //! It is NOT a cross-library comparison -- use throughput.rs for that.
 //!
 //! ## Pattern
@@ -13,7 +14,7 @@
 //! 3. DEALER: receive batch
 //! 4. Repeat
 //!
-//! DEALER and ROUTER run on separate OS threads (each with its own compio
+//! DEALER and ROUTER run on separate OS threads (each with its own
 //! runtime) so the measured time reflects real inter-thread communication.
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -38,12 +39,12 @@ const TOTAL_MESSAGES: usize = 10_000;
 const BATCH_SIZE: usize = 100;
 
 /// Write coalescing holds every send until the explicit `flush`, which is
-/// the batch API: one kernel write per batch instead of one per message.
+/// what batches the writes: one kernel write per batch instead of one per message.
 fn batch_options(options: SocketOptions) -> SocketOptions {
     options.with_write_coalescing(true)
 }
 
-/// Benchmark monocoque DEALER/ROUTER pipelined throughput using the batch API.
+/// Benchmark monocoque DEALER/ROUTER pipelined throughput with coalesced batches.
 ///
 /// ROUTER binds in a separate OS thread. DEALER connects in the bench thread.
 /// Both use coalesced sends plus `flush` to minimize syscall overhead.

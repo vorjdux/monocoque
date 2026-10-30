@@ -16,7 +16,8 @@
 //! 3. Handshake happens once per connection (not in hot path)
 //! 4. Total allocation overhead: ~93 bytes one-time per connection
 //!
-//! After handshake completes, the main data path uses the `core::io` read slab for zero-copy IO.
+//! After the handshake completes, the peer's reader in `monocoque_core::mux`
+//! takes over the stream and decodes frames out of its own read buffer.
 
 use crate::error::ZmtpError;
 use crate::security::curve::CurveHandshakeResult;

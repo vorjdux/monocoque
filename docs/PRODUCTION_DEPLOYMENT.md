@@ -56,7 +56,7 @@ let options = SocketOptions::default().with_read_buffer_size(4096);
 let options = SocketOptions::default().with_read_buffer_size(65_536);
 ```
 
-The read buffer is clamped to the 64 KB read slab and floored at 64 bytes. There is no write buffer setting: the outbound buffer grows on demand and is reused.
+The read buffer is clamped to 64 KB and floored at 64 bytes. There is no write buffer setting: the outbound buffer grows on demand and is reused.
 
 ### TCP Options
 

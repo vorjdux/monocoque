@@ -1,9 +1,10 @@
 //! Memory allocation benchmarks.
 //!
 //! Tracks allocation pressure in the hot path: frame construction, Bytes
-//! clone-vs-copy, and arena vs heap allocation patterns.
+//! clone-vs-copy, `BytesMut` reuse, read-buffer handling and multipart
+//! message allocation.
 //!
-//! Run with: `cargo bench --package monocoque -F zmq --bench allocation`
+//! Run with: `cargo bench -p monocoque-rs --bench allocation`
 
 use bytes::{Buf, Bytes, BytesMut};
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
@@ -111,32 +112,32 @@ fn bench_multipart_alloc(c: &mut Criterion) {
     let mut group = c.benchmark_group("multipart_alloc");
     let frame = Bytes::from(vec![0u8; 256]);
 
-    group.bench_function("2_frame_vec", |b| {
+    group.bench_function("2_frame_msg", |b| {
         b.iter(|| {
-            let msg: Vec<Bytes> = vec![frame.clone(), frame.clone()];
+            let msg = Msg::from([frame.clone(), frame.clone()]);
             black_box(msg);
         });
     });
 
-    group.bench_function("5_frame_vec", |b| {
+    group.bench_function("5_frame_msg", |b| {
         b.iter(|| {
-            let msg: Vec<Bytes> = vec![
+            let msg = Msg::from([
                 frame.clone(),
                 frame.clone(),
                 frame.clone(),
                 frame.clone(),
                 frame.clone(),
-            ];
+            ]);
             black_box(msg);
         });
     });
 
     group.bench_function("router_envelope_3_frame", |b| {
-        // Simulates a ROUTER envelope: [routing_id, empty, payload]
+        // A ROUTER envelope: [routing_id, empty, payload]
         let id = Bytes::copy_from_slice(b"peer-identity-01");
         let empty = Bytes::new();
         b.iter(|| {
-            let msg: Vec<Bytes> = vec![id.clone(), empty.clone(), frame.clone()];
+            let msg = Msg::from([id.clone(), empty.clone(), frame.clone()]);
             black_box(msg);
         });
     });

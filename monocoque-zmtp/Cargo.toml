@@ -6,11 +6,11 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Internal ZMTP 3.1 protocol implementation for Monocoque (use 'monocoque-rs' crate for public API)"
+description = "Internal ZMTP protocol implementation for Monocoque (use 'monocoque-rs' crate for public API)"
 keywords = ["zmq", "zeromq", "zmtp", "messaging", "protocol"]
 categories = ["network-programming"]
 homepage = "https://github.com/vorjdux/monocoque"
-documentation = "https://docs.rs/monocoque-rs"
+documentation = "https://docs.rs/monocoque-rs-zmtp"
 readme = "README.md"
 
 [lib]

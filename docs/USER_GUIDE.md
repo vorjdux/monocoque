@@ -180,7 +180,7 @@ Key options:
 - `conflate` - keep only the most recent message in the receive queue. Useful for telemetry or status updates where stale data is useless.
 - `tcp_keepalive` - detect dead connections. Use `with_tcp_keepalive(1)`, `with_tcp_keepalive_idle(60)`, `with_tcp_keepalive_intvl(10)`, `with_tcp_keepalive_cnt(3)` to enable.
 
-Buffer sizing: the default read buffer is 32KB. The outbound buffer has no fixed size; it grows on demand and is reused across sends. Use `with_read_buffer_size(4096)` to trade throughput for latency on small messages, or `with_read_buffer_size(65_536)` to widen the read batch for bulk transfers. The read buffer is clamped to the 64KB read slab and floored at 64 bytes.
+Buffer sizing: the default read buffer is 32KB. The outbound buffer has no fixed size; it grows on demand and is reused across sends. Use `with_read_buffer_size(4096)` to trade throughput for latency on small messages, or `with_read_buffer_size(65_536)` to widen the read batch for bulk transfers. The read buffer is clamped to 64KB and floored at 64 bytes.
 
 ---
 

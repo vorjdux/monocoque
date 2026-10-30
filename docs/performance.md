@@ -490,7 +490,7 @@ up under load rather than paying one syscall per message per subscriber.
 
 The read buffer size affects how many bytes fit before an extra read syscall is
 needed. The default is a 32 KB read buffer. There is no write buffer setting:
-the outbound buffer grows on demand and is reused. The read buffer is clamped to the 64 KB read slab, and floored at 64 bytes.
+the outbound buffer grows on demand and is reused. The read buffer is clamped to 64 KB and floored at 64 bytes.
 
 ```rust
 use monocoque_core::options::SocketOptions;

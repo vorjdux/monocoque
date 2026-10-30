@@ -80,8 +80,8 @@ pub async fn join<T>(handle: JoinHandle<T>) -> T {
 
 /// A self-contained runtime owned by a single thread.
 ///
-/// Used by worker threads that drive their own event loop independently of
-/// the caller's runtime (for example the publisher's fan-out workers).
+/// For a thread that drives its own event loop, such as a test or a helper
+/// thread that runs a socket outside the caller's runtime.
 pub struct LocalRuntime {
     inner: compio::runtime::Runtime,
 }
