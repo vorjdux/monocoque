@@ -105,8 +105,7 @@ fn correlation_id_is_added_and_stripped() {
     LocalRuntime::new().unwrap().block_on(async {
         let mut rep = RepSocket::new();
         let ep = rep.bind("tcp://127.0.0.1:0").await.unwrap();
-        let mut req =
-            ReqSocket::with_options(SocketOptions::default().with_req_correlate(true));
+        let mut req = ReqSocket::with_options(SocketOptions::default().with_req_correlate(true));
         req.connect(&ep).await.unwrap();
         req.send("payload").await.unwrap();
         let msg = rep.recv_owned().await.unwrap();

@@ -78,7 +78,12 @@ fn reports_only_the_ready_items_and_consumes_nothing() {
             PollItem::new(&sub, IN),
             PollItem::new(&router, IN),
         ];
-        assert_eq!(poll(&mut items, Some(Duration::from_secs(5))).await.unwrap(), 1);
+        assert_eq!(
+            poll(&mut items, Some(Duration::from_secs(5)))
+                .await
+                .unwrap(),
+            1
+        );
         assert!(!items[0].is_readable());
         assert!(items[1].is_readable());
         assert_eq!(items[1].revents(), IN);
@@ -98,7 +103,9 @@ fn reports_only_the_ready_items_and_consumes_nothing() {
         ];
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            poll(&mut items, Some(Duration::from_secs(5))).await.unwrap();
+            poll(&mut items, Some(Duration::from_secs(5)))
+                .await
+                .unwrap();
             if items[0].is_readable() && items[2].is_readable() {
                 break;
             }
@@ -162,7 +169,8 @@ fn pollout_on_a_full_socket_becomes_ready_after_drain() {
         let small = small.clone();
         move || {
             LocalRuntime::new().unwrap().block_on(async move {
-                let mut pull = PullSocket::with_options(small.with_recv_timeout(Duration::from_secs(1)));
+                let mut pull =
+                    PullSocket::with_options(small.with_recv_timeout(Duration::from_secs(1)));
                 pull.connect(&ep_rx.recv().unwrap()).await.unwrap();
                 // Wait without blocking the thread, so this runtime can still
                 // complete the handshake.
@@ -214,7 +222,12 @@ fn pollout_on_a_full_socket_becomes_ready_after_drain() {
         );
 
         go_tx.send(()).unwrap();
-        assert_eq!(poll(&mut items, Some(Duration::from_secs(10))).await.unwrap(), 1);
+        assert_eq!(
+            poll(&mut items, Some(Duration::from_secs(10)))
+                .await
+                .unwrap(),
+            1
+        );
         assert_eq!(items[0].revents(), OUT);
         push.send("last").await.unwrap();
         done_tx.send(0).unwrap();
@@ -267,7 +280,12 @@ fn inproc_peer_on_another_thread_wakes_the_poll() {
             });
         });
         let mut items = [PollItem::new(&pull, IN)];
-        assert_eq!(poll(&mut items, Some(Duration::from_secs(5))).await.unwrap(), 1);
+        assert_eq!(
+            poll(&mut items, Some(Duration::from_secs(5)))
+                .await
+                .unwrap(),
+            1
+        );
         assert_eq!(pull.recv().await.unwrap(), [b"inproc"]);
         sender.join().unwrap();
     });
@@ -294,7 +312,12 @@ fn req_rep_follow_their_state_machines() {
         req.send("q").await.unwrap();
         {
             let mut items = [PollItem::new(&req, both), PollItem::new(&rep, both)];
-            assert_eq!(poll(&mut items, Some(Duration::from_secs(5))).await.unwrap(), 1);
+            assert_eq!(
+                poll(&mut items, Some(Duration::from_secs(5)))
+                    .await
+                    .unwrap(),
+                1
+            );
             assert!(items[0].revents().is_empty(), "REQ waits for its reply");
             assert_eq!(items[1].revents(), IN);
         }
@@ -306,7 +329,12 @@ fn req_rep_follow_their_state_machines() {
         }
         rep.send("a").await.unwrap();
         let mut items = [PollItem::new(&req, IN)];
-        assert_eq!(poll(&mut items, Some(Duration::from_secs(5))).await.unwrap(), 1);
+        assert_eq!(
+            poll(&mut items, Some(Duration::from_secs(5)))
+                .await
+                .unwrap(),
+            1
+        );
         assert_eq!(req.recv().await.unwrap(), [b"a"]);
     });
 }
@@ -328,9 +356,14 @@ fn stream_sockets_mix_with_zmtp_sockets() {
         // The connect notification, then the data.
         for _ in 0..2 {
             let mut items = [PollItem::new(&pull, IN), PollItem::new(&stream, IN)];
-            assert_eq!(poll(&mut items, Some(Duration::from_secs(5))).await.unwrap(), 1);
+            assert_eq!(
+                poll(&mut items, Some(Duration::from_secs(5)))
+                    .await
+                    .unwrap(),
+                1
+            );
             assert!(items[1].is_readable());
-                assert_eq!(stream.recv().await.unwrap().len(), 2);
+            assert_eq!(stream.recv().await.unwrap().len(), 2);
         }
         client.join().unwrap();
     });

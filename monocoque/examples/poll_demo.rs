@@ -62,7 +62,10 @@ fn main() -> monocoque::zmq::Result<()> {
             }
             if stop_ready {
                 let cmd = control.recv().await?;
-                println!("control: {}", String::from_utf8_lossy(cmd.get(0).unwrap_or_default()));
+                println!(
+                    "control: {}",
+                    String::from_utf8_lossy(cmd.get(0).unwrap_or_default())
+                );
                 break;
             }
         }

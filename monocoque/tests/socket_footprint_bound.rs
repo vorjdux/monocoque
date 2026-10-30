@@ -15,7 +15,6 @@
 //! Linux-only: reads `VmHWM` (peak resident set) from `/proc/self/status`.
 
 #![cfg(target_os = "linux")]
-
 // The socket vectors exist only to keep the connections open.
 #![allow(clippy::collection_is_never_read)]
 

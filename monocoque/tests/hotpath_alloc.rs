@@ -282,7 +282,10 @@ fn push_pull_coalesced_with_timeouts() {
 fn curve_push_pull() {
     let key = |seed: u8| {
         let secret = [seed; 32];
-        (*CurveSecretKey::from_bytes(secret).public_key().as_bytes(), secret)
+        (
+            *CurveSecretKey::from_bytes(secret).public_key().as_bytes(),
+            secret,
+        )
     };
     let (server_public, server_secret) = key(1);
     let (client_public, client_secret) = key(2);

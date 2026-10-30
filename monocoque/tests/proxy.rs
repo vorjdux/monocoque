@@ -85,7 +85,10 @@ fn xsub_xpub_forwarder_with_capture() {
                 break;
             }
         }
-        assert_eq!(got.expect("no message through the forwarder"), [b"news hello"]);
+        assert_eq!(
+            got.expect("no message through the forwarder"),
+            [b"news hello"]
+        );
         // The capture saw the subscription going up as well as the data.
         let first = cap_pull.recv_owned().await.unwrap();
         assert_eq!(first, [b"\x01news"]);
@@ -106,9 +109,14 @@ fn steerable_pause_resume_statistics_terminate() {
         let done = std::rc::Rc::new(std::cell::Cell::new(false));
         let done2 = done.clone();
         monocoque::rt::spawn_detached(async move {
-            proxy_steerable(&mut frontend, &mut backend, None::<&mut NoCapture>, &mut control)
-                .await
-                .unwrap();
+            proxy_steerable(
+                &mut frontend,
+                &mut backend,
+                None::<&mut NoCapture>,
+                &mut control,
+            )
+            .await
+            .unwrap();
             done2.set(true);
         });
 
@@ -165,7 +173,12 @@ fn libzmq_peers_through_the_broker() {
             let _ = control.bind("inproc://libzmq-broker-ctl").await.unwrap();
             let _ = monocoque::rt::timeout(
                 Duration::from_secs(10),
-                proxy_steerable(&mut frontend, &mut backend, None::<&mut NoCapture>, &mut control),
+                proxy_steerable(
+                    &mut frontend,
+                    &mut backend,
+                    None::<&mut NoCapture>,
+                    &mut control,
+                ),
             )
             .await;
         });

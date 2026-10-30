@@ -33,7 +33,8 @@ async fn worker(id: u32) -> Result<()> {
     rep.connect(BACKEND).await?;
     loop {
         let request = rep.recv_owned().await?;
-        let text = String::from_utf8_lossy(request.frames().next().unwrap_or_default()).into_owned();
+        let text =
+            String::from_utf8_lossy(request.frames().next().unwrap_or_default()).into_owned();
         info!("[worker-{id}] processing: {text}");
         rep.send(format!("{text} done by worker-{id}")).await?;
     }
@@ -47,7 +48,13 @@ async fn broker() -> Result<()> {
     let mut control = PairSocket::new();
     control.bind(CONTROL).await?;
     info!("broker up: send PAUSE, RESUME, STATISTICS or TERMINATE on the control socket");
-    proxy_steerable(&mut frontend, &mut backend, None::<&mut NoCapture>, &mut control).await?;
+    proxy_steerable(
+        &mut frontend,
+        &mut backend,
+        None::<&mut NoCapture>,
+        &mut control,
+    )
+    .await?;
     info!("broker terminated");
     Ok(())
 }
