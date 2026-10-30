@@ -73,6 +73,16 @@ fn put_header(buf: &mut BytesMut, flags: u8, len: usize) {
 /// Encode `msg` as plain ZMTP data frames into `buf`, copying every body.
 pub fn encode_plain(msg: &Msg, buf: &mut BytesMut) {
     let n = msg.len();
+    // Most messages are one frame: size and copy it without walking the
+    // frame iterator twice.
+    if n == 1
+        && let Some(frame) = msg.first()
+    {
+        buf.reserve(frame.len() + 9);
+        put_header(buf, 0, frame.len());
+        buf.extend_from_slice(frame);
+        return;
+    }
     let total: usize = msg.frames().map(|f| f.len() + 9).sum();
     buf.reserve(total);
     for (i, frame) in msg.frames().enumerate() {
