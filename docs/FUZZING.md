@@ -1,187 +1,98 @@
-# Fuzzing Infrastructure
+# Fuzzing
 
-## Overview
-
-Fuzzing helps discover edge cases, crashes, and security vulnerabilities in the ZMTP protocol implementation.
+The fuzz targets live in `monocoque-fuzz/`, a `cargo-fuzz` (libFuzzer) crate
+kept outside the workspace and built with a nightly toolchain. Each target
+feeds arbitrary bytes to a parser or codec that a remote peer can reach. A
+target passes when the code under test only ever returns `Ok` or `Err`; a
+panic, an over-read, a hang or an out-of-memory is a finding.
 
 ## Setup
 
-### Install cargo-fuzz
-
 ```bash
+rustup toolchain install nightly
 cargo install cargo-fuzz
 ```
 
-### Install AFL (optional)
+## Targets
+
+| Target | Code under test |
+| --- | --- |
+| `fuzz_decoder` | `ZmtpCodec::decode` in `monocoque-zmtp/src/wire.rs`, the streaming frame decoder every socket uses, fed in chunks of 1 to 64 bytes so partial headers and payloads are carried across calls |
+| `fuzz_frame_codec` | one-shot `ZmtpCodec::decode` on raw input, plus an `encode_plain` then decode round trip |
+| `fuzz_greeting` | `ZmtpGreeting::parse`, the 64-byte ZMTP greeting |
+| `fuzz_command` | `parse_ready_command`, the READY command and its length-prefixed properties |
+| `fuzz_curve_handshake` | CURVE key construction and conversion, X25519 key agreement, `CurveClient`/`CurveServer` construction and `CurveMessageCipher::is_curve_message` |
+| `fuzz_security_plain` | `ZapRequest`/`ZapResponse` decoding, `ZapMechanism::from_str`, and PLAIN ZAP request encoding and its decode round trip |
+| `fuzz_zap_request` | `ZapRequest::decode` and `ZapResponse::decode` on arbitrary frame counts and contents |
+| `fuzz_subscription_trie` | `SubscriptionTrie` subscribe, unsubscribe and match sequences, and `SubscriptionEvent` parsing |
+| `fuzz_curve_decode` | `ZmtpCodec::decode` with a CURVE cipher: raw bytes into the encrypted decoder, and client-encrypted frames decoded intact (must match) or with one corrupted byte (must not yield a different message) |
+
+The CURVE handshake commands (HELLO, WELCOME, INITIATE, READY) are not fuzzed
+yet.
+
+## Running
+
+Run these from the repository root.
 
 ```bash
-cargo install afl
+# Build every target (CI does this on every PR)
+cargo +nightly fuzz build --fuzz-dir monocoque-fuzz
+
+# Run one target for 60 seconds
+cargo +nightly fuzz run --fuzz-dir monocoque-fuzz fuzz_decoder -- -max_total_time=60
+
+# Run every target, 60 seconds each (10 by default)
+scripts/run_fuzzer.sh 60
+
+# Run named targets only
+scripts/run_fuzzer.sh 30 fuzz_decoder fuzz_greeting
 ```
 
-## Fuzz Targets
+## CI
 
-### 1. ZMTP Decoder Fuzzing
+`.github/workflows/ci.yml` has two jobs:
 
-**Target:** `monocoque-zmtp/src/codec.rs` - `ZmtpDecoder::decode()`
+- `fuzz-build` builds every target on each PR.
+- `fuzz-run` runs each target for 60 seconds, on the nightly schedule and on
+  manual dispatch only.
 
-**What it tests:**
-- Malformed frame headers
-- Invalid frame lengths
-- Buffer overflow attempts
-- State machine corruption
+## Corpus and artifacts
 
-**Run:**
-```bash
-cd fuzz
-cargo fuzz run fuzz_decoder
-```
-
-### 2. Handshake Fuzzing
-
-**Target:** Handshake protocol parsing
-
-**What it tests:**
-- Invalid greeting signatures
-- Malformed ZMTP versions
-- Security mechanism parsing
-- Metadata injection
-
-**Run:**
-```bash
-cargo fuzz run fuzz_handshake
-```
-
-### 3. PLAIN Authentication Fuzzing
-
-**Target:** PLAIN mechanism command parsing
-
-**What it tests:**
-- Username/password injection
-- Buffer overflows in credentials
-- Invalid HELLO/WELCOME/ERROR commands
-
-**Run:**
-```bash
-cargo fuzz run fuzz_plain_auth
-```
-
-### 4. CURVE Encryption Fuzzing
-
-**Target:** CURVE box encryption/decryption
-
-**What it tests:**
-- Nonce manipulation
-- Key corruption
-- Ciphertext tampering
-- Cookie forgery
-
-**Run:**
-```bash
-cargo fuzz run fuzz_curve_crypto
-```
-
-### 5. ZAP Protocol Fuzzing
-
-**Target:** ZAP request/response parsing
-
-**What it tests:**
-- Malformed ZAP requests
-- Invalid status codes
-- Metadata overflow
-- Multipart message corruption
-
-**Run:**
-```bash
-cargo fuzz run fuzz_zap_protocol
-```
-
-## Running All Fuzzers
+`monocoque-fuzz/corpus/<target>/` holds committed seed inputs, so a fresh run
+starts from useful cases. A run adds the inputs it finds there; commit only the
+ones worth keeping, after minimizing:
 
 ```bash
-./run_all_fuzzers.sh
+cargo +nightly fuzz cmin --fuzz-dir monocoque-fuzz fuzz_greeting
 ```
 
-This script runs each fuzzer for 60 seconds and collects results.
+Crash reproducers land in `monocoque-fuzz/artifacts/<target>/`, which is
+ignored by git.
 
-## Continuous Fuzzing
+## Crash triage
 
-Set up continuous fuzzing on CI:
-
-```yaml
-# .github/workflows/fuzzing.yml
-name: Continuous Fuzzing
-
-on:
-  schedule:
-    - cron: '0 2 * * *'  # Daily at 2 AM
-
-jobs:
-  fuzz:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: dtolnay/rust-toolchain@nightly
-      - run: cargo install cargo-fuzz
-      - run: cd fuzz && cargo fuzz run fuzz_decoder -- -max_total_time=3600
-      - uses: actions/upload-artifact@v3
-        if: failure()
-        with:
-          name: fuzz-artifacts
-          path: fuzz/artifacts/
-```
-
-## Crash Triage
-
-When a crash is found:
-
-1. **Minimize the input:**
+1. Reproduce the crash:
    ```bash
-   cargo fuzz cmin fuzz_decoder
+   cargo +nightly fuzz run --fuzz-dir monocoque-fuzz fuzz_decoder \
+       monocoque-fuzz/artifacts/fuzz_decoder/crash-<hash>
    ```
-
-2. **Reproduce the crash:**
+2. Shrink the input:
    ```bash
-   cargo fuzz run fuzz_decoder fuzz/artifacts/crash-xyz
+   cargo +nightly fuzz tmin --fuzz-dir monocoque-fuzz fuzz_decoder \
+       monocoque-fuzz/artifacts/fuzz_decoder/crash-<hash>
    ```
+3. Fix the bug and add a regression test with the shrunk input as a unit test
+   next to the code. Do not commit the raw artifact.
 
-3. **Debug with ASAN:**
-   ```bash
-   RUSTFLAGS="-Zsanitizer=address" cargo fuzz run fuzz_decoder
-   ```
-
-4. **File a bug report** with minimized input
-
-## Coverage Analysis
-
-Generate coverage report:
+## Coverage
 
 ```bash
-cargo fuzz coverage fuzz_decoder
-cargo cov -- show target/x86_64-unknown-linux-gnu/coverage/x86_64-unknown-linux-gnu/release/fuzz_decoder \
-    --format=html > coverage.html
+cargo +nightly fuzz coverage --fuzz-dir monocoque-fuzz fuzz_decoder
 ```
 
-## Results
-
-### Last Run: [DATE]
-
-| Target | Runtime | Execs | Crashes | Coverage |
-|--------|---------|-------|---------|----------|
-| fuzz_decoder | 1h | 2.5M | 0 | 87% |
-| fuzz_handshake | 1h | 1.8M | 0 | 92% |
-| fuzz_plain_auth | 30m | 950K | 0 | 78% |
-| fuzz_curve_crypto | 1h | 1.2M | 0 | 83% |
-| fuzz_zap_protocol | 30m | 800K | 0 | 74% |
-
-**Status:** ✅ No crashes found
-
-## Known Issues
-
-- [List any known fuzzing limitations]
-- [List any areas needing more coverage]
+This writes profile data under `monocoque-fuzz/coverage/fuzz_decoder/`, which
+`llvm-cov show` can render against the instrumented binary.
 
 ## References
 
-- [The Fuzzing Book](https://www.fuzzingbook.org/)
-- [cargo-fuzz documentation](https://rust-fuzz.github.io/book/cargo-fuzz.html)
-- [Fuzzing with AFL](https://aflplus.plus/)
+- [cargo-fuzz book](https://rust-fuzz.github.io/book/cargo-fuzz.html)

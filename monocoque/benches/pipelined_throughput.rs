@@ -1,21 +1,22 @@
-//! Monocoque batch send API throughput benchmark
+//! DEALER/ROUTER pipelined throughput with write coalescing.
 //!
-//! This benchmark shows the speedup from monocoque's explicit batching API
-//! (`send_buffered()` + `flush()`) compared to naive one-send-per-message.
+//! Both sides enable write coalescing, issue a batch of `send()` calls and
+//! then one `flush()`, so each batch goes out in one kernel write. This
+//! measures that coalesced batch pattern; compare it with the one-send-per-
+//! message benches.
 //! It is NOT a cross-library comparison -- use throughput.rs for that.
 //!
 //! ## Pattern
 //!
 //! Process messages in batches to avoid TCP backpressure:
-//! 1. DEALER: `send_buffered` batch -> flush
-//! 2. ROUTER: receive batch -> `send_buffered` batch -> flush
+//! 1. DEALER: coalesced `send` batch -> flush
+//! 2. ROUTER: receive batch -> coalesced `send` batch -> flush
 //! 3. DEALER: receive batch
 //! 4. Repeat
 //!
-//! DEALER and ROUTER run on separate OS threads (each with its own compio
+//! DEALER and ROUTER run on separate OS threads (each with its own
 //! runtime) so the measured time reflects real inter-thread communication.
 
-use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
 // Identifies which runtime backend this build benchmarks, so compio, tokio, and smol
@@ -27,8 +28,7 @@ const BENCH_BACKEND: &str = if cfg!(feature = "runtime-tokio") {
 } else {
     "compio"
 };
-use monocoque::rt::TcpListener;
-use monocoque::zmq::{DealerSocket, RouterSocket, SocketOptions};
+use monocoque::zmq::{DealerSocket, Msg, RouterSocket, SocketOptions};
 use std::hint::black_box;
 use std::sync::mpsc;
 use std::thread;
@@ -38,10 +38,16 @@ const MESSAGE_SIZES: &[usize] = &[64, 256, 1024, 4096, 16384];
 const TOTAL_MESSAGES: usize = 10_000;
 const BATCH_SIZE: usize = 100;
 
-/// Benchmark monocoque DEALER/ROUTER pipelined throughput using the batch API.
+/// Write coalescing holds every send until the explicit `flush`, which is
+/// what batches the writes: one kernel write per batch instead of one per message.
+fn batch_options(options: SocketOptions) -> SocketOptions {
+    options.with_write_coalescing(true)
+}
+
+/// Benchmark monocoque DEALER/ROUTER pipelined throughput with coalesced batches.
 ///
 /// ROUTER binds in a separate OS thread. DEALER connects in the bench thread.
-/// Both use `send_buffered + flush` to minimize syscall overhead.
+/// Both use coalesced sends plus `flush` to minimize syscall overhead.
 fn monocoque_dealer_router_pipelined(c: &mut Criterion) {
     monocoque::dev_tracing::init_tracing();
     let mut group = c.benchmark_group(format!("pipelined/monocoque-{BENCH_BACKEND}/dealer_router"));
@@ -49,7 +55,7 @@ fn monocoque_dealer_router_pipelined(c: &mut Criterion) {
     group.sample_size(10);
 
     for &size in MESSAGE_SIZES {
-        let payload = Bytes::from(vec![0u8; size]);
+        let payload = Msg::from(vec![0u8; size]);
 
         group.throughput(Throughput::Bytes((size * TOTAL_MESSAGES) as u64));
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
@@ -57,7 +63,7 @@ fn monocoque_dealer_router_pipelined(c: &mut Criterion) {
                 let mut total = Duration::ZERO;
 
                 for _ in 0..iters {
-                    let (port_tx, port_rx) = mpsc::channel::<u16>();
+                    let (ep_tx, ep_rx) = mpsc::channel::<String>();
                     let (elapsed_tx, elapsed_rx) = mpsc::channel::<Duration>();
                     let payload_clone = payload.clone();
 
@@ -65,70 +71,71 @@ fn monocoque_dealer_router_pipelined(c: &mut Criterion) {
                     let router_thread = thread::spawn(move || {
                         let rt = monocoque::rt::LocalRuntime::new().unwrap();
                         rt.block_on(async move {
-                            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-                            let port = listener.local_addr().unwrap().port();
-                            port_tx.send(port).unwrap();
+                            let mut router =
+                                RouterSocket::with_options(batch_options(SocketOptions::default()));
+                            ep_tx
+                                .send(router.bind("tcp://127.0.0.1:0").await.unwrap())
+                                .unwrap();
 
-                            let (stream, _) = listener.accept().await.unwrap();
-                            let mut router = RouterSocket::from_tcp_with_options(
-                                stream,
-                                SocketOptions::default(),
-                            )
-                            .await
-                            .unwrap();
+                            // Start timing once the DEALER is handshaken.
+                            while router.peer_count() == 0 {
+                                monocoque::rt::sleep(Duration::from_millis(1)).await;
+                            }
 
                             let t0 = std::time::Instant::now();
+                            let mut batch = Vec::with_capacity(BATCH_SIZE);
                             for _ in 0..(TOTAL_MESSAGES / BATCH_SIZE) {
-                                let mut batch = Vec::with_capacity(BATCH_SIZE);
                                 for _ in 0..BATCH_SIZE {
-                                    if let Ok(Some(msg)) = router.recv().await {
+                                    if let Ok(msg) = router.recv_owned().await {
                                         batch.push(msg);
                                     }
                                 }
-                                for msg in batch {
-                                    router.send_buffered(msg).unwrap();
+                                // Each message still carries its identity frame,
+                                // so sending it back routes it to the DEALER.
+                                // `drain` keeps the batch's capacity for reuse.
+                                #[allow(clippy::iter_with_drain)]
+                                for msg in batch.drain(..) {
+                                    router.send(msg).await.unwrap();
                                 }
                                 router.flush().await.unwrap();
                             }
                             elapsed_tx.send(t0.elapsed()).unwrap();
+                            let _ = router.close().await;
                         });
                     });
 
-                    let port = port_rx.recv().unwrap();
+                    let endpoint = ep_rx.recv().unwrap();
 
                     // DEALER thread: connect, send + recv in batches.
                     let dealer_rt = monocoque::rt::LocalRuntime::new().unwrap();
-                    dealer_rt.block_on(async move {
-                        let stream = monocoque::rt::TcpStream::connect(("127.0.0.1", port))
-                            .await
-                            .unwrap();
-                        let mut dealer = DealerSocket::from_tcp_with_options(
-                            stream,
-                            SocketOptions::default().with_buffer_sizes(16384, 16384),
-                        )
-                        .await
-                        .unwrap();
+                    let elapsed = dealer_rt.block_on(async move {
+                        let mut dealer = DealerSocket::with_options(batch_options(
+                            SocketOptions::default().with_read_buffer_size(16384),
+                        ));
+                        dealer.connect(&endpoint).await.unwrap();
 
-                        // Allocation-free drain of the echoed batch.
-                        let mut buf: Vec<bytes::Bytes> = Vec::with_capacity(4);
                         for _ in 0..(TOTAL_MESSAGES / BATCH_SIZE) {
                             for _ in 0..BATCH_SIZE {
-                                dealer
-                                    .send_buffered(vec![black_box(payload_clone.clone())])
-                                    .unwrap();
+                                dealer.send(black_box(payload_clone.clone())).await.unwrap();
                             }
                             dealer.flush().await.unwrap();
 
+                            // Borrowed receive: the echoed batch is drained
+                            // without allocating.
                             for _ in 0..BATCH_SIZE {
-                                if !dealer.recv_into(&mut buf).await.unwrap_or(false) {
+                                if dealer.recv().await.is_err() {
                                     break;
                                 }
                             }
                         }
+                        // Keep the connection up until the ROUTER has finished.
+                        let elapsed = elapsed_rx.recv().unwrap();
+                        let _ = dealer.close().await;
+                        elapsed
                     });
 
                     router_thread.join().unwrap();
-                    total += elapsed_rx.recv().unwrap();
+                    total += elapsed;
                 }
 
                 total

@@ -19,59 +19,28 @@
 //! opts back into `unsafe_code` that the crate otherwise denies.
 #![allow(unsafe_code)]
 
-use bytes::BytesMut;
 use compio_buf::{BufResult, IoBufMut, IoVectoredBuf};
 use smallvec::SmallVec;
 use std::io::{self, IoSlice};
 use std::mem::MaybeUninit;
 
-/// Size of a read scratch slab.
-///
-/// Doubles as the ceiling `read_buffer_size` clamps to and the minimum capacity
-/// [`take_read_buffer`] grows a stash to. Equal to the old arena page size, so
-/// the per-read buffer bound and its resident footprint are unchanged.
-pub const READ_SLAB_SIZE: usize = 64 * 1024;
+/// The largest read a connection issues at once: the ceiling
+/// `read_buffer_size` clamps to.
+pub const MAX_READ_SIZE: usize = 64 * 1024;
 
-/// Take a read-sized scratch buffer from the front of `stash`, leaving the
-/// remaining tail in `stash` to hand out on the next call.
+/// Read into an owned buffer, then declare the bytes written as initialized.
 ///
-/// This replaces the old bump-pointer read arena: successive reads carve
-/// `read_size` chunks off one `READ_SLAB_SIZE` allocation until it is used up,
-/// then a fresh slab is allocated. Freezing a returned buffer shares that
-/// slab's allocation (via `bytes` refcounting), so a lagging consumer pins the
-/// slab exactly as the arena page did.
-///
-/// # Safety
-///
-/// The returned buffer reports `read_size` initialized bytes that are in fact
-/// uninitialized, so it can be handed to an owned-buffer read without
-/// zero-filling first. The caller must pass it straight to a read and
-/// `truncate` it to the number of bytes actually read before freezing,
-/// inspecting, or otherwise exposing its contents.
-pub unsafe fn take_read_buffer(stash: &mut BytesMut, read_size: usize) -> BytesMut {
-    if stash.capacity() < read_size {
-        *stash = BytesMut::with_capacity(read_size.max(READ_SLAB_SIZE));
-    }
-    if stash.len() < read_size {
-        // SAFETY: `read_size` is within capacity per the check above. The
-        // function's contract requires the caller to overwrite these bytes via
-        // the read and truncate to the real count before exposing them.
-        unsafe { stash.set_len(read_size) };
-    }
-    let tail = stash.split_off(read_size);
-    std::mem::replace(stash, tail)
-}
-
-/// Read into an owned buffer's spare capacity, then declare the bytes written
-/// as initialized.
+/// As with compio's own reads, the read fills the buffer from its start
+/// (`IoBufMut::as_uninit` is the whole buffer); a caller that appends passes
+/// a slice past what it holds, `buf.slice(len..)`.
 ///
 /// This is the one place in the workspace that calls `set_len` (from compio's
 /// `SetLen`). Every runtime backend routes its read path through here, so the
 /// single owned-buffer `unsafe` block lives behind one documented contract
 /// instead of a copy per adapter.
 ///
-/// `read` is an async closure handed the buffer's uninitialized spare capacity
-/// as `&mut [MaybeUninit<u8>]`; it performs the actual read into the front of
+/// `read` is an async closure handed the buffer's storage as
+/// `&mut [MaybeUninit<u8>]`; it performs the actual read into the front of
 /// that slice: tokio wraps it in a `ReadBuf`, smol hands it to `recv`, so the
 /// read mechanism stays with the backend while the buffer bookkeeping stays
 /// here. `AsyncFnOnce` lets the returned future borrow the spare slice, which a
@@ -135,85 +104,53 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytes::BytesMut;
 
-    #[test]
-    fn reclaim_makes_slab_use_track_bytes_read_and_freezes_only_read_bytes() {
-        // One 64 KiB slab, fully initialized so we can read pointers/contents.
-        let mut stash = BytesMut::new();
-        stash.resize(READ_SLAB_SIZE, 0);
-        let slab_ptr = stash.as_ptr();
-
-        // Carve a read buffer, "read" 10 bytes into it, and reclaim the unused
-        // tail back into the slab (the read_raw hot path).
-        let mut buf = unsafe { take_read_buffer(&mut stash, 8192) };
-        assert_eq!(buf.as_ptr(), slab_ptr, "carved from the slab front");
-        buf[..10].copy_from_slice(b"0123456789");
-        buf.truncate(10);
-        let mut reclaimed = buf.split_off(10);
-        // Scratch len so unsplit does not discard the empty tail (see read_raw).
-        // SAFETY: uninitialized scratch, overwritten before the next read.
-        unsafe {
-            reclaimed.set_len(reclaimed.capacity());
+    fn write_cdef(spare: &mut [MaybeUninit<u8>]) -> usize {
+        for (slot, b) in spare.iter_mut().zip(b"cdef") {
+            slot.write(*b);
         }
-        reclaimed.unsplit(std::mem::take(&mut stash));
-        stash = reclaimed;
+        4
+    }
 
-        // Freezing exposes exactly the 10 bytes read - never any of the
-        // uninitialized carve.
-        let frozen = buf.freeze();
-        assert_eq!(frozen.as_ref(), b"0123456789");
-        assert_eq!(
-            frozen.as_ptr(),
-            slab_ptr,
-            "frozen frame aliases the slab head"
-        );
+    /// `fill_read` declares exactly the bytes the read wrote. Runs under
+    /// Miri, which checks that no uninitialized byte is ever exposed.
+    #[test]
+    fn fill_read_exposes_exactly_the_bytes_read() {
+        let buf = BytesMut::with_capacity(32);
+        let BufResult(res, buf) =
+            futures::executor::block_on(fill_read(buf, async |s: &mut [MaybeUninit<u8>]| {
+                Ok(write_cdef(s))
+            }));
+        assert_eq!(res.unwrap(), 4);
+        assert_eq!(&buf[..], b"cdef");
+    }
 
-        // The reclaim returned the unused bytes: the next carve advances by the
-        // 10 bytes read, not the full 8192 carve, and reuses the same slab.
-        let next = unsafe { take_read_buffer(&mut stash, 8192) };
-        assert_eq!(
-            next.as_ptr() as usize,
-            slab_ptr as usize + 10,
-            "the next carve reuses the reclaimed space (slab use tracks bytes read)"
-        );
+    /// Appending goes through a slice past what the buffer holds, as the
+    /// socket reader does; the bytes already there survive.
+    #[test]
+    fn fill_read_through_a_slice_appends() {
+        use compio_buf::{IntoInner, IoBuf};
+        let mut buf = BytesMut::with_capacity(32);
+        buf.extend_from_slice(b"ab");
+        let len = buf.len();
+        let BufResult(res, slice) = futures::executor::block_on(fill_read(
+            buf.slice(len..),
+            async |s: &mut [MaybeUninit<u8>]| Ok(write_cdef(s)),
+        ));
+        assert_eq!(res.unwrap(), 4);
+        assert_eq!(&slice.into_inner()[..], b"abcdef");
     }
 
     #[test]
-    fn take_read_buffer_over_slab_size_does_not_panic_or_corrupt() {
-        // Regression (migrated from the old arena): a read_size larger than the
-        // slab size once overflowed the backing page and panicked in freeze()
-        // with "range end out of bounds". take_read_buffer must grow to fit.
-        let mut stash = BytesMut::with_capacity(READ_SLAB_SIZE);
-        let read_size = READ_SLAB_SIZE + 1024;
-        // SAFETY: bookkeeping-only test; we truncate to the full length and
-        // never rely on the (uninitialized) contents.
-        let mut buf = unsafe { take_read_buffer(&mut stash, read_size) };
-        assert_eq!(buf.len(), read_size);
-        buf.truncate(read_size);
-        assert_eq!(buf.freeze().len(), read_size);
-    }
-
-    #[test]
-    fn take_read_buffer_splits_front_and_keeps_tail() {
-        let mut stash = BytesMut::with_capacity(READ_SLAB_SIZE);
-        // SAFETY: bookkeeping-only test; contents are never inspected.
-        let buf = unsafe { take_read_buffer(&mut stash, 256) };
-        assert_eq!(buf.len(), 256);
-        assert_eq!(stash.len(), 0);
-        assert!(stash.capacity() >= READ_SLAB_SIZE - 256);
-    }
-
-    #[test]
-    fn take_read_buffer_reuses_one_slab_across_reads() {
-        // Successive sub-slab reads carve from the same allocation, the way the
-        // bump-pointer arena shared a page: the stash tail shrinks by exactly
-        // read_size each time, with no fresh 64 KiB allocation.
-        let mut stash = BytesMut::with_capacity(READ_SLAB_SIZE);
-        // SAFETY: bookkeeping-only test; contents are never inspected.
-        let _first = unsafe { take_read_buffer(&mut stash, 4096) };
-        assert_eq!(stash.capacity(), READ_SLAB_SIZE - 4096);
-        // SAFETY: bookkeeping-only test.
-        let _second = unsafe { take_read_buffer(&mut stash, 4096) };
-        assert_eq!(stash.capacity(), READ_SLAB_SIZE - 8192);
+    fn fill_read_leaves_the_buffer_alone_on_error() {
+        let mut buf = BytesMut::with_capacity(8);
+        buf.extend_from_slice(b"x");
+        let BufResult(res, buf) =
+            futures::executor::block_on(fill_read(buf, async |_: &mut [MaybeUninit<u8>]| {
+                Err(io::Error::other("no"))
+            }));
+        assert!(res.is_err());
+        assert_eq!(&buf[..], b"x");
     }
 }

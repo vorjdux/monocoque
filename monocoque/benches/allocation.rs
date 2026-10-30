@@ -1,13 +1,14 @@
 //! Memory allocation benchmarks.
 //!
 //! Tracks allocation pressure in the hot path: frame construction, Bytes
-//! clone-vs-copy, and arena vs heap allocation patterns.
+//! clone-vs-copy, `BytesMut` reuse, read-buffer handling and multipart
+//! message allocation.
 //!
-//! Run with: `cargo bench --package monocoque -F zmq --bench allocation`
+//! Run with: `cargo bench -p monocoque-rs --bench allocation`
 
-use bytes::{Bytes, BytesMut};
+use bytes::{Buf, Bytes, BytesMut};
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
-use monocoque_core::buffer::SegmentedBuffer;
+use monocoque_core::msg::Msg;
 use std::hint::black_box;
 
 /// `Bytes::copy_from_slice` vs `Bytes::from` (moves ownership)
@@ -77,37 +78,30 @@ fn bench_bytesmut_reuse(c: &mut Criterion) {
     group.finish();
 }
 
-/// `SegmentedBuffer` push/drain cycle (mimics the codec read path)
-fn bench_segmented_buffer(c: &mut Criterion) {
-    let mut group = c.benchmark_group("segmented_buffer");
+/// Read-buffer drain cycle (mimics the codec read path: skip a frame header,
+/// then split the body off without copying it)
+fn bench_read_buffer(c: &mut Criterion) {
+    let mut group = c.benchmark_group("read_buffer");
 
     group.throughput(Throughput::Bytes(1024));
-    group.bench_function("push_1kb", |b| {
+    group.bench_function("header_then_split_1kb", |b| {
         b.iter_batched(
-            || (SegmentedBuffer::new(), Bytes::from(vec![0u8; 1024])),
-            |(mut buf, data)| {
-                buf.push(data);
-                black_box(buf.len());
+            || BytesMut::from(&[0u8; 1024][..]),
+            |mut buf| {
+                buf.advance(2);
+                let body = buf.split_to(1022).freeze();
+                black_box(body.len());
             },
             BatchSize::SmallInput,
         );
     });
 
-    group.bench_function("push_drain_cycle_1kb", |b| {
-        b.iter_batched(
-            || {
-                let mut buf = SegmentedBuffer::new();
-                buf.push(Bytes::from(vec![0u8; 1024]));
-                buf
-            },
-            |mut buf| {
-                // Simulate draining 2 bytes (frame header) then the rest
-                buf.advance(2);
-                buf.advance(1022);
-                black_box(buf.len());
-            },
-            BatchSize::SmallInput,
-        );
+    group.bench_function("small_frame_into_inline_msg", |b| {
+        let wire = [0u8; 64];
+        b.iter(|| {
+            let msg = Msg::copy_from_slice(black_box(&wire));
+            black_box(msg);
+        });
     });
 
     group.finish();
@@ -118,32 +112,32 @@ fn bench_multipart_alloc(c: &mut Criterion) {
     let mut group = c.benchmark_group("multipart_alloc");
     let frame = Bytes::from(vec![0u8; 256]);
 
-    group.bench_function("2_frame_vec", |b| {
+    group.bench_function("2_frame_msg", |b| {
         b.iter(|| {
-            let msg: Vec<Bytes> = vec![frame.clone(), frame.clone()];
+            let msg = Msg::from([frame.clone(), frame.clone()]);
             black_box(msg);
         });
     });
 
-    group.bench_function("5_frame_vec", |b| {
+    group.bench_function("5_frame_msg", |b| {
         b.iter(|| {
-            let msg: Vec<Bytes> = vec![
+            let msg = Msg::from([
                 frame.clone(),
                 frame.clone(),
                 frame.clone(),
                 frame.clone(),
                 frame.clone(),
-            ];
+            ]);
             black_box(msg);
         });
     });
 
     group.bench_function("router_envelope_3_frame", |b| {
-        // Simulates a ROUTER envelope: [routing_id, empty, payload]
+        // A ROUTER envelope: [routing_id, empty, payload]
         let id = Bytes::copy_from_slice(b"peer-identity-01");
         let empty = Bytes::new();
         b.iter(|| {
-            let msg: Vec<Bytes> = vec![id.clone(), empty.clone(), frame.clone()];
+            let msg = Msg::from([id.clone(), empty.clone(), frame.clone()]);
             black_box(msg);
         });
     });
@@ -155,7 +149,7 @@ criterion_group!(
     benches,
     bench_bytes_construction,
     bench_bytesmut_reuse,
-    bench_segmented_buffer,
+    bench_read_buffer,
     bench_multipart_alloc,
 );
 criterion_main!(benches);

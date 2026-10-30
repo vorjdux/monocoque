@@ -13,31 +13,33 @@ PLAIN sends credentials in cleartext, so it must run over TLS or a VPN in produc
 let options = SocketOptions::new()
     .with_plain_credentials("alice", "secret");
 
-let mut socket = DealerSocket::connect_with_options("tcp://server:5555", options).await?;
+let mut socket = DealerSocket::with_options(options);
+socket.connect("tcp://server:5555").await?;
 
-// Server with a static credential store
+// Server with a static credential store, checked through ZAP
 use monocoque_zmtp::security::plain::StaticPlainHandler;
+use monocoque_zmtp::security::zap_handler::start_default_zap_server;
+use std::sync::Arc;
 
 let mut handler = StaticPlainHandler::new();
 handler.add_user("alice", "secret");
 handler.add_user("bob", "hunter2");
+start_default_zap_server(Arc::new(handler), false)?;
 
 let options = SocketOptions::new().with_plain_server(true);
 
-// Accept a connection, then apply the PLAIN server options to that stream.
-let listener = TcpListener::bind("0.0.0.0:5555").await?;
-let (stream, _) = listener.accept().await?;
-let mut socket = RouterSocket::with_options(stream, options).await?;
+// Every peer that connects to this endpoint runs the PLAIN handshake.
+let mut socket = RouterSocket::with_options(options);
+socket.bind("tcp://0.0.0.0:5555").await?;
 ```
 
-For dynamic credentials (database lookup, LDAP, etc.), implement `PlainAuthHandler`:
+For dynamic credentials (database lookup, LDAP, etc.), implement `PlainAuthHandler`. It uses native `async fn`, so it cannot be a `dyn` object; pass the concrete type, for example `Arc<DbAuthHandler>`:
 
 ```rust
 use monocoque_zmtp::security::plain::PlainAuthHandler;
 
 struct DbAuthHandler { pool: sqlx::PgPool }
 
-#[async_trait::async_trait(?Send)]
 impl PlainAuthHandler for DbAuthHandler {
     async fn authenticate(
         &self, username: &str, password: &str,
@@ -64,34 +66,37 @@ See `examples/plain_auth_demo.rs` for a runnable example.
 CURVE is what you should use in production. It provides mutual authentication and message encryption (XSalsa20-Poly1305, via NaCl `crypto_box`) with no shared secrets and no certificate authority. The server has a long-term keypair; clients get the server's public key out-of-band and generate ephemeral keys per connection.
 
 ```rust
-use monocoque_zmtp::security::curve::CurveKeyPair;
+use monocoque_zmtp::security::curve::CurveSecretKey;
 
-// Generate a server keypair once; store the secret key securely.
-let server_kp = CurveKeyPair::generate();
-// Distribute server_kp.public to clients (config file, environment variable, etc.)
+// Generate a server secret key once (32 random bytes) and store it securely.
+// The public key is derived from it; distribute that to clients
+// (config file, environment variable, etc.)
+let server_secret: [u8; 32] = load_server_secret();
+let server_public = *CurveSecretKey::from_bytes(server_secret).public_key().as_bytes();
 
 // Server
 let server_opts = SocketOptions::default()
     .with_curve_server(true)
-    .with_curve_keypair(*server_kp.public.as_bytes(), *server_kp.secret.as_bytes());
+    .with_curve_keypair(server_public, server_secret);
 
-let listener = TcpListener::bind("0.0.0.0:5555").await?;
-let (stream, _) = listener.accept().await?;
-let mut server = RouterSocket::with_options(stream, server_opts).await?;
+let mut server = RouterSocket::with_options(server_opts);
+server.bind("tcp://0.0.0.0:5555").await?;
 
 // Client
-let client_kp = CurveKeyPair::generate(); // ephemeral is fine
+let client_secret: [u8; 32] = random_32_bytes(); // a fresh key per client is fine
+let client_public = *CurveSecretKey::from_bytes(client_secret).public_key().as_bytes();
 
 let server_pubkey: [u8; 32] = hex::decode(std::env::var("SERVER_PUBLIC_KEY")?)?.try_into()?;
 
 let client_opts = SocketOptions::default()
-    .with_curve_keypair(*client_kp.public.as_bytes(), *client_kp.secret.as_bytes())
+    .with_curve_keypair(client_public, client_secret)
     .with_curve_serverkey(server_pubkey);
 
-let mut client = DealerSocket::connect_with_options("server:5555", client_opts).await?;
+let mut client = DealerSocket::with_options(client_opts);
+client.connect("tcp://server:5555").await?;
 ```
 
-The ZMTP handshake completes automatically on connect/accept. Handshake overhead is roughly 3 ms; per-message overhead is around 32 bytes (MAC + nonce). Throughput is typically 90-95% of NULL.
+The ZMTP handshake runs automatically on every connection a socket makes or accepts. CURVE follows RFC 26 and interoperates with libzmq in both roles, and custom properties set with `with_metadata` travel inside the encrypted handshake. Handshake overhead is roughly 3 ms; per-message overhead is around 32 bytes (MAC + nonce). Throughput is typically 90-95% of NULL.
 
 Store the server secret key in an environment variable or a secrets manager. Never log it, never commit it.
 
@@ -101,7 +106,7 @@ See `examples/curve_demo.rs` for a full working example.
 
 Without ZAP, any client that knows the server's public key can connect over CURVE, and any client that knows a valid credential can connect over PLAIN. ZAP lets you plug in custom authorization logic that runs during the handshake.
 
-A ZAP handler is an async task that receives authentication requests over `inproc://zeromq.zap.01` and responds with allow/deny decisions.
+A ZAP handler is an async task that receives authentication requests over `inproc://zeromq.zap.01` and responds with allow/deny decisions. `ZapHandler` uses native `async fn`, so store the concrete handler type (`Arc<AllowlistHandler>`), not a `dyn ZapHandler`.
 
 ```rust
 use monocoque_zmtp::security::zap_handler::{ZapHandler, spawn_zap_server};
@@ -113,7 +118,6 @@ struct AllowlistHandler {
     allowed_keys: HashSet<[u8; 32]>,
 }
 
-#[async_trait::async_trait(?Send)]
 impl ZapHandler for AllowlistHandler {
     async fn authenticate(&self, req: &ZapRequest) -> ZapResponse {
         // For CURVE, credentials[0] is the client's 32-byte public key.
@@ -145,6 +149,10 @@ let options = SocketOptions::new()
 ```
 
 See `examples/zap_server_demo.rs` and `examples/authenticated_req_rep.rs` for full examples. The ZAP handler details are in [ZAP_INTEGRATION_GUIDE.md](ZAP_INTEGRATION_GUIDE.md).
+
+### Repeated failures
+
+A server slows down an address that keeps failing authentication. After two failures in a row from one IP, each new connection from it waits before its handshake starts: 100 ms, doubling with each further failure, up to 10 s. A successful login clears the address, and one that stays quiet for a minute is forgotten. IPC peers have no address and are not delayed. This bounds online password guessing per address; it is not a substitute for rate limiting at the network edge.
 
 ## Troubleshooting
 

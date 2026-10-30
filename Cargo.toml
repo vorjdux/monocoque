@@ -36,13 +36,14 @@ let_underscore_future = "allow"
 # Async fns kept async for signature consistency across backends / traits.
 unused_async = "allow"
 # Same policy, trait-impl half: split out of `unused_async` in Rust 1.98. A no-op
-# or synchronous impl of an async trait method (NoOpPermits::acquire, the smol
-# and tokio flush/shutdown adapters, the inproc transport) keeps the `async fn`
+# or synchronous impl of an async trait method (the smol and tokio flush/shutdown
+# adapters, `transport::Stream::flush`) keeps the `async fn`
 # signature the trait declares rather than desugaring to `impl Future` at one
 # site and not the others.
 unused_async_trait_impl = "allow"
 # Wire-protocol and metrics math: casts are bounded by construction.
-cast_possible_truncation = "allow"
+# cast_possible_truncation is deliberately NOT allowed: every narrowing cast is
+# either a checked conversion or carries a per-site allow stating its bound.
 cast_sign_loss = "allow"
 cast_precision_loss = "allow"
 cast_possible_wrap = "allow"
@@ -92,16 +93,8 @@ compio = { version = "0.19", default-features = false, features = ["runtime", "m
 smol = "2"
 flume = "0.12"
 futures = "0.3"
-async-trait = "0.1"
 thiserror = "2"
-hashbrown = "0.14"
 smallvec = "1.13"
-
-# Async utilities
-async-lock = "3.3"
-dashmap = "6.0"
-once_cell = "1.19"
-parking_lot = "0.12"
 
 # Networking
 socket2 = { version = "0.6", features = ["all"] }

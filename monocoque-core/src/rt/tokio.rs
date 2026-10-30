@@ -75,9 +75,8 @@ pub async fn join<T>(handle: JoinHandle<T>) -> T {
 
 /// A self-contained runtime owned by a single thread.
 ///
-/// Used by worker threads that drive their own event loop independently of
-/// the caller's runtime (for example the publisher's fan-out workers). A
-/// current-thread tokio runtime matches the single-threaded compio one and
+/// For a thread that drives its own event loop, such as a test or a helper
+/// thread that runs a socket outside the caller's runtime. A current-thread tokio runtime matches the single-threaded compio one and
 /// lets `spawn`/`spawn_detached` run within `block_on`.
 pub struct LocalRuntime {
     inner: tokio::runtime::Runtime,
@@ -110,7 +109,7 @@ impl LocalRuntime {
 /// Mirrors compio's owned-buffer read contract: bytes land in the buffer's
 /// backing memory (no intermediate copy) and the count read is reported back
 /// through `set_buf_init`. `ReadBuf::uninit` keeps this sound over the read
-/// slab's spare capacity, which is not yet initialized.
+/// buffer's spare capacity, which is not yet initialized.
 async fn read_into<R, B>(reader: &mut R, buf: B) -> BufResult<usize, B>
 where
     R: tokio::io::AsyncRead + Unpin,
@@ -206,6 +205,90 @@ macro_rules! impl_compio_io {
     };
 }
 
+/// Implement the `compio::io` traits for `&$ty`, so one stream can have a read
+/// and a write in flight at once through shared references, the way compio's
+/// native streams do. tokio's `poll_read`/`poll_write` need `Pin<&mut _>`, so
+/// these wait for readiness on `&self` and then issue the non-blocking
+/// `try_*` call, retrying on a spurious wakeup.
+macro_rules! impl_shared_io {
+    ($ty:ty) => {
+        impl AsyncRead for &$ty {
+            async fn read<B: IoBufMut>(&mut self, buf: B) -> BufResult<usize, B> {
+                let inner = &self.inner;
+                crate::io::fill_read(buf, async move |spare| {
+                    // Try first: under a ping-pong the bytes are usually
+                    // already there, and registering readiness is the
+                    // expensive part.
+                    let len = spare.len();
+                    loop {
+                        let mut dst: &mut [std::mem::MaybeUninit<u8>] = &mut *spare;
+                        match inner.try_read_buf(&mut dst) {
+                            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                                inner.readable().await?;
+                            }
+                            Ok(n) if n > 0 && n < len => {
+                                // A short read drained the socket. Clear the
+                                // cached readiness (a closure that reports
+                                // WouldBlock does exactly that, with no
+                                // syscall) so the next read waits for an
+                                // event instead of spending a recv on EAGAIN.
+                                // tokio's own poll_read does the same.
+                                let _ = inner.try_io(tokio::io::Interest::READABLE, || {
+                                    Err::<(), _>(io::ErrorKind::WouldBlock.into())
+                                });
+                                return Ok(n);
+                            }
+                            other => return other,
+                        }
+                    }
+                })
+                .await
+            }
+        }
+
+        impl AsyncWrite for &$ty {
+            async fn write<B: IoBuf>(&mut self, buf: B) -> BufResult<usize, B> {
+                let result = loop {
+                    match self.inner.try_write(buf.as_init()) {
+                        Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                            if let Err(e) = self.inner.writable().await {
+                                break Err(e);
+                            }
+                        }
+                        other => break other,
+                    }
+                };
+                BufResult(result, buf)
+            }
+
+            async fn write_vectored<B: IoVectoredBuf>(&mut self, buf: B) -> BufResult<usize, B> {
+                let result = loop {
+                    let attempt = crate::io::with_vectored_slices(&buf, |slices| {
+                        self.inner.try_write_vectored(slices)
+                    });
+                    match attempt {
+                        Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                            if let Err(e) = self.inner.writable().await {
+                                break Err(e);
+                            }
+                        }
+                        other => break other,
+                    }
+                };
+                BufResult(result, buf)
+            }
+
+            async fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+
+            async fn shutdown(&mut self) -> io::Result<()> {
+                socket2::SockRef::from(&self.inner).shutdown(std::net::Shutdown::Write)
+            }
+        }
+    };
+}
+
 // ── TCP ──────────────────────────────────────────────────────────────────
 
 /// Tokio TCP stream wearing the `compio::io` interface.
@@ -235,9 +318,8 @@ impl TcpStream {
 
     /// Adopt a `std::net::TcpStream`, attaching it to the current runtime.
     ///
-    /// Mirrors compio's `TcpStream::from_std`; used to re-attach a handed-off
-    /// fd to a worker's runtime (see the publisher fan-out). tokio requires the
-    /// stream to be non-blocking.
+    /// Mirrors compio's `TcpStream::from_std`. tokio requires the stream to be
+    /// non-blocking, so this sets it.
     pub fn from_std(stream: std::net::TcpStream) -> io::Result<Self> {
         stream.set_nonblocking(true)?;
         Ok(Self {
@@ -303,6 +385,7 @@ pub fn bind_reuseport(addr: SocketAddr) -> io::Result<TcpListener> {
 impl_compio_io!(read TcpStream);
 impl_compio_io!(write TcpStream);
 impl_compio_io!(raw_fd TcpStream);
+impl_shared_io!(TcpStream);
 // The split halves intentionally have no raw-fd accessor: TCP tuning is
 // applied to the whole stream before it is split, and tokio's halves do not
 // expose the descriptor.
@@ -317,8 +400,8 @@ pub use unix::{UnixListener, UnixStream};
 #[cfg(unix)]
 mod unix {
     use super::{
-        AsyncRead, AsyncWrite, BufResult, IoBuf, IoBufMut, Pin, TokioAsyncWrite, io, poll_fn,
-        read_into, write_from,
+        AsyncRead, AsyncWrite, BufResult, IoBuf, IoBufMut, IoVectoredBuf, Pin, TokioAsyncWrite, io,
+        poll_fn, read_into, write_from, write_vectored_from,
     };
     use std::os::unix::io::AsRawFd;
     use std::path::Path;
@@ -387,6 +470,13 @@ mod unix {
             write_from(&mut self.inner, buf).await
         }
 
+        // Without this override compio-io's default writes one iovec per call,
+        // so a multi-frame send over IPC degraded to one syscall per header and
+        // body while TCP took a single writev.
+        async fn write_vectored<B: IoVectoredBuf>(&mut self, buf: B) -> BufResult<usize, B> {
+            write_vectored_from(&mut self.inner, buf).await
+        }
+
         async fn flush(&mut self) -> io::Result<()> {
             poll_fn(|cx| Pin::new(&mut self.inner).poll_flush(cx)).await
         }
@@ -399,6 +489,27 @@ mod unix {
     impl AsRawFd for UnixStream {
         fn as_raw_fd(&self) -> std::os::unix::io::RawFd {
             self.inner.as_raw_fd()
+        }
+    }
+
+    impl_shared_io!(UnixStream);
+
+    #[cfg(test)]
+    mod tests {
+        use super::{AsyncWrite, UnixStream};
+
+        // compio-io's default write_vectored writes only the first non-empty
+        // buffer per call. One call returning the full length proves the
+        // override issues a single writev across every iovec.
+        #[test]
+        fn unix_write_vectored_is_one_writev() {
+            crate::rt::LocalRuntime::new().unwrap().block_on(async {
+                let (a, _b) = tokio::net::UnixStream::pair().unwrap();
+                let mut a = UnixStream { inner: a };
+                let bufs = [vec![1u8; 10], vec![2u8; 20], vec![3u8; 30]];
+                let compio_buf::BufResult(n, _) = a.write_vectored(bufs).await;
+                assert_eq!(n.unwrap(), 60);
+            });
         }
     }
 }

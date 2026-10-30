@@ -5,6 +5,60 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+One breaking release: every socket is rebuilt on a single per-socket
+multiplexer with one message type. `docs/MIGRATION.md` lists every source
+change; `docs/rfc-compliance.md` describes protocol behaviour RFC by RFC.
+
+### Breaking
+
+- `Msg` replaces `Vec<Bytes>` everywhere. `recv()` returns a borrowed
+  `MsgRef`; `recv_owned()` keeps the message. `recv_into`, `try_recv_into`,
+  `send_one`, `send_buffered`, `recv_batch`, `PushFanOut`, `PullFanIn`, the
+  `small()`/`large()` presets and the write-buffer-size options are gone.
+- Every socket binds and connects endpoints (`tcp://`, `ipc://`, `inproc://`)
+  and serves any number of peers. Every public method returns
+  `Result<_, MonocoqueError>`; a receive timeout is an error, not `Ok(None)`.
+- `ZapHandler` and `PlainAuthHandler` use native `async fn` and cannot be used
+  as `dyn` trait objects; `async-trait` is no longer a dependency.
+- CURVE now implements RFC 26 and interoperates with libzmq; it does not talk
+  to the 0.4 CURVE implementation.
+- inproc is bounded by the HWM and works across threads. `vectored_write_threshold`
+  defaults to 16 KiB.
+
+### Added
+
+- `zmq_poll` (`monocoque::zmq::poll`) and per-message connection metadata
+  (`gets`), including custom handshake properties, over NULL, PLAIN and CURVE.
+- ZMTP 1.0 and 2.0 legacy peers; secured sockets refuse to downgrade.
+- Conflate, and CLIENT/SERVER, RADIO/DISH, SCATTER/GATHER and CHANNEL behind
+  the `draft` feature.
+- `xpub_manual`, `xpub_welcome_msg`, `connect_routing_id` and
+  `max_reconnect_attempts` take effect.
+- STREAM messages and notifications carry `Peer-Address`.
+- Failed authentications slow the offending address down (per-IP backoff).
+
+### Fixed
+
+- Coalesced large messages could be lost on `close()` and bypass the HWM.
+- Lost wakeups between sockets on different threads; a cross-thread inproc
+  `flush()` could wait forever.
+- A STREAM peer's last data before it closed could be dropped on tokio and smol.
+- A smol receiver with an unbounded HWM was starved by streaming peers.
+- compio runtime creation retries with smaller rings on `ENOMEM`.
+
+### Performance
+
+- compio's `LocalRuntime` polls for completions for up to 20 us before
+  sleeping (`MONOCOQUE_SPIN_US`), which closes its IPC latency gap to tokio.
+- Small writes go out directly on io_uring; timers are armed only when an
+  operation waits; long frames are read into a buffer of their own (one
+  allocation instead of three); CURVE encrypts in place.
+- New gates: allocations per message on every socket type, instruction counts
+  for CURVE, fragmented frames and envelopes, type sizes and estimated cycles,
+  and atomics per message (`scripts/count_atomics.sh`).
+
 ## 0.4.2 - 2026-09-22
 
 A maintenance release. No API, wire-format or behaviour change: the library code

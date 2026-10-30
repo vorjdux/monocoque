@@ -2,18 +2,18 @@
 //!
 //! This example demonstrates the Paranoid Pirate reliability pattern:
 //! - Workers send heartbeats and READY messages
-//! - Clients make reliable requests
+//! - Clients make reliable requests, retrying when a reply never comes
 //! - Workers can crash and recover
-//! - Broker forwards messages using proxy
+//! - Broker forwards messages and intercepts worker control messages
 //!
 //! Architecture:
 //! ```text
-//! Clients (REQ)  →  ROUTER (frontend)
-//!                        ↓
+//! Clients (REQ)  ->  ROUTER (frontend)
+//!                        |
 //!                    Broker
-//!                   (proxy + heartbeat monitoring)
-//!                        ↓
-//!                   DEALER (backend)  ←  Workers (DEALER)
+//!                   (forwarding + heartbeat monitoring)
+//!                        |
+//!                   DEALER (backend)  <-  Workers (DEALER)
 //!                                          + HEARTBEAT
 //!                                          + READY
 //! ```
@@ -29,8 +29,9 @@
 //! For production, you'd track worker queues in the broker and route intelligently.
 
 use bytes::Bytes;
+use futures::{FutureExt, select};
 use monocoque::rt::{self, LocalRuntime};
-use monocoque::zmq::{DealerSocket, ReqSocket};
+use monocoque::zmq::{DealerSocket, MonocoqueError, Msg, ReqSocket, RouterSocket, SocketOptions};
 use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 
@@ -40,6 +41,7 @@ const HEARTBEAT: &[u8] = b"\x02"; // Worker heartbeat
 
 // Timing constants
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
+const REQUEST_TIMEOUT: Duration = Duration::from_millis(2500);
 
 /// Paranoid Pirate Worker with heartbeating
 ///
@@ -47,17 +49,17 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 /// - READY message on startup
 /// - HEARTBEAT messages every second
 /// - REPLY messages when processing requests
-#[allow(clippy::future_not_send)]
-async fn run_worker(worker_id: u32, crash_after: Option<u32>) -> std::io::Result<()> {
-    info!("[Worker-{}] 🔧 Starting paranoid worker", worker_id);
+async fn run_worker(worker_id: u32, crash_after: Option<u32>) -> monocoque::zmq::Result<()> {
+    info!("[Worker-{}] Starting paranoid worker", worker_id);
 
-    let mut socket = DealerSocket::connect("127.0.0.1:5556").await?;
+    // The receive timeout wakes the worker up to send heartbeats while idle
+    let mut socket =
+        DealerSocket::with_options(SocketOptions::default().with_recv_timeout(HEARTBEAT_INTERVAL));
+    socket.connect("tcp://127.0.0.1:5556").await?;
 
     // Send READY signal to broker
-    socket
-        .send(vec![Bytes::new(), Bytes::from_static(READY)])
-        .await?;
-    info!("[Worker-{}] ✅ Sent READY to broker", worker_id);
+    socket.send(READY).await?;
+    info!("[Worker-{}] Sent READY to broker", worker_id);
 
     let mut heartbeat_timer = Instant::now();
     let mut request_count = 0u32;
@@ -65,10 +67,8 @@ async fn run_worker(worker_id: u32, crash_after: Option<u32>) -> std::io::Result
     loop {
         // Send periodic heartbeat
         if heartbeat_timer.elapsed() >= HEARTBEAT_INTERVAL {
-            socket
-                .send(vec![Bytes::new(), Bytes::from_static(HEARTBEAT)])
-                .await?;
-            debug!("[Worker-{}] 💓 Sent heartbeat", worker_id);
+            socket.send(HEARTBEAT).await?;
+            debug!("[Worker-{}] Sent heartbeat", worker_id);
             heartbeat_timer = Instant::now();
         }
 
@@ -76,140 +76,145 @@ async fn run_worker(worker_id: u32, crash_after: Option<u32>) -> std::io::Result
         if let Some(crash_at) = crash_after
             && request_count >= crash_at
         {
-            error!("[Worker-{}] 💥 CRASH SIMULATION - worker dying", worker_id);
+            error!("[Worker-{}] CRASH SIMULATION - worker dying", worker_id);
             return Ok(());
         }
 
-        // Receive and process requests (non-blocking)
-        if let Ok(Some(mut msg)) = socket.recv().await
-            && !msg.is_empty()
-        {
-            // Skip empty delimiter frame if present
-            if msg[0].is_empty() && msg.len() > 1 {
-                msg.remove(0);
-            }
+        // Receive a request: [client identity, empty delimiter, body]
+        let msg = match socket.recv_owned().await {
+            Ok(msg) if msg.len() >= 2 => msg,
+            Ok(_) => continue,
+            Err(MonocoqueError::TimedOut) => continue,
+            Err(e) => return Err(e),
+        };
 
-            request_count += 1;
-            let request_data = msg
-                .last()
-                .map(|b| String::from_utf8_lossy(b).to_string())
-                .unwrap_or_default();
+        request_count += 1;
+        let request_data = String::from_utf8_lossy(msg.last().unwrap_or_default()).into_owned();
 
-            info!(
-                "[Worker-{}] 📥 Processing request #{}: {}",
-                worker_id, request_count, request_data
-            );
+        info!(
+            "[Worker-{}] Processing request #{}: {}",
+            worker_id, request_count, request_data
+        );
 
-            // Simulate work
-            rt::sleep(Duration::from_millis(100)).await;
+        // Simulate work
+        rt::sleep(Duration::from_millis(100)).await;
 
-            // Send reply (echo back with worker ID)
-            let reply_text = format!("Processed by worker-{worker_id}: {request_data}");
+        // Send reply (echo back with worker ID), keeping the routing frames
+        let reply_text = format!("Processed by worker-{worker_id}: {request_data}");
+        let mut reply: Msg = (0..msg.len() - 1)
+            .filter_map(|i| msg.frame_bytes(i))
+            .collect();
+        reply.push(Bytes::from(reply_text));
 
-            let mut reply = vec![Bytes::new()];
-            // Keep routing info frames
-            reply.extend(msg[..msg.len() - 1].to_vec());
-            // Replace last frame with our reply
-            reply.push(Bytes::from(reply_text));
-
-            socket.send(reply).await?;
-            info!("[Worker-{}] 📤 Sent reply #{}", worker_id, request_count);
-        }
-
-        // Small yield to prevent CPU spinning
-        rt::sleep(Duration::from_millis(10)).await;
+        socket.send(reply).await?;
+        info!("[Worker-{}] Sent reply #{}", worker_id, request_count);
     }
 }
 
-/// Simple client making requests
+/// Reliable client making requests
 ///
-/// Sends N requests and waits for replies
-#[allow(clippy::future_not_send)]
-async fn run_client(client_id: u32, num_requests: u32) -> std::io::Result<()> {
-    info!("[Client-{}] 🔌 Starting", client_id);
+/// Sends N requests and waits for replies. A request lost with a crashed
+/// worker never gets a reply, so after `REQUEST_TIMEOUT` the client drops
+/// its socket, reconnects and sends the request again.
+async fn run_client(client_id: u32, num_requests: u32) -> monocoque::zmq::Result<()> {
+    info!("[Client-{}] Starting", client_id);
 
-    // Wait for broker and workers to be ready
-    rt::sleep(Duration::from_millis(1500)).await;
-
-    let mut socket = ReqSocket::connect("127.0.0.1:5555").await?;
+    let options = SocketOptions::default().with_recv_timeout(REQUEST_TIMEOUT);
+    let mut socket = ReqSocket::with_options(options.clone());
+    socket.connect("tcp://127.0.0.1:5555").await?;
 
     for i in 1..=num_requests {
         let request = format!("Request {i} from client-{client_id}");
-        info!("[Client-{}] 📨 Sending: {}", client_id, request);
+        loop {
+            info!("[Client-{}] Sending: {}", client_id, request);
+            socket.send(request.clone()).await?;
 
-        socket.send(vec![Bytes::from(request)]).await?;
-
-        // Wait for reply (REQ/REP guarantees request-reply pairs)
-        if let Ok(Some(reply)) = socket.recv().await {
-            if let Some(reply_text) = reply.first() {
-                info!(
-                    "[Client-{}] 📬 Received: {:?}",
-                    client_id,
-                    String::from_utf8_lossy(reply_text)
-                );
+            // Wait for reply (REQ/REP guarantees request-reply pairs)
+            match socket.recv().await {
+                Ok(reply) => {
+                    info!(
+                        "[Client-{}] Received: {:?}",
+                        client_id,
+                        String::from_utf8_lossy(reply.first().unwrap_or_default())
+                    );
+                    break;
+                }
+                Err(MonocoqueError::TimedOut) => {
+                    warn!("[Client-{}] No reply received, retrying", client_id);
+                    socket = ReqSocket::with_options(options.clone());
+                    socket.connect("tcp://127.0.0.1:5555").await?;
+                }
+                Err(e) => return Err(e),
             }
-        } else {
-            warn!("[Client-{}] ⚠️  No reply received", client_id);
         }
 
         // Delay between requests
         rt::sleep(Duration::from_millis(800)).await;
     }
 
-    info!("[Client-{}] ✅ Completed all requests", client_id);
+    info!("[Client-{}] Completed all requests", client_id);
     Ok(())
 }
 
-/// Simple broker using `ZeroMQ` proxy pattern
+/// Broker forwarding between clients and workers
 ///
-/// The proxy automatically forwards messages bidirectionally using `futures::select`!
-/// In production, you would intercept READY/HEARTBEAT messages
-/// to track worker liveness and maintain an LRU queue.
-#[allow(clippy::future_not_send)]
-async fn run_broker() -> std::io::Result<()> {
-    info!("🚀 Starting Paranoid Pirate Broker");
+/// Requests go from the frontend to the backend, which load-balances them
+/// over the connected workers. Replies go back to the frontend, which routes
+/// them by the client identity in the first frame. Worker READY and
+/// HEARTBEAT messages are intercepted here instead of forwarded.
+async fn run_broker() -> monocoque::zmq::Result<()> {
+    info!("Starting Paranoid Pirate Broker");
 
     // Frontend: ROUTER for clients (REQ sockets)
-    let (_, mut frontend) = monocoque::zmq::RouterSocket::bind("127.0.0.1:5555").await?;
+    let mut frontend = RouterSocket::new();
+    frontend.bind("tcp://127.0.0.1:5555").await?;
     // Backend: DEALER for workers (DEALER sockets)
-    let (_, mut backend) = DealerSocket::bind("127.0.0.1:5556").await?;
+    let mut backend = DealerSocket::new();
+    backend.bind("tcp://127.0.0.1:5556").await?;
 
-    info!("📡 Frontend (clients) listening on 127.0.0.1:5555");
-    info!("📡 Backend (workers) listening on 127.0.0.1:5556");
-    info!("🔄 Starting ZeroMQ proxy (async-aware with futures::select!)\n");
+    info!("Frontend (clients) listening on 127.0.0.1:5555");
+    info!("Backend (workers) listening on 127.0.0.1:5556\n");
 
-    // Use the ZeroMQ proxy pattern - now async-aware for single-threaded runtime
-    // This forwards messages bidirectionally: frontend ←→ backend
-    // READY, HEARTBEAT, and request/reply messages all flow through
-    monocoque::zmq::proxy::proxy(
-        &mut frontend,
-        &mut backend,
-        Option::<&mut DealerSocket>::None,
-    )
-    .await?;
-
-    Ok(())
+    let mut last_heartbeat = Instant::now();
+    loop {
+        let (msg, from_client): (Msg, bool) = select! {
+            m = frontend.recv_owned().fuse() => (m?, true),
+            m = backend.recv_owned().fuse() => (m?, false),
+        };
+        if from_client {
+            backend.send(msg).await?;
+        } else if msg == [READY] {
+            info!("[Broker] Worker ready ({} connected)", backend.peer_count());
+        } else if msg == [HEARTBEAT] {
+            debug!(
+                "[Broker] Heartbeat, {:?} since the previous one",
+                last_heartbeat.elapsed()
+            );
+            last_heartbeat = Instant::now();
+        } else {
+            frontend.send(msg).await?;
+        }
+    }
 }
 
-fn main() -> std::io::Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .with_target(false)
         .init();
 
-    info!("🎬 Paranoid Pirate Pattern Demo");
+    info!("Paranoid Pirate Pattern Demo");
     info!("=================================");
     info!("Demonstrating:");
-    info!("  • Workers with heartbeating");
-    info!("  • READY signals on startup");
-    info!("  • Request-reply through broker");
-    info!("  • Worker crash simulation");
-    info!("  • Recovery worker spawning");
+    info!("  - Workers with heartbeating");
+    info!("  - READY signals on startup");
+    info!("  - Request-reply through broker");
+    info!("  - Worker crash simulation");
+    info!("  - Recovery worker spawning");
     info!("=================================\n");
-    info!("⚠️  Note: This is a simplified demo.");
-    info!("⚠️  Production brokers would parse READY/HEARTBEAT");
-    info!("⚠️  and maintain worker queues.\n");
+    info!("Note: This is a simplified demo.");
+    info!("Production brokers would maintain worker queues.\n");
 
     LocalRuntime::new()?.block_on(async {
         // Spawn broker
@@ -219,9 +224,6 @@ fn main() -> std::io::Result<()> {
             }
         });
 
-        // Wait for broker to initialize
-        rt::sleep(Duration::from_secs(1)).await;
-
         // Spawn stable worker
         rt::spawn_detached(async {
             if let Err(e) = run_worker(1, None).await {
@@ -229,18 +231,15 @@ fn main() -> std::io::Result<()> {
             }
         });
 
-        // Small delay between worker spawns
-        rt::sleep(Duration::from_millis(200)).await;
-
         // Spawn worker that crashes after 3 requests
         rt::spawn_detached(async {
-            if let Err(_e) = run_worker(2, Some(3)).await {
-                info!("Worker 2 completed/crashed");
+            if let Err(e) = run_worker(2, Some(3)).await {
+                error!("Worker 2 error: {}", e);
             }
         });
 
         // Wait for workers to connect and send READY
-        rt::sleep(Duration::from_secs(2)).await;
+        rt::sleep(Duration::from_millis(500)).await;
 
         // Spawn client making 6 requests
         let client1 = rt::spawn(async {
@@ -249,9 +248,9 @@ fn main() -> std::io::Result<()> {
             }
         });
 
-        // After 5 seconds, spawn recovery worker (after worker 2 crashes)
-        rt::sleep(Duration::from_secs(5)).await;
-        info!("\n🔄 Spawning recovery worker...\n");
+        // After a few seconds, spawn recovery worker (after worker 2 crashes)
+        rt::sleep(Duration::from_secs(4)).await;
+        info!("\nSpawning recovery worker...\n");
 
         rt::spawn_detached(async {
             if let Err(e) = run_worker(3, None).await {
@@ -260,24 +259,20 @@ fn main() -> std::io::Result<()> {
         });
 
         // Wait for client to finish all requests
-        let () = rt::join(client1).await;
+        rt::join(client1).await;
 
-        // Give time to see final heartbeats
-        rt::sleep(Duration::from_secs(3)).await;
-
-        info!("\n✅ Demo completed successfully!");
+        info!("\nDemo completed successfully!");
         info!("\nPattern Summary:");
-        info!("  • Workers sent READY signals on connect");
-        info!("  • Workers sent heartbeats every second");
-        info!("  • Worker 2 crashed after 3 requests");
-        info!("  • Worker 3 joined as recovery worker");
-        info!("  • All client requests were processed");
+        info!("  - Workers sent READY signals on connect");
+        info!("  - Workers sent heartbeats every second");
+        info!("  - Worker 2 crashed after 3 requests");
+        info!("  - Worker 3 joined as recovery worker");
+        info!("  - All client requests were processed");
         info!("\nFor production:");
-        info!("  • Broker should parse READY/HEARTBEAT");
-        info!("  • Track worker liveness timestamps");
-        info!("  • Remove dead workers from queue");
-        info!("  • Route requests to available workers");
-        info!("  • Use multi-peer ROUTER sockets");
+        info!("  - Track worker liveness timestamps per worker");
+        info!("  - Remove dead workers from queue");
+        info!("  - Route requests to available workers");
+        info!("  - Use a ROUTER backend to address workers individually");
 
         Ok(())
     })

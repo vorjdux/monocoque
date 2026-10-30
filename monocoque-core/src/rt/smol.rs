@@ -102,8 +102,7 @@ thread_local! {
 /// Handle to a spawned task.
 ///
 /// Unlike compio and tokio, dropping a smol `Task` **cancels** it. All call
-/// sites either detach explicitly ([`spawn_detached`]) or await via [`join`];
-/// the one place that stores handles (`PullFanIn`) wants cancel-on-drop.
+/// sites either detach explicitly ([`spawn_detached`]) or await via [`join`].
 pub type JoinHandle<T> = smol::Task<T>;
 
 /// Spawn a task on the current thread's executor and return its handle.
@@ -243,9 +242,8 @@ impl TcpStream {
 
     /// Adopt a `std::net::TcpStream`, attaching it to the async reactor.
     ///
-    /// Mirrors compio's `TcpStream::from_std`; used to re-attach a handed-off fd
-    /// to a worker's runtime (see the publisher fan-out). `Async::new` puts the
-    /// stream into non-blocking mode.
+    /// Mirrors compio's `TcpStream::from_std`. `Async::new` puts the stream
+    /// into non-blocking mode.
     pub fn from_std(stream: std::net::TcpStream) -> io::Result<Self> {
         Ok(Self {
             inner: Arc::new(Async::new(stream)?),
@@ -343,6 +341,38 @@ impl AsyncWrite for TcpStream {
         SockRef::from(self.inner.get_ref()).shutdown(std::net::Shutdown::Write)
     }
 }
+
+/// Implement the `compio::io` traits for `&$ty`, so a read and a write can be
+/// in flight on one stream at once. Every helper already works on `&Async<T>`.
+macro_rules! impl_shared_io {
+    ($ty:ty) => {
+        impl AsyncRead for &$ty {
+            async fn read<B: IoBufMut>(&mut self, buf: B) -> BufResult<usize, B> {
+                read_into(&self.inner, buf).await
+            }
+        }
+
+        impl AsyncWrite for &$ty {
+            async fn write<B: IoBuf>(&mut self, buf: B) -> BufResult<usize, B> {
+                write_from(&self.inner, buf).await
+            }
+
+            async fn write_vectored<B: IoVectoredBuf>(&mut self, buf: B) -> BufResult<usize, B> {
+                write_vectored_from(&self.inner, buf).await
+            }
+
+            async fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+
+            async fn shutdown(&mut self) -> io::Result<()> {
+                SockRef::from(self.inner.get_ref()).shutdown(std::net::Shutdown::Write)
+            }
+        }
+    };
+}
+
+impl_shared_io!(TcpStream);
 
 impl AsyncRead for OwnedReadHalf {
     async fn read<B: IoBufMut>(&mut self, buf: B) -> BufResult<usize, B> {
@@ -482,4 +512,6 @@ mod unix {
             self.inner.get_ref().as_raw_fd()
         }
     }
+
+    impl_shared_io!(UnixStream);
 }

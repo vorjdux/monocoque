@@ -12,11 +12,43 @@
 
 use bytes::Bytes;
 use monocoque::rt::{self, LocalRuntime};
-use monocoque::zmq::{DealerSocket, SocketEvent};
+use monocoque::zmq::{DealerSocket, Msg, RouterSocket, SocketEvent, SocketMonitor};
 use std::time::Duration;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     LocalRuntime::new()?.block_on(async_main())
+}
+
+/// Print every event `monitor` delivers until its socket is gone.
+fn watch(name: &'static str, monitor: SocketMonitor) {
+    rt::spawn_detached(async move {
+        while let Ok(event) = monitor.recv_async().await {
+            match event {
+                SocketEvent::Connected(ep) => {
+                    println!("  [{name}] Connected to {ep}");
+                }
+                SocketEvent::Disconnected(ep) => {
+                    println!("  [{name}] Disconnected from {ep}");
+                }
+                SocketEvent::ConnectFailed { endpoint, reason } => {
+                    println!("  [{name}] Connection failed for {endpoint}: {reason}");
+                }
+                SocketEvent::Bound(ep) => {
+                    println!("  [{name}] Bound to {ep}");
+                }
+                SocketEvent::BindFailed { endpoint, reason } => {
+                    println!("  [{name}] Bind failed for {endpoint}: {reason}");
+                }
+                SocketEvent::Listening(ep) => {
+                    println!("  [{name}] Listening on {ep}");
+                }
+                SocketEvent::Accepted(ep) => {
+                    println!("  [{name}] Accepted connection from {ep}");
+                }
+            }
+        }
+        println!("  [{name}] Monitoring ended");
+    });
 }
 
 async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
@@ -27,75 +59,36 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("=== Socket Monitoring Example ===\n");
 
-    // Create a socket and enable monitoring
-    let mut socket = DealerSocket::connect("127.0.0.1:5555").await?;
-    let monitor = socket.monitor();
+    // Enable monitoring before binding or connecting so no event is missed
+    let mut router = RouterSocket::new();
+    watch("ROUTER", router.monitor());
+    let endpoint = router.bind("tcp://127.0.0.1:0").await?;
 
-    println!("✓ Created DEALER socket with monitoring enabled");
-    println!("  Endpoint: tcp://127.0.0.1:5555\n");
+    let mut socket = DealerSocket::new();
+    watch("DEALER", socket.monitor());
+    socket.connect(&endpoint).await?;
 
-    // Spawn a task to handle monitoring events
-    rt::spawn_detached(async move {
-        println!("📡 Monitoring task started...\n");
-
-        while let Ok(event) = monitor.recv_async().await {
-            match event {
-                SocketEvent::Connected(ep) => {
-                    println!("✓ Connected to {ep}");
-                }
-                SocketEvent::Disconnected(ep) => {
-                    println!("✗ Disconnected from {ep}");
-                }
-                SocketEvent::ConnectFailed { endpoint, reason } => {
-                    println!("✗ Connection failed for {endpoint}: {reason}");
-                }
-                SocketEvent::Bound(ep) => {
-                    println!("✓ Bound to {ep}");
-                }
-                SocketEvent::BindFailed { endpoint, reason } => {
-                    println!("✗ Bind failed for {endpoint}: {reason}");
-                }
-                SocketEvent::Listening(ep) => {
-                    println!("✓ Listening on {ep}");
-                }
-                SocketEvent::Accepted(ep) => {
-                    println!("✓ Accepted connection from {ep}");
-                }
-            }
-        }
-
-        println!("\n📡 Monitoring task ended");
-    });
+    println!("Created ROUTER and DEALER with monitoring enabled");
+    println!("  Endpoint: {endpoint}\n");
 
     // Simulate some socket operations
     println!("Sending test message...");
-    match socket
-        .send(vec![Bytes::from("Hello"), Bytes::from("World")])
-        .await
-    {
-        Ok(()) => println!("✓ Message sent successfully\n"),
-        Err(e) => println!("✗ Failed to send message: {e}\n"),
-    }
+    socket
+        .send(Msg::from([Bytes::from("Hello"), Bytes::from("World")]))
+        .await?;
+    let msg = router.recv_owned().await?;
+    println!("ROUTER received {} parts (identity included)\n", msg.len());
 
-    // Wait a bit to see events
+    // Close the server to trigger disconnect events on the DEALER
+    println!("Closing the ROUTER...");
+    router.close().await?;
     rt::sleep(Duration::from_millis(100)).await;
 
-    // Try to receive (will likely timeout since no server is running)
-    println!("Attempting to receive...");
-    if let Ok(Some(msg)) = socket.recv().await {
-        println!("✓ Received {} parts\n", msg.len());
-    } else {
-        println!("✗ No message received (connection closed or no server)\n");
-    }
-
-    // Drop the socket to trigger disconnect events
+    // Drop the DEALER; its monitor channel closes with it
     drop(socket);
-
-    // Wait for monitoring task to process final events
     rt::sleep(Duration::from_millis(100)).await;
 
     println!("\n=== Example Complete ===");
-    println!("Note: Connect to an actual server to see full event flow");
 
     Ok(())
 }

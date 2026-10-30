@@ -14,14 +14,9 @@
 //! sleep between recvs), so it stays continuously far behind the publish rate -
 //! the realistic "slow consumer" shape. This is the documented approximation the
 //! deliverable calls for.
-//!
-//! Multi-peer PUB fan-out over the direct-stream sockets is still maturing (see
-//! the note in `benches/patterns.rs`), so counts are kept modest. This target is
-//! required to COMPILE; running it to completion is best-effort.
 
-use bytes::Bytes;
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use monocoque::zmq::{PubSocket, SocketOptions, SubSocket};
+use monocoque::zmq::{Msg, PubSocket, SocketOptions, SubSocket};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -46,20 +41,20 @@ const WARMUP_MSGS: usize = 100;
 /// The slow subscriber reads one message per this interval, staying far behind.
 const SLOW_INTERVAL: Duration = Duration::from_millis(5);
 /// Brief settle after subscriptions are issued, cutting the slow-joiner drop
-/// burst. Uses `thread::sleep`, not `monocoque::rt::sleep`.
+/// burst.
 const SETTLE: Duration = Duration::from_millis(50);
+/// Longest the publisher waits for queued writes when a subscriber is full.
+const FLUSH_SLICE: Duration = Duration::from_millis(1);
 
 fn sub_options() -> SocketOptions {
-    SocketOptions::default().with_buffer_sizes(16384, 16384)
+    SocketOptions::default().with_read_buffer_size(16384)
 }
 
-/// Receive exactly `n` messages, returning early only on disconnect.
+/// Receive exactly `n` messages, returning early only on an error.
 async fn recv_n(sub: &mut SubSocket, n: usize) {
-    let mut count = 0;
-    while count < n {
-        match sub.recv().await {
-            Ok(Some(_)) => count += 1,
-            Ok(None) | Err(_) => return,
+    for _ in 0..n {
+        if sub.recv().await.is_err() {
+            return;
         }
     }
 }
@@ -68,53 +63,54 @@ async fn recv_n(sub: &mut SubSocket, n: usize) {
 /// while one slow subscriber lags and the publisher oversends. Returns the
 /// slowest fast subscriber's elapsed time.
 fn run_fanout_slow(iters: u64) -> Duration {
-    let target = iters as usize * MESSAGE_COUNT;
-    let payload = Bytes::from(vec![0u8; MESSAGE_SIZE]);
+    let target = usize::try_from(iters).expect("iteration count fits usize") * MESSAGE_COUNT;
+    let payload = Msg::from(vec![0u8; MESSAGE_SIZE]);
 
-    let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
+    let (ep_tx, ep_rx) = mpsc::channel::<String>();
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
 
-    // Publisher: accept every subscriber, then oversend until told to stop.
+    // Publisher: wait for every subscriber, then oversend until told to stop.
     let pub_handle = thread::spawn(move || {
         let rt = monocoque::rt::LocalRuntime::new().unwrap();
         rt.block_on(async move {
-            let mut pub_socket = PubSocket::bind("127.0.0.1:0").await.unwrap();
-            addr_tx.send(pub_socket.local_addr().unwrap()).unwrap();
-            for _ in 0..TOTAL_SUBS {
-                pub_socket.accept_subscriber().await.unwrap();
+            let mut pub_socket = PubSocket::new();
+            ep_tx
+                .send(pub_socket.bind("tcp://127.0.0.1:0").await.unwrap())
+                .unwrap();
+            while pub_socket.send(payload.clone()).await.unwrap_or(0) < TOTAL_SUBS {
+                monocoque::rt::sleep(Duration::from_millis(1)).await;
             }
             thread::sleep(SETTLE);
             while stop_rx.try_recv().is_err() {
-                pub_socket
-                    .send_frames(std::slice::from_ref(&payload))
-                    .await
-                    .ok();
+                // PUB never waits on a send. When a queue is full (the slow
+                // subscriber's, at least), hand the runtime a turn to write,
+                // bounded so the slow subscriber cannot hold the publisher
+                // back for longer than FLUSH_SLICE.
+                if pub_socket.send(payload.clone()).await.unwrap_or(0) < TOTAL_SUBS {
+                    let _ = monocoque::rt::timeout(FLUSH_SLICE, pub_socket.flush()).await;
+                }
             }
         });
     });
 
-    let server_addr = addr_rx.recv().unwrap();
+    let endpoint = ep_rx.recv().unwrap();
 
     // One slow subscriber: reads on a fixed slow cadence, never keeping up.
+    let slow_endpoint = endpoint.clone();
+    let (slow_stop_tx, slow_stop_rx) = mpsc::channel::<()>();
     let slow_handle = thread::spawn(move || {
         let rt = monocoque::rt::LocalRuntime::new().unwrap();
         rt.block_on(async move {
-            let stream = monocoque::rt::TcpStream::connect(server_addr)
-                .await
-                .unwrap();
-            let mut sub = SubSocket::from_tcp_with_options(stream, sub_options())
-                .await
-                .unwrap();
+            let mut sub = SubSocket::with_options(
+                sub_options().with_recv_timeout(Duration::from_millis(100)),
+            );
             sub.subscribe(b"").await.unwrap();
-            // Read slowly for the lifetime of the measurement. The fast
-            // subscribers bound the iteration, so a rough cap keeps this from
-            // outliving them if delivery stalls.
-            for _ in 0..(WARMUP_MSGS + MESSAGE_COUNT * 64) {
+            sub.connect(&slow_endpoint).await.unwrap();
+            // Read slowly until the measurement is over. The receive timeout
+            // lets it notice the stop once the publisher has gone quiet.
+            while slow_stop_rx.try_recv().is_err() {
                 thread::sleep(SLOW_INTERVAL);
-                match sub.recv().await {
-                    Ok(Some(_)) => {}
-                    Ok(None) | Err(_) => break,
-                }
+                let _ = sub.recv().await;
             }
         });
     });
@@ -122,16 +118,13 @@ fn run_fanout_slow(iters: u64) -> Duration {
     // Fast subscribers: drain at full speed and time their window.
     let mut fast_handles = Vec::with_capacity(FAST_SUBS);
     for _ in 0..FAST_SUBS {
+        let endpoint = endpoint.clone();
         fast_handles.push(thread::spawn(move || {
             let rt = monocoque::rt::LocalRuntime::new().unwrap();
             rt.block_on(async move {
-                let stream = monocoque::rt::TcpStream::connect(server_addr)
-                    .await
-                    .unwrap();
-                let mut sub = SubSocket::from_tcp_with_options(stream, sub_options())
-                    .await
-                    .unwrap();
+                let mut sub = SubSocket::with_options(sub_options());
                 sub.subscribe(b"").await.unwrap();
+                sub.connect(&endpoint).await.unwrap();
                 recv_n(&mut sub, WARMUP_MSGS).await; // untimed warmup
                 let start = Instant::now();
                 recv_n(&mut sub, target).await;
@@ -149,7 +142,8 @@ fn run_fanout_slow(iters: u64) -> Duration {
 
     let _ = stop_tx.send(());
     pub_handle.join().unwrap();
-    let _ = slow_handle.join();
+    let _ = slow_stop_tx.send(());
+    slow_handle.join().unwrap();
     elapsed
 }
 

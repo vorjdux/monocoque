@@ -3,9 +3,10 @@
 **⚠️ Internal Implementation Crate**
 
 This crate is an internal implementation detail of the Monocoque project. It
-provides the low-level runtime primitives shared by the protocol crates: the
-owned-buffer I/O layer over the io_uring (compio), tokio, and smol backends, the
-read slab, socket options, endpoint parsing, byte-based backpressure, and the
+provides the protocol-agnostic kernel the protocol crates build on: the socket
+multiplexer (`SocketCore`, one per socket, over any number of peers), the `Msg`
+message type, the owned-buffer I/O layer over the io_uring (compio), tokio, and
+smol backends, socket options, endpoint parsing, subscription matching, and the
 inproc transport.
 
 ## For Application Development
@@ -18,14 +19,18 @@ monocoque-rs = { version = "0.4", features = ["zmq"] }
 ```
 
 ```rust
+use monocoque::rt::LocalRuntime;
 use monocoque::zmq::DealerSocket;
 
-#[compio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut socket = DealerSocket::connect("127.0.0.1:5555").await?;
-    socket.send(vec![b"Hello!".into()]).await?;
-    let response = socket.recv().await;
-    Ok(())
+fn main() -> monocoque::zmq::Result<()> {
+    LocalRuntime::new()?.block_on(async {
+        let mut socket = DealerSocket::new();
+        socket.connect("tcp://127.0.0.1:5555").await?;
+        socket.send("hello").await?;
+        let reply = socket.recv().await?;
+        println!("{:?}", reply.get(0));
+        Ok(())
+    })
 }
 ```
 
@@ -34,11 +39,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 The Monocoque project is organized as:
 
 -   **`monocoque`** - Public API crate (use this)
--   **`monocoque-zmtp`** - Internal ZMTP 3.1 protocol implementation (internal)
--   **`monocoque-core`** - Internal runtime primitives (this crate, internal)
+-   **`monocoque-zmtp`** - Internal ZMTP implementation (internal)
+-   **`monocoque-core`** - Internal kernel (this crate, internal)
+    -   Socket multiplexer: per-peer reader and writer loops, driver task
+    -   `Msg` / `MsgRef` and same-thread queues
     -   Owned-buffer read/write over compio / tokio / smol
-    -   Zero-copy read slab and buffers
-    -   Socket options, endpoints, backpressure, inproc transport
+    -   Socket options, endpoints, subscriptions, inproc transport
 
 ## Documentation
 

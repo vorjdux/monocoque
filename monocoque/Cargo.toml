@@ -29,26 +29,6 @@ name = "api_demo"
 required-features = ["zmq"]
 
 [[example]]
-name = "read_batch_probe"
-required-features = ["zmq"]
-
-[[example]]
-name = "dealer_write_probe"
-required-features = ["zmq"]
-
-[[example]]
-name = "dealer_throughput_probe"
-required-features = ["zmq"]
-
-[[example]]
-name = "bench_changes"
-required-features = ["zmq"]
-
-[[example]]
-name = "handshake_test"
-required-features = ["zmq"]
-
-[[example]]
 name = "hello_dealer"
 required-features = ["zmq"]
 
@@ -92,10 +72,6 @@ name = "multithreaded"
 harness = false
 required-features = ["zmq"]
 
-[[bench]]
-name = "performance"
-harness = false
-required-features = ["zmq"]
 
 [[bench]]
 name = "measure_latency"
@@ -151,10 +127,6 @@ name = "pubsub_multi"
 required-features = ["zmq"]
 
 [[example]]
-name = "multi_pub_minimal"
-required-features = ["zmq"]
-
-[[example]]
 name = "router_dealer_basic"
 required-features = ["zmq"]
 
@@ -167,7 +139,7 @@ name = "pipeline_worker_pool"
 required-features = ["zmq"]
 
 [[example]]
-name = "recv_into_zero_alloc"
+name = "borrowed_recv"
 required-features = ["zmq"]
 
 # Interoperability examples (manual verification)
@@ -204,15 +176,11 @@ name = "curve_demo"
 required-features = ["zmq"]
 
 [[example]]
+name = "curve_echo"
+required-features = ["zmq"]
+
+[[example]]
 name = "authenticated_req_rep"
-required-features = ["zmq"]
-
-[[example]]
-name = "debug_handshake_timing"
-required-features = ["zmq"]
-
-[[example]]
-name = "debug_rep_server"
 required-features = ["zmq"]
 
 [[example]]
@@ -225,6 +193,10 @@ required-features = ["zmq"]
 
 [[example]]
 name = "inproc_demo"
+required-features = ["zmq"]
+
+[[example]]
+name = "poll_demo"
 required-features = ["zmq"]
 
 [[example]]
@@ -248,14 +220,6 @@ name = "monitoring"
 required-features = ["zmq"]
 
 [[example]]
-name = "multi_pub_test"
-required-features = ["zmq"]
-
-[[example]]
-name = "multi_sub_client"
-required-features = ["zmq"]
-
-[[example]]
 name = "multi_subscriber"
 required-features = ["zmq"]
 
@@ -272,23 +236,7 @@ name = "paranoid_pirate_simple"
 required-features = ["zmq"]
 
 [[example]]
-name = "poison_guard_demo"
-required-features = ["zmq"]
-
-[[example]]
-name = "pubsub_events_new"
-required-features = ["zmq"]
-
-[[example]]
 name = "reconnection_demo"
-required-features = ["zmq"]
-
-[[example]]
-name = "rep_server"
-required-features = ["zmq"]
-
-[[example]]
-name = "req_client"
 required-features = ["zmq"]
 
 [[example]]
@@ -323,9 +271,6 @@ required-features = ["zmq"]
 name = "socket_monitoring"
 required-features = ["zmq"]
 
-[[example]]
-name = "stream_sink_adapters"
-required-features = ["zmq"]
 
 [[example]]
 name = "tcp_and_ipc_demo"
@@ -341,11 +286,19 @@ name = "zap_integration"
 required-features = ["zmq"]
 
 [[test]]
-name = "req_state_machine"
+name = "zap_peer_address"
 required-features = ["zmq"]
 
 [[test]]
-name = "interop_load_balance"
+name = "poll"
+required-features = ["zmq"]
+
+[[test]]
+name = "msg_metadata"
+required-features = ["zmq"]
+
+[[test]]
+name = "req_state_machine"
 required-features = ["zmq"]
 
 [[test]]
@@ -385,14 +338,6 @@ name = "pipeline_fanout_fanin"
 required-features = ["zmq"]
 
 [[test]]
-name = "recv_into"
-required-features = ["zmq"]
-
-[[test]]
-name = "interop_recv_into"
-required-features = ["zmq"]
-
-[[test]]
 name = "fanin_rss_bound"
 required-features = ["zmq"]
 
@@ -416,6 +361,14 @@ required-features = ["zmq"]
 name = "idle_wakeups"
 required-features = ["zmq"]
 
+[[test]]
+name = "fanout_many_subscribers"
+required-features = ["zmq"]
+
+[[test]]
+name = "proxy"
+required-features = ["zmq"]
+
 [lints]
 workspace = true
 
@@ -424,18 +377,14 @@ workspace = true
 monocoque-core = { version = "0.4.2", path = "../monocoque-core", package = "monocoque-rs-core", default-features = false }
 monocoque-zmtp = { version = "0.4.2", path = "../monocoque-zmtp", package = "monocoque-rs-zmtp", optional = true, default-features = false }
 
-# Re-export dependencies for user convenience
+# `bytes` is re-exported; the runtime crates are the backends the runtime-*
+# features select, which the examples and runtime tests drive directly.
 bytes.workspace = true
-compio-io.workspace = true
-compio-buf.workspace = true
 compio = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 smol = { workspace = true, optional = true }
 tracing.workspace = true
 tracing-subscriber.workspace = true
-
-# Used by the PushFanOut / PullFanIn pipeline helpers (zmq feature only)
-flume = { workspace = true, optional = true }
 
 [dev-dependencies]
 zmq.workspace = true
@@ -446,7 +395,6 @@ tokio.workspace = true
 num_cpus.workspace = true
 portpicker.workspace = true
 hex.workspace = true
-async-trait.workspace = true
 
 [features]
 default = ["runtime-compio"]
@@ -469,8 +417,19 @@ runtime-smol = [
 ]
 
 # Protocol implementations (opt-in)
-zmq = ["dep:monocoque-zmtp", "dep:flume"]
+zmq = ["dep:monocoque-zmtp"]
+# The draft ZeroMQ socket types (CLIENT/SERVER, RADIO/DISH, SCATTER/GATHER,
+# CHANNEL), whose API libzmq may still change.
+draft = ["zmq", "monocoque-zmtp/draft"]
 
 # Future protocols
 # mqtt = ["dep:monocoque-mqtt"]
 # amqp = ["dep:monocoque-amqp"]
+
+[[test]]
+name = "auth_backoff"
+required-features = ["zmq"]
+
+[[example]]
+name = "atomics_probe"
+required-features = ["zmq"]

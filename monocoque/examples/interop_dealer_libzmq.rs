@@ -1,4 +1,4 @@
-//! Interoperability test: Monocoque DEALER ↔ libzmq ROUTER
+//! Interoperability test: Monocoque DEALER <-> libzmq ROUTER
 //!
 //! This example demonstrates that Monocoque can communicate with libzmq.
 //!
@@ -7,15 +7,14 @@
 //! cargo run --example interop_dealer_libzmq --features zmq
 //! ```
 
-use bytes::Bytes;
-use monocoque::rt::{LocalRuntime, TcpStream};
+use monocoque::rt::LocalRuntime;
 use monocoque::zmq::DealerSocket;
 use std::thread;
 use std::time::Duration;
 use tracing::info;
 
 fn main() {
-    info!("=== Monocoque ↔ libzmq Interop Test ===\n");
+    info!("=== Monocoque <-> libzmq Interop Test ===\n");
 
     // Spawn libzmq ROUTER server in background thread
     let server_handle = thread::spawn(|| {
@@ -41,43 +40,34 @@ fn main() {
         thread::sleep(Duration::from_millis(100));
     });
 
-    // Give server time to bind
-    thread::sleep(Duration::from_millis(50));
-
-    // Run Monocoque DEALER client
+    // Run Monocoque DEALER client. Connecting does not wait for the server:
+    // the socket dials in the background and the send waits for the peer.
     LocalRuntime::new().unwrap().block_on(async {
         info!("[Monocoque DEALER] Connecting to tcp://127.0.0.1:5560");
 
-        let stream = TcpStream::connect("127.0.0.1:5560")
+        let mut dealer = DealerSocket::new();
+        dealer
+            .connect("tcp://127.0.0.1:5560")
             .await
             .expect("Failed to connect");
 
-        let mut dealer = DealerSocket::from_tcp(stream).await.unwrap();
-        info!("[Monocoque DEALER] Connected");
-
-        // Send request (DEALER adds identity automatically)
+        // Send request (the ROUTER adds the identity frame on its side)
         dealer
-            .send(vec![Bytes::from_static(b"Ping from Monocoque")])
+            .send("Ping from Monocoque")
             .await
             .expect("Failed to send");
         info!("[Monocoque DEALER] Sent request\n");
 
         // Receive reply
-        let response = dealer
-            .recv()
-            .await
-            .expect("IO error")
-            .expect("Connection closed");
+        let response = dealer.recv().await.expect("Failed to receive");
 
         info!("[Monocoque DEALER] Received response:");
-        for (i, frame) in response.iter().enumerate() {
+        for (i, frame) in response.frames().enumerate() {
             info!("  Frame {}: {:?}", i, String::from_utf8_lossy(frame));
         }
-
-        drop(dealer);
     });
 
     server_handle.join().unwrap();
 
-    info!("\n✅ Interop test completed successfully!");
+    info!("\nInterop test completed successfully!");
 }

@@ -21,6 +21,8 @@ env:
 jobs:
   instr-hotpath:
     name: Hot-path instruction counts
+    env:
+      RUSTUP_TOOLCHAIN: stable
     runs-on: ubuntu-latest
     permissions:
       contents: read

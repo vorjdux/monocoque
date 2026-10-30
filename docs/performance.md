@@ -11,7 +11,7 @@ a cgroup v2 slice with a per-run network namespace, six replicates per cell with
 outlier dropping. It records syscall counts, CPU seconds split by sender and
 receiver, peak RSS and run-to-run spread alongside throughput and latency, and
 publishes the raw JSON for every run. That is the place to look for how monocoque
-compares to libzmq, omq, rzmq, zmq.rs, celerity or the libzmq bindings, on TCP or
+compares to libzmq, rzmq, zmq.rs, celerity or the libzmq bindings, on TCP or
 IPC, across payload sizes and peer counts, and for the cells where monocoque does
 not come out ahead.
 
@@ -130,7 +130,7 @@ than a scheduling side effect, and achieves a high batch ratio with zero
 intermediate copies.
 
 For **large** frames, eager mode no longer copies the body into the send buffer:
-above `vectored_write_threshold` (default 32 KB) it writes the header and the
+at or above `vectored_write_threshold` (default 16 KiB) it writes the header and the
 `Bytes` body as an iovec (`writev`), so the payload is never copied on its way to
 the kernel. See [Vectored writes](#vectored-writes-large-frames) below.
 
@@ -138,9 +138,9 @@ the kernel. See [Vectored writes](#vectored-writes-large-frames) below.
 
 ### Throughput - DEALER/ROUTER batch API, 10 000 messages, batches of 100
 
-The explicit `send_buffered() / flush()` API (used by the pipelined benchmark)
-encodes N messages then issues one write, similar to coalescing but with manual
-control over batch boundaries:
+The pipelined benchmark sends each batch with write coalescing on, then calls
+`flush()`, so N messages are encoded and go out in one write with the caller
+choosing the batch boundaries:
 
 | Message size | compio | tokio | smol |
 |---|---|---|---|
@@ -149,6 +149,10 @@ control over batch boundaries:
 | 1 KB | 1.71 M msg/s (1.63 GiB/s) | 1.66 M msg/s (1.58 GiB/s) | 1.40 M msg/s (1.34 GiB/s) |
 | 4 KB | 713 K msg/s (2.72 GiB/s) | 707 K msg/s (2.70 GiB/s) | 647 K msg/s (2.47 GiB/s) |
 | 16 KB | 146 K msg/s (2.23 GiB/s) | 157 K msg/s (2.39 GiB/s) | 159 K msg/s (2.42 GiB/s) |
+
+These figures were measured on 0.4, when the bench used the since-removed
+`send_buffered` batch call. They have not been re-measured with coalesced
+`send` + `flush`; treat them as the 0.4 result, not this release's.
 
 ---
 
@@ -256,15 +260,15 @@ Enable for any throughput-bound send-heavy workload:
 ```rust
 use monocoque::zmq::{PushSocket, SocketOptions};
 
-let mut push = PushSocket::connect_with_options(
-    "127.0.0.1:5555",
+let mut push = PushSocket::with_options(
     SocketOptions::default().with_write_coalescing(true),
-).await?;
+);
+push.connect("tcp://127.0.0.1:5555").await?;
 
 // Messages accumulate in a 64 KB buffer; the kernel write fires when the
 // buffer fills or when flush() is called.
-for msg in &batch {
-    push.send(vec![msg.clone()]).await?;
+for payload in &batch {
+    push.send(payload.clone()).await?;
 }
 push.flush().await?;   // drain remaining bytes after the last send
 ```
@@ -287,7 +291,7 @@ and PAIR ignored the flag and issued one kernel write per send regardless. 0.4
 routes all of them through the same coalesce/vector/write path, so a batching
 DEALER caller finally gets the syscall amortization PUSH already had. For a
 1,000,000-message 64 B DEALER-to-ROUTER flow over TCP loopback (receiver-timed,
-`examples/dealer_throughput_probe.rs`):
+one-off probe harness):
 
 | DEALER send path | throughput |
 |---|---|
@@ -297,7 +301,7 @@ DEALER caller finally gets the syscall amortization PUSH already had. For a
 That is a ~38x improvement for batched DEALER workloads, and it is not
 measurement-sensitive: the win is a deterministic drop in write submissions. The
 same 20,000-message run under `strace` falls from 32,260 to 80 `io_uring_enter`
-calls once coalescing is honored (`examples/dealer_write_probe.rs`). The eager
+calls once coalescing is honored. The eager
 (one-write-per-send) DEALER path is unchanged; this is purely what a caller gains
 by opting into coalescing, which 0.3 did not deliver for these socket types.
 
@@ -346,30 +350,30 @@ bottleneck and know exactly where to place each `flush()`.
 
 ## Vectored writes (large frames)
 
-In eager mode, large frames are written with a vectored write (`writev`) instead
-of being copied into the userspace send buffer first. The frame header and the
+Large frames are written with a vectored write (`writev`) instead of being
+copied into the userspace send buffer first. The frame header and the
 refcounted `Bytes` body are handed to the kernel as a two-entry iovec, so the
 body travels straight to the socket with no intermediate `memcpy`. The header is
 built into a reused buffer and the iovec list is reused across calls, so the path
 allocates nothing per message.
 
 This is automatic, no API change is needed. The switch happens per message when
-a frame body is at or above `vectored_write_threshold` (default 32 KB). Small and
+a frame body is at or above `vectored_write_threshold` (default 16 KiB). Small and
 medium frames stay on the copy path, where a single contiguous `write` beats the
 per-iovec bookkeeping.
 
-The 32 KB default is the measured crossover on loopback: below it the copy plus
-one `write` is faster than a two-segment `writev`; at or above it, skipping the
-copy wins. On this 4-core test box vectored writes are ~1.1-1.3x for 32 KB-1 MB
-frames and ~30% *slower* at 16 KB, which is exactly why the threshold exists.
-Because the crossover depends on memory bandwidth and syscall cost, benchmark on
+The 16 KiB default was measured on loopback against 8 and 32 KiB: below the
+threshold the copy plus one `write` is faster than a multi-segment `writev`; at
+or above it, skipping the copy wins. At 16 KiB bodies it beats a 32 KiB
+threshold by about half on coalesced throughput and 3% on round-trip latency,
+and 8 KiB gains nothing more. Because the crossover depends on memory bandwidth and syscall cost, benchmark on
 your own hardware and adjust:
 
 ```rust
 use monocoque::zmq::{PushSocket, SocketOptions};
 
 // Trigger vectored writes for smaller frames (only if it wins on your box).
-let opts = SocketOptions::default().with_vectored_write_threshold(16384);
+let opts = SocketOptions::default().with_vectored_write_threshold(8192);
 
 // Or disable vectored writes entirely (always copy into the send buffer).
 let opts = SocketOptions::default().with_vectored_write_threshold(usize::MAX);
@@ -377,10 +381,9 @@ let opts = SocketOptions::default().with_vectored_write_threshold(usize::MAX);
 
 Notes and limits:
 
-- Applies in **eager** mode only. With write coalescing enabled, messages are
-  batched into the 64 KB buffer instead (the two strategies serve different
-  workloads: coalescing wins for small-message bursts, vectored writes for large
-  frames).
+- Applies with and without write coalescing. With coalescing on, small frames
+  are batched into the 64 KB buffer and large bodies still join the same write
+  as their own iovec segments.
 - Skipped for **CURVE**-encrypted connections: the cipher rewrites each body into
   a fresh buffer regardless, so there is no copy to avoid.
 - Uses compio's `write_vectored_all` (`writev`). The further `IORING_OP_SEND_ZC`
@@ -388,144 +391,106 @@ Notes and limits:
 
 ---
 
-## Receive batching
+## Borrowed receive
 
-`PullSocket::recv_batch()` is the receive-side counterpart to the send batch
-API. It blocks until at least one message is available, then drains every
-further message already decoded from the same kernel read, returning the whole
-burst from a single `.await`. One `read` frequently delivers many small
-messages; returning them together amortizes the per-await overhead that becomes
-a real fraction of the budget at multi-million-msg/s rates.
+`recv()` returns a `MsgRef<'_>` that borrows the socket's receive slot, so a
+receive loop allocates nothing per message and copies nothing: a frame of at
+most 64 bytes lives inline in the `Msg`, and a longer one is a slice of the
+buffer it was read into. Call `recv_owned()` (or `MsgRef::take`) only for a
+message that has to outlive the next receive. A message already in the queue
+is taken before any I/O work, so a receive never pays for reading.
 
 ```rust
 use monocoque::zmq::PullSocket;
 
-let mut pull = PullSocket::connect("127.0.0.1:5555").await?;
-while let Some(batch) = pull.recv_batch().await? {
-    for msg in batch {
-        handle(msg);
-    }
+let mut pull = PullSocket::new();
+pull.connect("tcp://127.0.0.1:5555").await?;
+loop {
+    let msg = pull.recv().await?;
+    handle(msg.first().unwrap_or_default());
 }
 ```
 
-For finer control, `recv()` followed by `try_recv()` in a loop drains the same
-buffer manually; `recv_batch()` just packages that pattern into one call.
+The allocation gate (`monocoque/tests/hotpath_alloc.rs`) holds every socket
+type to that. On tokio it measures zero. compio's driver allocates its own op
+record per read and write, and smol's reactor one per readiness wait; those
+are the runtime's allocations, not the socket's.
 
-In a loopback microbenchmark `recv_batch()` did **not** beat a tight `recv()`
-loop (per-await scheduling is not the bottleneck there), so treat it as an
-ergonomic convenience rather than a guaranteed speedup, and measure it against
-`recv()` for your own workload before relying on it.
+### Atomics
 
----
+`scripts/count_atomics.sh <backend>` counts the atomic (lock-prefixed)
+instructions executed per message under callgrind, by function. 64 B messages
+over TCP on one thread, every call counted:
 
-## Allocation-free receive (`recv_into`)
+| | compio | tokio | smol |
+|---|---|---|---|
+| borrowed receive of a queued message | 0 | 0 | 0 |
+| a whole PUSH -> PULL message | 26.4 | 46.4 | 55.9 |
 
-`recv()` allocates a fresh `Vec<Bytes>` for every message. At small message
-sizes that allocation is the dominant per-message cost. `recv_into(&mut out)`
-writes the frames into a caller-owned buffer instead, so a recv loop that reuses
-one buffer allocates nothing per message. `try_recv_into` is the non-blocking
-drain counterpart, for emptying everything decoded from one kernel read.
-
-As of 0.4.0 the allocation-free receive API is available on every recv-capable
-socket (DEALER, ROUTER, REQ, REP, PAIR, SUB), not just PULL, and the
-single-frame pipeline sockets (PULL, DEALER, PAIR) also expose `recv_one` for
-messages known to be one frame. Each socket keeps its receive semantics: ROUTER
-still prefixes the peer identity, REQ strips the reply envelope, REP stashes the
-routing envelope, and SUB drops filtered messages without allocating them.
-Measured over 256 DEALER messages, `recv()` charges 261 allocations and
-`recv_into()` charges 1.
-
-```rust
-use bytes::Bytes;
-use monocoque::zmq::PullSocket;
-
-let mut pull = PullSocket::connect("127.0.0.1:5555").await?;
-let mut buf: Vec<Bytes> = Vec::with_capacity(4);
-while pull.recv_into(&mut buf).await? {
-    handle(&buf);
-    while pull.try_recv_into(&mut buf)? {
-        handle(&buf);
-    }
-}
-```
-
-On the coalesced PUSH/PULL throughput bench this lifts 64 B from 14.1 M to 15.6 M
-msg/s on compio (about 1.10x) and from 18.0 M to 19.1 M on tokio, plus a few
-percent at 256 B; the gain tapers as messages grow and the path becomes
-bandwidth-bound. `recv()` and `try_recv()` are unchanged for callers
-that want an owned `Vec`. A runnable example lives at
-`examples/recv_into_zero_alloc.rs`.
+The second row covers sending, waking the reader and writer tasks, and the
+runtime's own bookkeeping. About 18 of those per message are monocoque's task
+wakeups (`ChildWaker`, `progress`); the rest are the runtime's (tokio's
+readiness and scheduler, smol's reactor and parker) and two for the probe's
+own `Bytes` payload clone on the send side.
 
 ---
 
 ## Worker pools (fan-out / fan-in)
 
-A single `PushSocket` or `PullSocket` owns one connection. For pool topologies,
-`PushFanOut` binds once and round-robins each `send` across N PULL workers, and
-`PullFanIn` binds once and merges N PUSH workers into one fair-queued stream.
+Every socket is multi-peer, so a pool needs no special type. A `PushSocket`
+that binds once (or connects to several endpoints) round-robins each `send`
+across all its PULL peers, and a `PullSocket` fair-queues across all its PUSH
+peers into one receive stream.
 
-Two notes from measuring these:
+```rust
+use monocoque::zmq::{PullSocket, PushSocket};
 
-- The `PullFanIn` sink runs all its per-connection readers on **one** runtime and
-  forwards each kernel-read burst across the merge channel in bounded-size chunks.
-  That keeps it at the single-core decode ceiling (it matches single-stream PULL)
-  while capping how many messages queue when the sink lags, so peak memory stays
-  bounded instead of growing with worker count.
+// Ventilator: workers connect to this endpoint as PULL sockets.
+let mut ventilator = PushSocket::new();
+ventilator.bind("tcp://127.0.0.1:5557").await?;
+
+// Sink: workers connect to this endpoint as PUSH sockets.
+let mut sink = PullSocket::new();
+sink.bind("tcp://127.0.0.1:5558").await?;
+```
+
+Two notes on how this runs:
+
+- All of a socket's peers are served on the one runtime thread that owns the
+  socket. Each peer has its own reader loop, which decodes into that peer's
+  ready queue and stops reading once the queue holds `recv_hwm` messages, so a
+  lagging sink caps memory per worker instead of growing without bound.
   Spreading the readers across threads was measured and is a net loss at small
   messages: at ~10M msg/s the cost is dominated by cross-core cache and atomic
   `Bytes` refcount traffic, not decode. Threads only help large, decode-heavy
   messages, where the link bandwidth is the limit anyway.
-- The `PushFanOut` ventilator round-robins one message at a time. With coalescing
-  each worker's buffer flushes at the threshold, so the writes stay batched while
-  all workers receive interleaved. Handing each worker its whole share in one
-  batched write instead serializes the pool and is markedly slower at large
-  messages, so the per-message path is the one to use.
+- The PUSH side round-robins one message at a time. With coalescing each
+  worker's queue flushes at the threshold, so the writes stay batched while all
+  workers receive interleaved.
+
+See `examples/pipeline_worker_pool.rs` and `examples/router_worker_pool.rs`.
 
 ---
 
 ## PUB/SUB broadcast coalescing
 
-The worker-pool `PubSocket` coalesces broadcasts automatically. When a producer
-outpaces a worker and several broadcasts queue up, the worker drains them into a
-batch and writes each subscriber its matching messages in a single vectored
-write, amortizing the syscall cost across the burst. The plaintext fan-out stays
-zero-copy: every subscriber's iovec entries are O(1) `Bytes` clones of the
-shared per-message wire, never copies of the payload.
+A `PubSocket` encodes each message once and appends the same refcounted wire
+bytes to every matching subscriber's outbound queue, so the fan-out never copies
+the payload. Each subscriber's writer drains everything queued for it as one
+job: when a producer outpaces a subscriber and several broadcasts queue up while
+a write is in flight, they go out together in the next vectored write,
+amortizing the syscall cost across the burst.
 
 This is automatic and requires no API change; it is what lets PUB fan-out keep
 up under load rather than paying one syscall per message per subscriber.
-
-### Worker-pool PUB and runtime lifetime (tokio backend)
-
-The worker-pool `PubSocket` accepts each subscriber on the caller's runtime, then
-hands the connection to a worker thread that owns its own runtime and does the
-actual broadcast writes. `send()` only queues to that worker and returns; the
-socket write happens later, on the worker.
-
-On the **compio** backend this just works: the accepted socket is a plain file
-descriptor and is usable from any thread. The **smol** backend is likewise
-unaffected: `async-io` registers streams with a process-wide global reactor, not
-a per-runtime one, so a handed-off stream stays live regardless of which
-executor accepted it. On the **tokio** backend a `TcpStream` is bound to the
-runtime that created it (the accepting runtime), so the worker's writes only
-succeed while that runtime is still alive. In practice this is a
-non-issue for a normal long-running PUB server, whose accepting runtime stays up
-for the process lifetime. It only bites a **short-lived publisher** that
-broadcasts a burst and then lets its accepting runtime shut down immediately: the
-tail of the broadcast can be dropped because the in-flight worker writes race the
-teardown. If you drive a worker-pool `PubSocket` on tokio from a task that exits
-right after sending, keep the accepting runtime alive until subscribers have
-drained (for example, wait on a completion signal before returning from
-`block_on`). The direct-stream sockets (PUSH/PULL, REQ/REP, DEALER/ROUTER) are
-unaffected, since they never move a stream across runtimes.
 
 ---
 
 ## Buffer sizes
 
-Read and write buffer sizes affect how many bytes fit before an extra read/write
-syscall is needed. The defaults are a 32 KB read buffer and an 8 KB write buffer.
-The read buffer is clamped to the 64 KB read slab, and floored at 64 bytes.
+The read buffer size affects how many bytes fit before an extra read syscall is
+needed. The default is a 32 KB read buffer. There is no write buffer setting:
+the outbound buffer grows on demand and is reused. The read buffer is clamped to 64 KB and floored at 64 bytes.
 
 ```rust
 use monocoque_core::options::SocketOptions;
@@ -534,13 +499,11 @@ use monocoque_core::options::SocketOptions;
 let opts = SocketOptions::default().with_read_buffer_size(4096);
 
 // Bulk transfers: widen the read batch to the full slab
-let opts = SocketOptions::default().with_buffer_sizes(65_536, 65_536);
+let opts = SocketOptions::default().with_read_buffer_size(65_536);
 ```
 
-`SocketOptions::small()` and `large()` are deprecated. Both set read buffers
-below the 32 KB default, so they are slower than leaving the default alone
-despite being named as optimizations. Reach for a smaller read buffer only to
-cut latency, never to "tune" throughput.
+Reach for a read buffer below the 32 KB default only to cut latency, never to
+"tune" throughput.
 
 **Rule of thumb:** set read buffer >= your 99th-percentile message size.
 
@@ -548,8 +511,11 @@ cut latency, never to "tune" throughput.
 
 ## High-water marks (HWM)
 
-HWM limits the number of messages queued in memory. When the queue is full,
-sends block (or drop on PUB sockets). Lower HWM means lower memory footprint
+HWM limits the number of messages queued in memory, per peer and in each
+direction, on every socket type and transport (inproc included). When a send
+queue is full, sends wait (or fail with `Again`/`TimedOut` under a send timeout;
+PUB drops for that subscriber). When a receive queue is full, the peer stops
+being read, so the backpressure reaches the sender through the kernel. Lower HWM means lower memory footprint
 and faster backpressure propagation; higher HWM means more buffering to absorb bursts.
 
 ```rust
@@ -558,7 +524,7 @@ let opts = SocketOptions::default()
     .with_recv_hwm(2000);  // double the default recv queue
 ```
 
-Setting HWM to 0 disables the limit (unbounded queue, use with care).
+Setting HWM to 0 disables the limit (unbounded queue, use with care), as in libzmq.
 
 ---
 
@@ -575,10 +541,29 @@ the full benefit; older kernels fall back to thread-pool I/O.
 - **SQPOLL**: Enables kernel-side submission polling, eliminating `io_uring_enter`
   syscalls at the cost of a dedicated CPU core. Useful only for
   sustained > 500 K msg/s workloads.
-- **Fixed buffers**: reads go through a reused per-socket `BytesMut` slab
-  (`core::io::take_read_buffer`), so the read path already avoids a fresh
-  allocation on most reads. Registering those slabs as io_uring fixed buffers is
-  future work; see the roadmap.
+- **Fixed buffers**: reads go through a reused per-connection `BytesMut`, so
+  the read path does not allocate on most reads. Registering those buffers as
+  io_uring fixed buffers is future work.
+
+### Spinning before sleeping
+
+Sleeping in `io_uring_enter` and being woken by a completion costs more than a
+whole round trip on a local socket. A bare io_uring ping-pong over a Unix
+socket measured 8.3 µs per round trip when it slept for each completion and
+4.0 µs when it polled the completion queue, against 6.3 µs for tokio's epoll.
+
+So `monocoque::rt::LocalRuntime::block_on` on the compio backend polls for
+completions for up to 20 µs, yielding the CPU between polls, before it
+sleeps. A 64 B REQ/REP round trip over IPC went from 8.4 µs to 6.4 µs, level
+with or ahead of tokio, and over TCP from 11.1 µs to 10.5 µs.
+
+- Spinning is off when the thread can run on one CPU only (affinity mask or
+  cgroup quota), where it would only delay the peer it waits for.
+- After eight spins in a row that find nothing, the runtime sleeps straight
+  away for the next 64 waits, so an idle socket does not keep a core busy.
+- `MONOCOQUE_SPIN_US` sets the budget in microseconds; `0` turns it off.
+- Code that runs on `#[compio::main]` or its own compio runtime instead of
+  `LocalRuntime` does not spin.
 
 ---
 
@@ -611,8 +596,9 @@ single-threaded `LocalExecutor`.
 
 ## Inproc vs TCP
 
-`inproc://` transport skips the network stack entirely. Messages are passed
-via `flume` channels with no serialisation.
+`inproc://` transport skips the network stack entirely. `Msg` values are passed
+via `flume` channels with no serialisation, bounded by the HWM in each
+direction, within one thread or across threads.
 
 | Transport | Typical latency | Zero-copy |
 |---|---|---|
@@ -627,7 +613,9 @@ cross-process, TCP for cross-host.
 
 ## Reconnection
 
-Reconnection uses exponential backoff by default (100 ms initial, unlimited max).
+Every connected endpoint is redialed automatically, with exponential backoff
+and jitter (100 ms initial, unlimited max, unlimited attempts unless
+`with_max_reconnect_attempts(Some(n))` is set).
 For latency-sensitive workloads, tighten the backoff:
 
 ```rust
@@ -673,9 +661,9 @@ let opts = SocketOptions::default()
 - Build with `--release`; debug builds are 5-10x slower
 - Linux kernel >= 5.11 for full io_uring benefit
 - Use `with_write_coalescing(true)` + `flush()` for small-message throughput
-- Large frames use vectored writes automatically (eager mode, >= 32 KB body);
+- Large frames use vectored writes automatically (>= 16 KiB body);
   tune `vectored_write_threshold` for your hardware
-- Size read/write buffers to match your 99th-percentile message size
+- Size the read buffer to match your 99th-percentile message size
 - Use IPC instead of TCP loopback for co-located sockets (~2.4x throughput gain)
 - Run `dhat` or `heaptrack` to catch `Bytes::copy_from_slice` in hot paths
 - Verify io_uring is active: `/proc/$(pidof yourapp)/fdinfo` (look for `uring`)

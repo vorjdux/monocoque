@@ -6,7 +6,7 @@ This guide covers implementing and wiring up a ZAP handler. For how PLAIN and CU
 
 ## Setting Up a Handler
 
-Implement the `ZapHandler` trait and spawn it before binding your server socket:
+Implement the `ZapHandler` trait and spawn it before binding your server socket. The trait uses native `async fn`, so it cannot be used as a `dyn` object; `spawn_zap_server` takes an `Arc` of the concrete type:
 
 ```rust
 use monocoque_zmtp::security::zap_handler::{ZapHandler, spawn_zap_server};
@@ -15,10 +15,9 @@ use std::sync::Arc;
 
 struct MyHandler;
 
-#[async_trait::async_trait(?Send)]
 impl ZapHandler for MyHandler {
     async fn authenticate(&self, req: &ZapRequest) -> ZapResponse {
-        // req.mechanism is "PLAIN" or "CURVE"
+        // req.mechanism is ZapMechanism::Null, Plain or Curve
         // req.address  is the client's IP address
         // req.domain   is the ZAP domain set on the server socket
         //
@@ -45,7 +44,7 @@ spawn_zap_server(Arc::new(MyHandler))?;
 
 `ZapResponse::success` accepts the connection. The second argument is a user ID string that monocoque makes available to the application layer (useful for logging and per-connection authorization).
 
-`ZapResponse::failure` rejects the connection. The second argument is a reason string logged internally; it is not sent to the client.
+`ZapResponse::failure` rejects the connection. The second argument is a reason string logged internally; it is not sent to the client. After two failures in a row from one IP, the server delays that address's next handshakes (see "Repeated failures" in [SECURITY_GUIDE.md](SECURITY_GUIDE.md)).
 
 For CURVE, the client's 32-byte public key is in `req.credentials[0]`. A typical allowlist check:
 

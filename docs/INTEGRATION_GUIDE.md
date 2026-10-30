@@ -15,46 +15,51 @@ monocoque runs on [compio](https://github.com/compio-rs/compio), a completion-ba
 
 ## Basic patterns
 
-All sockets follow the same construction pattern:
+All sockets follow the same construction pattern: create the socket, then bind or connect one or more endpoints. Every socket type is multi-peer, on bind and on connect.
 
 ```rust
-use monocoque_zmtp::{DealerSocket, RouterSocket, SocketOptions};
+use monocoque::zmq::{DealerSocket, RouterSocket, SocketOptions};
 
-// Connect with default options
-let socket = DealerSocket::connect("127.0.0.1:5555").await?;
+// Default options
+let mut socket = DealerSocket::new();
+socket.connect("tcp://127.0.0.1:5555").await?;
 
-// Connect with custom options
+// Custom options
 let options = SocketOptions::new()
     .with_recv_timeout(Duration::from_secs(5))
     .with_send_hwm(1000);
-let socket = DealerSocket::connect_with_options("127.0.0.1:5555", options).await?;
+let mut socket = DealerSocket::with_options(options);
+socket.connect("tcp://127.0.0.1:5555").await?;
 
-// Or wrap a stream you already have
-let socket = DealerSocket::from_tcp(existing_stream).await?;
+// Bind returns the resolved endpoint (useful with port 0)
+let mut router = RouterSocket::new();
+let endpoint = router.bind("tcp://127.0.0.1:0").await?;
 ```
 
-Sending and receiving use `Vec<Bytes>` for multipart messages:
+`connect` returns once the dial has started; sends wait for a peer, or fail with `Again`/`TimedOut` per the options. A stream you already have can be added to a socket with `attach`.
+
+Messages are `Msg` values. A `Msg` is built from `Bytes`, a string, an array of frames, or an iterator of `Bytes`. `recv()` returns a borrowed `MsgRef` that is valid until the next call on the socket; use `recv_owned()` to keep the message. A timeout or closed socket is an error (`TimedOut`, for example), not an empty result.
 
 ```rust
 use bytes::Bytes;
+use monocoque::zmq::Msg;
 
-socket.send(vec![Bytes::from("hello")]).await?;
+socket.send("hello").await?;
+socket.send(Msg::from([Bytes::from_static(b"topic"), Bytes::from_static(b"payload")])).await?;
 
-if let Some(frames) = socket.recv().await? {
-    // frames is Vec<Bytes>
-}
+let msg = socket.recv().await?;
+let first = msg.first().unwrap_or_default();
+
+let kept: Msg = socket.recv_owned().await?;
 ```
 
-For building multipart messages, use the `Message` builder:
+To build a multipart message frame by frame, push onto a `Msg`:
 
 ```rust
-use monocoque_core::Message;
-
-let msg = Message::new()
-    .push_str("topic")
-    .push_empty()           // envelope delimiter
-    .push_str("payload")
-    .into_frames();
+let mut msg = Msg::new();
+msg.push(Bytes::from_static(b"topic"));
+msg.push(Bytes::new());      // envelope delimiter
+msg.push(Bytes::from_static(b"payload"));
 ```
 
 ## Transports
@@ -76,11 +81,11 @@ PLAIN (username/password) and CURVE (encrypted) are both available via `SocketOp
 let options = SocketOptions::new()
     .with_plain_credentials("user", "password");
 
-// CURVE server
-let keypair = CurveKeyPair::generate();
+// CURVE server (secret_key is 32 random bytes; the public key derives from it)
+let public_key = *CurveSecretKey::from_bytes(secret_key).public_key().as_bytes();
 let options = SocketOptions::new()
     .with_curve_server(true)
-    .with_curve_keypair(*keypair.public.as_bytes(), keypair.secret);
+    .with_curve_keypair(public_key, secret_key);
 ```
 
 See `examples/plain_auth_demo.rs` and `examples/curve_demo.rs` for full working examples.
@@ -88,26 +93,26 @@ See `examples/plain_auth_demo.rs` and `examples/curve_demo.rs` for full working 
 ## Proxies
 
 ```rust
-use monocoque_zmtp::proxy;
+use monocoque::zmq::proxy::{NoCapture, proxy, proxy_steerable};
 
 // Forward all messages between frontend and backend
-proxy(&mut frontend, &mut backend, None).await?;
+proxy(&mut frontend, &mut backend, None::<&mut NoCapture>).await?;
 
 // With a control socket (PAUSE/RESUME/TERMINATE)
-proxy_steerable(&mut frontend, &mut backend, None, &mut control).await?;
+proxy_steerable(&mut frontend, &mut backend, None::<&mut NoCapture>, &mut control).await?;
 ```
 
 ## Examples
 
 The `examples/` directory covers the common patterns:
 
-- `req_rep.rs` - basic request/reply
-- `pub_sub.rs` - publish/subscribe with topic filtering
-- `router_dealer.rs` - async load balancing
+- `simple_req_rep.rs` - basic request/reply
+- `pubsub_multi.rs` - publish/subscribe with topic filtering
+- `router_dealer_basic.rs` - ROUTER/DEALER request/response
 - `proxy_broker.rs` - ROUTER-DEALER proxy
 - `paranoid_pirate.rs` - reliable request/reply with heartbeating
 - `plain_auth_demo.rs` - PLAIN authentication
 - `curve_demo.rs` - CURVE encrypted messaging
 - `inproc_demo.rs` - in-process messaging
 
-For a broader overview of what's supported, see `docs/ZEROMQ_COMPATIBILITY_ROADMAP.md`. For migrating from an earlier monocoque API, see `docs/MIGRATION.md`.
+For a broader overview of what's supported, see `docs/COMPATIBILITY.md` and `docs/rfc-compliance.md`. For migrating from an earlier monocoque API, see `docs/MIGRATION.md`.

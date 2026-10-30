@@ -32,17 +32,18 @@
 //! use monocoque::zmq::prelude::*;
 //!
 //! # #[cfg(feature = "zmq")]
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! // Connect to a ZeroMQ peer
-//! let mut socket = DealerSocket::connect("127.0.0.1:5555").await?;
+//! # async fn example() -> Result<()> {
+//! // Connect to a ZeroMQ peer; the connection is made in the background
+//! let mut socket = DealerSocket::new();
+//! socket.connect("tcp://127.0.0.1:5555").await?;
 //!
 //! // Send a multipart message
-//! socket.send(vec![b"Hello".to_vec().into(), b"World".to_vec().into()]).await?;
+//! let frames = [Bytes::from_static(b"Hello"), Bytes::from_static(b"World")];
+//! socket.send(Msg::from_iter(frames)).await?;
 //!
-//! // Receive a reply
-//! if let Ok(Some(msg)) = socket.recv().await {
-//!     println!("Received: {:?}", msg);
-//! }
+//! // Receive a reply, borrowed from the socket without a copy
+//! let msg = socket.recv().await?;
+//! println!("Received {} frames", msg.len());
 //! # Ok(())
 //! # }
 //! ```
@@ -54,12 +55,15 @@
 //! use monocoque::zmq::prelude::*;
 //!
 //! # #[cfg(feature = "zmq")]
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! // Bind and accept first connection
-//! let (listener, mut socket) = RouterSocket::bind("127.0.0.1:5555").await?;
+//! # async fn example() -> Result<()> {
+//! // Bind; any number of peers can connect
+//! let mut socket = RouterSocket::new();
+//! socket.bind("tcp://127.0.0.1:5555").await?;
 //!
-//! // Echo server
-//! while let Ok(Some(msg)) = socket.recv().await {
+//! // Echo server: the first frame is the sender's identity, so sending the
+//! // message back routes it to that peer
+//! loop {
+//!     let msg = socket.recv_owned().await?;
 //!     socket.send(msg).await?;
 //! }
 //! # Ok(())
@@ -75,41 +79,23 @@
 //!
 //! ## Safety
 //!
-//! - `unsafe` code is isolated to the owned-buffer read helpers in
-//!   `monocoque-core/src/io.rs` and the raw-socket tuning in `tcp.rs`
-//! - All protocol and routing layers are 100% safe Rust
-//! - Formal invariants documented in `docs/blueprints/06-safety-model-and-unsafe-audit.md`
+//! This crate contains no `unsafe`. The few `unsafe` blocks in the workspace
+//! (owned-buffer reads, raw-fd socket tuning, the in-process stream adapter) are
+//! inventoried in the README's Safety section, each with a `SAFETY:` contract.
 
 #![warn(missing_docs)]
-#![warn(clippy::all)]
-// Allow some pedantic patterns
-#![allow(clippy::module_name_repetitions)]
-#![allow(clippy::must_use_candidate)]
-#![allow(clippy::needless_pass_by_value)]
-#![allow(clippy::future_not_send)] // Runtime-agnostic design
-#![allow(clippy::missing_errors_doc)] // Will add gradually
-#![allow(clippy::doc_markdown)] // Too many false positives
-#![allow(clippy::return_self_not_must_use)] // Builder patterns are obvious
-#![allow(clippy::missing_panics_doc)] // Most panics are unreachable
-#![allow(clippy::missing_const_for_fn)] // Not always an optimization
-#![allow(clippy::multiple_crate_versions)] // Transitive dependencies
-#![allow(clippy::doc_lazy_continuation)] // Doc formatting is intentional
-#![allow(clippy::manual_let_else)] // Match expressions sometimes clearer
-#![allow(clippy::empty_line_after_outer_attr)] // Spacing is intentional
 
 // Re-export core types
 pub use bytes::Bytes;
 pub use monocoque_core::options::SocketOptions;
 pub use monocoque_core::reconnect::{ReconnectError, ReconnectState};
-pub use monocoque_core::socket_type::SocketType;
 
 /// Runtime-agnostic networking types (TCP/Unix streams, listeners).
 ///
 /// These resolve to the active backend (compio by default, tokio with the
-/// `runtime-tokio` feature, smol with the `runtime-smol` feature). Socket
-/// constructors such as `from_unix_stream`
-/// accept the types re-exported here, so application code never names a runtime
-/// crate directly.
+/// `runtime-tokio` feature, smol with the `runtime-smol` feature). `Socket::attach` accepts the
+/// streams re-exported here, so application code never names a runtime crate
+/// directly.
 pub use monocoque_core::rt;
 
 // Protocol modules (opt-in via features)

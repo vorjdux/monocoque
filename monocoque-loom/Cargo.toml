@@ -3,15 +3,16 @@ name = "monocoque-loom"
 version = "0.4.2"
 edition = "2024"
 # Excluded from the workspace, so it does not inherit the workspace MSRV.
-# Pinned to match: it depends on the published crates, which require 1.95.
+# Pinned to the workspace MSRV, 1.95.
 rust-version = "1.95"
 publish = false
 
 # Standalone crate so `--cfg loom` reaches only loom, not the flume /
 # concurrent-queue / smol dependencies of the real crates (which have their own
 # cfg(loom) paths that break when the flag is forced on globally). The tests
-# here are models of the atomic protocols in monocoque-zmtp's publisher, run
-# with: RUSTFLAGS="--cfg loom" cargo test --manifest-path monocoque-loom/Cargo.toml
+# here are models of the cross-thread wakeup protocols in monocoque-core's
+# multiplexer (inproc room signal, Wakeups notify against exit), run with:
+# RUSTFLAGS="--cfg loom" cargo test --release --manifest-path monocoque-loom/Cargo.toml
 [dependencies]
 loom = "0.7"
 

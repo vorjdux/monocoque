@@ -16,16 +16,18 @@
 //! 3. Handshake happens once per connection (not in hot path)
 //! 4. Total allocation overhead: ~93 bytes one-time per connection
 //!
-//! After handshake completes, the main data path uses the `core::io` read slab for zero-copy IO.
+//! After the handshake completes, the peer's reader in `monocoque_core::mux`
+//! takes over the stream and decodes frames out of its own read buffer.
 
-use crate::codec::ZmtpError;
+use crate::error::ZmtpError;
 use crate::security::curve::CurveHandshakeResult;
 use crate::session::SocketType;
-use crate::utils::{FLAG_COMMAND, build_ready, encode_frame};
+use crate::utils::{FLAG_COMMAND, encode_frame};
 use bytes::{BufMut, Bytes, BytesMut};
 use compio_buf::BufResult;
 use compio_io::{AsyncRead, AsyncWrite};
 use monocoque_core::options::SocketOptions;
+use monocoque_core::rt::PeerAddress;
 use monocoque_core::timeout::{read_exact_with_timeout, write_all_with_timeout};
 use std::time::Duration;
 use tracing::{debug, warn};
@@ -36,6 +38,24 @@ pub struct HandshakeResult {
     pub peer_identity: Option<Bytes>,
     pub peer_socket_type: SocketType,
     pub curve_cipher: Option<crate::security::curve::CurveMessageCipher>,
+    /// The user id the ZAP handler returned when it admitted this peer.
+    pub user_id: Option<String>,
+    /// Further connection properties: the peer's handshake metadata beyond
+    /// `Socket-Type` and `Identity`, then any metadata the ZAP reply carried.
+    pub properties: Vec<(String, Bytes)>,
+    /// The framing the peer speaks.
+    pub framing: Framing,
+}
+
+/// Wire framing negotiated by the greeting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Framing {
+    /// ZMTP 1.0: a length that counts the flags byte, then the flags byte.
+    V1,
+    /// ZMTP 2.0: ZMTP 3 data frames without commands.
+    V2,
+    /// ZMTP 3.x.
+    V3,
 }
 
 /// Security mechanism to use for the ZMTP handshake.
@@ -91,7 +111,7 @@ pub async fn perform_handshake_with_options<S>(
     options: &SocketOptions,
 ) -> Result<HandshakeResult, ZmtpError>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + PeerAddress + Unpin,
 {
     // The handshake future is large; box it at the deadline boundary so the
     // combinator (and every caller's future) stays small.
@@ -130,7 +150,7 @@ async fn perform_handshake_inner<S>(
     options: &SocketOptions,
 ) -> Result<HandshakeResult, ZmtpError>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + PeerAddress + Unpin,
 {
     let mechanism = SecurityMechanism::from_options(options);
 
@@ -141,53 +161,67 @@ where
         mechanism
     );
 
-    // Step 1: Send our greeting
-    debug!("[HANDSHAKE] Step 1: Sending greeting...");
-    let greeting_bytes = build_greeting_with_mechanism(mechanism, options);
-    let BufResult(write_res, _) = write_all_with_timeout(stream, greeting_bytes.clone(), timeout)
-        .await
-        .map_err(|e| {
-            warn!("[HANDSHAKE] Step 1: Failed to send ZMTP greeting: {}", e);
-            ZmtpError::Protocol
-        })?;
-    write_res.map_err(|e| {
-        warn!(
-            "[HANDSHAKE] Step 1: Failed to write ZMTP greeting bytes: {}",
-            e
-        );
-        ZmtpError::Protocol
-    })?;
-    debug!(
-        "[HANDSHAKE] Step 1 DONE: Sent greeting ({} bytes)",
-        greeting_bytes.len()
-    );
-
-    // Step 2: Receive peer greeting
-    debug!("[HANDSHAKE] Step 2: Receiving peer greeting...");
-    let greeting_buf = [0u8; 64];
-    let BufResult(read_res, greeting_buf) = read_exact_with_timeout(stream, greeting_buf, timeout)
-        .await
-        .map_err(|e| {
-            warn!("[HANDSHAKE] Step 2: Failed to receive ZMTP greeting: {}", e);
-            ZmtpError::Protocol
-        })?;
-    read_res.map_err(|e| {
-        warn!(
-            "[HANDSHAKE] Step 2: Failed to read ZMTP greeting bytes: {}",
-            e
-        );
-        ZmtpError::Protocol
-    })?;
-    debug!("[HANDSHAKE] Step 2 DONE: Received peer greeting (64 bytes)");
-
-    // Validate greeting signature
-    if greeting_buf[0] != 0xFF || greeting_buf[9] != 0x7F {
-        warn!(
-            "[HANDSHAKE] ZMTP greeting: invalid signature bytes (expected [0]=0xff [9]=0x7f, got [0]=0x{:02x} [9]=0x{:02x})",
-            greeting_buf[0], greeting_buf[9]
-        );
-        return Err(ZmtpError::Protocol);
+    // Steps 1-2: exchange greetings in stages, as libzmq does, so a ZMTP 1.0
+    // or 2.0 peer is recognised before it is sent bytes it cannot parse. The
+    // signature goes first, then the major version once the peer's signature
+    // shows it is not 1.0, then the rest once its revision shows 3.x.
+    let greeting_bytes = build_greeting_with_mechanism(mechanism, options, identity);
+    send(
+        stream,
+        greeting_bytes.slice(..10),
+        timeout,
+        "greeting signature",
+    )
+    .await?;
+    let first = recv(stream, 1, timeout, "greeting signature").await?;
+    if first[0] != 0xFF {
+        // ZMTP 1.0 opens with its identity frame; a short one has a one-byte
+        // length that counts the flags byte.
+        refuse_legacy(mechanism, options, local_socket_type)?;
+        let len = usize::from(first[0]);
+        if len == 0 {
+            return Err(ZmtpError::Protocol);
+        }
+        let body = recv(stream, len, timeout, "1.0 identity").await?;
+        return finish_v1(stream, local_socket_type, identity, timeout, &body[1..]).await;
     }
+    let sig = recv(stream, 9, timeout, "greeting signature").await?;
+    if sig[8] & 1 == 0 {
+        // ZMTP 1.0 with a long identity frame: 0xFF, an 8-byte length that
+        // counts the flags byte, then the flags byte just read.
+        refuse_legacy(mechanism, options, local_socket_type)?;
+        let len = u64::from_be_bytes(sig[..8].try_into().expect("8 bytes"));
+        let len = usize::try_from(len)
+            .ok()
+            .filter(|&l| (1..=MAX_IDENTITY + 1).contains(&l))
+            .ok_or(ZmtpError::Protocol)?;
+        let body = recv(stream, len - 1, timeout, "1.0 identity").await?;
+        return finish_v1(stream, local_socket_type, identity, timeout, &body).await;
+    }
+    send(
+        stream,
+        greeting_bytes.slice(10..11),
+        timeout,
+        "greeting version",
+    )
+    .await?;
+    let revision = recv(stream, 1, timeout, "greeting version").await?[0];
+    if revision < 3 {
+        refuse_legacy(mechanism, options, local_socket_type)?;
+        let framing = if revision == 0 {
+            Framing::V1
+        } else {
+            Framing::V2
+        };
+        return finish_v2(stream, local_socket_type, identity, timeout, framing).await;
+    }
+    send(stream, greeting_bytes.slice(11..), timeout, "greeting").await?;
+    let tail = recv(stream, 53, timeout, "greeting").await?;
+    let mut greeting_buf = [0u8; 64];
+    greeting_buf[0] = 0xFF;
+    greeting_buf[1..10].copy_from_slice(&sig);
+    greeting_buf[10] = revision;
+    greeting_buf[11..].copy_from_slice(&tail);
 
     // Parse peer greeting to check mechanism compatibility
     use crate::greeting::ZmtpGreeting;
@@ -200,13 +234,6 @@ where
         warn!(
             "[HANDSHAKE] Security mechanism mismatch: we advertise {:?}, peer advertises {:?}",
             our_mech_name, peer_mech_str
-        );
-        return Err(ZmtpError::Protocol);
-    }
-    if greeting_buf[9] != 0x7F {
-        warn!(
-            "[HANDSHAKE] ZMTP greeting: expected signature byte 0x7f at offset 9, got 0x{:02x}",
-            greeting_buf[9]
         );
         return Err(ZmtpError::Protocol);
     }
@@ -231,12 +258,13 @@ where
 
     // Step 3: Run security-mechanism-specific exchange (between greeting and READY)
     let curve_cipher: Option<crate::security::curve::CurveMessageCipher> = None;
+    let mut zap = ZapOutcome::default();
     match mechanism {
         SecurityMechanism::Null => {
             // No mechanism-level exchange for NULL; proceed directly to READY.
         }
         SecurityMechanism::Plain => {
-            run_plain_exchange(stream, options, timeout).await?;
+            zap = run_plain_exchange(stream, options, timeout).await?;
         }
         SecurityMechanism::Curve => {
             // CURVE handshake carries all metadata internally (no separate READY needed).
@@ -248,6 +276,13 @@ where
                 peer_identity: cr.peer_identity,
                 peer_socket_type,
                 curve_cipher: cr.cipher,
+                user_id: cr.user_id,
+                properties: {
+                    let mut p = cr.peer_properties;
+                    p.extend(cr.zap_metadata);
+                    p
+                },
+                framing: Framing::V3,
             });
         }
     }
@@ -260,11 +295,12 @@ where
         "[HANDSHAKE] Step 4: Sending {} command...",
         if plain_client { "INITIATE" } else { "READY" }
     );
-    let ready_body = if plain_client {
-        crate::utils::build_initiate(local_socket_type.as_str(), identity)
-    } else {
-        build_ready(local_socket_type.as_str(), identity)
-    };
+    let ready_body = crate::utils::build_metadata_command_with(
+        if plain_client { "INITIATE" } else { "READY" },
+        local_socket_type.as_str(),
+        identity,
+        &options.metadata,
+    );
     let ready_frame = encode_frame(FLAG_COMMAND, &ready_body);
     let BufResult(write_res, _) = write_all_with_timeout(stream, ready_frame.clone(), timeout)
         .await
@@ -344,14 +380,13 @@ where
             ZmtpError::Protocol
         })?;
         let raw_len = u64::from_be_bytes(len_buf);
-        if raw_len > usize::MAX as u64 {
+        usize::try_from(raw_len).map_err(|_| {
             warn!(
                 "[HANDSHAKE] ZMTP READY long-frame length overflows usize: {}",
                 raw_len
             );
-            return Err(ZmtpError::Protocol);
-        }
-        raw_len as usize
+            ZmtpError::Protocol
+        })?
     } else {
         header_buf[1] as usize
     };
@@ -387,19 +422,44 @@ where
 
     // Parse READY command
     let ready_bytes = Bytes::from(body_buf);
-    let (peer_socket_type, peer_identity) = parse_ready_command(&ready_bytes)?;
-    check_socket_type_compatibility(local_socket_type, peer_socket_type)?;
+    let ready = parse_ready_metadata(&ready_bytes)?;
+    check_socket_type_compatibility(local_socket_type, ready.socket_type)?;
 
     debug!(
         "[HANDSHAKE] Handshake complete! Peer is {}",
-        peer_socket_type.as_str()
+        ready.socket_type.as_str()
     );
 
+    let mut properties = ready.properties;
+    properties.extend(zap.metadata);
     Ok(HandshakeResult {
-        peer_identity,
-        peer_socket_type,
+        peer_identity: ready.identity,
+        peer_socket_type: ready.socket_type,
         curve_cipher,
+        user_id: zap.user_id,
+        properties,
+        framing: Framing::V3,
     })
+}
+
+/// What a ZAP handler said about an admitted peer.
+#[derive(Default)]
+pub struct ZapOutcome {
+    pub user_id: Option<String>,
+    pub metadata: Vec<(String, Bytes)>,
+}
+
+impl ZapOutcome {
+    pub fn from_response(r: crate::security::zap::ZapResponse) -> Self {
+        Self {
+            user_id: Some(r.user_id).filter(|u| !u.is_empty()),
+            metadata: r
+                .metadata
+                .into_iter()
+                .map(|(k, v)| (k, Bytes::from(v)))
+                .collect(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -414,26 +474,33 @@ async fn run_plain_exchange<S>(
     stream: &mut S,
     options: &SocketOptions,
     timeout: Option<Duration>,
-) -> Result<(), ZmtpError>
+) -> Result<ZapOutcome, ZmtpError>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + PeerAddress + Unpin,
 {
     use crate::security::plain::{PlainCredentials, plain_client_handshake};
 
     if options.plain_server {
         debug!("[HANDSHAKE] Running PLAIN server exchange");
         let domain = options.zap_domain.as_str();
-        crate::security::plain::plain_server_handshake_zap(stream, domain, "unknown", timeout)
-            .await
-            .map(|_| ())
+        let peer_address = stream.zap_address();
+        crate::security::plain::plain_server_handshake_zap_response(
+            stream,
+            domain,
+            &peer_address,
+            timeout,
+        )
+        .await
+        .map(ZapOutcome::from_response)
     } else if let Some(ref username) = options.plain_username {
         debug!("[HANDSHAKE] Running PLAIN client exchange");
         let password = options.plain_password().unwrap_or("");
         let credentials = PlainCredentials::new(username.clone(), password);
-        plain_client_handshake(stream, &credentials, timeout).await
+        plain_client_handshake(stream, &credentials, timeout).await?;
+        Ok(ZapOutcome::default())
     } else {
         // Should not happen (mechanism detection guards this), but be safe.
-        Ok(())
+        Ok(ZapOutcome::default())
     }
 }
 
@@ -452,7 +519,7 @@ async fn run_curve_exchange<S>(
     local_identity: Option<&[u8]>,
 ) -> Result<CurveHandshakeResult, ZmtpError>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + PeerAddress + Unpin,
 {
     use crate::security::curve::{
         CurveClient, CurveKeyPair, CurvePublicKey, CurveSecretKey, CurveServer,
@@ -477,17 +544,20 @@ where
                 "[HANDSHAKE] CURVE server has no zap_domain: accepting any client key \
                  without authorization (encryption only). Configure ZAP to authenticate peers."
             );
-            let mut curve_server = CurveServer::new(server_keypair, local_socket_type.as_str());
+            let mut curve_server = CurveServer::new(server_keypair, local_socket_type.as_str())
+                .with_metadata(options.metadata.clone());
             curve_server.handshake(stream, timeout).await
         } else {
             use crate::security::curve::curve_server_handshake_zap;
+            let peer_address = stream.zap_address();
             curve_server_handshake_zap(
                 stream,
                 server_keypair,
                 options.zap_domain.clone(),
                 timeout,
-                "unknown",
+                &peer_address,
                 local_socket_type.as_str(),
+                options.metadata.clone(),
             )
             .await
         }
@@ -506,7 +576,8 @@ where
             server_public,
             local_socket_type.as_str(),
             local_id,
-        );
+        )
+        .with_metadata(options.metadata.clone());
         curve_client.handshake(stream, timeout).await
     } else if options.curve_secretkey.is_some() {
         // curve_secretkey set for a client but curve_serverkey is absent.
@@ -525,12 +596,21 @@ where
 // ---------------------------------------------------------------------------
 
 /// Build a ZMTP 3.0 greeting (64 bytes) advertising the given security mechanism.
-fn build_greeting_with_mechanism(mechanism: SecurityMechanism, options: &SocketOptions) -> Bytes {
+///
+/// The signature's padding carries the length of a ZMTP 1.0 identity frame
+/// (identity plus its flags byte) and its last byte doubles as that frame's
+/// flags, so a 1.0 peer reads the signature as the start of our identity.
+fn build_greeting_with_mechanism(
+    mechanism: SecurityMechanism,
+    options: &SocketOptions,
+    identity: Option<&[u8]>,
+) -> Bytes {
     let mut b = BytesMut::with_capacity(64);
 
     // Signature
+    let id_len = identity.map_or(0, <[u8]>::len) as u64;
     b.extend_from_slice(&[0xFF]);
-    b.extend_from_slice(&[0u8; 8]);
+    b.extend_from_slice(&(id_len + 1).to_be_bytes());
     b.extend_from_slice(&[0x7F]);
 
     // Version 3.0
@@ -556,6 +636,241 @@ fn build_greeting_with_mechanism(mechanism: SecurityMechanism, options: &SocketO
     b.freeze()
 }
 
+/// Longest identity a legacy peer may announce.
+const MAX_IDENTITY: usize = 255;
+
+async fn send<S>(
+    stream: &mut S,
+    bytes: Bytes,
+    timeout: Option<Duration>,
+    what: &str,
+) -> Result<(), ZmtpError>
+where
+    S: AsyncWrite + Unpin,
+{
+    let BufResult(res, _) = write_all_with_timeout(stream, bytes, timeout)
+        .await
+        .map_err(|e| {
+            warn!("[HANDSHAKE] failed to send {}: {}", what, e);
+            ZmtpError::Protocol
+        })?;
+    res.map_err(|e| {
+        warn!("[HANDSHAKE] failed to send {}: {}", what, e);
+        ZmtpError::Protocol
+    })
+}
+
+async fn recv<S>(
+    stream: &mut S,
+    len: usize,
+    timeout: Option<Duration>,
+    what: &str,
+) -> Result<Vec<u8>, ZmtpError>
+where
+    S: AsyncRead + Unpin,
+{
+    let BufResult(res, buf) = read_exact_with_timeout(stream, vec![0u8; len], timeout)
+        .await
+        .map_err(|e| {
+            warn!("[HANDSHAKE] failed to receive {}: {}", what, e);
+            ZmtpError::Protocol
+        })?;
+    res.map_err(|e| {
+        warn!("[HANDSHAKE] failed to receive {}: {}", what, e);
+        ZmtpError::Protocol
+    })?;
+    Ok(buf)
+}
+
+/// ZMTP 1.0 and 2.0 carry no security handshake, so a peer that offers one
+/// must not be able to talk a secured socket down to it. NULL with a ZAP
+/// domain would also skip authentication, so it refuses them too, and the
+/// draft socket types do not exist before ZMTP 3.1.
+fn refuse_legacy(
+    mechanism: SecurityMechanism,
+    options: &SocketOptions,
+    local: SocketType,
+) -> Result<(), ZmtpError> {
+    if mechanism != SecurityMechanism::Null || !options.zap_domain.is_empty() || local.is_draft() {
+        warn!(
+            "[HANDSHAKE] refusing a ZMTP 1.0/2.0 peer: mechanism {:?}, zap domain {:?}",
+            mechanism, options.zap_domain
+        );
+        return Err(ZmtpError::Protocol);
+    }
+    Ok(())
+}
+
+/// ZMTP 1.0 does not say what the peer is, so take it to be the usual
+/// partner of this socket.
+const fn assumed_peer(local: SocketType) -> SocketType {
+    match local {
+        SocketType::Pair => SocketType::Pair,
+        SocketType::Dealer | SocketType::Req => SocketType::Router,
+        SocketType::Router | SocketType::Rep => SocketType::Dealer,
+        SocketType::Pub | SocketType::Xpub => SocketType::Sub,
+        SocketType::Sub | SocketType::Xsub => SocketType::Pub,
+        SocketType::Push => SocketType::Pull,
+        SocketType::Pull => SocketType::Push,
+        // Refused before the greeting gets this far.
+        SocketType::Server
+        | SocketType::Client
+        | SocketType::Radio
+        | SocketType::Dish
+        | SocketType::Scatter
+        | SocketType::Gather
+        | SocketType::Channel => local,
+    }
+}
+
+/// The socket type numbers ZMTP 2.0 puts in its greeting.
+const fn legacy_type_number(t: SocketType) -> u8 {
+    match t {
+        SocketType::Pair => 0,
+        SocketType::Pub => 1,
+        SocketType::Sub => 2,
+        SocketType::Req => 3,
+        SocketType::Rep => 4,
+        SocketType::Dealer => 5,
+        SocketType::Router => 6,
+        SocketType::Pull => 7,
+        SocketType::Push => 8,
+        SocketType::Xpub => 9,
+        SocketType::Xsub => 10,
+        // Refused before the greeting gets this far.
+        SocketType::Server
+        | SocketType::Client
+        | SocketType::Radio
+        | SocketType::Dish
+        | SocketType::Scatter
+        | SocketType::Gather
+        | SocketType::Channel => u8::MAX,
+    }
+}
+
+fn legacy_type_from_number(n: u8) -> Result<SocketType, ZmtpError> {
+    Ok(match n {
+        0 => SocketType::Pair,
+        1 => SocketType::Pub,
+        2 => SocketType::Sub,
+        3 => SocketType::Req,
+        4 => SocketType::Rep,
+        5 => SocketType::Dealer,
+        6 => SocketType::Router,
+        7 => SocketType::Pull,
+        8 => SocketType::Push,
+        9 => SocketType::Xpub,
+        10 => SocketType::Xsub,
+        _ => return Err(ZmtpError::Protocol),
+    })
+}
+
+fn legacy_result(
+    framing: Framing,
+    peer_socket_type: SocketType,
+    peer_identity: &[u8],
+) -> HandshakeResult {
+    HandshakeResult {
+        peer_identity: (!peer_identity.is_empty()).then(|| Bytes::copy_from_slice(peer_identity)),
+        peer_socket_type,
+        curve_cipher: None,
+        user_id: None,
+        properties: Vec::new(),
+        framing,
+    }
+}
+
+/// Finish with a ZMTP 1.0 peer whose identity has been read. Our signature
+/// already announced our identity frame's length and flags, so only its body
+/// is left to send.
+async fn finish_v1<S>(
+    stream: &mut S,
+    local: SocketType,
+    identity: Option<&[u8]>,
+    timeout: Option<Duration>,
+    peer_identity: &[u8],
+) -> Result<HandshakeResult, ZmtpError>
+where
+    S: AsyncWrite + Unpin,
+{
+    if peer_identity.len() > MAX_IDENTITY {
+        return Err(ZmtpError::Protocol);
+    }
+    if let Some(id) = identity.filter(|id| !id.is_empty()) {
+        send(stream, Bytes::copy_from_slice(id), timeout, "1.0 identity").await?;
+    }
+    debug!("[HANDSHAKE] peer speaks ZMTP 1.0");
+    Ok(legacy_result(
+        Framing::V1,
+        assumed_peer(local),
+        peer_identity,
+    ))
+}
+
+/// Finish with a peer whose greeting revision was 0 (1.0 framing behind a
+/// signature) or 1 (ZMTP 2.0): swap socket type numbers, then identity frames
+/// in the peer's framing.
+async fn finish_v2<S>(
+    stream: &mut S,
+    local: SocketType,
+    identity: Option<&[u8]>,
+    timeout: Option<Duration>,
+    framing: Framing,
+) -> Result<HandshakeResult, ZmtpError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let id = identity.unwrap_or_default();
+    let mut out = BytesMut::with_capacity(11 + id.len());
+    out.put_u8(legacy_type_number(local));
+    if framing == Framing::V1 {
+        match u8::try_from(id.len() + 1) {
+            Ok(short) if short < 0xFF => out.put_u8(short),
+            _ => {
+                out.put_u8(0xFF);
+                out.put_u64(id.len() as u64 + 1);
+            }
+        }
+        out.put_u8(0);
+    } else {
+        out.put_u8(0);
+        out.put_u8(u8::try_from(id.len()).map_err(|_| ZmtpError::Protocol)?);
+    }
+    out.extend_from_slice(id);
+    send(stream, out.freeze(), timeout, "legacy greeting").await?;
+
+    let peer_type = legacy_type_from_number(recv(stream, 1, timeout, "socket type").await?[0])?;
+    check_socket_type_compatibility(local, peer_type)?;
+    let head = recv(stream, 2, timeout, "identity").await?;
+    let len = if framing == Framing::V1 {
+        let len = if head[0] == 0xFF {
+            let rest = recv(stream, 8, timeout, "identity").await?;
+            let mut long = [0u8; 8];
+            long[0] = head[1];
+            long[1..].copy_from_slice(&rest[..7]);
+            // The flags byte follows the length; nothing more to check.
+            usize::try_from(u64::from_be_bytes(long)).map_err(|_| ZmtpError::Protocol)?
+        } else {
+            usize::from(head[0])
+        };
+        len.checked_sub(1).ok_or(ZmtpError::Protocol)?
+    } else {
+        if head[0] & !FLAG_MORE_LEGACY != 0 {
+            return Err(ZmtpError::Protocol);
+        }
+        usize::from(head[1])
+    };
+    if len > MAX_IDENTITY {
+        return Err(ZmtpError::Protocol);
+    }
+    let peer_identity = recv(stream, len, timeout, "identity").await?;
+    debug!("[HANDSHAKE] peer speaks ZMTP 2.0 ({:?} framing)", framing);
+    Ok(legacy_result(framing, peer_type, &peer_identity))
+}
+
+/// The MORE bit, the only flag a ZMTP 2.0 identity frame may carry.
+const FLAG_MORE_LEGACY: u8 = 0x01;
+
 fn parse_greeting_mechanism(field: &[u8]) -> Result<SecurityMechanism, ZmtpError> {
     let len = field
         .iter()
@@ -571,6 +886,23 @@ fn parse_greeting_mechanism(field: &[u8]) -> Result<SecurityMechanism, ZmtpError
 
 /// Parse READY command to extract socket type and identity
 pub fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), ZmtpError> {
+    parse_ready_metadata(body).map(|r| (r.socket_type, r.identity))
+}
+
+/// Everything a peer's `READY` (or PLAIN `INITIATE`) command announced.
+#[derive(Debug)]
+pub struct ReadyMetadata {
+    /// The mandatory `Socket-Type`.
+    pub socket_type: SocketType,
+    /// The optional `Identity`.
+    pub identity: Option<Bytes>,
+    /// Every other property, in wire order. Values share the command body.
+    pub properties: Vec<(String, Bytes)>,
+}
+
+/// Parse a `READY` or `INITIATE` body, keeping every property.
+#[allow(clippy::too_many_lines)] // one linear pass over the property list
+pub fn parse_ready_metadata(body: &Bytes) -> Result<ReadyMetadata, ZmtpError> {
     // READY format:
     // - 1 byte: command name length
     // - N bytes: "READY"
@@ -600,6 +932,7 @@ pub fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), 
     let mut offset = 1 + name_len;
     let mut socket_type = None;
     let mut identity = None;
+    let mut properties = Vec::new();
 
     while offset < body.len() {
         if offset + 1 > body.len() {
@@ -683,7 +1016,11 @@ pub fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), 
                 identity = Some(body.slice(value_start..value_end));
             }
             _ => {
-                // Ignore unknown properties
+                // Any other property becomes connection metadata. RFC 23 names
+                // are ASCII; one that is not text is skipped, not fatal.
+                if let Ok(name) = std::str::from_utf8(key) {
+                    properties.push((name.to_string(), body.slice(value_start..value_end)));
+                }
             }
         }
     }
@@ -692,31 +1029,22 @@ pub fn parse_ready_command(body: &Bytes) -> Result<(SocketType, Option<Bytes>), 
         warn!("[HANDSHAKE] ZMTP READY parse: peer READY command is missing the required \"Socket-Type\" property");
         ZmtpError::Protocol
     })?;
-    Ok((socket_type, identity))
+    Ok(ReadyMetadata {
+        socket_type,
+        identity,
+        properties,
+    })
 }
 
 /// Parse socket type from bytes
 fn parse_socket_type(value: &[u8]) -> Result<SocketType, ZmtpError> {
-    match value {
-        b"PAIR" => Ok(SocketType::Pair),
-        b"DEALER" => Ok(SocketType::Dealer),
-        b"ROUTER" => Ok(SocketType::Router),
-        b"PUB" => Ok(SocketType::Pub),
-        b"SUB" => Ok(SocketType::Sub),
-        b"XPUB" => Ok(SocketType::Xpub),
-        b"XSUB" => Ok(SocketType::Xsub),
-        b"REQ" => Ok(SocketType::Req),
-        b"REP" => Ok(SocketType::Rep),
-        b"PUSH" => Ok(SocketType::Push),
-        b"PULL" => Ok(SocketType::Pull),
-        _ => {
-            warn!(
-                "[HANDSHAKE] ZMTP READY parse: unknown Socket-Type value {:?}",
-                String::from_utf8_lossy(value)
-            );
-            Err(ZmtpError::Protocol)
-        }
-    }
+    SocketType::from_name(value).ok_or_else(|| {
+        warn!(
+            "[HANDSHAKE] ZMTP READY parse: unknown Socket-Type value {:?}",
+            String::from_utf8_lossy(value)
+        );
+        ZmtpError::Protocol
+    })
 }
 
 /// Reject socket-type pairings that ZMQ does not allow (e.g. PUB with REQ).
@@ -725,10 +1053,20 @@ fn parse_socket_type(value: &[u8]) -> Result<SocketType, ZmtpError> {
 /// mismatched peer completes the handshake and then silently misbehaves. The
 /// rules mirror libzmq: each type lists the peer types it may talk to.
 fn check_socket_type_compatibility(local: SocketType, peer: SocketType) -> Result<(), ZmtpError> {
-    use SocketType::{Dealer, Pair, Pub, Pull, Push, Rep, Req, Router, Sub, Xpub, Xsub};
+    use SocketType::{
+        Channel, Client, Dealer, Dish, Gather, Pair, Pub, Pull, Push, Radio, Rep, Req, Router,
+        Scatter, Server, Sub, Xpub, Xsub,
+    };
 
     let compatible_peers: &[SocketType] = match local {
         Pair => &[Pair],
+        Server => &[Client],
+        Client => &[Server],
+        Radio => &[Dish],
+        Dish => &[Radio],
+        Scatter => &[Gather],
+        Gather => &[Scatter],
+        Channel => &[Channel],
         Pub | Xpub => &[Sub, Xsub],
         Sub | Xsub => &[Pub, Xpub],
         Req => &[Rep, Router],
@@ -751,6 +1089,13 @@ fn check_socket_type_compatibility(local: SocketType, peer: SocketType) -> Resul
     }
 }
 
+/// May a `local` socket talk to a peer that announced itself as `peer`?
+pub fn socket_types_compatible(local: SocketType, peer: &str) -> bool {
+    parse_socket_type(peer.as_bytes())
+        .and_then(|peer| check_socket_type_compatibility(local, peer))
+        .is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -767,13 +1112,50 @@ mod tests {
         body.extend_from_slice(b"\x05READY");
 
         for (key, value) in properties {
-            body.push(key.len() as u8);
+            body.push(u8::try_from(key.len()).unwrap());
             body.extend_from_slice(key);
-            body.extend_from_slice(&(value.len() as u32).to_be_bytes());
+            body.extend_from_slice(&u32::try_from(value.len()).unwrap().to_be_bytes());
             body.extend_from_slice(value);
         }
 
         Bytes::from(body)
+    }
+
+    #[test]
+    fn parse_ready_rejects_a_non_ready_command() {
+        assert!(matches!(
+            parse_ready_command(&Bytes::from_static(b"\x04PING")),
+            Err(ZmtpError::Protocol)
+        ));
+    }
+
+    #[test]
+    fn parse_ready_rejects_ready_without_socket_type() {
+        assert!(matches!(
+            parse_ready_command(&Bytes::from_static(b"\x05READY")),
+            Err(ZmtpError::Protocol)
+        ));
+    }
+
+    #[test]
+    fn parse_ready_reads_socket_type_and_identity() {
+        let body = crate::utils::build_ready("DEALER", Some(b"client-1"));
+        let (socket_type, identity) = parse_ready_command(&body).unwrap();
+        assert_eq!(socket_type, SocketType::Dealer);
+        assert_eq!(identity.as_deref(), Some(&b"client-1"[..]));
+    }
+
+    #[test]
+    fn parse_ready_keeps_custom_properties() {
+        let extra = [
+            ("X-Service".to_string(), Bytes::from_static(b"billing")),
+            ("X-Empty".to_string(), Bytes::new()),
+        ];
+        let body = crate::utils::build_metadata_command_with("READY", "PUSH", None, &extra);
+        let ready = parse_ready_metadata(&body).unwrap();
+        assert_eq!(ready.socket_type, SocketType::Push);
+        assert_eq!(ready.identity, None);
+        assert_eq!(ready.properties, extra);
     }
 
     #[test]
@@ -800,12 +1182,22 @@ mod tests {
         ));
     }
 
+    /// Read the client's signature, all it sends before seeing ours.
     async fn read_client_greeting(stream: &mut TcpStream) {
-        let greeting = [0u8; 64];
+        let greeting = [0u8; 10];
         let BufResult(read_res, _) = read_exact_with_timeout(stream, greeting, Some(TEST_TIMEOUT))
             .await
             .unwrap();
         read_res.unwrap();
+    }
+
+    /// Read the rest of the client's greeting, sent once it has seen ours.
+    async fn skip_greeting_rest(stream: &mut TcpStream) -> Option<()> {
+        let rest = [0u8; 54];
+        let BufResult(read_res, _) = read_exact_with_timeout(stream, rest, Some(TEST_TIMEOUT))
+            .await
+            .ok()?;
+        read_res.ok()
     }
 
     async fn write_greeting(stream: &mut TcpStream, greeting: Vec<u8>) {
@@ -816,6 +1208,7 @@ mod tests {
     }
 
     async fn maybe_read_plain_hello(stream: &mut TcpStream) -> Option<[u8; 6]> {
+        skip_greeting_rest(stream).await?;
         let header = [0u8; 6];
         let Ok(BufResult(read_res, header)) =
             read_exact_with_timeout(stream, header, Some(TEST_TIMEOUT)).await
@@ -827,6 +1220,9 @@ mod tests {
     }
 
     async fn maybe_complete_ready_exchange(stream: &mut TcpStream) {
+        if skip_greeting_rest(stream).await.is_none() {
+            return;
+        }
         let header = [0u8; 2];
         let Ok(BufResult(read_res, header)) =
             read_exact_with_timeout(stream, header, Some(TEST_TIMEOUT)).await
@@ -881,9 +1277,15 @@ mod tests {
                 let (mut stream, _) = listener.accept().await.unwrap();
                 read_client_greeting(&mut stream).await;
 
-                let mut bad_greeting =
-                    build_greeting_with_mechanism(SecurityMechanism::Null, &SocketOptions::new())
-                        .to_vec();
+                // With the tail's low bit clear the signature reads as a ZMTP
+                // 1.0 identity frame, and a zero length cannot hold its flags.
+                let mut bad_greeting = build_greeting_with_mechanism(
+                    SecurityMechanism::Null,
+                    &SocketOptions::new(),
+                    None,
+                )
+                .to_vec();
+                bad_greeting[1..9].fill(0);
                 bad_greeting[9] = 0x00;
                 write_greeting(&mut stream, bad_greeting).await;
                 maybe_complete_ready_exchange(&mut stream).await;
@@ -922,6 +1324,7 @@ mod tests {
                 let mut bad_greeting = build_greeting_with_mechanism(
                     SecurityMechanism::Plain,
                     &SocketOptions::new().with_plain_server(true),
+                    None,
                 )
                 .to_vec();
                 bad_greeting[10] = 2;
@@ -964,8 +1367,11 @@ mod tests {
 
                 read_client_greeting(&mut stream).await;
 
-                let peer_greeting =
-                    build_greeting_with_mechanism(SecurityMechanism::Null, &SocketOptions::new());
+                let peer_greeting = build_greeting_with_mechanism(
+                    SecurityMechanism::Null,
+                    &SocketOptions::new(),
+                    None,
+                );
                 write_greeting(&mut stream, peer_greeting.to_vec()).await;
 
                 assert!(
@@ -1005,6 +1411,7 @@ mod tests {
                 let peer_greeting = build_greeting_with_mechanism(
                     SecurityMechanism::Plain,
                     &SocketOptions::new().with_plain_server(true),
+                    None,
                 );
                 write_greeting(&mut stream, peer_greeting.to_vec()).await;
                 // Hold the connection open, sending nothing further.
@@ -1070,7 +1477,7 @@ mod tests {
         body.extend_from_slice(b"READY");
         body.push(11u8);
         body.extend_from_slice(b"Socket-Type");
-        body.extend_from_slice(&(value.len() as u32).to_be_bytes());
+        body.extend_from_slice(&20u32.to_be_bytes());
         body.extend_from_slice(&value);
 
         assert!(matches!(

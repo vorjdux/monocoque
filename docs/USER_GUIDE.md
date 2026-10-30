@@ -30,6 +30,8 @@ Monocoque implements 11 ZeroMQ socket types. Pick based on your communication pa
 - **PUSH / PULL** - pipeline. PUSH distributes tasks round-robin to connected PULL sockets. One-way, no replies.
 - **PAIR** - exclusive point-to-point. Exactly one peer.
 
+Every socket is multi-peer: it can bind and connect several endpoints (`tcp://`, `ipc://`, `inproc://`). inproc is bounded by the HWM and works across threads. STREAM (raw TCP) is also available, and the draft types (CLIENT/SERVER, RADIO/DISH, SCATTER/GATHER, CHANNEL) are in `monocoque::zmq::draft` behind the `draft` feature.
+
 ---
 
 ## Patterns
@@ -38,44 +40,42 @@ Monocoque implements 11 ZeroMQ socket types. Pick based on your communication pa
 
 ```rust
 // Server
-let (_listener, mut server) = RepSocket::bind("127.0.0.1:5555").await?;
+let mut server = RepSocket::new();
+server.bind("tcp://127.0.0.1:5555").await?;
 loop {
-    let request = server.recv().await.expect("connection closed");
-    server.send(vec![Bytes::from("pong")]).await?;
+    let _request = server.recv().await?;
+    server.send("pong").await?;
 }
 
 // Client
-let mut client = ReqSocket::connect("127.0.0.1:5555").await?;
-client.send(vec![Bytes::from("ping")]).await?;
-let reply = client.recv().await.expect("no reply");
+let mut client = ReqSocket::new();
+client.connect("tcp://127.0.0.1:5555").await?;
+client.send("ping").await?;
+let reply = client.recv().await?;
 ```
 
 REQ enforces strict send/recv alternation. If you need to fire multiple requests without waiting, use DEALER/ROUTER instead.
 
-For a single-frame request in a hot loop, `send_one(frame)` builds the wire envelope on the stack instead of allocating a `Vec`. Paired with `recv_into`, a round trip allocates nothing:
-
-```rust
-let mut reply: Vec<Bytes> = Vec::new();
-client.send_one(Bytes::from("ping")).await?;
-client.recv_into(&mut reply).await?;
-```
+In a hot loop the round trip above allocates nothing: `send(Msg::from(frame))` does not allocate, and `recv()` returns a `MsgRef` borrowed from a message slot the socket reuses. Call `recv_owned()` when you need to keep the message past the next receive.
 
 ### Async Request-Reply (DEALER/ROUTER)
 
 ```rust
 // Client
-let mut client = DealerSocket::connect("127.0.0.1:5555").await?;
+let mut client = DealerSocket::new();
+client.connect("tcp://127.0.0.1:5555").await?;
 for i in 0..10 {
-    client.send(vec![Bytes::from(format!("request {i}"))]).await?;
+    client.send(format!("request {i}")).await?;
 }
 
 // Server
-let (_listener, mut server) = RouterSocket::bind("127.0.0.1:5555").await?;
+let mut server = RouterSocket::new();
+server.bind("tcp://127.0.0.1:5555").await?;
 loop {
-    let msg = server.recv().await.expect("connection closed");
-    // msg[0] is the client identity, msg[1] is an empty delimiter, msg[2..] is the payload
-    let reply = vec![msg[0].clone(), Bytes::new(), Bytes::from("ok")];
-    server.send(reply).await?;
+    let msg = server.recv().await?;
+    // frame 0 is the client identity, the rest is what the DEALER sent
+    let identity = msg.frame_bytes(0).unwrap();
+    server.send(Msg::from([identity, Bytes::from("ok")])).await?;
 }
 ```
 
@@ -85,25 +85,26 @@ ROUTER prepends a client identity frame so you can route replies to specific cli
 
 ```rust
 // Publisher
-let mut pub_sock = PubSocket::bind("127.0.0.1:5556").await?;
-pub_sock.send(vec![Bytes::from("weather"), Bytes::from("72F")]).await?;
+let mut pub_sock = PubSocket::new();
+pub_sock.bind("tcp://127.0.0.1:5556").await?;
+pub_sock.send(Msg::from([Bytes::from("weather"), Bytes::from("72F")])).await?;
 
 // Subscriber
-let mut sub_sock = SubSocket::connect("127.0.0.1:5556").await?;
+let mut sub_sock = SubSocket::new();
+sub_sock.connect("tcp://127.0.0.1:5556").await?;
 sub_sock.subscribe(b"weather").await?;
-while let Ok(Some(msg)) = sub_sock.recv().await {
+while let Ok(msg) = sub_sock.recv().await {
     println!("{:?}", msg);
 }
 ```
 
-`bind` picks a worker count from the CPU count, clamped to `[2, 16]`. To tune the
-publisher, use `bind_with_options` (default worker count, custom options) or
-`bind_with_workers_opts` (both explicit). Publishers pushing many small frames
-usually want write coalescing on:
+A PUB socket serves every subscriber that connects. Publishers pushing many
+small frames usually want write coalescing on:
 
 ```rust
 let opts = SocketOptions::default().with_write_coalescing(true);
-let mut pub_sock = PubSocket::bind_with_options("127.0.0.1:5556", opts).await?;
+let mut pub_sock = PubSocket::with_options(opts);
+pub_sock.bind("tcp://127.0.0.1:5556").await?;
 ```
 
 The first frame is the topic. SUB filters by prefix match against subscribed topics. Subscribe to `b""` to receive everything.
@@ -112,59 +113,45 @@ The first frame is the topic. SUB filters by prefix match against subscribed top
 
 ```rust
 // Ventilator - distributes work
-let (_listener, mut push) = PushSocket::bind("127.0.0.1:5557").await?;
+let mut push = PushSocket::new();
+push.bind("tcp://127.0.0.1:5557").await?;
 for i in 0..100 {
-    push.send(vec![Bytes::from(format!("task {i}"))]).await?;
+    push.send(format!("task {i}")).await?;
 }
 
 // Worker - pulls tasks, pushes results
-let mut pull = PullSocket::connect("127.0.0.1:5557").await?;
-let mut push = PushSocket::connect("127.0.0.1:5558").await?;
-while let Ok(Some(task)) = pull.recv().await {
-    push.send(process(task)).await?;
+let mut pull = PullSocket::new();
+pull.connect("tcp://127.0.0.1:5557").await?;
+let mut push = PushSocket::new();
+push.connect("tcp://127.0.0.1:5558").await?;
+while let Ok(task) = pull.recv().await {
+    push.send(process(&task)).await?;
 }
 ```
 
-A single `PushSocket` and `PullSocket` own one connection each, so the pair above
-is one ventilator talking to one worker. There's no reply path; use a separate
-PULL socket to collect results if needed.
+There's no reply path; use a separate PULL socket to collect results if needed.
 
-### Worker pools (PushFanOut / PullFanIn)
+### Worker pools
 
-To spread work across a pool of workers, use `PushFanOut` and `PullFanIn`. The
-ventilator accepts many PULL workers and round-robins each `send` across them;
-the sink accepts many PUSH workers and merges their results into one fair-queued
-stream.
-
-```rust
-// Ventilator: round-robin tasks across 4 PULL workers
-let (_listener, mut vent) = PushFanOut::bind("127.0.0.1:5557", 4).await?;
-for i in 0..100 {
-    vent.send(vec![Bytes::from(format!("task {i}"))]).await?;
-}
-
-// Sink: merge results from 4 PUSH workers
-let (_listener, mut sink) = PullFanIn::bind("127.0.0.1:5558", 4).await?;
-while let Ok(Some(result)) = sink.recv().await {
-    // handle result
-}
-```
-
-`bind(addr, n)` accepts exactly `n` workers before returning. When you need the
-bound port before the workers connect, bind the listener yourself and call
-`accept_workers(&listener, n, options)`. See `examples/pipeline_worker_pool.rs`
-for a full ventilator-workers-sink run.
+`PushSocket` and `PullSocket` are multi-peer. A bound PUSH socket round-robins
+each `send` across every connected PULL worker, and a bound PULL socket
+fair-queues the results of every connected PUSH worker into one stream. PUSH
+only balances across peers that are already connected, so wait for the pool
+(for example with `peer_count()`) before handing out work. See
+`examples/pipeline_worker_pool.rs` for a full ventilator-workers-sink run.
 
 ---
 
 ## Messages
 
-All messages are `Vec<Bytes>`. A single-frame message is `vec![Bytes::from("hello")]`. Multipart messages are just more elements in the vec - you send all frames together and receive all frames together, no flags needed.
+All messages are `Msg`. A single-frame message is `Msg::from("hello")` (or from `Bytes`, `String`, `Vec<u8>`); `send` takes anything that converts into `Msg`, so `send("hello")` works too. A multipart message is `Msg::from([a, b])` or an iterator of `Bytes` collected into a `Msg` - you send all frames together and receive all frames together, no flags needed.
 
 ```rust
-// ROUTER envelope: identity + empty delimiter + payload
-let reply = vec![identity.clone(), Bytes::new(), Bytes::from("ok")];
+// ROUTER envelope to a REQ peer: identity + empty delimiter + payload
+let reply = Msg::from([identity.clone(), Bytes::new(), Bytes::from("ok")]);
 ```
+
+`recv()` returns a `MsgRef`, which derefs to `Msg`: read frames with `get(i)`, `first()` or `frames()`, and take one as `Bytes` with `frame_bytes(i)`. `recv_owned()` returns the `Msg` itself.
 
 `Bytes` is reference-counted, so cloning frames is cheap - no copying the underlying data.
 
@@ -172,7 +159,7 @@ let reply = vec![identity.clone(), Bytes::new(), Bytes::from("ok")];
 
 ## Socket Options
 
-Pass a `SocketOptions` to `connect_with_options` or `bind_with_options`:
+Pass a `SocketOptions` to `with_options` when creating the socket, or change them later with `set_options`:
 
 ```rust
 let options = SocketOptions::new()
@@ -181,34 +168,35 @@ let options = SocketOptions::new()
     .with_recv_hwm(1000)
     .with_send_hwm(1000);
 
-let socket = DealerSocket::connect_with_options("127.0.0.1:5555", options).await?;
+let mut socket = DealerSocket::with_options(options);
+socket.connect("tcp://127.0.0.1:5555").await?;
 ```
 
 Key options:
 
-- `recv_timeout` / `send_timeout` - how long to wait before returning `None`. Defaults to no timeout (wait forever).
-- `recv_hwm` / `send_hwm` - high water marks. When the queue reaches this many messages, new messages are dropped or the sender blocks depending on socket type. Default 1000.
-- `linger` - how long to wait for queued messages to drain when a socket closes. Default 0 (discard immediately).
+- `recv_timeout` / `send_timeout` - how long to wait before failing with `MonocoqueError::TimedOut`. Defaults to no timeout (wait forever).
+- `recv_hwm` / `send_hwm` - high water marks, applied to every socket type and transport, inproc included. When the queue reaches this many messages, new messages are dropped or the sender blocks depending on socket type. Default 1000; 0 means unbounded.
+- `linger` - how long to wait for queued messages to drain when a socket closes. Default 30 seconds.
 - `conflate` - keep only the most recent message in the receive queue. Useful for telemetry or status updates where stale data is useless.
 - `tcp_keepalive` - detect dead connections. Use `with_tcp_keepalive(1)`, `with_tcp_keepalive_idle(60)`, `with_tcp_keepalive_intvl(10)`, `with_tcp_keepalive_cnt(3)` to enable.
 
-Buffer sizing: the defaults are a 32KB read buffer and an 8KB write buffer. Use `with_read_buffer_size(4096)` to trade throughput for latency on small messages, or `with_buffer_sizes(65_536, 65_536)` to widen the read batch for bulk transfers. The read buffer is clamped to the 64KB read slab and floored at 64 bytes. The `SocketOptions::small()` and `large()` presets are deprecated because both sit below the default.
+Buffer sizing: the default read buffer is 32KB. The outbound buffer has no fixed size; it grows on demand and is reused across sends. Use `with_read_buffer_size(4096)` to trade throughput for latency on small messages, or `with_read_buffer_size(65_536)` to widen the read batch for bulk transfers. The read buffer is clamped to 64KB and floored at 64 bytes.
 
 ---
 
 ## Error Handling
 
-`recv()` returns `Result<Option<Vec<Bytes>>>`. An `Err` is an I/O error. `Ok(None)` means the connection closed or a timeout elapsed. `Ok(Some(msg))` is a message.
+Every method returns `Result<_, MonocoqueError>`. `recv()` returns `Result<MsgRef<'_>>`: `Ok(msg)` is a message, and a timeout or a closed socket is an error, not an empty result. I/O errors arrive as `MonocoqueError::Io`.
 
 ```rust
 match socket.recv().await {
-    Ok(Some(msg)) => { /* handle message */ }
-    Ok(None) => { /* timeout or closed */ }
-    Err(e) => { /* I/O error */ }
+    Ok(msg) => { /* handle message */ }
+    Err(MonocoqueError::TimedOut) => { /* recv timeout elapsed */ }
+    Err(e) => { /* closed, I/O or protocol error */ }
 }
 ```
 
-`send()` returns `Result<()>`. Errors indicate connection or buffer problems.
+`send()` returns `Result<()>`. Errors indicate connection or buffer problems; a send that cannot proceed fails with `Again` or `TimedOut` depending on the options.
 
 Set a recv timeout if you need to detect hangs rather than waiting forever.
 
@@ -221,14 +209,16 @@ PLAIN sends credentials in the clear - only use it over an already-encrypted cha
 ```rust
 // Server
 let options = SocketOptions::new().with_plain_server(true);
-let (_listener, mut server) = RepSocket::bind_with_options("127.0.0.1:5555", options).await?;
+let mut server = RepSocket::with_options(options);
+server.bind("tcp://127.0.0.1:5555").await?;
 
 // Client
 let options = SocketOptions::new().with_plain_credentials("admin", "secret");
-let mut client = ReqSocket::connect_with_options("127.0.0.1:5555", options).await?;
+let mut client = ReqSocket::with_options(options);
+client.connect("tcp://127.0.0.1:5555").await?;
 ```
 
-CURVE provides public-key encryption with forward secrecy. Generate keypairs with `CurveKeyPair::generate()`. Store secret keys outside of source code. See [SECURITY_GUIDE.md](SECURITY_GUIDE.md) for a complete setup example.
+CURVE provides public-key encryption with forward secrecy. It implements RFC 26 and interoperates with libzmq peers. Generate keypairs with `monocoque_zmtp::security::curve::CurveKeyPair::generate()`. Store secret keys outside of source code. See [SECURITY_GUIDE.md](SECURITY_GUIDE.md) for a complete setup example.
 
 ---
 
@@ -237,13 +227,23 @@ CURVE provides public-key encryption with forward secrecy. Generate keypairs wit
 Forward messages between two sockets:
 
 ```rust
-let (_listener, mut frontend) = RouterSocket::bind("127.0.0.1:5559").await?;
-let (_listener2, mut backend) = DealerSocket::bind("127.0.0.1:5560").await?;
+use monocoque::zmq::proxy::{self, NoCapture};
 
-proxy::proxy(&mut frontend, &mut backend, Option::<&mut RouterSocket>::None).await?;
+let mut frontend = RouterSocket::new();
+frontend.bind("tcp://127.0.0.1:5559").await?;
+let mut backend = DealerSocket::new();
+backend.bind("tcp://127.0.0.1:5560").await?;
+
+proxy::proxy(&mut frontend, &mut backend, None::<&mut NoCapture>).await?;
 ```
 
-For a steerable proxy, pass a PAIR socket as the third argument and send `b"PAUSE"`, `b"RESUME"`, or `b"TERMINATE"` to control it.
+For a steerable proxy, call `proxy::proxy_steerable` with a control socket (for example PAIR) as the fourth argument and send `b"PAUSE"`, `b"RESUME"`, or `b"TERMINATE"` to control it.
+
+---
+
+## Polling
+
+`monocoque::zmq::poll::poll` is the equivalent of `zmq_poll`: it waits on several sockets of any kind at once. See `examples/poll_demo.rs`.
 
 ---
 
@@ -254,7 +254,7 @@ Enable debug logging with `RUST_LOG=monocoque_zmtp=debug`. Socket introspection 
 ```rust
 socket.socket_type();     // which socket type
 socket.last_endpoint();   // last bound/connected address
-socket.has_more();        // more frames pending in current message
+socket.peer_count();      // connected peers
 socket.options();         // current option values
 ```
 

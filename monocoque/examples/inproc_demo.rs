@@ -7,118 +7,90 @@
 //!
 //! - Binding to inproc endpoints
 //! - Connecting multiple clients to the same endpoint
-//! - Zero-copy message passing via channels
+//! - Zero-copy message passing (frames are shared `Bytes`, never copied)
 //! - Cleanup and unbinding
 //!
 //! # Run
 //!
 //! ```sh
-//! cargo run --example inproc_demo
+//! cargo run --example inproc_demo --features zmq
 //! ```
 
 use bytes::Bytes;
-use monocoque_core::inproc::{bind_inproc, connect_inproc, list_inproc_endpoints, unbind_inproc};
-use std::thread;
-use std::time::Duration;
+use monocoque::rt::{self, LocalRuntime};
+use monocoque::zmq::{Msg, PullSocket, PushSocket};
+
+const ENDPOINT: &str = "inproc://demo-endpoint";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Inproc Transport Demo ===\n");
 
     // 1. Bind to an inproc endpoint
-    println!("1. Binding to 'inproc://demo-endpoint'...");
-    let (server_tx, server_rx) = bind_inproc("inproc://demo-endpoint")?;
-    println!("   ✓ Bound successfully\n");
+    println!("1. Binding to '{ENDPOINT}'...");
+    let mut server = PullSocket::new();
+    let bound = server.bind(ENDPOINT).await?;
+    println!("   Bound successfully to {bound}\n");
 
-    // 2. List endpoints
-    println!("2. Current inproc endpoints:");
-    for endpoint in list_inproc_endpoints() {
-        println!("   - inproc://{endpoint}");
-    }
-    println!();
-
-    // 3. Spawn a server task to receive messages
-    println!("3. Starting server thread...");
-    let server_thread = thread::spawn(move || {
+    // 2. Spawn a server task to receive messages
+    println!("2. Starting server task...");
+    let server_task = rt::spawn(async move {
         println!("   [Server] Listening for messages...");
-        let mut count = 0;
-        while let Ok(msg) = server_rx.recv() {
-            count += 1;
-            println!(
-                "   [Server] Received message #{}: {:?}",
-                count,
-                msg.iter()
-                    .map(|b| String::from_utf8_lossy(b).to_string())
-                    .collect::<Vec<_>>()
-            );
+        for count in 1..=4 {
+            let Ok(msg) = server.recv().await else {
+                break;
+            };
+            let frames: Vec<String> = msg
+                .frames()
+                .map(|f| {
+                    if f.len() > 64 {
+                        format!("<{} bytes>", f.len())
+                    } else {
+                        String::from_utf8_lossy(f).into_owned()
+                    }
+                })
+                .collect();
+            println!("   [Server] Received message #{count}: {frames:?}");
         }
-        println!("   [Server] Shutting down (received {count} messages)");
+        server.unbind(ENDPOINT).ok();
+        println!("   [Server] Unbound endpoint, shutting down");
     });
 
-    // Small delay to ensure server is ready
-    thread::sleep(Duration::from_millis(10));
+    // 3. Connect multiple clients
+    println!("\n3. Connecting clients...");
+    let mut client1 = PushSocket::new();
+    let mut client2 = PushSocket::new();
+    let mut client3 = PushSocket::new();
+    for client in [&mut client1, &mut client2, &mut client3] {
+        client.connect(ENDPOINT).await?;
+    }
+    println!("   3 clients connected\n");
 
-    // 4. Connect multiple clients
-    println!("\n4. Connecting clients...");
-    let client1 = connect_inproc("inproc://demo-endpoint")?;
-    let client2 = connect_inproc("inproc://demo-endpoint")?;
-    let client3 = connect_inproc("inproc://demo-endpoint")?;
-    println!("   ✓ 3 clients connected\n");
-
-    // 5. Send messages from clients
-    println!("5. Sending messages from clients...");
-
-    client1
-        .send(vec![Bytes::from("Hello from client 1")])
-        .map_err(|_| "send failed")?;
-    thread::sleep(Duration::from_millis(10));
-
+    // 4. Send messages from clients
+    println!("4. Sending messages from clients...");
+    client1.send("Hello from client 1").await?;
     client2
-        .send(vec![
-            Bytes::from("Multi-part"),
-            Bytes::from("message"),
-            Bytes::from("from client 2"),
-        ])
-        .map_err(|_| "send failed")?;
-    thread::sleep(Duration::from_millis(10));
+        .send(Msg::from([
+            Bytes::from_static(b"Multi-part"),
+            Bytes::from_static(b"message"),
+            Bytes::from_static(b"from client 2"),
+        ]))
+        .await?;
+    client3.send("Zero-copy message from client 3").await?;
 
-    client3
-        .send(vec![Bytes::from("🚀 Zero-copy message from client 3")])
-        .map_err(|_| "send failed")?;
-    thread::sleep(Duration::from_millis(10));
-
-    // 6. Send one more message to show zero-copy efficiency
-    println!("\n6. Demonstrating zero-copy messaging...");
+    // 5. Send one more message to show zero-copy efficiency
+    println!("\n5. Demonstrating zero-copy messaging...");
     let large_data = Bytes::from(vec![b'X'; 1024 * 100]); // 100 KB
     client1
-        .send(vec![Bytes::from("Large"), large_data])
-        .map_err(|_| "send failed")?;
-    println!("   ✓ Sent 100 KB message (zero-copy via Arc)");
-    thread::sleep(Duration::from_millis(10));
+        .send(Msg::from([Bytes::from_static(b"Large"), large_data]))
+        .await?;
+    println!("   Sent 100 KB message (the frame is shared, not copied)");
 
-    // 7. Cleanup
-    println!("\n7. Cleaning up...");
-
-    // Drop all senders to close the channel
-    drop(server_tx);
-    drop(client1);
-    drop(client2);
-    drop(client3);
-
-    // Unbind first. bind_inproc stored a clone of the server sender in the
-    // global registry (so connect_inproc could hand it out), so dropping the
-    // local senders above is not enough to close the channel: the registry's
-    // clone keeps the server's recv() blocked. Removing the endpoint drops that
-    // last sender, so the recv() loop ends and the join below returns.
-    unbind_inproc("inproc://demo-endpoint")?;
-    println!("   ✓ Unbound endpoint");
-
-    // Wait for server to finish now that every sender is gone.
-    server_thread.join().unwrap();
-
-    // Verify endpoint list is empty
-    let endpoints = list_inproc_endpoints();
-    println!("\n8. Final endpoint list: {endpoints:?}");
-    assert!(endpoints.is_empty(), "All endpoints should be unbound");
+    // 6. Wait for the server to receive everything and unbind
+    rt::join(server_task).await;
 
     println!("\n=== Demo Complete ===");
     Ok(())

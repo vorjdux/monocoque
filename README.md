@@ -21,20 +21,24 @@ The name comes from Formula 1 engineering, where the monocoque chassis achieves 
 
 ## Features
 
-- All 11 ZeroMQ socket types: REQ, REP, DEALER, ROUTER, PUB, SUB, XPUB, XSUB, PUSH, PULL, PAIR
-- PLAIN and CURVE (CurveZMQ/X25519) authentication, ZAP support
-- TCP and IPC (Unix domain socket) transports
+- All 11 ZeroMQ socket types: REQ, REP, DEALER, ROUTER, PUB, SUB, XPUB, XSUB, PUSH, PULL, PAIR,
+  plus STREAM; the draft types (CLIENT/SERVER, RADIO/DISH, SCATTER/GATHER, CHANNEL)
+  behind the `draft` feature
+- Every socket is multi-peer: bind and connect any number of endpoints
+- PLAIN and CURVE (RFC 26, interoperates with libzmq) authentication, ZAP support
+- TCP, IPC (Unix domain socket) and inproc transports (`tcp://`, `ipc://`, `inproc://`);
+  inproc is HWM-bounded and works across threads
+- `zmq_poll` equivalent in `monocoque::zmq::poll`
 - Automatic reconnection with exponential backoff on all socket types
-- ZMTP 3.1 heartbeating (PING/PONG) wired into all send/recv loops
+- ZMTP 3.1 heartbeating (PING/PONG with TTL) on every connection, answered and
+  timed out by the socket itself
 - Socket monitoring via channel-based lifecycle events
-- Explicit batching API for maximum throughput, plus `recv_batch()` to drain a
-  burst of messages in one `.await`
-- Allocation-free receive via `recv_into` / `try_recv_into`: reuse one buffer
-  across a hot recv loop instead of allocating a `Vec` per message
+- Borrowed receive: `recv()` lends a `MsgRef` into the socket's reused message
+  slot, so a hot recv loop allocates nothing; `recv_owned()` keeps the message
 - Vectored (`writev`) sends for large frames: the body skips the userspace copy
-- PUB fan-out coalesces queued broadcasts into one vectored write per subscriber
-- PUSH/PULL worker pools via `PushFanOut` (round-robin ventilator) and
-  `PullFanIn` (fair-queued sink)
+- PUB encodes each message once and shares the bytes among its subscribers;
+  what is queued for one subscriber goes out in one write
+- PUSH load balances and PULL fair-queues across all connected peers
 - Zero-copy message passing via `Bytes` refcounting
 
 ## Performance
@@ -82,7 +86,7 @@ Default (eager) mode sends each message immediately, one syscall per `send()`, a
 is the mode for latency-sensitive work where you want each message on the wire now
 rather than batched. Turn on coalescing for small-message throughput. For **large** frames the send
 path automatically uses a vectored write (`writev`) so the body is never copied
-into the send buffer; the threshold (`vectored_write_threshold`, default 32 KB)
+into the send buffer; the threshold (`vectored_write_threshold`, default 16 KiB)
 is tunable per workload. This applies in both modes: with coalescing enabled, a
 body at or above the threshold flushes whatever is buffered and then goes
 straight to the kernel, so batching small frames does not cost you a copy on the
@@ -107,29 +111,36 @@ compio = { version = "0.19", features = ["runtime", "macros"] }
 ```
 
 ```rust
-use monocoque::zmq::{DealerSocket, RouterSocket};
-
-// Connect a DEALER
-let mut dealer = DealerSocket::connect("tcp://127.0.0.1:5555").await?;
-dealer.send(vec![b"Hello".into()]).await?;
-let reply = dealer.recv().await?;
+use monocoque::zmq::{DealerSocket, Msg, RouterSocket};
 
 // Bind a ROUTER
-let mut router = RouterSocket::bind("tcp://127.0.0.1:5555").await?;
-let msg = router.recv().await?;  // msg[0] is the routing identity
+let mut router = RouterSocket::new();
+router.bind("tcp://127.0.0.1:5555").await?;
+
+// Connect a DEALER
+let mut dealer = DealerSocket::new();
+dealer.connect("tcp://127.0.0.1:5555").await?;
+dealer.send("Hello").await?;
+
+let msg = router.recv_owned().await?;  // frame 0 is the routing identity
+router.send(Msg::from([msg.frame_bytes(0).unwrap(), "World".into()])).await?;
+let reply = dealer.recv().await?;      // a MsgRef borrowed from the socket
 ```
 
 ```rust
 // PUB/SUB
-let mut publisher = PubSocket::bind("tcp://127.0.0.1:5556").await?;
-publisher.send(vec![b"events".into(), b"payload".into()]).await?;
+let mut publisher = PubSocket::new();
+publisher.bind("tcp://127.0.0.1:5556").await?;
 
-let mut subscriber = SubSocket::connect("tcp://127.0.0.1:5556").await?;
+let mut subscriber = SubSocket::new();
+subscriber.connect("tcp://127.0.0.1:5556").await?;
 subscriber.subscribe(b"events").await?;
+
+publisher.send(Msg::from([Bytes::from("events"), Bytes::from("payload")])).await?;
 let msg = subscriber.recv().await?;
 ```
 
-For high throughput, enable write coalescing or use the explicit batch API.
+For high throughput, enable write coalescing.
 
 By default each `send()` issues one kernel write per message. Write coalescing batches
 those writes into a 64 KB buffer and flushes them in a single syscall, which is where
@@ -139,21 +150,13 @@ data goes out. See [docs/performance.md](docs/performance.md) for the full expla
 and tuning guide.
 
 ```rust
-// Write coalescing: opt-in, requires flush() after each burst (PUSH/PULL)
-let mut push = PushSocket::connect_with_options(
-    "127.0.0.1:5555",
-    SocketOptions::default().with_write_coalescing(true),
-).await?;
+// Write coalescing: opt-in, requires flush() after each burst
+let mut push = PushSocket::with_options(SocketOptions::default().with_write_coalescing(true));
+push.connect("tcp://127.0.0.1:5555").await?;
 for msg in &batch {
-    push.send(vec![msg.clone()]).await?;
+    push.send(msg.clone()).await?;
 }
 push.flush().await?;  // flush bytes that did not fill the 64 KB threshold
-
-// Explicit batch API: encode N messages then one write (DEALER/ROUTER)
-for msg in &batch {
-    dealer.send_buffered(msg.clone())?;
-}
-dealer.flush().await?;
 ```
 
 ## Runtime backends
@@ -184,9 +187,10 @@ up the right one for you).
 let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
 let local = tokio::task::LocalSet::new();
 local.block_on(&rt, async {
-    let mut push = PushSocket::connect("127.0.0.1:5555").await?;
-    push.send(vec![b"hello".into()]).await?;
-    Ok::<_, std::io::Error>(())
+    let mut push = PushSocket::new();
+    push.connect("tcp://127.0.0.1:5555").await?;
+    push.send("hello").await?;
+    Ok::<_, MonocoqueError>(())
 })?;
 ```
 
@@ -197,11 +201,16 @@ whichever feature is enabled, so the same source runs on either.
 ```rust
 let rt = monocoque::rt::LocalRuntime::new()?;
 rt.block_on(async {
-    let mut push = PushSocket::connect("127.0.0.1:5555").await?;
-    push.send(vec![b"hello".into()]).await?;
-    Ok::<_, std::io::Error>(())
+    let mut push = PushSocket::new();
+    push.connect("tcp://127.0.0.1:5555").await?;
+    push.send("hello").await?;
+    Ok::<_, MonocoqueError>(())
 })?;
 ```
+
+On compio, `LocalRuntime` polls for completions briefly before it sleeps on
+io_uring, which cuts round-trip latency; set `MONOCOQUE_SPIN_US` to change the
+budget in microseconds (0 disables it).
 
 The `runtime_backends` example is the same program run both ways:
 
@@ -213,19 +222,21 @@ cargo run --example runtime_backends --no-default-features --features runtime-sm
 
 ## Safety
 
-`unsafe` is confined to a handful of small, well-contained spots, each behind a documented contract:
+This section is the single inventory of `unsafe` in the workspace; `CONTRIBUTING.md` and the crate docs point here rather than restating it. Every block carries a `SAFETY:` comment stating its contract. There are two kinds:
 
-- `monocoque-core/src/io.rs` - the owned-buffer read helpers shared by every backend. `fill_read` owns the workspace's single `set_buf_init` call (declaring how many bytes a read initialized in a buffer's spare capacity), and `take_read_buffer` hands out read-sized slabs from a reused `BytesMut`. The socket read paths call `take_read_buffer` in documented `unsafe` blocks.
-- `monocoque-core/src/tcp.rs` (and a few socket-tuning call sites) - TCP socket tuning (nodelay, keepalive) through the raw socket handle.
-- `monocoque-zmtp/src/inproc_stream.rs` - the in-process stream adapter that fills an owned buffer.
+- **Owned-buffer reads.** `monocoque-core/src/io.rs`: `fill_read` owns the workspace's single `set_len` call, declaring how many bytes a read initialized in the buffer it was handed. Miri checks it in CI.
+- **Raw-fd socket tuning.** `monocoque-core/src/tcp.rs` borrows the stream's raw fd as a `socket2::Socket` to set options (nodelay, keepalive, buffer sizes) and never closes it.
 
-Everything else is safe Rust.
+Everything else is safe Rust. `monocoque-core` denies `unsafe_code` at the crate root and opts back in per module, so a new `unsafe` block outside `io.rs` and `tcp.rs` fails to compile there.
 
 Memory invariants:
 - Buffers are never reused while referenced (tracked via `Bytes` refcounts)
-- A read slab is frozen to `Bytes` in a one-way transition; no mutation after freeze
-- The read slab is allocated lazily on the first read, so an idle socket holds none
-- PUB fanout is refcount-based (`Bytes::clone()`), never copies payloads
+- Received bytes are split off a connection's read buffer and frozen to `Bytes`
+  in a one-way transition; no mutation after freeze
+- A connection's read buffer is allocated on its first read, so an idle
+  connection holds none
+- PUB encodes a message once and shares the bytes among subscribers by refcount;
+  payloads are never copied per subscriber
 
 ## Development
 
@@ -242,16 +253,6 @@ cargo bench --no-default-features --features runtime-smol,zmq
 ```
 
 Interop testing against libzmq: see [docs/INTEROP_TESTING.md](docs/INTEROP_TESTING.md).
-
-## Roadmap
-
-Core features are complete. Possible future work:
-
-- io_uring fixed buffers (`IORING_OP_READ_FIXED`) - removes the last kernel-boundary copy per read; ~5-15% latency improvement at an already low baseline. (Large *writes* already use vectored `writev`.)
-- Prefix trie for topic matching - the publisher-side prefilter and per-subscriber matching use a linear prefix scan, which is fast for the handful of distinct prefixes a PUB typically holds; a trie would only help when a single PUB accumulates 100+ *distinct* subscription prefixes or deep hierarchies
-- Per-subscriber concurrent writes - PUB fan-out throughput now exceeds libzmq and is sharded across worker threads (each write has a fault-isolation timeout), but writes *within* a worker are sequential, so one slow subscriber can still delay the others on its worker
-
-Long term: high-performance RPC, additional transports (QUIC, shared memory), custom protocol framework.
 
 ## License
 

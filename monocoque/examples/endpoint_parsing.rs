@@ -39,6 +39,6 @@ fn main() -> Result<(), EndpointError> {
     println!("  Reparsed:   {reparsed}");
     assert_eq!(serialized, reparsed.to_string());
 
-    println!("\n✅ All endpoint parsing examples completed successfully");
+    println!("\nAll endpoint parsing examples completed successfully");
     Ok(())
 }

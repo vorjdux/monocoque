@@ -1,156 +1,104 @@
-//! Example demonstrating reconnection with exponential backoff.
+//! Example demonstrating automatic reconnection.
 //!
-//! This example shows how to implement a robust client that automatically
-//! reconnects when the connection is lost, using exponential backoff to
-//! avoid overwhelming the server.
+//! A connected socket redials on its own when the connection is lost, backing
+//! off between attempts from `reconnect_ivl` up to `reconnect_ivl_max`. The
+//! client below never reconnects by hand: it watches its monitor for
+//! Connected/Disconnected events while the server goes away and comes back on
+//! the same port, and its next request simply waits for the new connection.
 //!
 //! Run this example:
 //! ```bash
 //! cargo run --example reconnection_demo --features zmq
 //! ```
 
-use bytes::Bytes;
 use monocoque::rt::{self, LocalRuntime};
-use monocoque::zmq::ReqSocket;
-use monocoque::{ReconnectState, SocketOptions};
-use std::io;
+use monocoque::zmq::{RepSocket, ReqSocket, Result, SocketEvent, SocketOptions};
 use std::time::Duration;
-use tracing::{error, info, warn};
+use tracing::info;
 
-/// Maximum number of reconnection attempts before giving up
-const MAX_RECONNECT_ATTEMPTS: u32 = 10;
-
-/// Connect to server with automatic reconnection
+/// Bind a REP server on `endpoint` that answers `count` requests and then
+/// closes. Returns the bound endpoint and the server task.
 #[allow(clippy::future_not_send)]
-async fn connect_with_retry(addr: &str, reconnect: &mut ReconnectState) -> io::Result<ReqSocket> {
-    loop {
-        info!(
-            "Connecting to {} (attempt {})",
-            addr,
-            reconnect.attempt() + 1
-        );
-
-        match ReqSocket::connect(addr).await {
-            Ok(socket) => {
-                info!("Connected successfully");
-                reconnect.reset();
-                return Ok(socket);
-            }
-            Err(e) => {
-                error!("Connection failed: {}", e);
-
-                if reconnect.attempt() >= MAX_RECONNECT_ATTEMPTS {
-                    error!("Maximum reconnection attempts reached");
-                    return Err(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        format!("Failed to connect after {MAX_RECONNECT_ATTEMPTS} attempts"),
-                    ));
-                }
-
-                let delay = reconnect.next_delay();
-                warn!(
-                    "Reconnecting in {:?} (attempt {} of {})",
-                    delay,
-                    reconnect.attempt(),
-                    MAX_RECONNECT_ATTEMPTS
-                );
-                rt::sleep(delay).await;
-            }
+async fn start_server(
+    endpoint: &str,
+    count: usize,
+) -> Result<(String, rt::JoinHandle<Result<()>>)> {
+    let mut rep = RepSocket::new();
+    let bound = rep.bind(endpoint).await?;
+    info!("[Server] Listening on {}", bound);
+    let task = rt::spawn(async move {
+        for _ in 0..count {
+            let request = rep.recv_owned().await?;
+            let text = String::from_utf8_lossy(request.first().unwrap_or_default()).into_owned();
+            rep.send(format!("Reply to {text}")).await?;
         }
-    }
+        rep.close().await?;
+        info!("[Server] Shut down");
+        Ok(())
+    });
+    Ok((bound, task))
 }
 
-/// Main communication loop with automatic reconnection on errors
 #[allow(clippy::future_not_send)]
-async fn communication_loop(addr: &str) -> io::Result<()> {
-    // Configure reconnection with exponential backoff
-    let options = SocketOptions::default()
-        .with_reconnect_ivl(Duration::from_millis(100)) // Start with 100ms
-        .with_reconnect_ivl_max(Duration::from_secs(30)); // Cap at 30 seconds
-
-    let mut reconnect_state = ReconnectState::new(&options);
-
-    loop {
-        // Connect (or reconnect) to server
-        let mut socket = match connect_with_retry(addr, &mut reconnect_state).await {
-            Ok(s) => s,
-            Err(e) => {
-                error!("Failed to establish connection: {}", e);
-                return Err(e);
-            }
-        };
-
-        // Send requests until connection fails
-        let mut request_num = 0;
-        loop {
-            request_num += 1;
-            let message = format!("Request #{request_num}");
-
-            info!("Sending: {}", message);
-            let request = vec![Bytes::from(message)];
-
-            match socket.send(request).await {
-                Ok(()) => {
-                    info!("Request sent successfully");
-                }
-                Err(e) => {
-                    error!("Send failed: {}", e);
-                    let delay = reconnect_state.next_delay();
-                    warn!("Connection lost, reconnecting in {:?}", delay);
-                    rt::sleep(delay).await;
-                    break; // Break inner loop to reconnect
-                }
-            }
-
-            // Wait for response
-            if let Ok(Some(response)) = socket.recv().await {
-                if let Some(data) = response.first() {
-                    info!("Received: {}", String::from_utf8_lossy(data));
-                    reconnect_state.reset(); // Reset on successful communication
-                }
-            } else {
-                warn!("Connection closed by server");
-                let delay = reconnect_state.next_delay();
-                warn!("Reconnecting in {:?}", delay);
-                rt::sleep(delay).await;
-                break; // Break inner loop to reconnect
-            }
-
-            // Wait a bit between requests
-            rt::sleep(Duration::from_secs(1)).await;
-        }
-
-        // Check if we've exceeded max reconnection attempts
-        if reconnect_state.attempt() >= MAX_RECONNECT_ATTEMPTS {
-            error!("Maximum reconnection attempts reached, giving up");
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "Maximum reconnection attempts exceeded",
-            ));
-        }
-    }
+async fn request(req: &mut ReqSocket, n: usize) -> Result<()> {
+    let message = format!("Request #{n}");
+    info!("[Client] Sending: {}", message);
+    req.send(message).await?;
+    let reply = req.recv().await?;
+    info!(
+        "[Client] Received: {}",
+        String::from_utf8_lossy(reply.first().unwrap_or_default())
+    );
+    Ok(())
 }
 
-fn main() -> io::Result<()> {
+fn main() -> Result<()> {
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .init();
 
-    // Run the async communication loop
     LocalRuntime::new()?.block_on(async {
-        let addr = "127.0.0.1:5555";
-        info!("Starting client, connecting to {}", addr);
+        let (endpoint, first_server) = start_server("tcp://127.0.0.1:0", 2).await?;
 
-        match communication_loop(addr).await {
-            Ok(()) => {
-                info!("Client finished successfully");
-                Ok(())
+        // Configure reconnection with exponential backoff
+        let options = SocketOptions::default()
+            .with_reconnect_ivl(Duration::from_millis(100)) // Start with 100ms
+            .with_reconnect_ivl_max(Duration::from_secs(2)) // Cap at 2 seconds
+            .with_recv_timeout(Duration::from_secs(5));
+        let mut req = ReqSocket::with_options(options);
+
+        // Print connection events as they happen
+        let monitor = req.monitor();
+        rt::spawn_detached(async move {
+            while let Ok(event) = monitor.recv_async().await {
+                if matches!(
+                    event,
+                    SocketEvent::Connected(_) | SocketEvent::Disconnected(_)
+                ) {
+                    info!("[Monitor] {event}");
+                }
             }
-            Err(e) => {
-                error!("Client failed: {}", e);
-                Err(e)
-            }
-        }
+        });
+
+        req.connect(&endpoint).await?;
+        request(&mut req, 1).await?;
+        request(&mut req, 2).await?;
+
+        // The first server answers two requests and goes away.
+        rt::join(first_server).await?;
+
+        // Bring a new server up on the same port after a pause. Meanwhile the
+        // client keeps redialing in the background.
+        rt::sleep(Duration::from_millis(500)).await;
+        let (_, second_server) = start_server(&endpoint, 2).await?;
+
+        // These requests wait for the reconnection, no retry loop needed.
+        request(&mut req, 3).await?;
+        request(&mut req, 4).await?;
+
+        rt::join(second_server).await?;
+        info!("Client finished successfully");
+        Ok(())
     })
 }

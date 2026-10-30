@@ -3,71 +3,76 @@
 //! Classic "divide and conquer" pattern:
 //!
 //! ```text
-//! [Ventilator / PushFanOut] ──distributes tasks──▶ [Workers / PULL × N]
-//!                                                          │
-//! [Sink / PullFanIn]        ◀──collects results── [Workers / PUSH × N]
+//! [Ventilator / PUSH] ──distributes tasks──▶ [Workers / PULL × N]
+//!                                                    │
+//! [Sink / PULL]       ◀──collects results── [Workers / PUSH × N]
 //! ```
 //!
-//! The ventilator round-robins tasks across the whole worker pool and the sink
-//! merges every worker's results into one stream, so this scales past a single
-//! worker (a plain `PushSocket`/`PullSocket` pair only ever talks to one peer).
+//! A bound PUSH socket round-robins tasks across every connected worker and a
+//! bound PULL socket fair-queues every worker's results into one stream.
 //!
-//! Run with: `cargo run --example pipeline_worker_pool`
+//! Run with: `cargo run --example pipeline_worker_pool --features zmq`
 
-use bytes::Bytes;
-use monocoque::rt::{self, LocalRuntime, TcpListener};
-use monocoque::zmq::{PullFanIn, PullSocket, PushFanOut, PushSocket};
-use std::time::Instant;
+use monocoque::rt::{self, LocalRuntime};
+use monocoque::zmq::{PullSocket, PushSocket, Result};
+use std::time::{Duration, Instant};
 
 const TASKS: usize = 100;
 const WORKERS: usize = 4;
 
-fn main() -> std::io::Result<()> {
+fn main() -> Result<()> {
     LocalRuntime::new()?.block_on(async_main())
 }
 
 #[allow(clippy::cast_precision_loss)]
-async fn async_main() -> std::io::Result<()> {
-    // Bind both listeners up front so the workers can connect to either one
-    // before we start accepting the pool.
-    let vent_listener = TcpListener::bind("127.0.0.1:5557").await?;
-    let sink_listener = TcpListener::bind("127.0.0.1:5558").await?;
+async fn async_main() -> Result<()> {
+    let mut ventilator = PushSocket::new();
+    let vent_endpoint = ventilator.bind("tcp://127.0.0.1:0").await?;
+    let mut sink = PullSocket::new();
+    let sink_endpoint = sink.bind("tcp://127.0.0.1:0").await?;
 
     // ── Workers: PULL from the ventilator, PUSH results to the sink ───────
     for i in 0..WORKERS {
+        let vent_endpoint = vent_endpoint.clone();
+        let sink_endpoint = sink_endpoint.clone();
         rt::spawn_detached(async move {
-            let mut work_rx = PullSocket::connect("127.0.0.1:5557").await.unwrap();
-            let mut result_tx = PushSocket::connect("127.0.0.1:5558").await.unwrap();
+            let mut work_rx = PullSocket::new();
+            work_rx.connect(&vent_endpoint).await.unwrap();
+            let mut result_tx = PushSocket::new();
+            result_tx.connect(&sink_endpoint).await.unwrap();
             println!("Worker {i} ready");
-            while let Ok(Some(msg)) = work_rx.recv().await {
-                let task = String::from_utf8_lossy(&msg[0]);
+            while let Ok(msg) = work_rx.recv().await {
+                let task = String::from_utf8_lossy(msg.first().unwrap_or_default());
                 let result = format!("worker-{i} done: {task}");
-                result_tx.send(vec![Bytes::from(result)]).await.unwrap();
+                result_tx.send(result).await.unwrap();
             }
         });
     }
 
-    // ── Accept the pool on both ends ──────────────────────────────────────
-    let mut ventilator =
-        PushFanOut::accept_workers(&vent_listener, WORKERS, monocoque::SocketOptions::default())
-            .await?;
-    let mut sink =
-        PullFanIn::accept_workers(&sink_listener, WORKERS, monocoque::SocketOptions::default())
-            .await?;
+    // PUSH only balances across peers that are already connected, so wait for
+    // the whole pool before handing out work.
+    while ventilator.peer_count() < WORKERS {
+        rt::sleep(Duration::from_millis(5)).await;
+    }
 
     // ── Distribute tasks ──────────────────────────────────────────────────
     println!("Distributing {TASKS} tasks to {WORKERS} workers...");
     let start = Instant::now();
     for i in 0..TASKS {
-        ventilator
-            .send(vec![Bytes::from(format!("task-{i}"))])
-            .await?;
+        ventilator.send(format!("task-{i}")).await?;
     }
 
     // ── Collect results ───────────────────────────────────────────────────
+    let mut per_worker = [0usize; WORKERS];
     for _ in 0..TASKS {
-        if let Ok(Some(result)) = sink.recv().await {
-            let _ = String::from_utf8_lossy(&result[0]); // process result
+        let result = sink.recv().await?;
+        let text = String::from_utf8_lossy(result.first().unwrap_or_default());
+        if let Some(n) = text
+            .strip_prefix("worker-")
+            .and_then(|s| s.split(' ').next())
+            .and_then(|s| s.parse::<usize>().ok())
+        {
+            per_worker[n] += 1;
         }
     }
 
@@ -75,9 +80,10 @@ async fn async_main() -> std::io::Result<()> {
     println!(
         "All {} tasks completed in {:.2}ms ({:.0} tasks/sec)",
         TASKS,
-        elapsed.as_millis(),
+        elapsed.as_secs_f64() * 1000.0,
         TASKS as f64 / elapsed.as_secs_f64()
     );
+    println!("Tasks per worker: {per_worker:?}");
 
     Ok(())
 }
