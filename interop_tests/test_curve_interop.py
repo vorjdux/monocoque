@@ -8,6 +8,7 @@ lacks it (and the Rust interop_curve tests skip).
 """
 
 import binascii
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -99,7 +100,9 @@ def test_heartbeats_cross_curve_in_both_directions():
     after the idle period would fail."""
     server_pub, server_sec = zmq.curve_keypair()
     client_pub, client_sec = zmq.curve_keypair()
-    proc, endpoint = start_server(server_pub, server_sec, 2, heartbeat_ms=50)
+    # Three echoes: the server exits after the last, so the disconnect check
+    # runs while it still has one to go.
+    proc, endpoint = start_server(server_pub, server_sec, 3, heartbeat_ms=50)
     ctx = zmq.Context()
     try:
         s = dealer(ctx)
@@ -112,6 +115,32 @@ def test_heartbeats_cross_curve_in_both_directions():
         time.sleep(1.0)
         echo_all(s, [[b"after"]])
         assert not monitor.poll(0), "the CURVE connection dropped while heartbeating"
+        echo_all(s, [[b"done"]])
+        assert proc.wait(timeout=10) == 0
+    finally:
+        proc.kill()
+        ctx.destroy()
+
+
+def test_custom_properties_cross_curve_in_both_directions():
+    """Each side's ZMQ_METADATA travels inside the CURVE handshake boxes and
+    shows up as message properties on the other side."""
+    server_pub, server_sec = zmq.curve_keypair()
+    client_pub, client_sec = zmq.curve_keypair()
+    cmd = [str(BINARY), "server", "tcp://127.0.0.1:0", hex_key(server_pub), hex_key(server_sec), "1"]
+    env = dict(os.environ, CURVE_ECHO_EXPECT="X-Client=pyzmq")
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, cwd=ROOT, env=env)
+    endpoint = proc.stdout.readline().strip()
+    ctx = zmq.Context()
+    try:
+        s = dealer(ctx)
+        s.curve_serverkey, s.curve_publickey, s.curve_secretkey = server_pub, client_pub, client_sec
+        s.setsockopt(zmq.METADATA, b"X-Client:pyzmq")
+        s.connect(endpoint)
+        s.send(b"meta")
+        frame = s.recv(copy=False)
+        assert frame.bytes == b"meta"
+        assert frame.get("X-Echo") == "monocoque"
         assert proc.wait(timeout=10) == 0
     finally:
         proc.kill()

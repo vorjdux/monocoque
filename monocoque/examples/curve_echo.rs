@@ -9,6 +9,10 @@
 //! Keys are 64 hex characters. The server prints the endpoint it bound once it
 //! is listening; the client sends `hello` once connected. Either side then
 //! echoes `count` messages and exits.
+//!
+//! Both sides announce the handshake property `X-Echo: monocoque`. With
+//! `CURVE_ECHO_EXPECT=Name=Value` set, every received message must carry that
+//! property from the peer, or the process exits with an error.
 
 use monocoque::zmq::{DealerSocket, SocketOptions};
 use std::io::Write;
@@ -30,7 +34,13 @@ fn main() {
         (&args[6], args.get(7))
     };
     let count: usize = count.parse().expect("count is a number");
-    let mut options = SocketOptions::default().with_recv_timeout(Duration::from_secs(10));
+    let mut options = SocketOptions::default()
+        .with_recv_timeout(Duration::from_secs(10))
+        .with_metadata("X-Echo", "monocoque");
+    let expect = std::env::var("CURVE_ECHO_EXPECT").ok().map(|e| {
+        let (name, value) = e.split_once('=').expect("CURVE_ECHO_EXPECT is Name=Value");
+        (name.to_string(), value.to_string())
+    });
     if let Some(ms) = heartbeat {
         let ivl = Duration::from_millis(ms.parse().expect("heartbeat is milliseconds"));
         options = options
@@ -61,7 +71,11 @@ fn main() {
                 s
             };
             for _ in 0..count {
-                let msg = socket.recv_owned().await.unwrap();
+                let msg = socket.recv().await.unwrap();
+                if let Some((name, value)) = &expect {
+                    assert_eq!(msg.gets(name), Some(value.as_str()), "peer property {name}");
+                }
+                let msg = msg.take();
                 socket.send(msg).await.unwrap();
             }
             socket.close().await.unwrap();

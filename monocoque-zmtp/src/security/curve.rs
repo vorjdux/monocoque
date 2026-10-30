@@ -423,8 +423,17 @@ where
 
 // ── ZMTP property helpers ─────────────────────────────────────────────────────
 
-/// Encode Socket-Type and optional Identity as ZMTP property bytes (RFC 23 §2.5).
-fn encode_zmtp_props(socket_type: &str, identity: Option<&[u8]>) -> Vec<u8> {
+/// Connection properties beyond Socket-Type and Identity.
+type Properties = Vec<(String, Bytes)>;
+
+/// Encode Socket-Type, optional Identity and custom properties as ZMTP
+/// property bytes (RFC 23 §2.5). A name over 255 bytes is skipped, as in the
+/// clear-text READY.
+fn encode_zmtp_props(
+    socket_type: &str,
+    identity: Option<&[u8]>,
+    extra: &[(String, Bytes)],
+) -> Vec<u8> {
     let mut out = Vec::with_capacity(64);
     push_prop(&mut out, b"Socket-Type", socket_type.as_bytes());
     if let Some(id) = identity
@@ -432,13 +441,18 @@ fn encode_zmtp_props(socket_type: &str, identity: Option<&[u8]>) -> Vec<u8> {
     {
         push_prop(&mut out, b"Identity", id);
     }
+    for (name, value) in extra {
+        if name.len() <= 255 {
+            push_prop(&mut out, name.as_bytes(), value);
+        }
+    }
     out
 }
 
 #[inline]
 fn push_prop(out: &mut Vec<u8>, key: &[u8], value: &[u8]) {
-    // Keys are the fixed RFC 23 property names; values are a socket-type name or
-    // a routing identity, which the options layer caps at 255 bytes.
+    // Callers keep names within 255 bytes; identities are capped at 255 by the
+    // options layer.
     out.push(u8::try_from(key.len()).expect("ZMTP property name exceeds 255 bytes"));
     out.extend_from_slice(key);
     out.extend_from_slice(
@@ -449,10 +463,14 @@ fn push_prop(out: &mut Vec<u8>, key: &[u8], value: &[u8]) {
     out.extend_from_slice(value);
 }
 
-/// Decode ZMTP property bytes, returning (socket_type, identity).
-fn decode_zmtp_props(mut data: &[u8]) -> Result<(Option<Bytes>, Option<Bytes>), ZmtpError> {
+/// Decode ZMTP property bytes, returning (socket_type, identity, everything
+/// else).
+fn decode_zmtp_props(
+    mut data: &[u8],
+) -> Result<(Option<Bytes>, Option<Bytes>, Properties), ZmtpError> {
     let mut socket_type = None;
     let mut identity = None;
+    let mut properties = Vec::new();
 
     while !data.is_empty() {
         if data.len() < 5 {
@@ -493,10 +511,13 @@ fn decode_zmtp_props(mut data: &[u8]) -> Result<(Option<Bytes>, Option<Bytes>), 
                 return Err(ZmtpError::Protocol);
             }
             identity = Some(value);
+        } else if let Ok(name) = std::str::from_utf8(key) {
+            // As in the clear-text READY: a name that is not text is skipped.
+            properties.push((name.to_string(), value));
         }
     }
 
-    Ok((socket_type, identity))
+    Ok((socket_type, identity, properties))
 }
 
 // ── Post-handshake message cipher ────────────────────────────────────────────
@@ -717,6 +738,8 @@ pub struct CurveHandshakeResult {
     pub cipher: Option<CurveMessageCipher>,
     /// The user id the ZAP handler returned (server side, with ZAP only).
     pub user_id: Option<String>,
+    /// The peer's handshake properties beyond Socket-Type and Identity.
+    pub peer_properties: Vec<(String, Bytes)>,
     /// Metadata the ZAP reply carried (server side, with ZAP only).
     pub zap_metadata: Vec<(String, Bytes)>,
 }
@@ -739,10 +762,14 @@ pub struct CurveClient {
     local_socket_type: String,
     /// Local identity to announce in INITIATE metadata
     local_identity: Option<Bytes>,
+    /// Custom properties to announce in INITIATE metadata
+    local_metadata: Properties,
     /// Peer socket type received in READY metadata
     peer_socket_type: Option<Bytes>,
     /// Peer identity received in READY metadata
     peer_identity_recv: Option<Bytes>,
+    /// Other properties received in READY metadata
+    peer_properties: Properties,
     /// Send nonce counter
     send_nonce: u64,
     /// Next expected receive nonce counter (replay protection)
@@ -767,14 +794,23 @@ impl CurveClient {
             cookie: None,
             local_socket_type: local_socket_type.into(),
             local_identity,
+            local_metadata: Vec::new(),
             peer_socket_type: None,
             peer_identity_recv: None,
+            peer_properties: Vec::new(),
             // HELLO and INITIATE take nonces 1 and 2, so messages start at 3,
             // as in libzmq.
             send_nonce: 3,
             recv_nonce: 1,
             message_box: None,
         }
+    }
+
+    /// Announce `metadata` (`ZMQ_METADATA`) in INITIATE.
+    #[must_use]
+    pub fn with_metadata(mut self, metadata: Properties) -> Self {
+        self.local_metadata = metadata;
+        self
     }
 
     /// Perform full client handshake: HELLO → WELCOME → INITIATE → READY
@@ -798,6 +834,7 @@ impl CurveClient {
             peer_public_key: None,
             cipher: Some(cipher),
             user_id: None,
+            peer_properties: std::mem::take(&mut self.peer_properties),
             zap_metadata: Vec::new(),
         })
     }
@@ -942,8 +979,11 @@ impl CurveClient {
         // vouch_ct = 64 + 16 = 80 bytes
 
         // INITIATE box plaintext: C(32) ‖ vouch nonce(16) ‖ vouch box(80) ‖ metadata.
-        let local_props =
-            encode_zmtp_props(&self.local_socket_type, self.local_identity.as_deref());
+        let local_props = encode_zmtp_props(
+            &self.local_socket_type,
+            self.local_identity.as_deref(),
+            &self.local_metadata,
+        );
         let mut initiate_pt = Vec::with_capacity(128 + local_props.len());
         initiate_pt.extend_from_slice(self.client_keypair.public.as_bytes());
         initiate_pt.extend_from_slice(&vouch_nonce_16);
@@ -1013,7 +1053,8 @@ impl CurveClient {
             ZmtpError::Protocol
         })?;
 
-        let (peer_st, peer_id) = decode_zmtp_props(&metadata_bytes)?;
+        let (peer_st, peer_id, peer_props) = decode_zmtp_props(&metadata_bytes)?;
+        self.peer_properties = peer_props;
         if peer_st.is_none() {
             warn!("[CURVE CLIENT] CURVE READY missing Socket-Type");
             return Err(ZmtpError::Protocol);
@@ -1083,10 +1124,14 @@ pub struct CurveServer {
     cookie_key: [u8; 32],
     /// Local socket type to announce in READY metadata
     local_socket_type: String,
+    /// Custom properties to announce in READY metadata
+    local_metadata: Properties,
     /// Peer socket type received in INITIATE metadata
     peer_socket_type: Option<Bytes>,
     /// Peer identity received in INITIATE metadata
     peer_identity_recv: Option<Bytes>,
+    /// Other properties received in INITIATE metadata
+    peer_properties: Properties,
     /// Send nonce counter
     send_nonce: u64,
     /// Next expected receive nonce counter (replay protection)
@@ -1107,13 +1152,22 @@ impl CurveServer {
             client_public: None,
             cookie_key,
             local_socket_type: local_socket_type.into(),
+            local_metadata: Vec::new(),
             peer_socket_type: None,
             peer_identity_recv: None,
+            peer_properties: Vec::new(),
             // READY takes nonce 1, so messages start at 2, as in libzmq.
             send_nonce: 2,
             recv_nonce: 1,
             message_box: None,
         }
+    }
+
+    /// Announce `metadata` (`ZMQ_METADATA`) in READY.
+    #[must_use]
+    pub fn with_metadata(mut self, metadata: Properties) -> Self {
+        self.local_metadata = metadata;
+        self
     }
 
     /// Perform full server handshake: HELLO → WELCOME → INITIATE → READY
@@ -1137,6 +1191,7 @@ impl CurveServer {
             peer_public_key: self.client_public,
             cipher: Some(cipher),
             user_id: None,
+            peer_properties: std::mem::take(&mut self.peer_properties),
             zap_metadata: Vec::new(),
         })
     }
@@ -1385,7 +1440,8 @@ impl CurveServer {
         }
 
         let metadata = &initiate_pt[128..];
-        let (peer_st, peer_id) = decode_zmtp_props(metadata)?;
+        let (peer_st, peer_id, peer_props) = decode_zmtp_props(metadata)?;
+        self.peer_properties = peer_props;
         if peer_st.is_none() {
             warn!("[CURVE SERVER] INITIATE missing Socket-Type in metadata");
             return Err(ZmtpError::Protocol);
@@ -1429,7 +1485,7 @@ impl CurveServer {
         ready_nonce_24[..16].copy_from_slice(CURVE_READY_NONCE_PREFIX);
         ready_nonce_24[16..].copy_from_slice(&ready_counter.to_be_bytes());
 
-        let server_meta = encode_zmtp_props(&self.local_socket_type, None);
+        let server_meta = encode_zmtp_props(&self.local_socket_type, None, &self.local_metadata);
         let ready_box = salsa_encrypt(
             c_prime.as_bytes(),
             &self.server_short_keypair.secret.to_raw_bytes(),
@@ -1516,6 +1572,7 @@ pub async fn curve_server_handshake_zap<S>(
     timeout: Option<Duration>,
     peer_addr: &str,
     local_socket_type: impl Into<String>,
+    metadata: Properties,
 ) -> Result<CurveHandshakeResult, ZmtpError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -1524,7 +1581,8 @@ where
 
     debug!("[CURVE SERVER ZAP] Starting ZAP-authenticated handshake");
 
-    let mut curve_server = CurveServer::new(server_keypair, local_socket_type);
+    let mut curve_server =
+        CurveServer::new(server_keypair, local_socket_type).with_metadata(metadata);
 
     // Drive the handshake only up to INITIATE, which yields the client's
     // authenticated long-term public key. READY is deliberately withheld until
@@ -1584,6 +1642,7 @@ where
         peer_public_key: Some(client_public_key),
         cipher: Some(cipher),
         user_id: zap.user_id,
+        peer_properties: std::mem::take(&mut curve_server.peer_properties),
         zap_metadata: zap.metadata,
     })
 }
@@ -2018,16 +2077,24 @@ mod tests {
 
     #[test]
     fn test_encode_decode_zmtp_props_round_trip() {
-        let encoded = encode_zmtp_props("DEALER", Some(b"my-identity"));
-        let (st, id) = decode_zmtp_props(&encoded).unwrap();
+        let encoded = encode_zmtp_props("DEALER", Some(b"my-identity"), &[]);
+        let (st, id, _) = decode_zmtp_props(&encoded).unwrap();
         assert_eq!(st.unwrap().as_ref(), b"DEALER");
         assert_eq!(id.unwrap().as_ref(), b"my-identity");
     }
 
     #[test]
+    fn custom_properties_round_trip() {
+        let extra = vec![("X-Region".to_string(), Bytes::from_static(b"eu-west"))];
+        let encoded = encode_zmtp_props("PUSH", None, &extra);
+        let (_, _, props) = decode_zmtp_props(&encoded).unwrap();
+        assert_eq!(props, extra);
+    }
+
+    #[test]
     fn test_encode_decode_zmtp_props_no_identity() {
-        let encoded = encode_zmtp_props("ROUTER", None);
-        let (st, id) = decode_zmtp_props(&encoded).unwrap();
+        let encoded = encode_zmtp_props("ROUTER", None, &[]);
+        let (st, id, _) = decode_zmtp_props(&encoded).unwrap();
         assert_eq!(st.unwrap().as_ref(), b"ROUTER");
         assert!(id.is_none());
     }

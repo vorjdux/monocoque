@@ -76,6 +76,44 @@ fn inproc_messages_carry_socket_type_and_custom_properties() {
     });
 }
 
+#[test]
+fn curve_carries_custom_properties_both_ways() {
+    let key = |seed: u8| {
+        let secret = [seed; 32];
+        (
+            *monocoque_zmtp::security::curve::CurveSecretKey::from_bytes(secret)
+                .public_key()
+                .as_bytes(),
+            secret,
+        )
+    };
+    let (server_public, server_secret) = key(11);
+    let (client_public, client_secret) = key(12);
+    LocalRuntime::new().unwrap().block_on(async {
+        let mut server = DealerSocket::with_options(
+            opts()
+                .with_curve_server(true)
+                .with_curve_keypair(server_public, server_secret)
+                .with_metadata("X-Side", "server"),
+        );
+        let ep = server.bind("tcp://127.0.0.1:0").await.unwrap();
+        let mut client = DealerSocket::with_options(
+            opts()
+                .with_curve_keypair(client_public, client_secret)
+                .with_curve_serverkey(server_public)
+                .with_metadata("X-Side", "client"),
+        );
+        client.connect(&ep).await.unwrap();
+        client.send("ping").await.unwrap();
+        let msg = server.recv().await.unwrap();
+        assert_eq!(msg.gets("X-Side"), Some("client"), "INITIATE properties");
+        assert_eq!(msg.gets("Socket-Type"), Some("DEALER"));
+        server.send("pong").await.unwrap();
+        let msg = client.recv().await.unwrap();
+        assert_eq!(msg.gets("X-Side"), Some("server"), "READY properties");
+    });
+}
+
 struct UserIdHandler;
 
 impl ZapHandler for UserIdHandler {
@@ -127,7 +165,9 @@ fn interop_metadata_with_libzmq() {
     let server = thread::spawn(move || {
         LocalRuntime::new().unwrap().block_on(async move {
             let mut router = RouterSocket::with_options(opts());
-            ep_tx.send(router.bind("tcp://127.0.0.1:0").await.unwrap()).unwrap();
+            ep_tx
+                .send(router.bind("tcp://127.0.0.1:0").await.unwrap())
+                .unwrap();
             let msg = router.recv().await.unwrap();
             assert_eq!(msg.get(1), Some(&b"from libzmq"[..]));
             assert_eq!(msg.gets("Socket-Type"), Some("DEALER"));

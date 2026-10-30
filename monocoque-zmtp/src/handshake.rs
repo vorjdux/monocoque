@@ -276,7 +276,11 @@ where
                 peer_socket_type,
                 curve_cipher: cr.cipher,
                 user_id: cr.user_id,
-                properties: cr.zap_metadata,
+                properties: {
+                    let mut p = cr.peer_properties;
+                    p.extend(cr.zap_metadata);
+                    p
+                },
                 framing: Framing::V3,
             });
         }
@@ -539,7 +543,8 @@ where
                 "[HANDSHAKE] CURVE server has no zap_domain: accepting any client key \
                  without authorization (encryption only). Configure ZAP to authenticate peers."
             );
-            let mut curve_server = CurveServer::new(server_keypair, local_socket_type.as_str());
+            let mut curve_server = CurveServer::new(server_keypair, local_socket_type.as_str())
+                .with_metadata(options.metadata.clone());
             curve_server.handshake(stream, timeout).await
         } else {
             use crate::security::curve::curve_server_handshake_zap;
@@ -551,6 +556,7 @@ where
                 timeout,
                 &peer_address,
                 local_socket_type.as_str(),
+                options.metadata.clone(),
             )
             .await
         }
@@ -569,7 +575,8 @@ where
             server_public,
             local_socket_type.as_str(),
             local_id,
-        );
+        )
+        .with_metadata(options.metadata.clone());
         curve_client.handshake(stream, timeout).await
     } else if options.curve_secretkey.is_some() {
         // curve_secretkey set for a client but curve_serverkey is absent.

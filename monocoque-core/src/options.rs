@@ -162,10 +162,10 @@ pub struct SocketOptions {
 
     /// Custom handshake properties (`ZMQ_METADATA`)
     ///
-    /// Sent in this socket's `READY` (or PLAIN `INITIATE`) command, so the
-    /// peer sees them as message metadata. libzmq expects names starting with
-    /// `X-`. Peers reject a `READY` above 512 bytes, so keep these short.
-    /// Not sent over CURVE.
+    /// Sent in this socket's `READY` or `INITIATE` command (inside the box
+    /// under CURVE), so the peer sees them as message metadata. libzmq expects
+    /// names starting with `X-`. Peers reject a clear-text `READY` above 512
+    /// bytes, so keep these short.
     /// - Default: none
     pub metadata: Vec<(String, bytes::Bytes)>,
 
