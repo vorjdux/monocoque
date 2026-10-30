@@ -250,8 +250,16 @@ library_benchmark_group!(
 // above the stored baseline: margin enough to absorb toolchain jitter, tight
 // enough to catch a real hot-path regression. CI persists the baseline in the
 // cached target dir, so a PR is compared against it.
+//
+// Estimated cycles weigh callgrind's simulated cache misses, so they also move
+// when a type's layout pushes hot fields onto another cache line without
+// changing an instruction (see `monocoque-zmtp/tests/layout.rs`). Misses are
+// fewer and lumpier than instructions, hence the wider margin.
 main!(
     config = LibraryBenchmarkConfig::default()
-        .tool(Callgrind::default().soft_limits([(EventKind::Ir, 5.0)]));
+        .tool(Callgrind::default().soft_limits([
+            (EventKind::Ir, 5.0),
+            (EventKind::EstimatedCycles, 10.0),
+        ]));
     library_benchmark_groups = hotpath
 );
