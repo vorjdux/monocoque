@@ -17,7 +17,6 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Wake, Waker};
-use std::thread::ThreadId;
 
 /// A child future in a [`Children`] set.
 ///
@@ -54,8 +53,22 @@ pub struct Wakeups {
     pending: AtomicBool,
     user_parked: AtomicBool,
     active: AtomicBool,
-    /// The socket's thread, the only one that runs its operations.
-    owner: ThreadId,
+    /// The socket's thread, the only one that runs its operations, as
+    /// [`thread_token`] reports it.
+    owner: usize,
+}
+
+thread_local! {
+    static TOKEN: u8 = const { 0 };
+}
+
+/// A number unique to the calling thread among live threads: the address of
+/// a thread-local. `std::thread::current()` would do, but it clones and drops
+/// an `Arc` (two atomic operations) on every call, and this runs on every
+/// wakeup an operation raises. A socket lives on one thread, so its owner
+/// outlives every check.
+fn thread_token() -> usize {
+    TOKEN.with(|t| std::ptr::from_ref(t) as usize)
 }
 
 impl Default for Wakeups {
@@ -65,7 +78,7 @@ impl Default for Wakeups {
             pending: AtomicBool::new(false),
             user_parked: AtomicBool::new(false),
             active: AtomicBool::new(false),
-            owner: std::thread::current().id(),
+            owner: thread_token(),
         }
     }
 }
@@ -194,7 +207,7 @@ impl Wakeups {
             // `pending` at this very moment, and without a fence on both
             // sides each can miss the other's store. A foreign wakeup always
             // delivers instead; at worst the driver polls once for nothing.
-            if self.active.load(Ordering::Acquire) && std::thread::current().id() == self.owner {
+            if self.active.load(Ordering::Acquire) && thread_token() == self.owner {
                 return;
             }
             let user = s.user.take();
