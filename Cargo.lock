@@ -1296,10 +1296,7 @@ version = "0.4.2"
 dependencies = [
  "bytes",
  "compio",
- "compio-buf",
- "compio-io",
  "criterion",
- "flume",
  "futures",
  "gungraun",
  "hex",

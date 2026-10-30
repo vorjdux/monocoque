@@ -26,7 +26,7 @@ use std::mem::MaybeUninit;
 
 /// The largest read a connection issues at once: the ceiling
 /// `read_buffer_size` clamps to.
-pub const READ_SLAB_SIZE: usize = 64 * 1024;
+pub const MAX_READ_SIZE: usize = 64 * 1024;
 
 /// Read into an owned buffer, then declare the bytes written as initialized.
 ///

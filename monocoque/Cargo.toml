@@ -72,10 +72,6 @@ name = "multithreaded"
 harness = false
 required-features = ["zmq"]
 
-[[bench]]
-name = "performance"
-harness = false
-required-features = ["zmq"]
 
 [[bench]]
 name = "measure_latency"
@@ -381,18 +377,14 @@ workspace = true
 monocoque-core = { version = "0.4.2", path = "../monocoque-core", package = "monocoque-rs-core", default-features = false }
 monocoque-zmtp = { version = "0.4.2", path = "../monocoque-zmtp", package = "monocoque-rs-zmtp", optional = true, default-features = false }
 
-# Re-export dependencies for user convenience
+# `bytes` is re-exported; the runtime crates are the backends the runtime-*
+# features select, which the examples and runtime tests drive directly.
 bytes.workspace = true
-compio-io.workspace = true
-compio-buf.workspace = true
 compio = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 smol = { workspace = true, optional = true }
 tracing.workspace = true
 tracing-subscriber.workspace = true
-
-# Used by the PushFanOut / PullFanIn pipeline helpers (zmq feature only)
-flume = { workspace = true, optional = true }
 
 [dev-dependencies]
 zmq.workspace = true
@@ -425,7 +417,7 @@ runtime-smol = [
 ]
 
 # Protocol implementations (opt-in)
-zmq = ["dep:monocoque-zmtp", "dep:flume"]
+zmq = ["dep:monocoque-zmtp"]
 # The draft ZeroMQ socket types (CLIENT/SERVER, RADIO/DISH, SCATTER/GATHER,
 # CHANNEL), whose API libzmq may still change.
 draft = ["zmq", "monocoque-zmtp/draft"]

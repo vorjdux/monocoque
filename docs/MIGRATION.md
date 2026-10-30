@@ -131,6 +131,8 @@ message type. It is a single break with no compatibility shims.
 ### Options
 
 - The `small()` and `large()` presets are removed.
+- `monocoque_core::io::READ_SLAB_SIZE` is `MAX_READ_SIZE` (still 64 KiB, the
+  ceiling `read_buffer_size` clamps to), and `io::take_read_buffer` is removed.
 - `write_buffer_size`, `with_write_buffer_size` and `with_buffer_sizes` are
   removed; the outbound buffer grows on demand and is reused, so the setting
   had no effect. Use `with_read_buffer_size` for the read side.
