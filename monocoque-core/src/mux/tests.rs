@@ -228,6 +228,30 @@ fn reconnects_after_the_peer_goes_away() {
 }
 
 #[test]
+fn stops_dialing_after_max_reconnect_attempts() {
+    LocalRuntime::new().unwrap().block_on(async {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let ep = format!("tcp://127.0.0.1:{port}");
+        let opts = SocketOptions::default().with_reconnect_ivl(Duration::from_millis(10));
+        let limited = core(opts.clone().with_max_reconnect_attempts(Some(2)));
+        SocketCore::connect(&limited, &ep).unwrap();
+        let unlimited = core(opts.clone());
+        SocketCore::connect(&unlimited, &ep).unwrap();
+        // Both fail well past two attempts before anything listens.
+        crate::rt::sleep(Duration::from_millis(200)).await;
+        let server = core(opts);
+        SocketCore::bind(&server, &ep).await.unwrap();
+        wait_peers(&unlimited, 1).await;
+        crate::rt::sleep(Duration::from_millis(100)).await;
+        assert_eq!(limited.borrow().peer_count(), 0);
+    });
+}
+
+#[test]
 fn inproc_same_thread_moves_messages_without_a_codec() {
     LocalRuntime::new().unwrap().block_on(async {
         let a = core(SocketOptions::default());

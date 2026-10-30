@@ -415,9 +415,11 @@ pub struct SocketOptions {
 
     /// Maximum reconnection attempts (`ZMQ_RECONNECT_STOP`)
     ///
-    /// Maximum number of times to attempt reconnection after a disconnect.
+    /// How many dials in a row may fail before a connected endpoint stops
+    /// being dialed. A connection that succeeds resets the count.
     /// - `None`: Retry indefinitely (default, matches libzmq behaviour)
-    /// - `Some(n)`: Give up and return `NotConnected` after n attempts
+    /// - `Some(n)`: Stop after `n` consecutive failures; each failure is
+    ///   reported as `SocketEvent::ConnectFailed`
     pub max_reconnect_attempts: Option<u32>,
 
     /// ZMTP heartbeat interval (`ZMQ_HEARTBEAT_IVL` = 75)
@@ -903,7 +905,11 @@ impl SocketOptions {
     /// Announce a custom handshake property (`ZMQ_METADATA`), such as
     /// `X-Service`. See [`metadata`](Self::metadata).
     #[must_use]
-    pub fn with_metadata(mut self, name: impl Into<String>, value: impl Into<bytes::Bytes>) -> Self {
+    pub fn with_metadata(
+        mut self,
+        name: impl Into<String>,
+        value: impl Into<bytes::Bytes>,
+    ) -> Self {
         self.metadata.push((name.into(), value.into()));
         self
     }

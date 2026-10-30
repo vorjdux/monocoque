@@ -99,6 +99,7 @@ pub async fn connect_loop(
     options: Rc<SocketOptions>,
 ) {
     let mut backoff = ReconnectState::new(&options);
+    let mut failures = 0u32;
     loop {
         match Stream::connect(&endpoint).await {
             Ok(stream) => {
@@ -112,6 +113,7 @@ pub async fn connect_loop(
                     // connection had been established.
                     down.wait().await;
                     backoff.reset();
+                    failures = 0;
                 }
             }
             Err(e) => {
@@ -119,6 +121,13 @@ pub async fn connect_loop(
                     connector: index,
                     reason: e.to_string(),
                 });
+                failures += 1;
+                if options
+                    .max_reconnect_attempts
+                    .is_some_and(|max| failures >= max)
+                {
+                    return;
+                }
             }
         }
         crate::rt::sleep(jittered(backoff.next_delay())).await;
