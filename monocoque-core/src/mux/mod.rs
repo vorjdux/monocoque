@@ -145,8 +145,13 @@ pub trait Hooks: 'static {
         true
     }
 
-    /// A peer went away.
+    /// A peer went away. Messages it sent before closing may still be
+    /// waiting to be received.
     fn on_peer_down(&mut self, _id: PeerId, _info: &PeerInfo) {}
+
+    /// The last message from a peer that went away has been received (or it
+    /// left none), so `id` will not be seen again.
+    fn on_peer_freed(&mut self, _id: PeerId) {}
 
     /// Messages every new peer gets first, built when it comes up (SUB's
     /// current subscriptions).
@@ -888,6 +893,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         let i = id.index as usize;
         if self.peers[i].take().is_some() {
             self.free_peers.push(id.index);
+            self.hooks.on_peer_freed(id);
         }
     }
 

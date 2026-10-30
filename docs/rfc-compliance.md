@@ -138,8 +138,10 @@ Follows libzmq: `[identity, data]` on receive, `[identity, ""]` for connect and
 disconnect notifications (`stream_notify`), and a send of `[identity, ""]`
 closes that connection. Identities are 5 bytes: `0x00` and a 32-bit counter.
 
+- Data a peer sent before closing is delivered before its disconnect
+  notification, and a close requested with `[identity, ""]` writes everything
+  queued first.
 - **Gap:** STREAM messages carry no connection metadata.
-- **Gap:** data sent just before the peer closes can be lost.
 
 ## Transports
 

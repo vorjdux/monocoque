@@ -143,11 +143,31 @@ pub struct StreamHooks {
     next: u32,
     notify: bool,
     notifications: VecDeque<Msg>,
+    /// The peer freed most recently. The core frees a departed peer as it
+    /// hands over that peer's last message, before this socket addresses it.
+    retired: Option<(PeerId, Bytes)>,
 }
 
 impl StreamHooks {
     fn notification(identity: &Bytes) -> Msg {
         Msg::from([identity.clone(), Bytes::new()])
+    }
+
+    /// The identity `id` is addressed by, including a peer freed as its last
+    /// message was taken.
+    fn identity(&self, id: PeerId) -> Option<&Bytes> {
+        self.identity_of.get(&id).or_else(|| match &self.retired {
+            Some((r, identity)) if *r == id => Some(identity),
+            _ => None,
+        })
+    }
+
+    /// `true` until `id` goes away, while its identity is still routable.
+    fn is_live(&self, id: PeerId) -> bool {
+        self.identity_of
+            .get(&id)
+            .and_then(|i| identity_key(i))
+            .is_some_and(|key| self.by_identity.get(&key) == Some(&id))
     }
 }
 
@@ -165,14 +185,21 @@ impl Hooks for StreamHooks {
         true
     }
 
+    /// Sends to the peer fail from here on, but the identity stays known so
+    /// the data it sent before closing is still delivered addressed.
     fn on_peer_down(&mut self, id: PeerId, _info: &PeerInfo) {
+        if let Some(key) = self.identity_of.get(&id).and_then(|i| identity_key(i)) {
+            self.by_identity.remove(&key);
+        }
+    }
+
+    /// The peer's last data has been received: report the disconnect after it.
+    fn on_peer_freed(&mut self, id: PeerId) {
         if let Some(identity) = self.identity_of.remove(&id) {
-            if let Some(key) = identity_key(&identity) {
-                self.by_identity.remove(&key);
-            }
             if self.notify {
                 self.notifications.push_back(Self::notification(&identity));
             }
+            self.retired = Some((id, identity));
         }
     }
 }
@@ -210,6 +237,7 @@ impl StreamSocket {
             next: rand::random(),
             notify: options.stream_notify,
             notifications: VecDeque::new(),
+            retired: None,
         };
         Self {
             core: SocketCore::new((), options, hooks),
@@ -250,12 +278,15 @@ impl StreamSocket {
                     }
                     match c.poll_recv(cx) {
                         Poll::Ready((peer, data)) => {
-                            // Notifications raised while that receive ran come
-                            // first, so a connect is reported before its data.
-                            if let Some(identity) = c.hooks().identity_of.get(&peer).cloned() {
+                            // A connect raised while that receive ran comes
+                            // first, so it is reported before its data. A
+                            // disconnect raised by taking a departed peer's last
+                            // message stays queued behind it.
+                            if let Some(identity) = c.hooks().identity(peer).cloned() {
                                 let mut m = data;
                                 m.push_front(identity);
-                                if let Some(n) = c.hooks_mut().notifications.pop_front() {
+                                let live = c.hooks().is_live(peer);
+                                if live && let Some(n) = c.hooks_mut().notifications.pop_front() {
                                     c.hooks_mut().notifications.push_back(m);
                                     *slot = n;
                                 } else {
