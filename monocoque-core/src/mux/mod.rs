@@ -883,7 +883,11 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
                 continue;
             }
             let mut st = entry.state.borrow_mut();
-            let Some(last) = st.last_recv else { continue };
+            let Some(mut last) = st.last_recv else { continue };
+            if std::mem::take(&mut st.recv_seen) {
+                last = now;
+                st.last_recv = Some(now);
+            }
             let idle = now.saturating_duration_since(last);
             let limit = match &st.outbound {
                 Outbound::Wire { codec, .. } => {

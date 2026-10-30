@@ -65,8 +65,11 @@ pub struct PeerState<C> {
     readable_signaled: bool,
     pub(crate) closed: Option<CloseReason>,
     pub(crate) events: Rc<EventQueue>,
-    /// Last time any bytes arrived; tracked only when heartbeating.
+    /// Last heartbeat tick that found bytes had arrived; tracked only when
+    /// heartbeating. Reads only raise `recv_seen`, so the hot path never
+    /// reads the clock.
     pub(crate) last_recv: Option<Instant>,
+    pub(crate) recv_seen: bool,
     pub(crate) ping_outstanding: bool,
     /// Close the connection once everything queued has been written.
     pub(crate) close_when_drained: bool,
@@ -93,6 +96,7 @@ impl<C: Codec> PeerState<C> {
             closed: None,
             events,
             last_recv: heartbeat.then(Instant::now),
+            recv_seen: false,
             ping_outstanding: false,
             close_when_drained: false,
         }
@@ -459,10 +463,8 @@ pub async fn reader_loop<C: Codec>(
             }
             Ok(_) => {}
         }
-        if st.last_recv.is_some() {
-            st.last_recv = Some(Instant::now());
-            st.ping_outstanding = false;
-        }
+        st.recv_seen = true;
+        st.ping_outstanding = false;
         let st = &mut *st;
         let Outbound::Wire {
             codec,
