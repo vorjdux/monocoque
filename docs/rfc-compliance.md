@@ -85,8 +85,8 @@ the server.
   PONG and JOIN inside MESSAGE boxes with inner flag `0x02`. monocoque does the same
   and refuses any command sent in the clear after the handshake, since it
   would be unauthenticated.
-- **Gap:** custom READY properties from a CURVE peer are not yet surfaced as
-  message metadata.
+- Custom properties (`ZMQ_METADATA`) travel inside the INITIATE and READY
+  boxes and become message metadata on the other side, as with libzmq.
 
 ## RFC 27: ZAP
 
