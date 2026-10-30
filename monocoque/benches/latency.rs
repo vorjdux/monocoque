@@ -83,7 +83,7 @@ fn monocoque_latency(c: &mut Criterion, name: &str, endpoint: fn() -> String) {
                         let rt = monocoque::rt::LocalRuntime::new().unwrap();
                         rt.block_on(async move {
                             let mut rep = RepSocket::with_options(
-                                SocketOptions::default().with_buffer_sizes(4096, 4096),
+                                SocketOptions::default().with_read_buffer_size(4096),
                             );
                             ep_tx.send(rep.bind(&bind_to).await.unwrap()).unwrap();
                             for _ in 0..total {
@@ -103,7 +103,7 @@ fn monocoque_latency(c: &mut Criterion, name: &str, endpoint: fn() -> String) {
 
                     let elapsed = rt.block_on(async move {
                         let mut req = ReqSocket::with_options(
-                            SocketOptions::default().with_buffer_sizes(4096, 4096),
+                            SocketOptions::default().with_read_buffer_size(4096),
                         );
                         req.connect(&endpoint).await.unwrap();
 

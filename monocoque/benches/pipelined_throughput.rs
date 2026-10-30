@@ -70,9 +70,8 @@ fn monocoque_dealer_router_pipelined(c: &mut Criterion) {
                     let router_thread = thread::spawn(move || {
                         let rt = monocoque::rt::LocalRuntime::new().unwrap();
                         rt.block_on(async move {
-                            let mut router = RouterSocket::with_options(batch_options(
-                                SocketOptions::default(),
-                            ));
+                            let mut router =
+                                RouterSocket::with_options(batch_options(SocketOptions::default()));
                             ep_tx
                                 .send(router.bind("tcp://127.0.0.1:0").await.unwrap())
                                 .unwrap();
@@ -110,7 +109,7 @@ fn monocoque_dealer_router_pipelined(c: &mut Criterion) {
                     let dealer_rt = monocoque::rt::LocalRuntime::new().unwrap();
                     let elapsed = dealer_rt.block_on(async move {
                         let mut dealer = DealerSocket::with_options(batch_options(
-                            SocketOptions::default().with_buffer_sizes(16384, 16384),
+                            SocketOptions::default().with_read_buffer_size(16384),
                         ));
                         dealer.connect(&endpoint).await.unwrap();
 

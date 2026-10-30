@@ -51,7 +51,7 @@ fn run_once(payload: &Msg, mode: Mode) -> Duration {
         let rt = monocoque::rt::LocalRuntime::new().unwrap();
         rt.block_on(async move {
             let mut pull =
-                PullSocket::with_options(SocketOptions::default().with_buffer_sizes(16384, 16384));
+                PullSocket::with_options(SocketOptions::default().with_read_buffer_size(16384));
             ep_tx
                 .send(pull.bind("tcp://127.0.0.1:0").await.unwrap())
                 .unwrap();
@@ -74,7 +74,7 @@ fn run_once(payload: &Msg, mode: Mode) -> Duration {
     let payload = payload.clone();
     let push_rt = monocoque::rt::LocalRuntime::new().unwrap();
     let elapsed = push_rt.block_on(async move {
-        let mut options = SocketOptions::default().with_buffer_sizes(16384, 16384);
+        let mut options = SocketOptions::default().with_read_buffer_size(16384);
         if !matches!(mode, Mode::Eager) {
             options = options.with_write_coalescing(true);
         }

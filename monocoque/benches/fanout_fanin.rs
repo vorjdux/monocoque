@@ -47,7 +47,7 @@ const COALESCE_BATCH: usize = 256;
 
 fn coalescing_options() -> SocketOptions {
     SocketOptions::default()
-        .with_buffer_sizes(16384, 16384)
+        .with_read_buffer_size(16384)
         .with_write_coalescing(true)
 }
 
@@ -211,7 +211,7 @@ fn fanin(c: &mut Criterion, group_name: &str, coalesce: bool) {
                         let rt = monocoque::rt::LocalRuntime::new().unwrap();
                         rt.block_on(async move {
                             let mut sink = PullSocket::with_options(
-                                SocketOptions::default().with_buffer_sizes(16384, 16384),
+                                SocketOptions::default().with_read_buffer_size(16384),
                             );
                             ep_tx
                                 .send(sink.bind("tcp://127.0.0.1:0").await.unwrap())
@@ -240,7 +240,7 @@ fn fanin(c: &mut Criterion, group_name: &str, coalesce: bool) {
                                 let options = if coalesce {
                                     coalescing_options()
                                 } else {
-                                    SocketOptions::default().with_buffer_sizes(16384, 16384)
+                                    SocketOptions::default().with_read_buffer_size(16384)
                                 };
                                 let mut push = PushSocket::with_options(options);
                                 push.connect(&endpoint).await.unwrap();

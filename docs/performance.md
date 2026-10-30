@@ -534,7 +534,7 @@ use monocoque_core::options::SocketOptions;
 let opts = SocketOptions::default().with_read_buffer_size(4096);
 
 // Bulk transfers: widen the read batch to the full slab
-let opts = SocketOptions::default().with_buffer_sizes(65_536, 65_536);
+let opts = SocketOptions::default().with_read_buffer_size(65_536);
 ```
 
 Reach for a read buffer below the 32 KB default only to cut latency, never to

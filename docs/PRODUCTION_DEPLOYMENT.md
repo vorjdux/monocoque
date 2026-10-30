@@ -53,7 +53,7 @@ let options = SocketOptions::default();
 let options = SocketOptions::default().with_read_buffer_size(4096);
 
 // Bulk transfers: widen the read batch to the full 64 KB slab
-let options = SocketOptions::default().with_buffer_sizes(65_536, 65_536);
+let options = SocketOptions::default().with_read_buffer_size(65_536);
 ```
 
 The read buffer is clamped to the 64 KB read slab and floored at 64 bytes.

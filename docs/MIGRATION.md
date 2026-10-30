@@ -131,6 +131,11 @@ message type. It is a single break with no compatibility shims.
 ### Options
 
 - The `small()` and `large()` presets are removed.
+- `write_buffer_size`, `with_write_buffer_size` and `with_buffer_sizes` are
+  removed; the outbound buffer grows on demand and is reused, so the setting
+  had no effect. Use `with_read_buffer_size` for the read side.
+- `max_reconnect_attempts`, `xpub_manual`, `xpub_welcome_msg` and
+  `connect_routing_id` now take effect; they were accepted and ignored.
 - `with_conflate()` now takes effect: a conflating socket keeps only the newest
   message. Code that set it and relied on it being ignored changes behaviour.
 - `recv_hwm` applies to every socket type, not only STREAM.

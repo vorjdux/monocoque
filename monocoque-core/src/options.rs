@@ -12,10 +12,6 @@ use std::{fmt, time::Duration};
 const MIN_READ_BUFFER_SIZE: usize = 64;
 
 /// Clamp a caller-supplied read buffer size into the usable range.
-///
-/// Both [`SocketOptions::with_read_buffer_size`] and
-/// [`SocketOptions::with_buffer_sizes`] write the same field, so they share one
-/// clamp rather than each carrying its own and drifting apart.
 const fn clamp_read_buffer_size(size: usize) -> usize {
     if size < MIN_READ_BUFFER_SIZE {
         MIN_READ_BUFFER_SIZE
@@ -45,7 +41,7 @@ const fn clamp_read_buffer_size(size: usize) -> usize {
 /// let opts = SocketOptions::default()
 ///     .with_recv_timeout(Duration::from_secs(5))
 ///     .with_send_timeout(Duration::from_secs(5))
-///     .with_buffer_sizes(65536, 16384);  // widen the read batch for bulk transfers
+///     .with_read_buffer_size(65536); // widen the read batch for bulk transfers
 /// ```
 #[derive(Clone)]
 pub struct SocketOptions {
@@ -62,14 +58,6 @@ pub struct SocketOptions {
     /// 65536. Note that anything under the 32KB default trades throughput away,
     /// so reach for a smaller buffer only to cut latency, not to "tune".
     pub read_buffer_size: usize,
-
-    /// Write buffer size (bytes)
-    ///
-    /// Initial capacity of `BytesMut` buffer for sending data.
-    /// - Default: 8192 (8KB) - balanced for most workloads
-    /// - Small (4KB): Low-latency with small messages
-    /// - Large (16KB): High-throughput with large messages
-    pub write_buffer_size: usize,
 
     /// Receive timeout (`ZMQ_RCVTIMEO`)
     ///
@@ -521,7 +509,6 @@ impl fmt::Debug for SocketOptions {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SocketOptions")
             .field("read_buffer_size", &self.read_buffer_size())
-            .field("write_buffer_size", &self.write_buffer_size)
             .field("recv_timeout", &self.recv_timeout)
             .field("send_timeout", &self.send_timeout)
             .field("handshake_timeout", &self.handshake_timeout)
@@ -614,7 +601,6 @@ impl Default for SocketOptions {
             // fresh slab each time. 32 KiB leaves room for ~512 small reads per
             // slab and does not raise the per-connection footprint.
             read_buffer_size: 32768,
-            write_buffer_size: 8192, // 8KB - balanced default
             routing_id: None,
             connect_routing_id: None,
             metadata: Vec::new(),
@@ -863,28 +849,6 @@ impl SocketOptions {
     /// ```
     pub const fn with_read_buffer_size(mut self, size: usize) -> Self {
         self.read_buffer_size = clamp_read_buffer_size(size);
-        self
-    }
-
-    /// Set write buffer size.
-    pub const fn with_write_buffer_size(mut self, size: usize) -> Self {
-        self.write_buffer_size = size;
-        self
-    }
-
-    /// Set both read and write buffer sizes (convenience method).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use monocoque_core::options::SocketOptions;
-    ///
-    /// // Small buffers for both
-    /// let opts = SocketOptions::new().with_buffer_sizes(4096, 4096);
-    /// ```
-    pub const fn with_buffer_sizes(mut self, read_size: usize, write_size: usize) -> Self {
-        self.read_buffer_size = clamp_read_buffer_size(read_size);
-        self.write_buffer_size = write_size;
         self
     }
 
@@ -1490,10 +1454,9 @@ mod tests {
     }
 
     #[test]
-    fn both_read_buffer_setters_clamp_identically() {
-        // `with_buffer_sizes` writes the same field as `with_read_buffer_size`
-        // but used to skip the lower bound, so a zero read buffer slipped
-        // through it and turned the read loop into a spin or a false EOF.
+    fn read_buffer_size_is_clamped_into_range() {
+        // A zero read buffer would turn the read loop into a spin or a false
+        // EOF.
         for size in [
             0,
             1,
@@ -1503,17 +1466,11 @@ mod tests {
             crate::io::READ_SLAB_SIZE + 1,
             usize::MAX,
         ] {
-            let via_single = SocketOptions::new().with_read_buffer_size(size);
-            let via_pair = SocketOptions::new().with_buffer_sizes(size, 8192);
-
-            assert_eq!(
-                via_single.read_buffer_size, via_pair.read_buffer_size,
-                "the two read-buffer setters disagree for {size}"
-            );
+            let opts = SocketOptions::new().with_read_buffer_size(size);
             assert!(
-                via_pair.read_buffer_size >= MIN_READ_BUFFER_SIZE
-                    && via_pair.read_buffer_size <= crate::io::READ_SLAB_SIZE,
-                "with_buffer_sizes({size}) left the read buffer out of range"
+                opts.read_buffer_size >= MIN_READ_BUFFER_SIZE
+                    && opts.read_buffer_size <= crate::io::READ_SLAB_SIZE,
+                "with_read_buffer_size({size}) left the read buffer out of range"
             );
         }
     }

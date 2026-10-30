@@ -47,7 +47,7 @@ const SETTLE: Duration = Duration::from_millis(50);
 const FLUSH_SLICE: Duration = Duration::from_millis(1);
 
 fn sub_options() -> SocketOptions {
-    SocketOptions::default().with_buffer_sizes(16384, 16384)
+    SocketOptions::default().with_read_buffer_size(16384)
 }
 
 /// Receive exactly `n` messages, returning early only on an error.

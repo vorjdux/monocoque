@@ -91,7 +91,7 @@ fn spawn_rep(transport: Transport) -> (thread::JoinHandle<()>, String) {
         rt.block_on(async move {
             let (endpoint, path) = transport.bind_endpoint("lat");
             let mut rep =
-                RepSocket::with_options(SocketOptions::default().with_buffer_sizes(4096, 4096));
+                RepSocket::with_options(SocketOptions::default().with_read_buffer_size(4096));
             ep_tx.send(rep.bind(&endpoint).await.unwrap()).unwrap();
 
             for _ in 0..=WARMUP_ROUNDS {
@@ -136,7 +136,7 @@ fn monocoque_latency(c: &mut Criterion, name: &str, transport: Transport) {
 
                         let req = rt.block_on(async {
                             let mut req = ReqSocket::with_options(
-                                SocketOptions::default().with_buffer_sizes(4096, 4096),
+                                SocketOptions::default().with_read_buffer_size(4096),
                             );
                             req.connect(&endpoint).await.unwrap();
 
@@ -191,7 +191,7 @@ fn run_throughput(payload: &Msg, transport: Transport) -> Duration {
         rt.block_on(async move {
             let (endpoint, path) = transport.bind_endpoint("tp");
             let mut pull =
-                PullSocket::with_options(SocketOptions::default().with_buffer_sizes(16384, 16384));
+                PullSocket::with_options(SocketOptions::default().with_read_buffer_size(16384));
             ep_tx.send(pull.bind(&endpoint).await.unwrap()).unwrap();
 
             pull.recv().await.unwrap();
@@ -211,7 +211,7 @@ fn run_throughput(payload: &Msg, transport: Transport) -> Duration {
     let push_rt = monocoque::rt::LocalRuntime::new().unwrap();
     let elapsed = push_rt.block_on(async move {
         let mut push =
-            PushSocket::with_options(SocketOptions::default().with_buffer_sizes(16384, 16384));
+            PushSocket::with_options(SocketOptions::default().with_read_buffer_size(16384));
         push.connect(&endpoint).await.unwrap();
         for _ in 0..=MESSAGE_COUNT {
             push.send(black_box(payload.clone())).await.unwrap();
@@ -237,7 +237,11 @@ fn monocoque_throughput(c: &mut Criterion, name: &str, transport: Transport) {
         let payload = Msg::from(vec![0u8; size]);
 
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
-            b.iter_custom(|iters| (0..iters).map(|_| run_throughput(&payload, transport)).sum());
+            b.iter_custom(|iters| {
+                (0..iters)
+                    .map(|_| run_throughput(&payload, transport))
+                    .sum()
+            });
         });
     }
     group.finish();

@@ -90,9 +90,8 @@ fn run_monocoque_fanout(num_subs: usize, iters: u64) -> Duration {
         sub_handles.push(thread::spawn(move || {
             let rt = monocoque::rt::LocalRuntime::new().unwrap();
             rt.block_on(async move {
-                let mut sub = SubSocket::with_options(
-                    SocketOptions::default().with_buffer_sizes(16384, 16384),
-                );
+                let mut sub =
+                    SubSocket::with_options(SocketOptions::default().with_read_buffer_size(16384));
                 sub.subscribe(b"").await.unwrap();
                 sub.connect(&endpoint).await.unwrap();
                 recv_n(&mut sub, WARMUP_MSGS).await; // untimed warmup
