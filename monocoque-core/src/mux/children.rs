@@ -332,11 +332,16 @@ impl Children {
         self.len() == 0
     }
 
-    /// Poll every child that has woken since the last call. Returns `true` if
-    /// any child was polled.
+    /// Poll every child that has woken since the last call, and those they
+    /// wake in turn, for a few rounds. Returns `true` if any child was polled.
+    ///
+    /// Bounded so a child that keeps waking itself (a reader yielding while
+    /// its peer streams) cannot hold the caller here; whatever is still woken
+    /// stays queued, and its wakeup has already gone to the driver or the
+    /// waiting user task.
     pub fn poll_woken(&mut self) -> bool {
         let mut any = false;
-        loop {
+        for _ in 0..POLL_ROUNDS {
             let mut woken = std::mem::take(&mut self.scratch);
             self.wakeups.take_woken(&mut woken);
             if woken.is_empty() {
@@ -362,8 +367,14 @@ impl Children {
             woken.clear();
             self.scratch = woken;
         }
+        any
     }
 }
+
+/// Rounds of [`Children::poll_woken`] per call: enough for the chains that
+/// matter (a reader waking the writer that sends its PONG), few enough that
+/// a self-waking child gives the thread back.
+const POLL_ROUNDS: usize = 4;
 
 #[cfg(test)]
 mod tests {

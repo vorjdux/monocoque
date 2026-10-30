@@ -28,6 +28,25 @@ use std::time::Instant;
 /// Smallest spare capacity a read is issued with.
 const MIN_READ: usize = 512;
 
+/// Reads a reader task makes in a row before it yields to the other tasks on
+/// its thread. A yield costs one wake and one poll, noise against 16 reads.
+const READS_PER_YIELD: u32 = 16;
+
+/// Return Pending once, waking immediately, so other tasks get a turn.
+async fn yield_now() {
+    let mut yielded = false;
+    poll_fn(|cx| {
+        if yielded {
+            Poll::Ready(())
+        } else {
+            yielded = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    })
+    .await;
+}
+
 /// What a peer's sends go through.
 pub enum Outbound<C> {
     /// A byte stream with a protocol codec.
@@ -448,10 +467,20 @@ pub async fn reader_loop<C: Codec>(
             st.signal_readable();
         }
     }
+    let mut reads = 0u32;
     loop {
         poll_fn(|cx| peer.borrow_mut().poll_reader_room(cx)).await;
         if peer.borrow().closed.is_some() {
             return;
+        }
+        // A readiness runtime with no task budget (smol) completes reads
+        // without ever returning Pending while the peer keeps sending, and
+        // with an unbounded receive HWM nothing else stops this loop, so it
+        // would hold the thread. Step aside now and then; a ring read already
+        // yields on every submission.
+        reads = reads.wrapping_add(1);
+        if reads.is_multiple_of(READS_PER_YIELD) {
+            yield_now().await;
         }
         // `reserve` reclaims the front of a unique buffer instead of
         // reallocating, so the steady state reuses one allocation. A frame

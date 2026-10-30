@@ -370,6 +370,9 @@ struct Bound {
 /// Size of the region fan-out encodings are carved from.
 const SHARED_WIRE_REGION: usize = 64 * 1024;
 
+/// Rounds of child polling and event processing per [`SocketCore::progress`].
+const PROGRESS_ROUNDS: usize = 8;
+
 /// A socket core shared between the user's handle and its driver task.
 pub type Shared<P, H> = Rc<RefCell<SocketCore<P, H>>>;
 
@@ -557,7 +560,9 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
 
     /// Poll every woken child and process what they reported, until quiet.
     pub fn progress(&mut self) {
-        loop {
+        // Bounded for the same reason as `poll_woken`: a child that keeps
+        // waking itself must not keep the caller from what it came for.
+        for _ in 0..PROGRESS_ROUNDS {
             let polled = self.children.poll_woken();
             let processed = self.process_events();
             if !polled && !processed {
@@ -1189,6 +1194,12 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
 
     /// Poll for the next message from any peer.
     pub fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<(PeerId, Msg)> {
+        // A message already queued is taken before any I/O work, so the cost
+        // of a receive never depends on how much the readers could still read
+        // (see `poll_recv_into`).
+        if let Some(m) = self.take_ready() {
+            return Poll::Ready(m);
+        }
         loop {
             self.progress();
             if let Some(m) = self.take_ready() {
@@ -1203,6 +1214,15 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
     /// Like [`poll_recv`](Self::poll_recv), writing the message straight into
     /// `slot` so it is not moved through every layer of the calling future.
     pub fn poll_recv_into(&mut self, cx: &mut Context<'_>, slot: &mut Msg) -> Poll<PeerId> {
+        // A message already queued is taken before any I/O work. Progress runs
+        // every woken reader, and on a readiness runtime a reader keeps
+        // reading while its peer keeps sending; with an unbounded receive HWM
+        // nothing stops it, so making every receive pay for that starved the
+        // consumer of a fast fan-in to a few thousand messages per second.
+        if let Some((id, msg)) = self.take_ready() {
+            *slot = msg;
+            return Poll::Ready(id);
+        }
         loop {
             self.progress();
             if let Some((id, msg)) = self.take_ready() {
