@@ -71,6 +71,12 @@ pub trait Codec: 'static {
         replies: &mut OutQueue,
     ) -> Result<()>;
 
+    /// `true` while `decode` has swapped in a buffer sized to one frame, which
+    /// reads must fill but not grow.
+    fn filling_frame(&self) -> bool {
+        false
+    }
+
     /// Encode `msg` into `out`.
     fn encode(&mut self, msg: &Msg, out: &mut OutQueue) -> Result<()>;
 

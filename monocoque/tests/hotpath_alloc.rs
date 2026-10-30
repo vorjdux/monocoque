@@ -24,8 +24,9 @@ use bytes::Bytes;
 use monocoque::rt::LocalRuntime;
 use monocoque::zmq::{
     DealerSocket, Msg, PairSocket, PubSocket, PullSocket, PushSocket, RepSocket, ReqSocket,
-    RouterSocket, SocketOptions, SubSocket,
+    RouterSocket, SocketOptions, StreamSocket, SubSocket,
 };
+use monocoque_zmtp::security::curve::CurveSecretKey;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -95,9 +96,15 @@ fn start() {
 /// End the window. `ops` is the reads plus writes each measured unit costs,
 /// which is what the compio driver allocates for.
 fn stop(case: &str, ops: usize) -> usize {
+    stop_owning(case, ops, 0)
+}
+
+/// [`stop`] for a case whose messages each own `owned` allocations of their
+/// own, which are the message's memory rather than per-message overhead.
+fn stop_owning(case: &str, ops: usize, owned: usize) -> usize {
     COUNTING.store(0, Ordering::Relaxed);
     let n = ALLOCS.load(Ordering::Relaxed);
-    let ceiling = CEILING + PER_OP_DRIVER_ALLOCS * ops * MEAS;
+    let ceiling = CEILING + (PER_OP_DRIVER_ALLOCS * ops + owned) * MEAS;
     println!("[hotpath_alloc] {case}: {n} allocations over {MEAS} (ceiling {ceiling})");
     assert!(
         n <= ceiling,
@@ -206,6 +213,134 @@ fn pair_large_frames() {
             a.recv().await.unwrap();
         }
         stop("PAIR 1 KiB", 2);
+    });
+}
+
+/// Frames above the vectored threshold go to the kernel as their own iovec.
+#[test]
+fn pair_vectored_frames() {
+    case(async {
+        let mut a = PairSocket::with_options(opts());
+        let ep = a.bind("tcp://127.0.0.1:0").await.unwrap();
+        let mut b = PairSocket::with_options(opts());
+        b.connect(&ep).await.unwrap();
+        let payload = Msg::from(vec![3u8; 64 * 1024]);
+        for _ in 0..WARM {
+            b.send(payload.clone()).await.unwrap();
+            a.recv().await.unwrap();
+        }
+        start();
+        for _ in 0..MEAS {
+            b.send(payload.clone()).await.unwrap();
+            a.recv().await.unwrap();
+        }
+        // A frame too long for the read buffer is read into one allocated
+        // for it, which the message then owns: one per message until receives
+        // come from a registered buffer pool. Regrowing and sharing the read
+        // buffer instead cost three. A 64 KiB frame takes several reads;
+        // budget four per message for the driver.
+        stop_owning("PAIR 64 KiB vectored", 5, 1);
+    });
+}
+
+/// Coalesced sends in flushed bursts, with a send timeout set so the timer
+/// path is measured.
+#[test]
+fn push_pull_coalesced_with_timeouts() {
+    const BURST: usize = 64;
+    case(async {
+        let mut pull = PullSocket::with_options(opts().with_recv_hwm(0));
+        let ep = pull.bind("tcp://127.0.0.1:0").await.unwrap();
+        let mut push = PushSocket::with_options(
+            opts()
+                .with_write_coalescing(true)
+                .with_send_timeout(Duration::from_secs(10)),
+        );
+        push.connect(&ep).await.unwrap();
+        let payload = Msg::from(vec![7u8; 64]);
+        let mut burst = async |push: &mut PushSocket, pull: &mut PullSocket| {
+            for _ in 0..BURST {
+                push.send(payload.clone()).await.unwrap();
+            }
+            push.flush().await.unwrap();
+            for _ in 0..BURST {
+                pull.recv().await.unwrap();
+            }
+        };
+        for _ in 0..WARM / BURST {
+            burst(&mut push, &mut pull).await;
+        }
+        start();
+        for _ in 0..MEAS / BURST {
+            burst(&mut push, &mut pull).await;
+        }
+        stop("PUSH -> PULL coalesced, timeouts", 2);
+    });
+}
+
+#[test]
+fn curve_push_pull() {
+    let key = |seed: u8| {
+        let secret = [seed; 32];
+        (*CurveSecretKey::from_bytes(secret).public_key().as_bytes(), secret)
+    };
+    let (server_public, server_secret) = key(1);
+    let (client_public, client_secret) = key(2);
+    case(async {
+        let mut pull = PullSocket::with_options(
+            opts()
+                .with_recv_hwm(0)
+                .with_curve_server(true)
+                .with_curve_keypair(server_public, server_secret),
+        );
+        let ep = pull.bind("tcp://127.0.0.1:0").await.unwrap();
+        let mut push = PushSocket::with_options(
+            SocketOptions::default()
+                .with_curve_keypair(client_public, client_secret)
+                .with_curve_serverkey(server_public),
+        );
+        push.connect(&ep).await.unwrap();
+        let payload = Msg::from(vec![7u8; 64]);
+        for _ in 0..WARM {
+            push.send(payload.clone()).await.unwrap();
+            pull.recv().await.unwrap();
+        }
+        start();
+        for _ in 0..MEAS {
+            push.send(payload.clone()).await.unwrap();
+            pull.recv().await.unwrap();
+        }
+        stop("CURVE PUSH -> PULL 64 B", 2);
+    });
+}
+
+/// STREAM to STREAM: raw bytes, routed by identity on both sides.
+#[test]
+fn stream_round_trip() {
+    case(async {
+        let mut server = StreamSocket::with_options(opts());
+        let ep = server.bind("tcp://127.0.0.1:0").await.unwrap();
+        let mut client = StreamSocket::with_options(opts());
+        client.connect(&ep).await.unwrap();
+        let to_server = client.recv_owned().await.unwrap().first().unwrap().to_vec();
+        let to_client = server.recv_owned().await.unwrap().first().unwrap().to_vec();
+        let ping = Msg::from([Bytes::from(to_server), Bytes::from_static(&[1u8; 64])]);
+        let pong = Msg::from([Bytes::from(to_client), Bytes::from_static(&[2u8; 64])]);
+        // Each side reads exactly what one send wrote, since the other waits.
+        let mut round = async |client: &mut StreamSocket, server: &mut StreamSocket| {
+            client.send(ping.clone()).await.unwrap();
+            server.recv().await.unwrap();
+            server.send(pong.clone()).await.unwrap();
+            client.recv().await.unwrap();
+        };
+        for _ in 0..WARM {
+            round(&mut client, &mut server).await;
+        }
+        start();
+        for _ in 0..MEAS {
+            round(&mut client, &mut server).await;
+        }
+        stop("STREAM <-> STREAM 64 B", 4);
     });
 }
 

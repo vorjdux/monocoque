@@ -36,6 +36,9 @@ pub const MAX_FRAMES_PER_MESSAGE: usize = 8192;
 pub const MAX_MESSAGE_BYTES: usize = 256 * 1024 * 1024;
 /// Largest frame body accepted when `max_msg_size` is unset.
 const DEFAULT_MAX_FRAME: usize = 64 * 1024 * 1024;
+/// A frame at least this long that does not fit the read buffer is read into
+/// a buffer of its own; see `ZmtpCodec::await_frame`.
+const LONG_FRAME: usize = 8 * 1024;
 
 const PING: &[u8] = b"\x04PING";
 const PONG: &[u8] = b"\x04PONG";
@@ -92,6 +95,9 @@ pub struct ZmtpCodec {
     dish: bool,
     /// ZMTP 1.0 framing or DISH commands: anything but the plain path.
     unusual_encode: bool,
+    /// The read buffer, set aside while a frame too long for it is read into
+    /// a buffer of its own.
+    parked: Option<BytesMut>,
 }
 
 impl ZmtpCodec {
@@ -109,6 +115,36 @@ impl ZmtpCodec {
             subscribe_all: false,
             dish: false,
             unusual_encode: false,
+            parked: None,
+        }
+    }
+
+    /// Make room for the `total`-byte frame whose start is in `buf`. One that
+    /// fits the read buffer is assembled in place. One that does not gets a
+    /// buffer of exactly its size, which the following reads fill and the
+    /// frame then takes whole, while the read buffer waits in `parked`. That
+    /// is one allocation per long frame, the frame's own, and the read buffer
+    /// is neither regrown nor shared.
+    fn await_frame(&mut self, buf: &mut BytesMut, total: usize) {
+        if self.parked.is_none() && total >= LONG_FRAME && total > buf.capacity() {
+            let mut frame = BytesMut::with_capacity(total);
+            frame.extend_from_slice(buf);
+            buf.clear();
+            self.parked = Some(std::mem::replace(buf, frame));
+        } else {
+            buf.reserve(total - buf.len());
+        }
+    }
+
+    /// Split the complete `total`-byte frame at the front of `buf` off.
+    fn take_frame(&mut self, buf: &mut BytesMut, total: usize) -> BytesMut {
+        match self.parked.take() {
+            Some(mut read) => {
+                read.extend_from_slice(&buf[total..]);
+                buf.truncate(total);
+                std::mem::replace(buf, read)
+            }
+            None => buf.split_to(total),
         }
     }
 
@@ -180,7 +216,7 @@ impl ZmtpCodec {
             }
             let total = header + len;
             if buf.len() < total {
-                buf.reserve(total - buf.len());
+                self.await_frame(buf, total);
                 return Ok(());
             }
             let more = flags & FLAG_MORE != 0;
@@ -189,9 +225,9 @@ impl ZmtpCodec {
                 buf.advance(total);
                 continue;
             }
-            buf.advance(header);
-            let frame = buf.split_to(len).freeze();
-            self.push_frame(frame, more, deliver)?;
+            let mut frame = self.take_frame(buf, total);
+            frame.advance(header);
+            self.push_frame(frame.freeze(), more, deliver)?;
         }
     }
 
@@ -372,7 +408,7 @@ impl Codec for ZmtpCodec {
             if buf.len() < total {
                 // Make room for the whole frame now so later reads land in
                 // place rather than regrowing the buffer step by step.
-                buf.reserve(total - buf.len());
+                self.await_frame(buf, total);
                 return Ok(());
             }
 
@@ -389,7 +425,7 @@ impl Codec for ZmtpCodec {
                         "command frame from a ZMTP 2.0 peer".into(),
                     ));
                 }
-                let mut body = buf.split_to(total);
+                let mut body = self.take_frame(buf, total);
                 body.advance(header);
                 if self.cipher.is_some() {
                     // Everything after a CURVE handshake is boxed; a command
@@ -408,7 +444,7 @@ impl Codec for ZmtpCodec {
             if self.cipher.is_some() {
                 // libzmq sends MESSAGE as a data frame; its own flags byte,
                 // inside the box, says whether more frames follow.
-                let mut body = buf.split_to(total);
+                let mut body = self.take_frame(buf, total);
                 body.advance(header);
                 if !body.starts_with(CURVE_MESSAGE) {
                     return Err(MonocoqueError::Protocol(
@@ -423,15 +459,20 @@ impl Codec for ZmtpCodec {
                     deliver(Msg::copy_from_slice(&buf[header..total]));
                     buf.advance(total);
                 } else {
-                    buf.advance(header);
-                    deliver(Msg::from(buf.split_to(len).freeze()));
+                    let mut frame = self.take_frame(buf, total);
+                    frame.advance(header);
+                    deliver(Msg::from(frame.freeze()));
                 }
                 continue;
             }
-            buf.advance(header);
-            let frame = buf.split_to(len).freeze();
-            self.push_frame(frame, more, deliver)?;
+            let mut frame = self.take_frame(buf, total);
+            frame.advance(header);
+            self.push_frame(frame.freeze(), more, deliver)?;
         }
+    }
+
+    fn filling_frame(&self) -> bool {
+        self.parked.is_some()
     }
 
     fn encode(&mut self, msg: &Msg, out: &mut OutQueue) -> Result<()> {

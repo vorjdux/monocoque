@@ -444,7 +444,9 @@ pub async fn reader_loop<C: Codec>(
         // `reserve` reclaims the front of a unique buffer instead of
         // reallocating, so the steady state reuses one allocation. A frame
         // longer than the buffer has already asked for its full size.
-        if buf.capacity() - buf.len() < MIN_READ {
+        if buf.capacity() - buf.len() < MIN_READ
+            && !matches!(&peer.borrow().outbound, Outbound::Wire { codec, .. } if codec.filling_frame())
+        {
             buf.reserve(read_size);
         }
         let len = buf.len();
