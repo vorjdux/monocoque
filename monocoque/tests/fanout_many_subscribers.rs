@@ -8,6 +8,8 @@ use std::thread;
 use std::time::Duration;
 
 const SUBS: usize = 100;
+/// The 99 normal subscribers run 11 to a thread.
+const SUBS_PER_THREAD: usize = 11;
 const COUNT: usize = 20_000;
 
 #[test]
@@ -52,20 +54,29 @@ fn fanout_to_many_tcp_subscribers_drains() {
             }
         });
     });
-    let subs: Vec<_> = (0..SUBS - 1)
+    // The other subscribers share a few threads: sockets on one thread share
+    // its runtime, and a runtime per subscriber would need 100 io_uring rings
+    // at once, more than a CI runner's kernel memory limit allows.
+    let subs: Vec<_> = (0..(SUBS - 1) / SUBS_PER_THREAD)
         .map(|_| {
             let ep = ep.clone();
             thread::spawn(move || {
                 LocalRuntime::new().unwrap().block_on(async move {
-                    let mut sub = SubSocket::with_options(
-                        monocoque::zmq::SocketOptions::default()
-                            .with_recv_timeout(Duration::from_secs(10)),
-                    );
-                    sub.subscribe(b"").await.unwrap();
-                    sub.connect(&ep).await.unwrap();
-                    for _ in 0..COUNT {
-                        sub.recv().await.expect("subscriber starved");
-                    }
+                    let drains = (0..SUBS_PER_THREAD).map(|_| {
+                        let ep = ep.clone();
+                        async move {
+                            let mut sub = SubSocket::with_options(
+                                monocoque::zmq::SocketOptions::default()
+                                    .with_recv_timeout(Duration::from_secs(10)),
+                            );
+                            sub.subscribe(b"").await.unwrap();
+                            sub.connect(&ep).await.unwrap();
+                            for _ in 0..COUNT {
+                                sub.recv().await.expect("subscriber starved");
+                            }
+                        }
+                    });
+                    futures::future::join_all(drains).await;
                 });
             })
         })
