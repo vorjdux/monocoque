@@ -1,6 +1,6 @@
 [package]
 name = "monocoque-loom"
-version = "0.4.2"
+version = "1.0.0"
 edition = "2024"
 # Excluded from the workspace, so it does not inherit the workspace MSRV.
 # Pinned to the workspace MSRV, 1.95.

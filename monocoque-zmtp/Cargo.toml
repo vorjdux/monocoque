@@ -13,6 +13,10 @@ homepage = "https://github.com/vorjdux/monocoque"
 documentation = "https://docs.rs/monocoque-rs-zmtp"
 readme = "README.md"
 
+# Document the draft socket types too; docs.rs builds default features only.
+[package.metadata.docs.rs]
+features = ["draft"]
+
 [lib]
 name = "monocoque_zmtp"
 
@@ -39,7 +43,7 @@ compio-buf.workspace = true
 compio = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 smol = { workspace = true, optional = true }
-monocoque-core = { version = "0.4.2", path = "../monocoque-core", package = "monocoque-rs-core", default-features = false }
+monocoque-core = { version = "1.0.0", path = "../monocoque-core", package = "monocoque-rs-core", default-features = false }
 smallvec.workspace = true
 tracing.workspace = true
 

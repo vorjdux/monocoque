@@ -16,9 +16,10 @@ categories = ["network-programming", "asynchronous"]
 # docs.rs builds a crate with its default features only. The whole ZeroMQ API
 # lives behind the opt-in `zmq` feature, so the default build renders an almost
 # empty page. Build the docs with `zmq` (on top of the default runtime-compio
-# backend) so the socket types show up.
+# backend) so the socket types show up, and `draft` so the draft socket types
+# the README lists do too.
 [package.metadata.docs.rs]
-features = ["zmq"]
+features = ["zmq", "draft"]
 
 [lib]
 name = "monocoque"
@@ -374,8 +375,8 @@ workspace = true
 
 [dependencies]
 # Internal implementation crates (not exposed)
-monocoque-core = { version = "0.4.2", path = "../monocoque-core", package = "monocoque-rs-core", default-features = false }
-monocoque-zmtp = { version = "0.4.2", path = "../monocoque-zmtp", package = "monocoque-rs-zmtp", optional = true, default-features = false }
+monocoque-core = { version = "1.0.0", path = "../monocoque-core", package = "monocoque-rs-core", default-features = false }
+monocoque-zmtp = { version = "1.0.0", path = "../monocoque-zmtp", package = "monocoque-rs-zmtp", optional = true, default-features = false }
 
 # `bytes` is re-exported; the runtime crates are the backends the runtime-*
 # features select, which the examples and runtime tests drive directly.

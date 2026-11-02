@@ -1292,7 +1292,7 @@ checksum = "21909324aa58f5c284d91cac514c6d081210901dc372d7c8ea6a9d7e0406097a"
 
 [[package]]
 name = "monocoque-rs"
-version = "0.4.2"
+version = "1.0.0"
 dependencies = [
  "bytes",
  "compio",
@@ -1313,7 +1313,7 @@ dependencies = [
 
 [[package]]
 name = "monocoque-rs-core"
-version = "0.4.2"
+version = "1.0.0"
 dependencies = [
  "bytes",
  "compio",
@@ -1333,7 +1333,7 @@ dependencies = [
 
 [[package]]
 name = "monocoque-rs-zmtp"
-version = "0.4.2"
+version = "1.0.0"
 dependencies = [
  "bytes",
  "chacha20poly1305",

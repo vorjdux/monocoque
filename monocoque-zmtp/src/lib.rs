@@ -31,7 +31,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! monocoque-rs = { version = "0.4", features = ["zmq"] }
+//! monocoque-rs = { version = "1.0", features = ["zmq"] }
 //! ```
 //!
 //! ```rust,ignore
