@@ -6,9 +6,7 @@ Add the dependencies to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-monocoque-rs-zmtp = { version = "0.4", path = "..." }   # crates.io name
-compio = { version = "0.19", features = ["runtime", "macros"] }
-bytes = "1"
+monocoque-rs = { version = "1.0", features = ["zmq"] }
 ```
 
 monocoque runs on [compio](https://github.com/compio-rs/compio), a completion-based io_uring runtime, by default. If you are already on tokio, you have three choices: keep the default compio backend and run it on its own thread (the two runtimes do not conflict), or build monocoque with its native tokio backend (`default-features = false, features = ["runtime-tokio", "zmq"]`) and run everything on one tokio runtime, or build with the smol backend (`default-features = false, features = ["runtime-smol", "zmq"]`) if you prefer the smol stack. The tokio backend uses a current-thread runtime inside a `LocalSet`; the smol backend uses a single-threaded smol executor.
@@ -41,7 +39,7 @@ let endpoint = router.bind("tcp://127.0.0.1:0").await?;
 Messages are `Msg` values. A `Msg` is built from `Bytes`, a string, an array of frames, or an iterator of `Bytes`. `recv()` returns a borrowed `MsgRef` that is valid until the next call on the socket; use `recv_owned()` to keep the message. A timeout or closed socket is an error (`TimedOut`, for example), not an empty result.
 
 ```rust
-use bytes::Bytes;
+use monocoque::Bytes;
 use monocoque::zmq::Msg;
 
 socket.send("hello").await?;

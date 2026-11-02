@@ -1,8 +1,8 @@
 # Migration Guide
 
 Two audiences: users of libzmq or rust-zmq moving to monocoque, and users of
-monocoque 0.4 moving to the unified message and multiplexer release. Both are
-covered below; the second section lists every source-breaking change.
+monocoque 0.4 moving to 1.0. Both are covered below; the second section lists
+every source-breaking change.
 
 ---
 
@@ -14,7 +14,7 @@ Remove `zmq` and add:
 
 ```toml
 [dependencies]
-monocoque-rs = "0.4"
+monocoque-rs = "1.0"
 ```
 
 No system libzmq is needed. The default backend is compio (io_uring on Linux).
@@ -97,9 +97,9 @@ like `zmq_msg_gets`.
 
 ---
 
-## From monocoque 0.4
+## From monocoque 0.4 to 1.0
 
-This release replaces the per-socket I/O code with one multiplexer and one
+1.0 replaces the per-socket I/O code with one multiplexer and one
 message type. It is a single break with no compatibility shims.
 
 ### Messages
@@ -152,7 +152,7 @@ message type. It is a single break with no compatibility shims.
 ### Security
 
 - CURVE now speaks RFC 26 and interoperates with libzmq. A 0.4 peer cannot
-  complete a CURVE handshake with this release; upgrade both ends together.
+  complete a CURVE handshake with 1.0; upgrade both ends together.
 - `ZapHandler` and `PlainAuthHandler` use native `async fn`. They can no longer
   be used as `dyn` trait objects; store a concrete type, for example
   `Arc<StaticPlainHandler>`. The `async-trait` dependency is gone.

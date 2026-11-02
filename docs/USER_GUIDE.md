@@ -4,7 +4,7 @@ Add monocoque to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-monocoque-rs = "0.4"
+monocoque-rs = "1.0"
 bytes = "1.0"
 compio = { version = "0.19", features = ["runtime", "macros"] }
 ```
@@ -260,4 +260,4 @@ socket.options();         // current option values
 
 ---
 
-See [examples/](../examples/) for complete working programs, [MIGRATION.md](MIGRATION.md) if you're coming from libzmq or rust-zmq, and [SECURITY_GUIDE.md](SECURITY_GUIDE.md) for production security setup.
+See [monocoque/examples/](../monocoque/examples/) for complete working programs, [MIGRATION.md](MIGRATION.md) if you're coming from libzmq or rust-zmq, and [SECURITY_GUIDE.md](SECURITY_GUIDE.md) for production security setup.

@@ -17,7 +17,7 @@ A five-minute guide to sending your first message with Monocoque.
 
 ```toml
 [dependencies]
-monocoque-rs = { version = "0.4", features = ["zmq"] }
+monocoque-rs = { version = "1.0", features = ["zmq"] }
 bytes    = "1"
 compio   = { version = "0.19", features = ["runtime", "macros"] }
 ```
@@ -49,7 +49,7 @@ runtime primitives differ.
 ```toml
 # tokio backend
 [dependencies]
-monocoque-rs = { version = "0.4", default-features = false, features = ["runtime-tokio", "zmq"] }
+monocoque-rs = { version = "1.0", default-features = false, features = ["runtime-tokio", "zmq"] }
 bytes = "1"
 tokio = { version = "1", features = ["rt", "macros"] }
 ```
@@ -57,7 +57,7 @@ tokio = { version = "1", features = ["rt", "macros"] }
 ```toml
 # smol backend
 [dependencies]
-monocoque-rs = { version = "0.4", default-features = false, features = ["runtime-smol", "zmq"] }
+monocoque-rs = { version = "1.0", default-features = false, features = ["runtime-smol", "zmq"] }
 bytes = "1"
 ```
 
@@ -229,8 +229,8 @@ cargo test --workspace
 
 ## Next Steps
 
-- [Architecture Decision Records](ADR.md)  -  why io_uring, worker pools, and `Bytes`
-- [Performance Tuning Guide](PERFORMANCE_TUNING.md)  -  buffer sizes, worker counts, TCP options
+- [Architecture Decision Records](ADR.md)  -  the design decisions behind the library and how they changed
+- [Performance Guide](performance.md)  -  backends, coalescing, buffer sizes, HWMs, TCP options
 - [Security Guide](SECURITY_GUIDE.md)  -  PLAIN and CURVE authentication
 - [Migration Guide](MIGRATION.md)  -  coming from `zmq` (rust-zmq) or libzmq
 - API docs: `cargo doc --no-deps --open -p monocoque`

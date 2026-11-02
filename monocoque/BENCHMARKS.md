@@ -8,14 +8,16 @@ the receiver side for throughput tests. Both sides are given identical
 methodology - same number of operations per message, same warmup structure.
 
 The three runtime backends run the identical suite (compio uses io_uring, tokio
-and smol use epoll). On these single-flow loopback microbenchmarks the epoll
-backends (tokio, smol) are consistently a bit faster: a one-connection ping-pong
-does not exercise io_uring's strengths (batched submission, registered buffers,
-many concurrent connections) and just pays its per-op submission overhead. compio
-(io_uring) is the default; its edge is on real network I/O and high connection
-counts, which these benches do not cover. The criterion tables below (throughput,
+and smol use epoll). On 0.4, on these single-flow loopback microbenchmarks, the
+epoll backends (tokio, smol) were consistently a bit faster: a one-connection
+ping-pong does not exercise io_uring's strengths (batched submission, registered
+buffers, many concurrent connections), and sleeping in the kernel for each
+completion cost more than a round trip. The criterion tables below (throughput,
 latency, IPC-vs-TCP) were all re-measured together for the 0.4.0 release on a
-quiet machine, on the same corrected live-connection timer. The cross-process
+quiet machine, on the same corrected live-connection timer. 1.0 has not been
+re-measured on that machine yet; its compio backend now polls for completions
+before sleeping, which closes the latency gap to tokio described above (see
+docs/performance.md, "Spinning before sleeping"). The cross-process
 multi-implementation comparison tables further down come from a separate harness
 and are kept for shape, not as absolute reference-machine numbers;
 [docs/performance.md](../docs/performance.md) is the canonical breakdown.

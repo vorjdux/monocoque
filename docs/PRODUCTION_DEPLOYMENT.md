@@ -52,7 +52,7 @@ let options = SocketOptions::default();
 // Small messages (<1 KB), trading throughput for latency
 let options = SocketOptions::default().with_read_buffer_size(4096);
 
-// Bulk transfers: widen the read batch to the full 64 KB slab
+// Bulk transfers: widen the read batch to the 64 KiB maximum
 let options = SocketOptions::default().with_read_buffer_size(65_536);
 ```
 
@@ -83,12 +83,16 @@ let options = SocketOptions::default()
     .with_sndbuf(128 * 1024);
 ```
 
-For connections over WAN (multi-region), extend timeouts:
+For connections over WAN (multi-region), allow slow handshakes and keep idle
+links alive through middleboxes. The handshake timeout defaults to 30 s and
+the connect timeout to the OS default:
 
 ```rust
-options.handshake_timeout = Duration::from_secs(30);
-options.connect_timeout = Duration::from_secs(30);
-options.tcp_keepalive_idle = 120;
+let options = SocketOptions::default()
+    .with_handshake_timeout(Duration::from_secs(60))
+    .with_connect_timeout(Duration::from_secs(30))
+    .with_tcp_keepalive(1)
+    .with_tcp_keepalive_idle(120);
 ```
 
 ## Error Handling

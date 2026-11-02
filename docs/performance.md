@@ -66,6 +66,12 @@ All columns were re-measured together for the 0.4.0 release on this box on a
 quiet machine, on the same corrected live-connection timer (see below). Latency
 is a fresh steady-state run for all columns.
 
+**These are 0.4.0 numbers.** 1.0 has not been re-measured on the reference
+machine yet. Its compio backend polls for completions before sleeping (see
+[Spinning before sleeping](#spinning-before-sleeping)), which on a development
+host took a 64 B IPC round trip from 8.4 to 6.4 µs, level with or ahead of
+tokio, so the backend comparison above no longer holds as written.
+
 Throughput timer lives on the receiver side and starts on a **live** connection:
 the receiver takes one warmup message before the clock starts, so connection setup
 is excluded. Latency is measured steady-state: the connection is
@@ -152,7 +158,7 @@ choosing the batch boundaries:
 
 These figures were measured on 0.4, when the bench used the since-removed
 `send_buffered` batch call. They have not been re-measured with coalesced
-`send` + `flush`; treat them as the 0.4 result, not this release's.
+`send` + `flush`; treat them as the 0.4 result, not 1.0's.
 
 ---
 
@@ -498,7 +504,7 @@ use monocoque_core::options::SocketOptions;
 // Low-latency REQ/REP with small messages (< 1 KB)
 let opts = SocketOptions::default().with_read_buffer_size(4096);
 
-// Bulk transfers: widen the read batch to the full slab
+// Bulk transfers: widen the read batch to the 64 KiB maximum
 let opts = SocketOptions::default().with_read_buffer_size(65_536);
 ```
 
@@ -533,8 +539,8 @@ Setting HWM to 0 disables the limit (unbounded queue, use with care), as in libz
 This section applies to the default compio backend. The tokio and smol backends
 do not use io_uring, so these knobs do not apply to them.
 
-compio uses a shared io_uring ring per thread. On Linux >= 5.11 you get
-the full benefit; older kernels fall back to thread-pool I/O.
+compio drives one io_uring per runtime, and so one per thread; every socket on
+that thread shares it.
 
 - **SQ/CQ ring size**: Controlled by compio's runtime builder. Larger rings
   reduce submission overhead for high-connection-count servers.
@@ -596,15 +602,19 @@ single-threaded `LocalExecutor`.
 
 ## Inproc vs TCP
 
-`inproc://` transport skips the network stack entirely. `Msg` values are passed
-via `flume` channels with no serialisation, bounded by the HWM in each
-direction, within one thread or across threads.
+`inproc://` transport skips the network stack entirely: `Msg` values move
+between the sockets with no encoding, bounded by the HWM in each direction.
+Two sockets on one thread share a queue that uses no atomics; sockets on
+different threads use a `flume` channel.
 
-| Transport | Typical latency | Zero-copy |
+| Transport | What a message costs | Copies |
 |---|---|---|
-| inproc | < 1 µs | Arc clone |
-| IPC (Unix socket) | 240-260 µs (per-connection) | io_uring |
-| TCP loopback | 260-320 µs (per-connection) | io_uring |
+| inproc | a queue push and pop, no syscall | none: the `Msg` itself moves |
+| IPC (Unix socket) | ZMTP framing and a kernel round trip | body to and from the kernel |
+| TCP loopback | the same, plus the TCP stack | body to and from the kernel |
+
+For measured numbers see the zmq-arena runs linked from the README; its inproc
+cell runs both ends in one process across two threads.
 
 Use inproc for inter-task communication within a process, IPC for same-host
 cross-process, TCP for cross-host.
