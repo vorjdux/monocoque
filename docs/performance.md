@@ -340,7 +340,10 @@ completes.
 The consequence is that batching requires a deliberate choice. When eager mode
 (the default) is used, after `send()` returns the bytes are inside the kernel.
 When coalescing is enabled, they may still be in a userspace buffer waiting for
-the 64 KB threshold to fill. That difference matters in a few real situations:
+the 64 KB threshold to fill. The one exception in eager mode is a peer that
+stopped reading: once its writes have made no progress for 50 ms, sends stop
+waiting on it, until one of its writes completes again, so it cannot hold up
+the socket's other peers. That difference matters in a few real situations:
 
 - If your process crashes between `send()` and `flush()`, coalesced messages
   are lost. Eager-mode messages are already in the kernel buffer and will survive.

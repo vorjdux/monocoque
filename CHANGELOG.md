@@ -50,14 +50,15 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
 - A STREAM peer's last data before it closed could be dropped on tokio and smol.
 - A smol receiver with an unbounded HWM was starved by streaming peers.
 - compio runtime creation retries with smaller rings on `ENOMEM`.
-- A send never waits on a peer that stopped reading, so one stalled peer
-  cannot block sends to the others.
+- An eager send stops waiting on a peer whose writes made no progress for
+  50 ms, so one peer that stopped reading cannot block sends to the others.
 - A PING flood from a peer that never reads cannot grow its PONG queue past
-  64 KB, and XPUB keeps at most its receive HWM of subscription reports.
+  64 KB, and a manual-mode XPUB holds at most its receive HWM of
+  subscriptions for `recv`.
 - A cancelled REQ send leaves the request outstanding; a REP reply that times
   out or is cancelled stays owed and can be retried.
-- Reconnect backoff resets only after a peer came up, not after a failed
-  handshake.
+- Reconnect backoff resets only after a peer came up, and a failed handshake
+  counts toward `max_reconnect_attempts` like a refused connect.
 
 ### Security
 

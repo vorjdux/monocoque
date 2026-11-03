@@ -625,6 +625,12 @@ impl Hooks for XPubHooks {
         self.0.apply(id, msg)
     }
 
+    /// In manual mode the hook only keeps messages; the application applies
+    /// them, so holding them back at the HWM loses nothing.
+    fn defer_inbound_at_hwm(&self) -> bool {
+        self.0.manual
+    }
+
     fn on_peer_down(&mut self, id: PeerId, _info: &PeerInfo) {
         self.0.drop_peer(id);
     }

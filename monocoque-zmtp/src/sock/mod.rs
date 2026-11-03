@@ -27,7 +27,11 @@ use std::future::{Future, poll_fn};
 use std::pin::pin;
 use std::sync::Arc;
 use std::task::Poll;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+/// How long an eager send waits on a peer none of whose writes complete
+/// before treating it as no longer reading.
+const WRITE_STALL: Duration = Duration::from_millis(50);
 
 /// A ZeroMQ socket type.
 pub trait Kind: Sized + 'static {
@@ -364,13 +368,34 @@ impl<K: Kind> Socket<K> {
     /// kernel, so a caller that blocks its thread right after a send still
     /// gets the message out. Bounded by `send_timeout`; the message is already
     /// queued, so running out of time here is not a send failure.
+    ///
+    /// A peer whose writes all stay incomplete for [`WRITE_STALL`] has stopped
+    /// reading. It is marked stalled and no send waits on it again until one
+    /// of its writes completes, so it cannot hold up sends to other peers.
     pub(crate) async fn wait_written(&mut self, peer: PeerId) {
         let timeout = self.send_timeout();
-        let _ = with_timeout(
-            op(&self.core, move |c, cx| c.poll_written(cx, peer)),
-            timeout,
-        )
-        .await;
+        let deadline = timeout.map(|t| Instant::now() + t);
+        loop {
+            let Some(before) = self.core.borrow().writes_done(peer) else {
+                return;
+            };
+            let slice = deadline.map_or(WRITE_STALL, |d| {
+                d.saturating_duration_since(Instant::now()).min(WRITE_STALL)
+            });
+            let written = with_timeout(
+                op(&self.core, move |c, cx| c.poll_written(cx, peer)),
+                Some(slice),
+            )
+            .await;
+            if written.is_ok() || deadline.is_some_and(|d| Instant::now() >= d) {
+                return;
+            }
+            let mut core = self.core.borrow_mut();
+            if core.writes_done(peer) == Some(before) {
+                core.mark_write_stalled(peer);
+                return;
+            }
+        }
     }
 
     /// Queue to `peer` without waiting.

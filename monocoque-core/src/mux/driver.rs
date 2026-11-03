@@ -123,6 +123,8 @@ pub async fn connect_loop(
                     if down.wait().await {
                         backoff.reset();
                         failures = 0;
+                    } else if gave_up(&options, &mut failures) {
+                        return;
                     }
                 }
             }
@@ -131,17 +133,22 @@ pub async fn connect_loop(
                     connector: index,
                     reason: e.to_string(),
                 });
-                failures += 1;
-                if options
-                    .max_reconnect_attempts
-                    .is_some_and(|max| failures >= max)
-                {
+                if gave_up(&options, &mut failures) {
                     return;
                 }
             }
         }
         crate::rt::sleep(jittered(backoff.next_delay())).await;
     }
+}
+
+/// Count one failed attempt, a refused connect or a failed handshake alike;
+/// `true` once `max_reconnect_attempts` is used up.
+fn gave_up(options: &SocketOptions, failures: &mut u32) -> bool {
+    *failures += 1;
+    options
+        .max_reconnect_attempts
+        .is_some_and(|max| *failures >= max)
 }
 
 /// Accept connections on `listener` and hand each to the core.

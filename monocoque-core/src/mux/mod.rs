@@ -170,6 +170,18 @@ pub trait Hooks: 'static {
         false
     }
 
+    /// With [`eager_inbound`], stop handing messages to [`on_inbound`] while
+    /// the kept ones fill the receive HWM, leaving the rest in the peer's
+    /// queue. Only for a pattern whose hook does nothing but keep messages
+    /// (manual XPUB); one that applies them (PUB's subscriptions) must see
+    /// every message as it arrives.
+    ///
+    /// [`eager_inbound`]: Self::eager_inbound
+    /// [`on_inbound`]: Self::on_inbound
+    fn defer_inbound_at_hwm(&self) -> bool {
+        false
+    }
+
     /// Inspect an inbound message. Return it to make it receivable, or `None`
     /// to consume it.
     fn on_inbound(&mut self, _id: PeerId, msg: Msg) -> Option<Msg> {
@@ -859,13 +871,17 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         entry.state.borrow_mut().readable_seen();
         if eager {
             let state = Rc::clone(&entry.state);
-            let limit = self.options.recv_hwm;
+            let limit = if self.hooks.defer_inbound_at_hwm() {
+                self.options.recv_hwm
+            } else {
+                0
+            };
             let mut inbox_full = false;
             loop {
-                // What the hooks keep (XPUB's reports) waits for a receive. At
-                // the HWM the rest stays in the peer's own queue, which pauses
-                // its reader, and the fair queue hands it over later, through
-                // the same hook, once the inbox has drained.
+                // What the hooks keep waits for a receive. When the pattern
+                // allows it, at the HWM the rest stays in the peer's own
+                // queue, which pauses its reader, and the fair queue hands it
+                // over later, through the same hook, once the inbox drains.
                 if limit != 0 && self.inbox.len() >= limit {
                     inbox_full = true;
                     break;
@@ -1591,8 +1607,9 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
     }
 
     /// Wait until everything queued toward `id` has been written (or the
-    /// peer is gone). A send that waits on this is eager: once it returns,
-    /// the bytes are in the kernel and need no further action from the caller.
+    /// peer is gone, or marked stalled). A send that waits on this is eager:
+    /// once it returns, the bytes are in the kernel and need no further action
+    /// from the caller.
     pub fn poll_written(&mut self, cx: &mut Context<'_>, id: PeerId) -> Poll<()> {
         loop {
             self.progress();
@@ -1658,6 +1675,20 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             if self.park(cx) {
                 return Poll::Pending;
             }
+        }
+    }
+
+    /// Write jobs completed toward `id`, or `None` once it is gone.
+    pub fn writes_done(&self, id: PeerId) -> Option<u64> {
+        self.entry(id)
+            .filter(|e| !e.closed)
+            .map(|e| e.state.borrow().writes_done)
+    }
+
+    /// Stop eager sends waiting on `id`'s writes until one completes again.
+    pub fn mark_write_stalled(&mut self, id: PeerId) {
+        if let Some(e) = self.entry(id) {
+            e.state.borrow_mut().write_stalled = true;
         }
     }
 

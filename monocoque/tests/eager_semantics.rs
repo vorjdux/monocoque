@@ -48,6 +48,61 @@ fn eager_send_reaches_peer_with_no_further_sender_action() {
     sender.join().unwrap();
 }
 
+/// Messages too large for one write to finish still reach a peer that is
+/// reading, after the sender blocks its thread or drops its socket without
+/// `close()`: the send waits while the writes make progress.
+fn large_sends_arrive_after(count: usize, size: usize, drop_socket: bool) {
+    let (ep_tx, ep_rx) = mpsc::channel::<String>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+
+    let sender = thread::spawn(move || {
+        LocalRuntime::new().unwrap().block_on(async move {
+            let endpoint = ep_rx.recv().unwrap();
+            let mut push = PushSocket::new();
+            push.connect(&endpoint).await.unwrap();
+            let body = monocoque::Bytes::from(vec![9u8; size]);
+            for _ in 0..count {
+                push.send(body.clone()).await.unwrap();
+            }
+            if drop_socket {
+                drop(push);
+            }
+            release_rx.recv().unwrap();
+        });
+    });
+
+    LocalRuntime::new().unwrap().block_on(async move {
+        let mut pull = PullSocket::with_options(
+            SocketOptions::default().with_recv_timeout(Duration::from_secs(5)),
+        );
+        ep_tx
+            .send(pull.bind("tcp://127.0.0.1:0").await.unwrap())
+            .unwrap();
+        for i in 0..count {
+            let msg = pull
+                .recv()
+                .await
+                .unwrap_or_else(|e| panic!("message {i} of {count} x {size} B lost: {e}"));
+            assert_eq!(msg.frames().next().unwrap().len(), size);
+        }
+    });
+
+    release_tx.send(()).unwrap();
+    sender.join().unwrap();
+}
+
+#[test]
+fn large_eager_sends_arrive_while_the_sender_blocks() {
+    large_sends_arrive_after(20, 64 * 1024, false);
+    large_sends_arrive_after(20, 1024 * 1024, false);
+}
+
+#[test]
+fn large_eager_sends_arrive_after_the_socket_is_dropped() {
+    large_sends_arrive_after(20, 64 * 1024, true);
+    large_sends_arrive_after(20, 1024 * 1024, true);
+}
+
 /// Coalescing must not stall a sender at the send HWM: once the HWM is full,
 /// held writes go out even though the byte threshold was not reached.
 #[test]

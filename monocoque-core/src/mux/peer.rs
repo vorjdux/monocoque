@@ -92,6 +92,12 @@ pub struct PeerState<C> {
     pub(crate) ping_outstanding: bool,
     /// Close the connection once everything queued has been written.
     pub(crate) close_when_drained: bool,
+    /// Write jobs completed, so a waiting sender can tell a slow peer from
+    /// one that stopped reading.
+    pub(crate) writes_done: u64,
+    /// A sender gave up waiting on this peer's writes. Eager sends stop
+    /// waiting on it until a write completes again.
+    pub(crate) write_stalled: bool,
 }
 
 impl<C: Codec> PeerState<C> {
@@ -118,6 +124,8 @@ impl<C: Codec> PeerState<C> {
             recv_seen: false,
             ping_outstanding: false,
             close_when_drained: false,
+            writes_done: 0,
+            write_stalled: false,
         }
     }
 
@@ -193,19 +201,13 @@ impl<C: Codec> PeerState<C> {
         }
     }
 
-    /// `true` while queued bytes still wait for the writer to take them. Held
-    /// (coalescing) writes and inproc queues never count: the first waits for
-    /// an explicit flush, the second for the receiver.
-    ///
-    /// Once a write is in flight the sender has done its part: the writer
-    /// finishes it without the sender, and if the kernel buffer is full the
-    /// rest waits on the peer reading, which no sender should wait for. The
-    /// HWM bounds what queues up behind it.
+    /// `true` while bytes this peer will write on its own are not yet in the
+    /// kernel. Held (coalescing) writes and inproc queues never count: the
+    /// first waits for an explicit flush, the second for the receiver. Nor
+    /// does a peer marked stalled, which no sender should wait for.
     pub(crate) fn write_pending(&self) -> bool {
-        matches!(
-            &self.outbound,
-            Outbound::Wire { out, hold: None, .. } if out.pending_msgs() > 0 && !out.job_in_flight()
-        )
+        !self.write_stalled
+            && matches!(&self.outbound, Outbound::Wire { out, hold: None, .. } if out.pending_msgs() > 0)
     }
 
     /// `true` if the writer may take queued bytes now.
@@ -441,6 +443,8 @@ impl<C: Codec> PeerState<C> {
                 *flushing = false;
             }
         }
+        self.writes_done = self.writes_done.wrapping_add(1);
+        self.write_stalled = false;
         self.events.push(super::Event::Writable(self.id));
     }
 
