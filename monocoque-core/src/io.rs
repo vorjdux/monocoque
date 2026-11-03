@@ -53,7 +53,13 @@ pub const MAX_READ_SIZE: usize = 64 * 1024;
 /// then declares precisely those bytes live, matching what was written. A
 /// backend that reported more bytes than it wrote, or wrote them anywhere but
 /// the front of the slice, would break this contract and the `unsafe` below.
-pub async fn fill_read<B, F>(mut buf: B, read: F) -> BufResult<usize, B>
+/// That is why this stays crate-private: only the backends' own reads, which
+/// keep the contract, can reach it. compio reads natively and never calls it.
+#[cfg_attr(
+    not(any(feature = "runtime-tokio", feature = "runtime-smol")),
+    allow(dead_code)
+)]
+pub(crate) async fn fill_read<B, F>(mut buf: B, read: F) -> BufResult<usize, B>
 where
     B: IoBufMut,
     F: AsyncFnOnce(&mut [MaybeUninit<u8>]) -> io::Result<usize>,
@@ -68,9 +74,9 @@ where
     match outcome {
         Ok(n) => {
             // A backend that reports more bytes than the spare slice held would
-            // make the set_len below declare uninitialized (or out-of-bounds)
-            // memory live. Catch that contract violation in debug builds.
-            debug_assert!(
+            // make the set_len below declare out-of-bounds memory live. One
+            // compare per read is cheap next to the syscall it follows.
+            assert!(
                 n <= spare_len,
                 "read reported {n} bytes but the spare slice was only {spare_len}"
             );

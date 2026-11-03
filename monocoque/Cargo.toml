@@ -355,6 +355,14 @@ name = "eager_semantics"
 required-features = ["zmq"]
 
 [[test]]
+name = "stalled_peer"
+required-features = ["zmq"]
+
+[[test]]
+name = "xpub_inbox_bound"
+required-features = ["zmq"]
+
+[[test]]
 name = "gate_invariants"
 required-features = ["zmq"]
 

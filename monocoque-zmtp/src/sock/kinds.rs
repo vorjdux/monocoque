@@ -1,12 +1,12 @@
 //! The ZeroMQ patterns: what each socket type does on send and receive.
 
-use super::{Kind, Socket};
+use super::{Kind, Socket, with_timeout};
 use crate::session::SocketType;
 use crate::wire::Zmtp;
 use bytes::Bytes;
 use monocoque_core::error::{MonocoqueError, Result};
 use monocoque_core::msg::{Msg, MsgRef};
-use monocoque_core::mux::{Hooks, PeerId, PeerInfo, SendTo, SocketCore};
+use monocoque_core::mux::{Hooks, PeerId, PeerInfo, SendTo, SocketCore, op};
 use monocoque_core::options::SocketOptions;
 use monocoque_core::subscription::{
     Subscribed, SubscriptionEvent, SubscriptionIndex, SubscriptionTrie, Unsubscribed,
@@ -373,11 +373,14 @@ impl Socket<Req> {
         let peer = if correlate {
             self.ext.request_id = self.ext.request_id.wrapping_add(1);
             let id = Bytes::copy_from_slice(&self.ext.request_id.to_be_bytes());
-            self.send_lb_prefixed(&[id, Bytes::new()], msg).await?
+            self.queue_lb_prefixed(&[id, Bytes::new()], msg).await?
         } else {
-            self.send_lb_prefixed(&[Bytes::new()], msg).await?
+            self.queue_lb_prefixed(&[Bytes::new()], msg).await?
         };
+        // Set before waiting for the write, so a send cancelled there still
+        // leaves the request outstanding.
         self.ext.waiting_on = Some(peer);
+        self.wait_written(peer).await;
         Ok(())
     }
 
@@ -474,18 +477,35 @@ impl Socket<Rep> {
     /// Reply to the last request. Fails with `InvalidState` if none is owed. A
     /// requester that has gone away loses its reply silently.
     pub async fn send(&mut self, msg: impl Into<Msg>) -> Result<()> {
-        let Some((peer, envelope)) = self.ext.pending.take() else {
+        let timeout = self.send_timeout();
+        let Some((peer, envelope)) = self.ext.pending.as_ref() else {
             return Err(MonocoqueError::InvalidState(
                 "REP must receive a request before replying",
             ));
         };
-        match self
-            .send_to_waiting_prefixed(peer, &envelope, msg.into())
-            .await
-        {
-            Err(MonocoqueError::HostUnreachable) => Ok(()),
-            other => other,
+        let peer = *peer;
+        // The request stays owed until the reply is queued, so a send that
+        // times out at the HWM or is cancelled can be retried.
+        let mut slot = Some(msg.into());
+        let queued = with_timeout(
+            op(&self.core, move |c, cx| {
+                c.poll_send_to_prefixed(cx, peer, envelope, &mut slot)
+            }),
+            timeout,
+        )
+        .await
+        .and_then(|r| r);
+        match queued {
+            Ok(()) => {}
+            Err(MonocoqueError::HostUnreachable) => {
+                self.ext.pending = None;
+                return Ok(());
+            }
+            Err(e) => return Err(e),
         }
+        self.ext.pending = None;
+        self.wait_written(peer).await;
+        Ok(())
     }
 }
 

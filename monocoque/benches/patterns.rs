@@ -38,9 +38,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-// NOTE: Multi-subscriber fanout is currently not benchmarked here because the
-// direct-stream PUB/SUB sockets do not yet support stable multi-peer fanout.
-const FANOUT_SUBSCRIBERS: &[usize] = &[1];
+const FANOUT_SUBSCRIBERS: &[usize] = &[1, 4];
 const MESSAGE_COUNT: usize = 100; // elements counted per criterion iteration
 const MESSAGE_SIZE: usize = 256;
 /// Messages received (untimed) to confirm the stream is flowing and warm the

@@ -193,11 +193,19 @@ impl<C: Codec> PeerState<C> {
         }
     }
 
-    /// `true` while bytes this peer will write on its own are not yet in the
-    /// kernel. Held (coalescing) writes and inproc queues never count: the
-    /// first waits for an explicit flush, the second for the receiver.
+    /// `true` while queued bytes still wait for the writer to take them. Held
+    /// (coalescing) writes and inproc queues never count: the first waits for
+    /// an explicit flush, the second for the receiver.
+    ///
+    /// Once a write is in flight the sender has done its part: the writer
+    /// finishes it without the sender, and if the kernel buffer is full the
+    /// rest waits on the peer reading, which no sender should wait for. The
+    /// HWM bounds what queues up behind it.
     pub(crate) fn write_pending(&self) -> bool {
-        matches!(&self.outbound, Outbound::Wire { out, hold: None, .. } if out.pending_msgs() > 0)
+        matches!(
+            &self.outbound,
+            Outbound::Wire { out, hold: None, .. } if out.pending_msgs() > 0 && !out.job_in_flight()
+        )
     }
 
     /// `true` if the writer may take queued bytes now.

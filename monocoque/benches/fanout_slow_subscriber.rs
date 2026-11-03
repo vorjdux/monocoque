@@ -43,8 +43,20 @@ const SLOW_INTERVAL: Duration = Duration::from_millis(5);
 /// Brief settle after subscriptions are issued, cutting the slow-joiner drop
 /// burst.
 const SETTLE: Duration = Duration::from_millis(50);
-/// Longest the publisher waits for queued writes when a subscriber is full.
-const FLUSH_SLICE: Duration = Duration::from_millis(1);
+/// Return to the runtime once, so tasks woken meanwhile (the writers) run.
+async fn yield_once() {
+    let mut yielded = false;
+    std::future::poll_fn(|cx| {
+        if yielded {
+            std::task::Poll::Ready(())
+        } else {
+            yielded = true;
+            cx.waker().wake_by_ref();
+            std::task::Poll::Pending
+        }
+    })
+    .await;
+}
 
 fn sub_options() -> SocketOptions {
     SocketOptions::default().with_read_buffer_size(16384)
@@ -83,11 +95,12 @@ fn run_fanout_slow(iters: u64) -> Duration {
             thread::sleep(SETTLE);
             while stop_rx.try_recv().is_err() {
                 // PUB never waits on a send. When a queue is full (the slow
-                // subscriber's, at least), hand the runtime a turn to write,
-                // bounded so the slow subscriber cannot hold the publisher
-                // back for longer than FLUSH_SLICE.
+                // subscriber's is, nearly always), hand the runtime one turn so
+                // the writers run. A timed wait here would measure the
+                // runtime's timer resolution instead: tokio rounds sub-ms
+                // deadlines up to whole milliseconds.
                 if pub_socket.send(payload.clone()).await.unwrap_or(0) < TOTAL_SUBS {
-                    let _ = monocoque::rt::timeout(FLUSH_SLICE, pub_socket.flush()).await;
+                    yield_once().await;
                 }
             }
         });

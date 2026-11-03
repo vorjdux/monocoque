@@ -24,10 +24,13 @@ fairly rather than flattering any one of them.
 rather than describe a competitive position:
 
 - `benches/instr_hotpath.rs` counts instructions on the IO-free hot path under
-  callgrind and fails a run more than 5% over baseline
+  callgrind and fails a run more than 5% over baseline. The baseline is the
+  previous run's result, kept in the CI cache, not a committed file: a run with
+  a cold cache has nothing to compare to and passes
 - `tests/hotpath_alloc.rs` asserts the per-message allocation count
 - `tests/socket_footprint_bound.rs` bounds idle per-socket resident memory
-- `docs/perf/baselines/` holds the per-commit snapshots those gates compare to
+- `docs/perf/baselines/` holds per-commit snapshots for reference; no gate
+  reads them
 
 The rest of this document is tuning guidance: which knobs exist, what each one
 trades, and when to reach for it.
@@ -233,6 +236,12 @@ overhead and no TCP framing cost.
 ### PUB/SUB patterns
 
 Sender and subscribers run on separate OS threads.
+
+These figures predate the 1.0 multiplexer and have not been re-measured on
+a quiet machine since. A 1.0 run on another host measured about 427 K msg/s
+for fan-out and 2.9 M msg/s for topic filtering, with libzmq ahead on both,
+so read the tables below as out of date until they are refreshed. The bench
+now also covers four subscribers.
 
 **Fan-out** (single subscriber, 256 B messages):
 

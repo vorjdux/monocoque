@@ -342,17 +342,22 @@ impl<K: Kind> Socket<K> {
 
     /// Like `send_lb`, with envelope frames ahead of the message.
     pub(crate) async fn send_lb_prefixed(&mut self, prefix: &[Bytes], msg: Msg) -> Result<PeerId> {
+        let peer = self.queue_lb_prefixed(prefix, msg).await?;
+        self.wait_written(peer).await;
+        Ok(peer)
+    }
+
+    /// Queue to the next writable peer without waiting for the write.
+    pub(crate) async fn queue_lb_prefixed(&mut self, prefix: &[Bytes], msg: Msg) -> Result<PeerId> {
         let timeout = self.send_timeout();
         let mut slot = Some(msg);
-        let peer = with_timeout(
+        with_timeout(
             op(&self.core, move |c, cx| {
                 c.poll_send_lb_prefixed(cx, prefix, &mut slot)
             }),
             timeout,
         )
-        .await??;
-        self.wait_written(peer).await;
-        Ok(peer)
+        .await?
     }
 
     /// Eager delivery: return only once `peer`'s queued bytes are in the
@@ -366,27 +371,6 @@ impl<K: Kind> Socket<K> {
             timeout,
         )
         .await;
-    }
-
-    /// Send to `peer` with envelope frames ahead of the message, waiting
-    /// while it is at its HWM.
-    pub(crate) async fn send_to_waiting_prefixed(
-        &mut self,
-        peer: PeerId,
-        prefix: &[Bytes],
-        msg: Msg,
-    ) -> Result<()> {
-        let timeout = self.send_timeout();
-        let mut slot = Some(msg);
-        with_timeout(
-            op(&self.core, move |c, cx| {
-                c.poll_send_to_prefixed(cx, peer, prefix, &mut slot)
-            }),
-            timeout,
-        )
-        .await??;
-        self.wait_written(peer).await;
-        Ok(())
     }
 
     /// Queue to `peer` without waiting.

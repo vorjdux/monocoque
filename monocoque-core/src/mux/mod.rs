@@ -859,12 +859,29 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         entry.state.borrow_mut().readable_seen();
         if eager {
             let state = Rc::clone(&entry.state);
+            let limit = self.options.recv_hwm;
+            let mut inbox_full = false;
             loop {
+                // What the hooks keep (XPUB's reports) waits for a receive. At
+                // the HWM the rest stays in the peer's own queue, which pauses
+                // its reader, and the fair queue hands it over later, through
+                // the same hook, once the inbox has drained.
+                if limit != 0 && self.inbox.len() >= limit {
+                    inbox_full = true;
+                    break;
+                }
                 let msg = state.borrow_mut().pop_ready();
                 let Some(msg) = msg else { break };
                 if let Some(keep) = self.hooks.on_inbound(id, msg) {
                     self.inbox.push_back((id, keep));
                 }
+            }
+            if inbox_full
+                && let Some(entry) = self.peers[i].as_mut()
+                && !entry.in_fair
+            {
+                entry.in_fair = true;
+                self.fair.push_back(id);
             }
         } else if !entry.in_fair {
             entry.in_fair = true;
@@ -905,7 +922,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             && conn.peer == Some(id)
         {
             conn.peer = None;
-            conn.down.fire();
+            conn.down.fire_after_up();
         }
         if let Some(ep) = endpoint {
             self.emit(SocketEvent::Disconnected(ep));

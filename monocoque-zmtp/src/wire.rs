@@ -42,6 +42,8 @@ const LONG_FRAME: usize = 8 * 1024;
 
 const PING: &[u8] = b"\x04PING";
 const PONG: &[u8] = b"\x04PONG";
+/// Outbound bytes beyond which a PING is not answered (see `on_command`).
+const PONG_BACKLOG_LIMIT: usize = 64 * 1024;
 const SUBSCRIBE: &[u8] = b"\x09SUBSCRIBE";
 const CANCEL: &[u8] = b"\x06CANCEL";
 const ERROR: &[u8] = b"\x05ERROR";
@@ -332,6 +334,15 @@ impl ZmtpCodec {
             }
             let ttl = u16::from_be_bytes([rest[0], rest[1]]);
             self.peer_ttl = (ttl != 0).then(|| Duration::from_millis(u64::from(ttl) * 100));
+            // A PING adds nothing to the receive queue, so the receive HWM
+            // never pauses a reader taking a flood of them, and a peer that
+            // never reads would grow the PONG backlog without limit. Behind a
+            // backlog this large a PONG proves nothing anyway: the peer counts
+            // any traffic from us as liveness, and what it has not read yet
+            // already is some.
+            if replies.queued_bytes() > PONG_BACKLOG_LIMIT {
+                return Ok(());
+            }
             let context = &rest[2..];
             let mut pong = BytesMut::with_capacity(PONG.len() + context.len());
             pong.extend_from_slice(PONG);
@@ -703,6 +714,26 @@ mod tests {
             .unwrap();
         assert_eq!(&replies.buf()[..], b"\x04\x07\x04PONGab");
         assert_eq!(c.peer_ttl(), Some(Duration::from_secs(5)));
+    }
+
+    /// A peer that floods PINGs and never reads cannot grow our outbound
+    /// queue past the backlog limit with PONGs.
+    #[test]
+    fn a_ping_flood_with_nobody_reading_stays_bounded() {
+        let mut c = codec();
+        let mut wire = BytesMut::new();
+        for _ in 0..1_000_000 {
+            put_header(&mut wire, FLAG_COMMAND, 7);
+            wire.extend_from_slice(b"\x04PING\x00\x00");
+        }
+        let mut replies = OutQueue::default();
+        c.decode(&mut wire, &mut |_| unreachable!(), &mut replies)
+            .unwrap();
+        assert!(
+            replies.queued_bytes() <= PONG_BACKLOG_LIMIT + 16,
+            "{} bytes of PONGs queued",
+            replies.queued_bytes()
+        );
     }
 
     #[test]

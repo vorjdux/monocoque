@@ -62,6 +62,11 @@ impl OutQueue {
         self.queued_msgs + self.in_flight_msgs
     }
 
+    /// `true` while a write job handed out by `take_job` has not completed.
+    pub const fn job_in_flight(&self) -> bool {
+        self.in_flight_msgs > 0
+    }
+
     /// `true` when nothing is queued (a job may still be in flight).
     pub fn is_empty(&self) -> bool {
         self.segs.is_empty() && self.tail.is_empty()

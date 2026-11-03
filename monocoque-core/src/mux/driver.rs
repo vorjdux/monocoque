@@ -52,11 +52,12 @@ impl<P: Protocol, H: Hooks> Future for Driver<P, H> {
 #[derive(Default)]
 pub struct Signal {
     fired: Cell<bool>,
+    was_up: Cell<bool>,
     waker: RefCell<Option<Waker>>,
 }
 
 impl Signal {
-    /// Fire the signal, waking its waiter.
+    /// Fire the signal for a connection that never became a peer.
     pub fn fire(&self) {
         self.fired.set(true);
         if let Some(w) = self.waker.borrow_mut().take() {
@@ -64,17 +65,24 @@ impl Signal {
         }
     }
 
-    /// Wait until fired, then re-arm.
-    pub async fn wait(&self) {
+    /// Fire the signal for a peer that was up and has gone away.
+    pub fn fire_after_up(&self) {
+        self.was_up.set(true);
+        self.fire();
+    }
+
+    /// Wait until fired, then re-arm. Returns whether the connection had
+    /// become a peer.
+    pub async fn wait(&self) -> bool {
         poll_fn(|cx| {
             if self.fired.replace(false) {
-                Poll::Ready(())
+                Poll::Ready(self.was_up.replace(false))
             } else {
                 *self.waker.borrow_mut() = Some(cx.waker().clone());
                 Poll::Pending
             }
         })
-        .await;
+        .await
     }
 }
 
@@ -109,11 +117,13 @@ pub async fn connect_loop(
                         stream,
                     });
                     // The core fires this when the handshake fails or the
-                    // resulting peer goes away; `true` in `up` means the
-                    // connection had been established.
-                    down.wait().await;
-                    backoff.reset();
-                    failures = 0;
+                    // resulting peer goes away. Only a peer that came up
+                    // resets the backoff; a server that accepts and then
+                    // fails every handshake keeps backing off.
+                    if down.wait().await {
+                        backoff.reset();
+                        failures = 0;
+                    }
                 }
             }
             Err(e) => {
