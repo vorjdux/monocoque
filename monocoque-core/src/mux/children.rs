@@ -53,6 +53,10 @@ pub struct Wakeups {
     pending: AtomicBool,
     user_parked: AtomicBool,
     active: AtomicBool,
+    /// The driver has been woken for what is pending. Until it drains that,
+    /// waking it again achieves nothing, and a user task that never yields
+    /// would otherwise lock and wake it on every operation.
+    driver_told: AtomicBool,
     /// The socket's thread, the only one that runs its operations, as
     /// [`thread_token`] reports it.
     owner: usize,
@@ -78,6 +82,7 @@ impl Default for Wakeups {
             pending: AtomicBool::new(false),
             user_parked: AtomicBool::new(false),
             active: AtomicBool::new(false),
+            driver_told: AtomicBool::new(false),
             owner: thread_token(),
         }
     }
@@ -101,7 +106,7 @@ impl Wakeups {
         // thread's own stores and loads are already in program order, so no
         // fence is needed here.
         self.active.store(false, Ordering::Release);
-        if !self.pending.load(Ordering::Acquire) {
+        if !self.pending.load(Ordering::Acquire) || self.already_told() {
             return;
         }
         // A wakeup raised after the operation's last drain (possibly from
@@ -111,15 +116,30 @@ impl Wakeups {
             if s.woken.is_empty() {
                 return;
             }
-            let user = s.user.take();
-            if user.is_some() {
-                self.user_parked.store(false, Ordering::Release);
-            }
-            user.or_else(|| s.driver.clone())
+            self.user_or_driver(&mut s)
         };
         if let Some(w) = target {
             w.wake();
         }
+    }
+
+    /// Nobody is parked and the driver already knows: nothing to deliver.
+    fn already_told(&self) -> bool {
+        !self.user_parked.load(Ordering::Acquire) && self.driver_told.load(Ordering::Acquire)
+    }
+
+    /// Who should hear about pending work: the parked user, else the driver.
+    fn user_or_driver(&self, s: &mut WakeState) -> Option<Waker> {
+        let user = s.user.take();
+        if user.is_some() {
+            self.user_parked.store(false, Ordering::Release);
+            return user;
+        }
+        let driver = s.driver.clone();
+        if driver.is_some() {
+            self.driver_told.store(true, Ordering::Release);
+        }
+        driver
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, WakeState> {
@@ -142,18 +162,24 @@ impl Wakeups {
 
     /// The user task is no longer parked; wakeups go to the driver again.
     pub fn unpark_user(&self) {
-        if !self.user_parked.load(Ordering::Acquire) && !self.pending.load(Ordering::Acquire) {
+        if !self.user_parked.load(Ordering::Acquire)
+            && (!self.pending.load(Ordering::Acquire) || self.already_told())
+        {
             return;
         }
-        let pending = {
+        // Work queued for a user who has since left must not be stranded.
+        let target = {
             let mut s = self.lock();
             s.user = None;
             self.user_parked.store(false, Ordering::Release);
-            !s.woken.is_empty()
+            if s.woken.is_empty() || self.driver_told.load(Ordering::Acquire) {
+                None
+            } else {
+                self.user_or_driver(&mut s)
+            }
         };
-        // Work queued for a user who has since left must not be stranded.
-        if pending {
-            self.wake_driver();
+        if let Some(w) = target {
+            w.wake();
         }
     }
 
@@ -210,11 +236,7 @@ impl Wakeups {
             if self.active.load(Ordering::Acquire) && thread_token() == self.owner {
                 return;
             }
-            let user = s.user.take();
-            if user.is_some() {
-                self.user_parked.store(false, Ordering::Release);
-            }
-            user.or_else(|| s.driver.clone())
+            self.user_or_driver(&mut s)
         };
         if let Some(w) = target {
             w.wake();
@@ -228,6 +250,7 @@ impl Wakeups {
         let mut s = self.lock();
         std::mem::swap(&mut s.woken, out);
         self.pending.store(false, Ordering::Release);
+        self.driver_told.store(false, Ordering::Release);
     }
 
     /// `true` if some child has woken and not been polled yet.

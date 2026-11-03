@@ -23,7 +23,7 @@ use std::mem::size_of;
 #[cfg(target_pointer_width = "64")]
 fn message_types_keep_their_size() {
     // 64 bytes of inline payload plus the frame bookkeeping.
-    assert_eq!(size_of::<Msg>(), 144, "Msg changed size");
+    assert_eq!(size_of::<Msg>(), 112, "Msg changed size");
     assert!(
         size_of::<MsgRef<'_>>() <= 2 * size_of::<usize>(),
         "MsgRef is a borrow"
@@ -37,6 +37,6 @@ fn connection_state_keeps_its_size() {
     // The codec copies the two options it reads per frame (max frame size,
     // vectored threshold) instead of holding a `SocketOptions` (664 bytes),
     // so options can grow without moving the decoder's fields.
-    assert_eq!(size_of::<ZmtpCodec>(), 280, "ZmtpCodec changed size");
+    assert_eq!(size_of::<ZmtpCodec>(), 248, "ZmtpCodec changed size");
     assert_eq!(size_of::<OutQueue>(), 80, "OutQueue changed size");
 }

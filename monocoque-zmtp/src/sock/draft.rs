@@ -76,7 +76,8 @@ kind!(
 impl Socket<Client> {
     /// Send to the next SERVER with room, waiting while none has.
     pub async fn send(&mut self, msg: impl Into<Msg>) -> Result<()> {
-        self.send_lb(single(msg.into())?).await.map(drop)
+        let mut slot = Some(single(msg.into())?);
+        self.send_lb(&mut slot).await.map(drop)
     }
 
     /// Receive the next message from any peer.
@@ -100,7 +101,8 @@ kind!(
 impl Socket<Scatter> {
     /// Send to the next peer with room, waiting while none has.
     pub async fn send(&mut self, msg: impl Into<Msg>) -> Result<()> {
-        self.send_lb(single(msg.into())?).await.map(drop)
+        let mut slot = Some(single(msg.into())?);
+        self.send_lb(&mut slot).await.map(drop)
     }
 }
 
@@ -157,7 +159,8 @@ kind!(
 impl Socket<Channel> {
     /// Send to the peer, waiting for one if none is connected.
     pub async fn send(&mut self, msg: impl Into<Msg>) -> Result<()> {
-        self.send_lb(single(msg.into())?).await.map(drop)
+        let mut slot = Some(single(msg.into())?);
+        self.send_lb(&mut slot).await.map(drop)
     }
 
     /// Receive the next message.

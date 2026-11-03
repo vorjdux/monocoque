@@ -7,7 +7,7 @@
 //!   so a small message costs no allocation and no atomic on either side, and
 //!   holds no reference into the read buffer it was decoded from;
 //! - one larger frame is a single [`Bytes`] (the dominant network case);
-//! - up to four frames sit in a [`SmallVec`] with no allocation;
+//! - up to three frames sit in a [`SmallVec`] with no allocation;
 //! - [`Msg::into_shared`] moves the frames behind one `Arc` so a fan-out to N
 //!   peers costs one allocation and N refcount bumps rather than N copies.
 //!
@@ -24,11 +24,17 @@ use std::sync::Arc;
 /// Largest single frame stored inline, without a heap allocation.
 pub const INLINE_CAP: usize = 64;
 
+/// A frame list; this many frames need no allocation.
+///
+/// Three covers a ROUTER's identity and a two-frame message. A `Msg` is moved on every send and
+/// receive, so a frame more here costs every message 32 bytes.
+pub type FrameVec = SmallVec<[Bytes; 3]>;
+
 #[derive(Clone)]
 enum FrameStore {
     Inline { len: u8, data: [u8; INLINE_CAP] },
     Single(Bytes),
-    Multi(SmallVec<[Bytes; 4]>),
+    Multi(FrameVec),
     Shared(Arc<[Bytes]>),
 }
 
@@ -192,7 +198,7 @@ impl Msg {
     }
 
     /// Store `v` in the cheapest shape that holds it.
-    fn set_vec(&mut self, mut v: SmallVec<[Bytes; 4]>) {
+    fn set_vec(&mut self, mut v: FrameVec) {
         self.frames = if v.len() == 1 {
             FrameStore::Single(v.pop().expect("len checked"))
         } else {
@@ -233,12 +239,12 @@ impl Msg {
 
     /// Consume the message, yielding its frames as `Bytes`.
     #[must_use]
-    pub fn into_frames(mut self) -> SmallVec<[Bytes; 4]> {
+    pub fn into_frames(mut self) -> FrameVec {
         self.take_vec()
     }
 
     /// Take the frames out as an owned list, leaving the message empty.
-    fn take_vec(&mut self) -> SmallVec<[Bytes; 4]> {
+    fn take_vec(&mut self) -> FrameVec {
         match std::mem::replace(&mut self.frames, FrameStore::Multi(SmallVec::new())) {
             FrameStore::Inline { len, data } => {
                 let mut v = SmallVec::new();
@@ -344,7 +350,7 @@ impl<const N: usize> From<[Bytes; N]> for Msg {
 
 impl FromIterator<Bytes> for Msg {
     fn from_iter<I: IntoIterator<Item = Bytes>>(iter: I) -> Self {
-        let v: SmallVec<[Bytes; 4]> = iter.into_iter().collect();
+        let v: FrameVec = iter.into_iter().collect();
         let frames = if v.len() == 1 {
             FrameStore::Single(v.into_iter().next().expect("len checked"))
         } else {

@@ -337,24 +337,28 @@ impl<K: Kind> Socket<K> {
     }
 
     /// Send to the next peer with room, waiting while none has.
-    pub(crate) async fn send_lb(&mut self, msg: Msg) -> Result<PeerId> {
-        self.send_lb_prefixed(&[], msg).await
-    }
-
-    /// Like `send_lb`, with envelope frames ahead of the message.
-    pub(crate) async fn send_lb_prefixed(&mut self, prefix: &[Bytes], msg: Msg) -> Result<PeerId> {
-        let peer = self.queue_lb_prefixed(prefix, msg).await?;
+    ///
+    /// The message stays in the caller's `slot` the whole way: a `Msg` is large,
+    /// and each async layer holding one by value would copy it, and copy it
+    /// again whenever its future moves. That cost half of small-message
+    /// throughput.
+    pub(crate) async fn send_lb(&mut self, slot: &mut Option<Msg>) -> Result<PeerId> {
+        let peer = self.queue_lb_prefixed(&[], slot).await?;
         self.wait_written(peer).await;
         Ok(peer)
     }
 
-    /// Queue to the next writable peer without waiting for the write.
-    pub(crate) async fn queue_lb_prefixed(&mut self, prefix: &[Bytes], msg: Msg) -> Result<PeerId> {
+    /// Queue to the next writable peer, with envelope frames ahead of the
+    /// message, without waiting for the write.
+    pub(crate) async fn queue_lb_prefixed(
+        &mut self,
+        prefix: &[Bytes],
+        slot: &mut Option<Msg>,
+    ) -> Result<PeerId> {
         let timeout = self.send_timeout();
-        let mut slot = Some(msg);
         with_timeout(
             op(&self.core, move |c, cx| {
-                c.poll_send_lb_prefixed(cx, prefix, &mut slot)
+                c.poll_send_lb_prefixed(cx, prefix, slot)
             }),
             timeout,
         )
@@ -371,6 +375,9 @@ impl<K: Kind> Socket<K> {
     /// send waits on it until it reads again, so it cannot hold up sends to
     /// other peers. A slow peer that keeps reading is waited for.
     pub(crate) async fn wait_written(&mut self, peer: PeerId) {
+        if !self.core.borrow().write_pending(peer) {
+            return;
+        }
         let timeout = self.send_timeout();
         let stall = self.core.borrow().options().write_stall;
         let deadline = timeout.map(|t| Instant::now() + t);

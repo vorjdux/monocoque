@@ -96,7 +96,8 @@ kind!(
 impl Socket<Pair> {
     /// Send to the peer, waiting for one if none is connected.
     pub async fn send(&mut self, msg: impl Into<Msg>) -> Result<()> {
-        self.send_lb(msg.into()).await.map(drop)
+        let mut slot = Some(msg.into());
+        self.send_lb(&mut slot).await.map(drop)
     }
 
     /// Receive the next message.
@@ -120,7 +121,8 @@ kind!(
 impl Socket<Dealer> {
     /// Send to the next peer with room, waiting while none has.
     pub async fn send(&mut self, msg: impl Into<Msg>) -> Result<()> {
-        self.send_lb(msg.into()).await.map(drop)
+        let mut slot = Some(msg.into());
+        self.send_lb(&mut slot).await.map(drop)
     }
 
     /// Receive the next message from any peer.
@@ -144,7 +146,8 @@ kind!(
 impl Socket<Push> {
     /// Send to the next peer with room, waiting while none has.
     pub async fn send(&mut self, msg: impl Into<Msg>) -> Result<()> {
-        self.send_lb(msg.into()).await.map(drop)
+        let mut slot = Some(msg.into());
+        self.send_lb(&mut slot).await.map(drop)
     }
 }
 
@@ -370,13 +373,14 @@ impl Socket<Req> {
                 "REQ must receive a reply before sending again",
             ));
         }
-        let msg = msg.into();
+        let mut slot = Some(msg.into());
         let peer = if correlate {
             self.ext.request_id = self.ext.request_id.wrapping_add(1);
             let id = Bytes::copy_from_slice(&self.ext.request_id.to_be_bytes());
-            self.queue_lb_prefixed(&[id, Bytes::new()], msg).await?
+            self.queue_lb_prefixed(&[id, Bytes::new()], &mut slot)
+                .await?
         } else {
-            self.queue_lb_prefixed(&[Bytes::new()], msg).await?
+            self.queue_lb_prefixed(&[Bytes::new()], &mut slot).await?
         };
         // Set before waiting for the write, so a send cancelled there still
         // leaves the request outstanding.

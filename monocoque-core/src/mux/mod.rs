@@ -1447,8 +1447,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         loop {
             self.progress();
             if let Some(id) = self.pick_writable() {
-                let m = msg.take().expect("polled after completion");
-                let result = self.enqueue_to(id, prefix, m);
+                let result = self.enqueue_slot_to(id, prefix, msg);
                 self.progress();
                 return Poll::Ready(result.map(|()| id));
             }
@@ -1482,11 +1481,24 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         None
     }
 
-    fn enqueue_to(&mut self, id: PeerId, prefix: &[Bytes], msg: Msg) -> Result<()> {
+    /// Queue the message in `slot` toward `id`, leaving the slot empty.
+    fn enqueue_slot_to(
+        &mut self,
+        id: PeerId,
+        prefix: &[Bytes],
+        slot: &mut Option<Msg>,
+    ) -> Result<()> {
         let Some(entry) = self.entry(id) else {
             return Err(MonocoqueError::HostUnreachable);
         };
-        entry.state.borrow_mut().enqueue_prefixed(prefix, msg)
+        entry.state.borrow_mut().enqueue_slot(prefix, slot)
+    }
+
+    /// `true` while a send to `id` has bytes to wait for. A cheap look before
+    /// building the wait, which a coalesced send never needs.
+    pub fn write_pending(&self, id: PeerId) -> bool {
+        self.entry(id)
+            .is_some_and(|e| !e.closed && e.state.borrow().write_pending())
     }
 
     /// Queue `msg` toward `id` without waiting.
