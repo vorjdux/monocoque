@@ -98,6 +98,32 @@ impl PeerAddress for Stream {
 }
 
 impl Stream {
+    /// A read fell short, so the socket is drained: on smol, whose read tries
+    /// the syscall first, wait for data instead of spending a `recv` on EAGAIN.
+    /// tokio clears its readiness on a short read, and a ring read just waits.
+    pub async fn wait_after_short_read(&self) {
+        #[cfg(feature = "runtime-smol")]
+        {
+            // An error here surfaces from the read that follows.
+            let _ = match self {
+                Self::Tcp(s) => s.readable().await,
+                #[cfg(unix)]
+                Self::Ipc(s) => s.readable().await,
+            };
+        }
+    }
+
+    /// Write what the socket takes right now, without going through the
+    /// runtime. `None` if it took nothing.
+    #[must_use]
+    pub fn send_direct(&self, buf: &[u8]) -> Option<usize> {
+        match self {
+            Self::Tcp(s) => crate::tcp::send_now(s, buf),
+            #[cfg(unix)]
+            Self::Ipc(s) => crate::tcp::send_now(s, buf),
+        }
+    }
+
     /// Bytes in the socket's send queue the peer has not acknowledged; 0 where
     /// the platform cannot tell.
     #[must_use]

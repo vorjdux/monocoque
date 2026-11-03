@@ -318,6 +318,13 @@ pub fn bind_reuseport(addr: SocketAddr) -> io::Result<TcpListener> {
     TcpListener::from_std(crate::tcp::reuseport_listener(addr)?)
 }
 
+impl TcpStream {
+    /// Wait until a read would find something.
+    pub async fn readable(&self) -> io::Result<()> {
+        self.inner.readable().await
+    }
+}
+
 impl AsyncRead for TcpStream {
     async fn read<B: IoBufMut>(&mut self, buf: B) -> BufResult<usize, B> {
         read_into(&self.inner, buf).await
@@ -486,6 +493,13 @@ mod unix {
     impl AsyncRead for UnixStream {
         async fn read<B: IoBufMut>(&mut self, buf: B) -> BufResult<usize, B> {
             read_into(&self.inner, buf).await
+        }
+    }
+
+    impl UnixStream {
+        /// Wait until a read would find something.
+        pub async fn readable(&self) -> io::Result<()> {
+            self.inner.readable().await
         }
     }
 

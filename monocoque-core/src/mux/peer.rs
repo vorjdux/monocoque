@@ -15,7 +15,7 @@ use super::out::{OutQueue, WriteJob};
 use super::{CloseReason, Codec, EventQueue, PeerId};
 use crate::msg::Msg;
 use crate::transport::Stream;
-use bytes::{Bytes, BytesMut};
+use bytes::{Buf, Bytes, BytesMut};
 use compio_buf::IoVectoredBuf;
 use compio_buf::{BufResult, IntoInner, IoBuf};
 use compio_io::{AsyncRead, AsyncWrite, AsyncWriteExt};
@@ -297,8 +297,7 @@ impl<C: Codec> PeerState<C> {
         match &mut self.outbound {
             Outbound::Wire { codec, out, .. } => {
                 codec.encode(msg, out)?;
-                out.note_message();
-                self.wake_writer_if_released();
+                self.finish_encoded();
                 Ok(())
             }
             Outbound::Local(tx) => tx
@@ -319,6 +318,30 @@ impl<C: Codec> PeerState<C> {
         self.enqueue_prefixed(&[], msg)
     }
 
+    /// A message was just encoded onto the queue. An eager send with the writer
+    /// idle goes straight to the kernel here, with no task woken or polled;
+    /// only what the socket would not take is left for the writer.
+    fn finish_encoded(&mut self) {
+        if let Outbound::Wire {
+            out, hold: None, ..
+        } = &mut self.outbound
+            && let Some(tail) = out.sole_message()
+            && let Some(stream) = self.stream.upgrade()
+            && let Some(n) = stream.send_direct(tail)
+        {
+            self.bytes_written = self.bytes_written.wrapping_add(n as u64);
+            if n == tail.len() {
+                tail.clear();
+                return;
+            }
+            tail.advance(n);
+        }
+        if let Outbound::Wire { out, .. } = &mut self.outbound {
+            out.note_message();
+        }
+        self.wake_writer_if_released();
+    }
+
     /// Queue the message in `slot`, leaving it empty. A wire peer encodes it
     /// where it is: a `Msg` is large, and moving it here costs a real copy.
     pub(crate) fn enqueue_slot(
@@ -334,8 +357,7 @@ impl<C: Codec> PeerState<C> {
                 codec.encode_prefixed(prefix, msg, out)?;
             }
             *slot = None;
-            out.note_message();
-            self.wake_writer_if_released();
+            self.finish_encoded();
             return Ok(());
         }
         let msg = slot.take().expect("polled after completion");
@@ -355,8 +377,7 @@ impl<C: Codec> PeerState<C> {
             } else {
                 codec.encode_prefixed(prefix, &msg, out)?;
             }
-            out.note_message();
-            self.wake_writer_if_released();
+            self.finish_encoded();
             return Ok(());
         }
         for frame in prefix.iter().rev() {
@@ -530,6 +551,34 @@ impl<C: Codec> PeerState<C> {
     }
 }
 
+/// How much to read next, after `n` bytes arrived with `spare` of room.
+///
+/// A read that filled the buffer left more behind: read more at once next time,
+/// fewer syscalls per byte. A peer gone quiet brings it back down, so only a
+/// busy connection holds more. Only a read given the whole target says anything:
+/// one into the leftover tail of a buffer fills it or falls short by chance.
+const fn next_read_target(target: usize, floor: usize, spare: usize, n: usize) -> usize {
+    if spare < target {
+        return target;
+    }
+    let cap = if MAX_READ_TARGET > floor {
+        MAX_READ_TARGET
+    } else {
+        floor
+    };
+    if n == spare && target * 2 <= cap {
+        target * 2
+    } else if n == spare {
+        cap
+    } else if n < target / 4 && target / 2 >= floor {
+        target / 2
+    } else if n < target / 4 {
+        floor
+    } else {
+        target
+    }
+}
+
 /// Read, decode and queue messages from a wire peer until it closes.
 pub async fn reader_loop<C: Codec>(
     peer: Rc<RefCell<PeerState<C>>>,
@@ -551,6 +600,7 @@ pub async fn reader_loop<C: Codec>(
     }
     let mut reads = 0u32;
     let mut target = read_size;
+    let mut short_read = false;
     loop {
         poll_fn(|cx| peer.borrow_mut().poll_reader_room(cx)).await;
         if peer.borrow().closed.is_some() {
@@ -573,6 +623,9 @@ pub async fn reader_loop<C: Codec>(
         {
             buf.reserve(target);
         }
+        if short_read {
+            stream.wait_after_short_read().await;
+        }
         let len = buf.len();
         let spare = buf.capacity() - len;
         let mut s = &*stream;
@@ -589,19 +642,8 @@ pub async fn reader_loop<C: Codec>(
                 return;
             }
             Ok(n) => {
-                // A read that filled the buffer left more behind: read more at
-                // once next time, fewer syscalls per byte. A peer gone quiet
-                // brings it back down, so only a busy connection holds more.
-                // Only a read given the whole target says anything: one into
-                // the leftover tail of a buffer fills it or falls short by
-                // chance.
-                if spare >= target {
-                    if n == spare {
-                        target = (target * 2).min(MAX_READ_TARGET.max(read_size));
-                    } else if n < target / 4 {
-                        target = (target / 2).max(read_size);
-                    }
-                }
+                short_read = n < spare;
+                target = next_read_target(target, read_size, spare, n);
             }
         }
         st.recv_seen = true;

@@ -52,6 +52,13 @@ impl OutQueue {
         self.segs.push_back(seg);
     }
 
+    /// The bytes of the one message just encoded, if it is all there is: no
+    /// segment, nothing queued before it and no write in flight.
+    pub fn sole_message(&mut self) -> Option<&mut BytesMut> {
+        (self.segs.is_empty() && self.queued_msgs == 0 && self.in_flight_msgs == 0)
+            .then_some(&mut self.tail)
+    }
+
     /// Count one more queued message toward the high-water mark.
     pub const fn note_message(&mut self) {
         self.queued_msgs += 1;
