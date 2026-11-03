@@ -97,6 +97,19 @@ impl PeerAddress for Stream {
     }
 }
 
+impl Stream {
+    /// Bytes in the socket's send queue the peer has not acknowledged; 0 where
+    /// the platform cannot tell.
+    #[must_use]
+    pub fn unacked_bytes(&self) -> u32 {
+        match self {
+            Self::Tcp(s) => crate::tcp::unacked_bytes(s),
+            #[cfg(unix)]
+            Self::Ipc(s) => crate::tcp::unacked_bytes(s),
+        }
+    }
+}
+
 impl PeerAddress for &Stream {
     fn zap_address(&self) -> String {
         (**self).zap_address()

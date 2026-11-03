@@ -20,6 +20,7 @@ use bytes::Bytes;
 use monocoque_core::error::{MonocoqueError, Result};
 use monocoque_core::monitor::{SocketMonitor, create_monitor};
 use monocoque_core::msg::{Metadata, Msg, MsgRef};
+use monocoque_core::mux::peer::WRITE_PROGRESS_FLOOR;
 use monocoque_core::mux::{Hooks, PeerId, PeerInfo, SendTo, Shared, SocketCore, op};
 use monocoque_core::options::SocketOptions;
 use monocoque_core::transport::Stream;
@@ -28,10 +29,6 @@ use std::pin::pin;
 use std::sync::Arc;
 use std::task::Poll;
 use std::time::{Duration, Instant};
-
-/// How long an eager send waits on a peer none of whose writes complete
-/// before treating it as no longer reading.
-const WRITE_STALL: Duration = Duration::from_millis(50);
 
 /// A ZeroMQ socket type.
 pub trait Kind: Sized + 'static {
@@ -369,32 +366,38 @@ impl<K: Kind> Socket<K> {
     /// gets the message out. Bounded by `send_timeout`; the message is already
     /// queued, so running out of time here is not a send failure.
     ///
-    /// A peer whose writes all stay incomplete for [`WRITE_STALL`] has stopped
-    /// reading. It is marked stalled and no send waits on it again until one
-    /// of its writes completes, so it cannot hold up sends to other peers.
+    /// A peer taking under [`WRITE_PROGRESS_FLOOR`] bytes during a
+    /// `write_stall` window has stopped reading. It is marked stalled and no
+    /// send waits on it until it reads again, so it cannot hold up sends to
+    /// other peers. A slow peer that keeps reading is waited for.
     pub(crate) async fn wait_written(&mut self, peer: PeerId) {
         let timeout = self.send_timeout();
+        let stall = self.core.borrow().options().write_stall;
         let deadline = timeout.map(|t| Instant::now() + t);
+        // Asking the kernel costs a syscall, so a send that finishes within
+        // the first window, as nearly all do, never asks: that window only
+        // takes the first reading, and the next one compares against it.
+        let mut before = None;
         loop {
-            let Some(before) = self.core.borrow().writes_done(peer) else {
-                return;
+            let left = deadline.map(|d| d.saturating_duration_since(Instant::now()));
+            let slice = match (left, stall) {
+                (Some(l), Some(s)) => Some(l.min(s)),
+                (l, s) => l.or(s),
             };
-            let slice = deadline.map_or(WRITE_STALL, |d| {
-                d.saturating_duration_since(Instant::now()).min(WRITE_STALL)
-            });
-            let written = with_timeout(
-                op(&self.core, move |c, cx| c.poll_written(cx, peer)),
-                Some(slice),
-            )
-            .await;
+            let written =
+                with_timeout(op(&self.core, move |c, cx| c.poll_written(cx, peer)), slice).await;
             if written.is_ok() || deadline.is_some_and(|d| Instant::now() >= d) {
                 return;
             }
             let mut core = self.core.borrow_mut();
-            if core.writes_done(peer) == Some(before) {
+            let Some(now) = core.write_progress(peer) else {
+                return;
+            };
+            if before.is_some_and(|b| now - b < i128::from(WRITE_PROGRESS_FLOOR)) {
                 core.mark_write_stalled(peer);
                 return;
             }
+            before = Some(now);
         }
     }
 

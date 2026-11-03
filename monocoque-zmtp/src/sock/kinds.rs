@@ -13,6 +13,7 @@ use monocoque_core::subscription::{
 };
 use smallvec::SmallVec;
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::collections::hash_map::RandomState;
 
 /// Hooks for patterns that need none.
@@ -629,6 +630,36 @@ impl Hooks for XPubHooks {
     /// them, so holding them back at the HWM loses nothing.
     fn defer_inbound_at_hwm(&self) -> bool {
         self.0.manual
+    }
+
+    /// Past the HWM only what a reader could act on is kept, so a subscriber
+    /// toggling a topic or sending data cannot grow the inbox, while a broker
+    /// forwarding these upstream still ends up with the right subscriptions.
+    /// A report meets its opposite still unread: neither needs reading. The
+    /// same report already queued says nothing new. What remains is at most
+    /// one report per prefix.
+    fn keep_past_hwm(&mut self, inbox: &mut VecDeque<(PeerId, Msg)>, id: PeerId, msg: Msg) {
+        let Some(frame) = msg.frame_bytes(0) else {
+            return;
+        };
+        let (Some(&kind @ (0 | 1)), prefix) = (frame.first(), frame.slice(1..)) else {
+            return;
+        };
+        let queued = inbox.iter().rposition(|(_, m)| {
+            m.frame_bytes(0)
+                .is_some_and(|f| f.first().is_some_and(|k| *k <= 1) && f[1..] == prefix[..])
+        });
+        let Some(at) = queued else {
+            inbox.push_back((id, msg));
+            return;
+        };
+        let same = inbox[at]
+            .1
+            .frame_bytes(0)
+            .is_some_and(|f| f.first() == Some(&kind));
+        if !same {
+            inbox.remove(at);
+        }
     }
 
     fn on_peer_down(&mut self, id: PeerId, _info: &PeerInfo) {

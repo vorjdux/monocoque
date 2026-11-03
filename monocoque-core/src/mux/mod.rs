@@ -182,6 +182,14 @@ pub trait Hooks: 'static {
         false
     }
 
+    /// With [`eager_inbound`], decide what happens to a message the hook kept
+    /// while `inbox` already holds the receive HWM. Keeps it by default.
+    ///
+    /// [`eager_inbound`]: Self::eager_inbound
+    fn keep_past_hwm(&mut self, inbox: &mut VecDeque<(PeerId, Msg)>, id: PeerId, msg: Msg) {
+        inbox.push_back((id, msg));
+    }
+
     /// Inspect an inbound message. Return it to make it receivable, or `None`
     /// to consume it.
     fn on_inbound(&mut self, _id: PeerId, msg: Msg) -> Option<Msg> {
@@ -751,6 +759,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             self.options.heartbeat_ivl.is_some(),
         )));
         state.borrow_mut().conflate = self.conflates();
+        state.borrow_mut().stream = Rc::downgrade(&stream);
         let reader = self.children.spawn(peer::reader_loop(
             Rc::clone(&state),
             Rc::clone(&stream),
@@ -889,7 +898,12 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
                 let msg = state.borrow_mut().pop_ready();
                 let Some(msg) = msg else { break };
                 if let Some(keep) = self.hooks.on_inbound(id, msg) {
-                    self.inbox.push_back((id, keep));
+                    let hwm = self.options.recv_hwm;
+                    if hwm != 0 && self.inbox.len() >= hwm {
+                        self.hooks.keep_past_hwm(&mut self.inbox, id, keep);
+                    } else {
+                        self.inbox.push_back((id, keep));
+                    }
                 }
             }
             if inbox_full
@@ -1678,17 +1692,21 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         }
     }
 
-    /// Write jobs completed toward `id`, or `None` once it is gone.
-    pub fn writes_done(&self, id: PeerId) -> Option<u64> {
+    /// A figure that rises as `id` takes bytes, or `None` once it is gone.
+    /// Costs a syscall: for a send that has already waited a while.
+    pub fn write_progress(&self, id: PeerId) -> Option<i128> {
         self.entry(id)
             .filter(|e| !e.closed)
-            .map(|e| e.state.borrow().writes_done)
+            .map(|e| e.state.borrow().write_progress())
     }
 
-    /// Stop eager sends waiting on `id`'s writes until one completes again.
+    /// Stop eager sends waiting on `id`'s writes until it reads again.
     pub fn mark_write_stalled(&mut self, id: PeerId) {
-        if let Some(e) = self.entry(id) {
-            e.state.borrow_mut().write_stalled = true;
+        let Some(e) = self.entry(id) else { return };
+        let newly = e.state.borrow_mut().mark_write_stalled();
+        let endpoint = e.info.endpoint.clone();
+        if newly && let Some(ep) = endpoint {
+            self.emit(SocketEvent::PeerStalled(ep));
         }
     }
 

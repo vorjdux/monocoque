@@ -29,6 +29,10 @@ runtime-tokio = ["dep:tokio"]
 # Drive the same socket stack on smol (async-executor + async-io) instead.
 runtime-smol = ["dep:smol"]
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# TIOCOUTQ, which socket2 does not expose: how much a peer has taken.
+libc = "0.2"
+
 [dependencies]
 bytes.workspace = true
 compio-io.workspace = true

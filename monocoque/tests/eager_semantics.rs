@@ -8,6 +8,7 @@
 
 use monocoque::rt::LocalRuntime;
 use monocoque::zmq::{PullSocket, PushSocket, SocketOptions};
+use std::io::{Read, Write};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -101,6 +102,106 @@ fn large_eager_sends_arrive_while_the_sender_blocks() {
 fn large_eager_sends_arrive_after_the_socket_is_dropped() {
     large_sends_arrive_after(20, 64 * 1024, true);
     large_sends_arrive_after(20, 1024 * 1024, true);
+}
+
+/// Accept a raw ZMTP 3.0 NULL peer posing as PULL, read `read` bytes every 10 ms
+/// until the sender is gone, and return what arrived after the greeting.
+fn read_throttled(l: &std::net::TcpListener, read: usize) -> usize {
+    let (mut s, _) = l.accept().unwrap();
+    let mut g = [0u8; 64];
+    g[0] = 0xff;
+    g[9] = 0x7f;
+    g[10] = 3;
+    g[12..16].copy_from_slice(b"NULL");
+    s.write_all(&g).unwrap();
+    let mut peer = [0u8; 64];
+    s.read_exact(&mut peer).unwrap();
+    let mut body = vec![5];
+    body.extend_from_slice(b"READY");
+    body.push(11);
+    body.extend_from_slice(b"Socket-Type");
+    body.extend_from_slice(&4u32.to_be_bytes());
+    body.extend_from_slice(b"PULL");
+    s.write_all(&[0x04, u8::try_from(body.len()).unwrap()])
+        .unwrap();
+    s.write_all(&body).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+    let mut buf = vec![0u8; read];
+    let mut total = 0;
+    while let Ok(k) = s.read(&mut buf) {
+        if k == 0 {
+            break;
+        }
+        total += k;
+        thread::sleep(Duration::from_millis(10));
+    }
+    total
+}
+
+/// Send `count` messages to the throttled reader, drop the socket, and check
+/// every byte arrived.
+fn throttled_sends_arrive(count: usize, size: usize) {
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("tcp://{}", l.local_addr().unwrap());
+    let sender = thread::spawn(move || {
+        LocalRuntime::new().unwrap().block_on(async move {
+            let mut push = PushSocket::new();
+            push.connect(&endpoint).await.unwrap();
+            let body = monocoque::Bytes::from(vec![9u8; size]);
+            for _ in 0..count {
+                push.send(body.clone()).await.unwrap();
+            }
+        });
+    });
+    let total = read_throttled(&l, 64 * 1024);
+    sender.join().unwrap();
+    // Each message has a 9-byte long-frame header; READY comes on top.
+    let frames = count * (size + 9);
+    assert!(total >= frames, "{total} of {frames} bytes arrived");
+}
+
+/// A slow link, where no single write job finishes inside the stall window
+/// while bytes keep moving, is not a peer that stopped reading.
+#[test]
+fn a_slow_reader_is_not_treated_as_stalled() {
+    throttled_sends_arrive(4, 2 * 1024 * 1024);
+    throttled_sends_arrive(8, 512 * 1024);
+}
+
+/// Without a stall window a send waits however long the peer pauses.
+#[test]
+fn no_stall_window_waits_out_a_pausing_reader() {
+    const COUNT: usize = 10;
+    const SIZE: usize = 1024 * 1024;
+    let (ep_tx, ep_rx) = mpsc::channel::<String>();
+    let sender = thread::spawn(move || {
+        LocalRuntime::new().unwrap().block_on(async move {
+            let mut push =
+                PushSocket::with_options(SocketOptions::default().with_write_stall(None));
+            push.connect(&ep_rx.recv().unwrap()).await.unwrap();
+            let body = monocoque::Bytes::from(vec![9u8; SIZE]);
+            for _ in 0..COUNT {
+                push.send(body.clone()).await.unwrap();
+            }
+        });
+    });
+    LocalRuntime::new().unwrap().block_on(async move {
+        let mut pull = PullSocket::with_options(
+            SocketOptions::default()
+                .with_recv_hwm(1)
+                .with_recv_timeout(Duration::from_secs(5)),
+        );
+        ep_tx
+            .send(pull.bind("tcp://127.0.0.1:0").await.unwrap())
+            .unwrap();
+        for i in 0..COUNT {
+            pull.recv()
+                .await
+                .unwrap_or_else(|e| panic!("message {i} lost: {e}"));
+            thread::sleep(Duration::from_millis(80));
+        }
+    });
+    sender.join().unwrap();
 }
 
 /// Coalescing must not stall a sender at the send HWM: once the HWM is full,

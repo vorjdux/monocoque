@@ -45,6 +45,9 @@ fn watch(name: &'static str, monitor: SocketMonitor) {
                 SocketEvent::Accepted(ep) => {
                     println!("  [{name}] Accepted connection from {ep}");
                 }
+                SocketEvent::PeerStalled(ep) => {
+                    println!("  [{name}] Peer on {ep} stopped reading");
+                }
             }
         }
         println!("  [{name}] Monitoring ended");

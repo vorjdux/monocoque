@@ -24,9 +24,10 @@ fairly rather than flattering any one of them.
 rather than describe a competitive position:
 
 - `benches/instr_hotpath.rs` counts instructions on the IO-free hot path under
-  callgrind and fails a run more than 5% over baseline. The baseline is the
-  previous run's result, kept in the CI cache, not a committed file: a run with
-  a cold cache has nothing to compare to and passes
+  callgrind; CI fails a run more than 5% over the committed
+  `docs/perf/instr-baseline.json`, or with a bench on only one side
+  (`scripts/check_instr_baseline.py --update` rewrites it after an intended
+  change)
 - `tests/hotpath_alloc.rs` asserts the per-message allocation count
 - `tests/socket_footprint_bound.rs` bounds idle per-socket resident memory
 - `docs/perf/baselines/` holds per-commit snapshots for reference; no gate
@@ -341,12 +342,17 @@ The consequence is that batching requires a deliberate choice. When eager mode
 (the default) is used, after `send()` returns the bytes are inside the kernel.
 When coalescing is enabled, they may still be in a userspace buffer waiting for
 the 64 KB threshold to fill. The one exception in eager mode is a peer that
-stopped reading: once its writes have made no progress for 50 ms, sends stop
-waiting on it, until one of its writes completes again, so it cannot hold up
-the socket's other peers. That difference matters in a few real situations:
+stopped reading: once it has taken under 16 KiB in a `write_stall` window
+(50 ms by default; noticing takes up to two windows), sends stop waiting on it
+until it reads again, so it cannot hold up the socket's other peers. A slow
+peer that keeps reading is waited for. The socket's monitor reports
+`PeerStalled`, `with_write_stall(None)` always waits, and `close()` waits for
+everything up to `linger`, so call it before a sender exits. That difference
+matters in a few real situations:
 
 - If your process crashes between `send()` and `flush()`, coalesced messages
-  are lost. Eager-mode messages are already in the kernel buffer and will survive.
+  are lost. Eager-mode messages are already in the kernel buffer and will
+  survive, except what is queued for a stalled peer.
 - If you are writing a request-reply loop, the send must reach the peer before
   you call `recv()`. With eager mode that is automatic; with coalescing you need
   `flush()` before the `recv()` or you will deadlock.

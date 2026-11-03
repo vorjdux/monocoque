@@ -43,6 +43,48 @@ fn xpub_applies_subscriptions_past_the_recv_hwm_without_a_recv() {
     });
 }
 
+/// A subscriber toggling one topic leaves at most the HWM of reports, and
+/// a subscription made after the flood still takes effect and is reported.
+#[test]
+fn toggling_a_topic_cannot_grow_the_reports() {
+    const TOGGLES: usize = 100_000;
+    LocalRuntime::new().unwrap().block_on(async {
+        let mut xpub =
+            XPubSocket::with_options(opts().with_recv_timeout(Duration::from_millis(200)));
+        let ep = xpub.bind("tcp://127.0.0.1:0").await.unwrap();
+        let mut sub = SubSocket::with_options(opts());
+        sub.connect(&ep).await.unwrap();
+        for _ in 0..TOGGLES {
+            sub.subscribe("toggled").await.unwrap();
+            sub.unsubscribe("toggled").await.unwrap();
+        }
+        sub.subscribe("after").await.unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the subscription after the flood was never applied"
+            );
+            xpub.send("after").await.unwrap();
+            if monocoque::rt::timeout(Duration::from_millis(20), sub.recv_owned())
+                .await
+                .is_ok()
+            {
+                break;
+            }
+        }
+        let mut reports = Vec::new();
+        while let Ok(r) = xpub.recv_owned().await {
+            reports.push(r.frames().next().unwrap().to_vec());
+        }
+        assert!(reports.len() <= 6, "{} reports kept", reports.len());
+        assert!(
+            reports.iter().any(|r| r == b"\x01after"),
+            "the last subscription's report was lost"
+        );
+    });
+}
+
 #[test]
 fn manual_xpub_reports_past_the_recv_hwm_all_arrive_in_order() {
     const SUBS: usize = 1_000;

@@ -90,6 +90,16 @@ pub struct SocketOptions {
     /// - `Some(duration)`: Wait up to duration for messages to be sent
     pub linger: Option<Duration>,
 
+    /// How long an eager send waits on a peer taking under 16 KiB of bytes
+    /// before treating it as no longer reading (default 50 ms; noticing takes
+    /// up to two windows). Sends to it then stop waiting, so it cannot hold up
+    /// the socket's other peers, and the monitor reports `PeerStalled`.
+    ///
+    /// - `Some(window)`: give up on such a peer after `window`
+    /// - `None`: always wait until the bytes are in the kernel, bounded only by
+    ///   `send_timeout`; one peer that stops reading then blocks the sender
+    pub write_stall: Option<Duration>,
+
     /// Reconnect interval (`ZMQ_RECONNECT_IVL`)
     ///
     /// Initial reconnection delay after connection loss.
@@ -513,6 +523,7 @@ impl fmt::Debug for SocketOptions {
             .field("send_timeout", &self.send_timeout)
             .field("handshake_timeout", &self.handshake_timeout)
             .field("linger", &self.linger)
+            .field("write_stall", &self.write_stall)
             .field("reconnect_ivl", &self.reconnect_ivl)
             .field("reconnect_ivl_max", &self.reconnect_ivl_max)
             .field("connect_timeout", &self.connect_timeout)
@@ -584,6 +595,7 @@ impl Default for SocketOptions {
             send_timeout: None, // Block indefinitely
             handshake_timeout: Duration::from_secs(30),
             linger: Some(Duration::from_secs(30)), // Wait 30s for pending messages
+            write_stall: Some(Duration::from_millis(50)),
             reconnect_ivl: Duration::from_millis(100),
             reconnect_ivl_max: Duration::ZERO, // No maximum
             connect_timeout: Duration::ZERO,   // Use OS default
@@ -916,6 +928,13 @@ impl SocketOptions {
     /// Enable XPUB verbose mode.
     pub const fn with_xpub_verbose(mut self, enabled: bool) -> Self {
         self.xpub_verbose = enabled;
+        self
+    }
+
+    /// Set how long an eager send waits on a peer that stopped reading; see
+    /// [`write_stall`](Self::write_stall).
+    pub const fn with_write_stall(mut self, window: Option<Duration>) -> Self {
+        self.write_stall = window;
         self
     }
 

@@ -1321,6 +1321,7 @@ dependencies = [
  "compio-io",
  "flume",
  "futures",
+ "libc",
  "rand 0.10.2",
  "smallvec",
  "smol",

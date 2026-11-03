@@ -16,14 +16,21 @@ use super::{CloseReason, Codec, EventQueue, PeerId};
 use crate::msg::Msg;
 use crate::transport::Stream;
 use bytes::{Bytes, BytesMut};
+use compio_buf::IoVectoredBuf;
 use compio_buf::{BufResult, IntoInner, IoBuf};
-use compio_io::{AsyncRead, AsyncWriteExt};
+use compio_io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::future::poll_fn;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::task::{Context, Poll, Waker};
 use std::time::Instant;
+
+/// Fewest bytes a peer must take during one stall window to count as reading.
+///
+/// It also has to take this many to stop counting as stalled, so a peer
+/// reading a trickle does not cost each send to it a whole window.
+pub const WRITE_PROGRESS_FLOOR: u64 = 16 * 1024;
 
 /// Smallest spare capacity a read is issued with.
 const MIN_READ: usize = 512;
@@ -92,12 +99,18 @@ pub struct PeerState<C> {
     pub(crate) ping_outstanding: bool,
     /// Close the connection once everything queued has been written.
     pub(crate) close_when_drained: bool,
-    /// Write jobs completed, so a waiting sender can tell a slow peer from
-    /// one that stopped reading.
-    pub(crate) writes_done: u64,
+    /// Bytes the kernel has taken, so a waiting sender can tell a slow peer
+    /// from one that stopped reading. A job's partial writes count.
+    pub(crate) bytes_written: u64,
     /// A sender gave up waiting on this peer's writes. Eager sends stop
-    /// waiting on it until a write completes again.
+    /// waiting on it until it takes [`WRITE_PROGRESS_FLOOR`] more bytes or
+    /// its queue drains.
     pub(crate) write_stalled: bool,
+    /// `bytes_written` when the peer was marked stalled.
+    stalled_at: u64,
+    /// The wire stream, to ask how much of what was written the peer has
+    /// taken. Weak: the reader and writer alone keep the socket open.
+    pub(crate) stream: Weak<Stream>,
 }
 
 impl<C: Codec> PeerState<C> {
@@ -124,8 +137,10 @@ impl<C: Codec> PeerState<C> {
             recv_seen: false,
             ping_outstanding: false,
             close_when_drained: false,
-            writes_done: 0,
+            bytes_written: 0,
             write_stalled: false,
+            stalled_at: 0,
+            stream: Weak::new(),
         }
     }
 
@@ -441,11 +456,37 @@ impl<C: Codec> PeerState<C> {
             out.complete_job();
             if out.pending_msgs() == 0 {
                 *flushing = false;
+                self.write_stalled = false;
             }
         }
-        self.writes_done = self.writes_done.wrapping_add(1);
-        self.write_stalled = false;
         self.events.push(super::Event::Writable(self.id));
+    }
+
+    /// The kernel took `n` more bytes.
+    const fn note_written(&mut self, n: usize) {
+        self.bytes_written = self.bytes_written.wrapping_add(n as u64);
+        if self.write_stalled
+            && self.bytes_written.wrapping_sub(self.stalled_at) >= WRITE_PROGRESS_FLOOR
+        {
+            self.write_stalled = false;
+        }
+    }
+
+    /// A figure that rises as the peer takes bytes: written minus what its
+    /// kernel has not acknowledged. Only differences mean anything. A full
+    /// socket buffer wakes a writer only once much of it is free, so at a low
+    /// rate `bytes_written` alone sits still while the peer reads. One syscall.
+    pub(crate) fn write_progress(&self) -> i128 {
+        let unacked = self.stream.upgrade().map_or(0, |s| s.unacked_bytes());
+        i128::from(self.bytes_written) - i128::from(unacked)
+    }
+
+    /// Stop eager sends waiting on this peer. `true` if it was not stalled.
+    pub(crate) const fn mark_write_stalled(&mut self) -> bool {
+        let newly = !self.write_stalled;
+        self.write_stalled = true;
+        self.stalled_at = self.bytes_written;
+        newly
     }
 
     /// Mark the peer gone and tell the core, once.
@@ -562,6 +603,45 @@ pub async fn reader_loop<C: Codec>(
     }
 }
 
+/// The peer's stream, counting what each write gets into the kernel. Under
+/// compio's `write_all` loops, so a job's partial writes count as they happen.
+struct CountedWriter<'a, C> {
+    stream: &'a Stream,
+    peer: &'a RefCell<PeerState<C>>,
+}
+
+impl<C: Codec> CountedWriter<'_, C> {
+    fn count<B>(&self, r: BufResult<usize, B>) -> BufResult<usize, B> {
+        if let Ok(n) = r.0 {
+            self.peer.borrow_mut().note_written(n);
+        }
+        r
+    }
+}
+
+impl<C: Codec> AsyncWrite for CountedWriter<'_, C> {
+    async fn write<B: IoBuf>(&mut self, buf: B) -> BufResult<usize, B> {
+        let mut s = self.stream;
+        let r = s.write(buf).await;
+        self.count(r)
+    }
+
+    async fn write_vectored<B: IoVectoredBuf>(&mut self, buf: B) -> BufResult<usize, B> {
+        let mut s = self.stream;
+        let r = s.write_vectored(buf).await;
+        self.count(r)
+    }
+
+    async fn flush(&mut self) -> std::io::Result<()> {
+        let mut s = self.stream;
+        s.flush().await
+    }
+
+    async fn shutdown(&mut self) -> std::io::Result<()> {
+        self.stream.shutdown().await
+    }
+}
+
 /// Write a wire peer's queued bytes until it closes.
 pub async fn writer_loop<C: Codec>(peer: Rc<RefCell<PeerState<C>>>, stream: Rc<Stream>) {
     let mut spare = BytesMut::new();
@@ -575,7 +655,10 @@ pub async fn writer_loop<C: Codec>(peer: Rc<RefCell<PeerState<C>>>, stream: Rc<S
             }
             return;
         };
-        let mut s = &*stream;
+        let mut s = CountedWriter {
+            stream: &stream,
+            peer: &peer,
+        };
         let res = match job {
             WriteJob::Contiguous(buf) => {
                 let BufResult(res, mut buf) = s.write_all(buf).await;
