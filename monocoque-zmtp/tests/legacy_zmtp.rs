@@ -298,13 +298,15 @@ fn legacy_peers_cannot_downgrade_security() {
                 let ep = pull.bind("tcp://127.0.0.1:0").await.unwrap();
                 let peer = thread::spawn(move || {
                     let mut s = connect(&ep);
-                    if v1 {
-                        s.write_all(&[1, 0]).unwrap();
+                    // Being rejected is the point, and it can happen before
+                    // any of these writes: a failed write is a closed peer.
+                    let greeting: &[u8] = if v1 {
+                        &[1, 0]
                     } else {
-                        s.write_all(&[0xFF, 0, 0, 0, 0, 0, 0, 0, 1, 0x7F, 1, 8, 0, 0])
-                            .unwrap();
-                    }
-                    s.write_all(&v2_frame(false, b"smuggled")).unwrap();
+                        &[0xFF, 0, 0, 0, 0, 0, 0, 0, 1, 0x7F, 1, 8, 0, 0]
+                    };
+                    let _ = s.write_all(greeting);
+                    let _ = s.write_all(&v2_frame(false, b"smuggled"));
                     closed(&mut s)
                 });
                 assert!(thread_result(peer).await, "{name} accepted a legacy peer");
