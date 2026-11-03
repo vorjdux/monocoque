@@ -7,7 +7,7 @@
 //!
 //! - declaring how many bytes a read initialized in a buffer's spare capacity,
 //!   which is the workspace's single owned-buffer `unsafe` operation
-//!   ([`fill_read`]); and
+//!   (`fill_read`); and
 //! - building borrowed `IoSlice`s over an owned vectored buffer for one
 //!   `writev` ([`with_vectored_slices`]).
 //!

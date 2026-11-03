@@ -56,6 +56,6 @@ jobs:
       - name: Run hot-path instruction-count bench
         run: |
           set -euo pipefail
-          cargo bench --bench instr_hotpath --features zmq | tee instr.out
+          cargo bench --bench instr_hotpath --features zmq 2>&1 | tee instr.out
       - name: Compare with the committed baseline
         run: python3 scripts/check_instr_baseline.py instr.out

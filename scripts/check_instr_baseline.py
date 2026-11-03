@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compare instr_hotpath instruction counts with the committed baseline.
 
-    cargo bench --bench instr_hotpath --features zmq -p monocoque-rs | tee out.txt
+    cargo bench --bench instr_hotpath --features zmq -p monocoque-rs 2>&1 | tee out.txt
     scripts/check_instr_baseline.py out.txt            # fail on a regression
     scripts/check_instr_baseline.py out.txt --update   # rewrite the baseline
 
@@ -17,13 +17,14 @@ from pathlib import Path
 BASELINE = Path(__file__).resolve().parent.parent / "docs/perf/instr-baseline.json"
 LIMIT_PERCENT = 5.0
 
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
 INSTRUCTIONS = re.compile(r"^\s+Instructions:\s+(\d+)\|")
 
 
 def parse(text):
     counts = {}
     name = None
-    for line in text.splitlines():
+    for line in ANSI.sub("", text).splitlines():
         if line.startswith("instr_hotpath::"):
             name = line.strip()
         elif name and (m := INSTRUCTIONS.match(line)):

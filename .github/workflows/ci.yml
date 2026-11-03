@@ -263,6 +263,8 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: nightly
     runs-on: ubuntu-latest
+    # Miri interprets every instruction: a test with a big loop looks like a hang.
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:

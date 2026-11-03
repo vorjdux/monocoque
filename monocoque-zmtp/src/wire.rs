@@ -722,7 +722,8 @@ mod tests {
     fn a_ping_flood_with_nobody_reading_stays_bounded() {
         let mut c = codec();
         let mut wire = BytesMut::new();
-        for _ in 0..1_000_000 {
+        // Enough to pass the limit several times over, and few enough for Miri.
+        for _ in 0..20_000 {
             put_header(&mut wire, FLAG_COMMAND, 7);
             wire.extend_from_slice(b"\x04PING\x00\x00");
         }
