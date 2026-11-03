@@ -579,7 +579,15 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
     // ── progress ─────────────────────────────────────────────────────────
 
     /// Poll every woken child and process what they reported, until quiet.
+    #[inline]
     pub fn progress(&mut self) {
+        // Every send and receive comes through here, usually with nothing to do.
+        if !self.wakeups.has_woken()
+            && self.events.q.borrow().is_empty()
+            && self.handshaken.borrow().is_empty()
+        {
+            return;
+        }
         // Bounded for the same reason as `poll_woken`: a child that keeps
         // waking itself must not keep the caller from what it came for.
         for _ in 0..PROGRESS_ROUNDS {
@@ -1465,16 +1473,41 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         }
     }
 
+    /// [`poll_send_lb_prefixed`](Self::poll_send_lb_prefixed) for the usual
+    /// case of a peer with room: no future, timer or parking. `None` means the
+    /// message is still in `msg` and the caller has to wait.
+    pub fn try_send_lb_prefixed(
+        &mut self,
+        prefix: &[Bytes],
+        msg: &mut Option<Msg>,
+    ) -> Option<Result<PeerId>> {
+        self.wakeups.enter();
+        self.progress();
+        let sent = self.pick_writable().map(|id| {
+            let result = self.enqueue_slot_to(id, prefix, msg);
+            self.progress();
+            result.map(|()| id)
+        });
+        self.wakeups.exit();
+        sent
+    }
+
     fn pick_writable(&mut self) -> Option<PeerId> {
         let n = self.lb.len();
-        for k in 0..n {
-            let i = (self.lb_cursor + k) % n;
+        let mut i = self.lb_cursor;
+        for _ in 0..n {
+            // A compare rather than `%`: this runs on every send, and a
+            // division costs more than the rest of the pick.
+            if i >= n {
+                i = 0;
+            }
             let id = self.lb[i];
+            i += 1;
             if self
                 .entry(id)
                 .is_some_and(|e| !e.closed && e.state.borrow().writable())
             {
-                self.lb_cursor = (i + 1) % n;
+                self.lb_cursor = i;
                 return Some(id);
             }
         }

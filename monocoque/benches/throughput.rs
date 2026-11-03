@@ -97,7 +97,12 @@ fn run_once(payload: &Msg, mode: Mode) -> Duration {
 fn monocoque_group(c: &mut Criterion, name: &str, mode: Mode) {
     monocoque::dev_tracing::init_tracing();
     let mut group = c.benchmark_group(format!("throughput/monocoque-{BENCH_BACKEND}/{name}"));
-    group.measurement_time(Duration::from_secs(15));
+    // BENCH_SECS shortens a run while iterating; published numbers use the default.
+    let secs = std::env::var("BENCH_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(15);
+    group.measurement_time(Duration::from_secs(secs));
     group.sample_size(10);
 
     for &size in MESSAGE_SIZES {

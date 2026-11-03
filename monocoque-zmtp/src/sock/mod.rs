@@ -355,6 +355,9 @@ impl<K: Kind> Socket<K> {
         prefix: &[Bytes],
         slot: &mut Option<Msg>,
     ) -> Result<PeerId> {
+        if let Some(sent) = self.core.borrow_mut().try_send_lb_prefixed(prefix, slot) {
+            return sent;
+        }
         let timeout = self.send_timeout();
         with_timeout(
             op(&self.core, move |c, cx| {

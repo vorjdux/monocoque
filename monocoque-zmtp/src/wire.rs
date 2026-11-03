@@ -497,6 +497,20 @@ impl Codec for ZmtpCodec {
     }
 
     fn encode(&mut self, msg: &Msg, out: &mut OutQueue) -> Result<()> {
+        // The usual message: one plain frame small enough to copy, with no
+        // frame iterator and one capacity check.
+        if !self.unusual_encode
+            && self.cipher.is_none()
+            && msg.len() == 1
+            && let Some(body) = msg.first()
+            && body.len() < self.vectored_threshold
+        {
+            let buf = out.buf();
+            buf.reserve(9 + body.len());
+            put_header(buf, 0, body.len());
+            buf.extend_from_slice(body);
+            return Ok(());
+        }
         self.encode_prefixed(&[], msg, out)
     }
 

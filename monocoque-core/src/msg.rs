@@ -331,7 +331,11 @@ impl From<&'static str> for Msg {
 }
 
 impl From<Vec<u8>> for Msg {
+    /// A small frame moves inline, so sending and cloning it touch no refcount.
     fn from(frame: Vec<u8>) -> Self {
+        if frame.len() <= INLINE_CAP {
+            return Self::copy_from_slice(&frame);
+        }
         Self::from(Bytes::from(frame))
     }
 }
