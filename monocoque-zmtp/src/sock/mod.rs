@@ -274,6 +274,11 @@ impl<K: Kind> Socket<K> {
 
     /// Next message from any peer, fair-queued, honoring `recv_timeout`.
     pub(crate) async fn next_into_slot(&mut self) -> Result<PeerId> {
+        let ready = self.core.borrow_mut().try_recv_ready_into(&mut self.slot);
+        if let Some(peer) = ready {
+            self.note_peer(peer);
+            return Ok(peer);
+        }
         let timeout = self.recv_timeout();
         let slot = &mut self.slot;
         let peer = with_timeout(

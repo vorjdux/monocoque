@@ -1220,9 +1220,10 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         if let Some(m) = self.inbox.pop_front() {
             return Some(m);
         }
-        while let Some(id) = self.fair.pop_front() {
+        while let Some(&id) = self.fair.front() {
             let i = id.index as usize;
             let Some(entry) = self.peers.get_mut(i).and_then(Option::as_mut) else {
+                self.fair.pop_front();
                 continue;
             };
             let (msg, more) = {
@@ -1231,8 +1232,13 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
                 (msg, !st.ready.is_empty())
             };
             if more {
-                self.fair.push_back(id);
+                // A lone peer stays where it is: this runs on every receive.
+                if self.fair.len() > 1 {
+                    self.fair.pop_front();
+                    self.fair.push_back(id);
+                }
             } else {
+                self.fair.pop_front();
                 entry.in_fair = false;
                 if entry.closed {
                     self.free_peer(id);
@@ -1245,6 +1251,18 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             }
         }
         None
+    }
+
+    /// Move a message already queued into `slot`: no future, timer or parking.
+    /// `None` means nothing is queued and the caller has to wait.
+    pub fn try_recv_ready_into(&mut self, slot: &mut Msg) -> Option<PeerId> {
+        self.wakeups.enter();
+        let taken = self.take_ready().map(|(id, msg)| {
+            *slot = msg;
+            id
+        });
+        self.wakeups.exit();
+        taken
     }
 
     /// Poll for the next message from any peer.

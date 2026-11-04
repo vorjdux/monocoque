@@ -224,7 +224,10 @@ macro_rules! impl_shared_io {
                         let mut dst: &mut [std::mem::MaybeUninit<u8>] = &mut *spare;
                         match inner.try_read_buf(&mut dst) {
                             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                                inner.readable().await?;
+                                // One reader at a time, so the single waker
+                                // slot will do: no lock or waiter list, unlike
+                                // `readable()`.
+                                poll_fn(|cx| inner.poll_read_ready(cx)).await?;
                             }
                             Ok(n) if n > 0 && n < len => {
                                 // A short read drained the socket. Clear the
@@ -251,7 +254,7 @@ macro_rules! impl_shared_io {
                 let result = loop {
                     match self.inner.try_write(buf.as_init()) {
                         Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                            if let Err(e) = self.inner.writable().await {
+                            if let Err(e) = poll_fn(|cx| self.inner.poll_write_ready(cx)).await {
                                 break Err(e);
                             }
                         }
@@ -268,7 +271,7 @@ macro_rules! impl_shared_io {
                     });
                     match attempt {
                         Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                            if let Err(e) = self.inner.writable().await {
+                            if let Err(e) = poll_fn(|cx| self.inner.poll_write_ready(cx)).await {
                                 break Err(e);
                             }
                         }
