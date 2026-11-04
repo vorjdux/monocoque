@@ -425,6 +425,7 @@ pub struct SocketCore<P: Protocol, H: Hooks> {
     inbox: VecDeque<(PeerId, Msg)>,
     lb: Vec<PeerId>,
     lb_cursor: usize,
+    spin: crate::spin::YieldSpin,
     listeners: Vec<Option<Bound>>,
     connectors: Vec<Option<Connector>>,
     greeting: Vec<Msg>,
@@ -461,6 +462,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             inbox: VecDeque::new(),
             lb: Vec::new(),
             lb_cursor: 0,
+            spin: crate::spin::YieldSpin::default(),
             listeners: Vec::new(),
             connectors: Vec::new(),
             greeting: Vec::new(),
@@ -1299,8 +1301,12 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         loop {
             self.progress();
             if let Some((id, msg)) = self.take_ready() {
+                self.spin.found();
                 *slot = msg;
                 return Poll::Ready(id);
+            }
+            if self.spin.instead_of_park(cx) {
+                return Poll::Pending;
             }
             if self.park(cx) {
                 return Poll::Pending;
@@ -1337,6 +1343,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             };
             if let Some(msg) = msg {
                 if let Some(msg) = self.hooks.on_inbound(id, msg) {
+                    self.spin.found();
                     *slot = msg;
                     return Poll::Ready(true);
                 }
@@ -1349,6 +1356,9 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
                     self.free_peer(id);
                 }
                 return Poll::Ready(false);
+            }
+            if self.spin.instead_of_park(cx) {
+                return Poll::Pending;
             }
             if self.park(cx) {
                 return Poll::Pending;
@@ -1501,11 +1511,20 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
     ) -> Option<Result<PeerId>> {
         self.wakeups.enter();
         self.progress();
-        let sent = self.pick_writable().map(|id| {
-            let result = self.enqueue_slot_to(id, prefix, msg);
+        let sent = if let [id] = self.lb[..] {
+            // One peer: one lookup and one borrow for the whole send.
+            self.entry(id).filter(|e| !e.closed).and_then(|e| {
+                let mut st = e.state.borrow_mut();
+                st.writable()
+                    .then(|| st.enqueue_slot(prefix, msg).map(|()| id))
+            })
+        } else {
+            self.pick_writable()
+                .map(|id| self.enqueue_slot_to(id, prefix, msg).map(|()| id))
+        };
+        if sent.is_some() {
             self.progress();
-            result.map(|()| id)
-        });
+        }
         self.wakeups.exit();
         sent
     }

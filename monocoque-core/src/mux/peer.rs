@@ -347,6 +347,7 @@ impl<C: Codec> PeerState<C> {
 
     /// Queue the message in `slot`, leaving it empty. A wire peer encodes it
     /// where it is: a `Msg` is large, and moving it here costs a real copy.
+    #[inline]
     pub(crate) fn enqueue_slot(
         &mut self,
         prefix: &[Bytes],

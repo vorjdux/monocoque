@@ -22,6 +22,7 @@ pub mod mux;
 pub mod options;
 pub mod reconnect;
 pub mod rt;
+pub mod spin;
 pub mod subscription;
 pub mod tcp;
 pub mod timeout;

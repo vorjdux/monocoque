@@ -588,6 +588,10 @@ with or ahead of tokio, and over TCP from 11.1 µs to 10.5 µs.
 - `MONOCOQUE_SPIN_US` sets the budget in microseconds; `0` turns it off.
 - Code that runs on `#[compio::main]` or its own compio runtime instead of
   `LocalRuntime` does not spin.
+- On tokio and smol a receive about to sleep yields to the runtime instead for
+  the same budget, under the same rules. Other tasks on that runtime keep
+  running meanwhile, and a fast sender no longer pays to wake the receiver
+  inside every `send`.
 
 ---
 

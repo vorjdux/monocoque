@@ -229,8 +229,11 @@ macro_rules! impl_shared_io {
                                 // `readable()`.
                                 poll_fn(|cx| inner.poll_read_ready(cx)).await?;
                             }
-                            Ok(n) if n > 0 && n < len => {
-                                // A short read drained the socket. Clear the
+                            Ok(n) if n > 0 && n < len && n < 4096 => {
+                                // A small short read drained the socket: a
+                                // larger one is a stream, whose next bytes may
+                                // already be here, and sleeping on `epoll` for
+                                // them costs more than a read. Clear the
                                 // cached readiness (a closure that reports
                                 // WouldBlock does exactly that, with no
                                 // syscall) so the next read waits for an

@@ -68,7 +68,13 @@ const MEAS: usize = 50_000;
 /// frames are split off the read buffer, which is replaced once it fills while
 /// still referenced (measured: one per 12 messages of 1 KiB); everything else
 /// measures at or near zero.
+#[cfg(not(feature = "runtime-smol"))]
 const CEILING: usize = MEAS / 10;
+/// smol's executor also allocates a queue block every 31 tasks it schedules,
+/// which a receive yielding before it sleeps adds to: about 0.03 per message
+/// in PAIR 1 KiB, from dhat, none of it in this crate.
+#[cfg(feature = "runtime-smol")]
+const CEILING: usize = MEAS / 10 + MEAS / 20;
 
 /// compio's driver heap-allocates every submitted operation (its `ThinCell`
 /// op record), about 1.5 allocations per read or write. That is driver cost

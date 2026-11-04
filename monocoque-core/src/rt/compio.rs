@@ -2,6 +2,7 @@
 //!
 //! See [`super`](crate::rt) for the facade contract this implements.
 
+use crate::spin::{SpinBackoff, spin_budget};
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -126,7 +127,7 @@ impl LocalRuntime {
             let waker = Waker::from(Arc::clone(&flag));
             let mut cx = Context::from_waker(&waker);
             let mut fut = std::pin::pin!(fut);
-            let mut backoff = SpinBackoff { misses: 0, skip: 0 };
+            let mut backoff = SpinBackoff::default();
             loop {
                 if flag.woken.swap(false, Ordering::Acquire)
                     && let Poll::Ready(out) = fut.as_mut().poll(&mut cx)
@@ -163,69 +164,6 @@ impl LocalRuntime {
                 }
             }
         })
-    }
-}
-
-/// Default for how long [`LocalRuntime::block_on`] polls for completions
-/// before it sleeps. On a Unix socket REQ/REP round trip (64 B, two cores)
-/// 5 µs and 20 µs measured alike, 7.0 µs against 10.0 without spinning;
-/// 20 µs leaves room for a slower peer.
-const DEFAULT_SPIN: Duration = Duration::from_micros(20);
-
-/// The spin budget: `MONOCOQUE_SPIN_US` if set (0 disables), otherwise
-/// [`DEFAULT_SPIN`], or none when this thread may run on one CPU only, where
-/// spinning only delays the peer it waits for.
-fn spin_budget() -> Duration {
-    if let Some(us) = std::env::var("MONOCOQUE_SPIN_US")
-        .ok()
-        .and_then(|v| v.parse().ok())
-    {
-        return Duration::from_micros(us);
-    }
-    if single_cpu() {
-        Duration::ZERO
-    } else {
-        DEFAULT_SPIN
-    }
-}
-
-/// `true` when this thread has one CPU to run on. On Linux the count honours
-/// the affinity mask and the cgroup CPU quota.
-fn single_cpu() -> bool {
-    std::thread::available_parallelism().map_or(true, |n| n.get() <= 1)
-}
-
-/// Stops spinning while it keeps finding nothing (an idle socket, or a peer
-/// starved of CPU), and tries again after a while.
-struct SpinBackoff {
-    misses: u32,
-    skip: u32,
-}
-
-impl SpinBackoff {
-    /// Spins that find nothing, in a row, before spinning pauses.
-    const MAX_MISSES: u32 = 8;
-    /// Sleeps without spinning before trying again.
-    const PAUSE: u32 = 64;
-
-    fn should_spin(&mut self) -> bool {
-        if self.skip > 0 {
-            self.skip -= 1;
-            return false;
-        }
-        true
-    }
-
-    fn hit(&mut self) {
-        self.misses = 0;
-    }
-
-    fn miss(&mut self) {
-        self.misses += 1;
-        if self.misses >= Self::MAX_MISSES {
-            self.misses = 0;
-            self.skip = Self::PAUSE;
-        }
     }
 }
 
