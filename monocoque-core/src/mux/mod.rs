@@ -1298,6 +1298,10 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             *slot = msg;
             return Poll::Ready(id);
         }
+        // This receive releases the last message. Dropping it before the reader
+        // runs lets the read buffer it points into be reused in place, warm and
+        // without an allocation, rather than replaced.
+        slot.clear();
         loop {
             self.progress();
             if let Some((id, msg)) = self.take_ready() {
