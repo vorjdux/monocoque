@@ -18,6 +18,13 @@ use std::collections::VecDeque;
 /// Most segments handed to one vectored write.
 pub const MAX_IOV: usize = 64;
 
+/// A vectored job stops taking segments once it holds this many bytes.
+///
+/// A write the socket buffer cannot take whole leaves the writer asleep until much of
+/// the buffer is free and the reader asleep once it has drained the rest, so
+/// large frames go faster written a few at a time.
+pub const MAX_VECTORED_JOB: usize = 32 * 1024;
+
 /// Bytes waiting to be written to one peer.
 #[derive(Default)]
 pub struct OutQueue {
@@ -97,8 +104,14 @@ impl OutQueue {
             self.segs.push_back(self.tail.split().freeze());
         }
         iov.clear();
-        let n = self.segs.len().min(MAX_IOV);
-        iov.extend(self.segs.drain(..n));
+        let mut bytes = 0;
+        while iov.len() < MAX_IOV
+            && bytes < MAX_VECTORED_JOB
+            && let Some(seg) = self.segs.pop_front()
+        {
+            bytes += seg.len();
+            iov.push(seg);
+        }
         // A job cut at MAX_IOV leaves segments of queued messages behind.
         // Those messages stay counted as queued until the job that takes their
         // last segment, so the HWM and `drained` never see them as written.
