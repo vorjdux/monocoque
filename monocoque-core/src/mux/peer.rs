@@ -37,6 +37,9 @@ pub const WRITE_PROGRESS_FLOOR: u64 = 16 * 1024;
 /// would cost page faults.
 const MAX_READ_TARGET: usize = 64 * 1024;
 
+/// Below this, a read that did not fill the buffer means the socket is drained.
+const SMALL_READ: usize = 4096;
+
 /// Smallest spare capacity a read is issued with.
 const MIN_READ: usize = 512;
 
@@ -642,7 +645,10 @@ pub async fn reader_loop<C: Codec>(
                 return;
             }
             Ok(n) => {
-                short_read = n < spare;
+                // A small read that fell short is a request-reply exchange,
+                // with nothing more coming until this side answers. A larger
+                // one is a stream, whose next bytes may already be here.
+                short_read = n < spare && n < SMALL_READ;
                 target = next_read_target(target, read_size, spare, n);
             }
         }

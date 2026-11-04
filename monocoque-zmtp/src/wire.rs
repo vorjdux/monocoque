@@ -38,7 +38,21 @@ pub const MAX_MESSAGE_BYTES: usize = 256 * 1024 * 1024;
 const DEFAULT_MAX_FRAME: usize = 64 * 1024 * 1024;
 /// A frame at least this long that does not fit the read buffer is read into
 /// a buffer of its own; see `ZmtpCodec::await_frame`.
+///
+/// On io_uring a read is a submission and a completion, so one that brings in
+/// several frames is worth more than a buffer per frame: 16 KiB frames gained
+/// over 20%. On the readiness backends the same change lost about as much.
+#[cfg(feature = "runtime-compio")]
+const LONG_FRAME: usize = 64 * 1024;
+#[cfg(not(feature = "runtime-compio"))]
 const LONG_FRAME: usize = 8 * 1024;
+/// A shorter frame that does not fit gets room for several like it, so one
+/// read brings in many. Under the allocator's mmap threshold (128 KiB in glibc).
+#[cfg(feature = "runtime-compio")]
+const FRAMES_PER_READ: usize = 4;
+#[cfg(not(feature = "runtime-compio"))]
+const FRAMES_PER_READ: usize = 1;
+const MAX_FRAMES_READ: usize = 96 * 1024;
 
 const PING: &[u8] = b"\x04PING";
 const PONG: &[u8] = b"\x04PONG";
@@ -143,6 +157,9 @@ impl ZmtpCodec {
             frame.extend_from_slice(buf);
             buf.clear();
             self.parked = Some(std::mem::replace(buf, frame));
+        } else if total > buf.capacity() {
+            let room = (total * FRAMES_PER_READ).min(MAX_FRAMES_READ).max(total);
+            buf.reserve(room - buf.len());
         } else {
             buf.reserve(total - buf.len());
         }
