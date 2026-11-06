@@ -30,6 +30,8 @@ env:
 jobs:
   publish:
     name: Verify version and publish
+    env:
+      RUSTUP_TOOLCHAIN: stable
     runs-on: ubuntu-latest
     permissions:
       contents: read

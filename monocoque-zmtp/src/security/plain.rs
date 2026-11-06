@@ -35,9 +35,9 @@
 //! WELCOME (if 200) or ERROR (if not 200)
 //! ```
 
-use crate::codec::ZmtpError;
+use crate::error::ZmtpError;
 use crate::security::protocol::reject_immediately_available_trailing_bytes;
-use crate::security::zap::{ZapMechanism, ZapRequest, ZapStatus};
+use crate::security::zap::{ZapMechanism, ZapRequest, ZapResponse, ZapStatus};
 use bytes::{Bytes, BytesMut};
 use compio_io::{AsyncRead, AsyncWrite};
 use std::fmt;
@@ -104,7 +104,7 @@ where
     use compio_buf::BufResult;
     use monocoque_core::timeout::write_all_with_timeout;
     let mut framed = BytesMut::new();
-    crate::base::append_zmtp_cmd_frame(&mut framed, body);
+    crate::security::protocol::append_zmtp_cmd_frame(&mut framed, body);
     let BufResult(result, _) =
         write_all_with_timeout(stream, framed.freeze().to_vec(), timeout).await?;
     result?;
@@ -143,7 +143,10 @@ impl PlainCredentials {
 ///
 /// Implement this to provide custom credential validation.
 /// The default implementation rejects all connections.
-#[async_trait::async_trait(?Send)]
+///
+/// The returned future need not be `Send`: authentication runs on the
+/// socket's own single-threaded runtime.
+#[allow(async_fn_in_trait)]
 pub trait PlainAuthHandler {
     /// Validate username and password
     ///
@@ -206,7 +209,6 @@ impl Default for StaticPlainHandler {
     }
 }
 
-#[async_trait::async_trait(?Send)]
 impl PlainAuthHandler for StaticPlainHandler {
     async fn authenticate(
         &self,
@@ -269,25 +271,21 @@ where
 
     // Username (length-prefixed)
     let username_bytes = credentials.username.as_bytes();
-    if username_bytes.len() > 255 {
-        return Err(ZmtpError::Protocol);
-    }
-    hello.extend_from_slice(&[username_bytes.len() as u8]);
+    let username_len = u8::try_from(username_bytes.len()).map_err(|_| ZmtpError::Protocol)?;
+    hello.extend_from_slice(&[username_len]);
     hello.extend_from_slice(username_bytes);
 
     // Password (length-prefixed)
     let password_bytes = credentials.password.as_bytes();
-    if password_bytes.len() > 255 {
-        return Err(ZmtpError::Protocol);
-    }
-    hello.extend_from_slice(&[password_bytes.len() as u8]);
+    let password_len = u8::try_from(password_bytes.len()).map_err(|_| ZmtpError::Protocol)?;
+    hello.extend_from_slice(&[password_len]);
     hello.extend_from_slice(password_bytes);
 
     // Send HELLO wrapped in a ZMTP command frame ([0x04][len][body]) so a real
     // libzmq peer can parse it. (Previously the raw command body was written
     // with no frame header, which only interoperated with monocoque itself.)
     let mut framed = BytesMut::new();
-    crate::base::append_zmtp_cmd_frame(&mut framed, &hello);
+    crate::security::protocol::append_zmtp_cmd_frame(&mut framed, &hello);
     let buf_result = write_all_with_timeout(stream, framed.freeze().to_vec(), timeout).await?;
     let BufResult(result, _) = buf_result;
     result?;
@@ -369,6 +367,22 @@ pub async fn plain_server_handshake_zap<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    plain_server_handshake_zap_response(stream, domain, peer_address, timeout)
+        .await
+        .map(|r| r.user_id)
+}
+
+/// [`plain_server_handshake_zap`], returning the whole successful ZAP reply
+/// so its user id and metadata can become connection metadata.
+pub async fn plain_server_handshake_zap_response<S>(
+    stream: &mut S,
+    domain: &str,
+    peer_address: &str,
+    timeout: Option<Duration>,
+) -> Result<ZapResponse, ZmtpError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     use crate::security::zap_client::ZapClient;
 
     debug!(
@@ -383,7 +397,7 @@ where
     debug!("[PLAIN SERVER ZAP] Received credentials, sending ZAP request");
 
     // Create ZAP client and send authentication request
-    let mut zap_client = ZapClient::new(Duration::from_secs(5)).map_err(|_| {
+    let mut zap_client = ZapClient::new(Duration::from_secs(5)).await.map_err(|_| {
         warn!("[PLAIN SERVER ZAP] Failed to connect to ZAP handler");
         ZmtpError::AuthenticationFailed
     })?;
@@ -404,7 +418,7 @@ where
         );
 
         write_plain_cmd(stream, PLAIN_WELCOME, timeout).await?;
-        Ok(zap_response.user_id)
+        Ok(zap_response)
     } else {
         warn!(
             "[PLAIN SERVER ZAP] Authentication failed: {}",
@@ -442,9 +456,9 @@ mod tests {
     fn plain_hello(username: &[u8], password: &[u8]) -> Vec<u8> {
         let mut hello = Vec::new();
         hello.extend_from_slice(PLAIN_HELLO);
-        hello.push(username.len() as u8);
+        hello.push(u8::try_from(username.len()).unwrap());
         hello.extend_from_slice(username);
-        hello.push(password.len() as u8);
+        hello.push(u8::try_from(password.len()).unwrap());
         hello.extend_from_slice(password);
         hello
     }
@@ -539,7 +553,7 @@ mod tests {
             let body = plain_hello(b"admin", b"secret");
             let mut framed = Vec::new();
             framed.push(0x04);
-            framed.push(body.len() as u8);
+            framed.push(u8::try_from(body.len()).unwrap());
             framed.extend_from_slice(&body);
             framed.extend_from_slice(b"\x05extra");
             let BufResult(write_result, _) =

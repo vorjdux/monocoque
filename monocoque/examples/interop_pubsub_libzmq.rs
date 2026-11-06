@@ -1,4 +1,4 @@
-//! Interoperability test: Monocoque PUB ↔ libzmq SUB
+//! Interoperability test: Monocoque PUB <-> libzmq SUB
 //!
 //! This example demonstrates pub/sub compatibility with libzmq.
 //!
@@ -7,7 +7,6 @@
 //! cargo run --example interop_pubsub_libzmq --features zmq
 //! ```
 
-use bytes::Bytes;
 use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::PubSocket;
 use std::thread;
@@ -15,7 +14,7 @@ use std::time::Duration;
 use tracing::info;
 
 fn main() {
-    info!("=== Monocoque PUB ↔ libzmq SUB Test ===\n");
+    info!("=== Monocoque PUB <-> libzmq SUB Test ===\n");
 
     // Spawn libzmq SUB client in background thread
     let subscriber_handle = thread::spawn(|| {
@@ -36,39 +35,43 @@ fn main() {
 
     // Run Monocoque PUB server
     LocalRuntime::new().unwrap().block_on(async {
-        let mut pub_socket = PubSocket::bind("127.0.0.1:5562")
+        let mut pub_socket = PubSocket::new();
+        pub_socket
+            .bind("tcp://127.0.0.1:5562")
             .await
             .expect("Failed to bind");
         info!("[Monocoque PUB] Listening on tcp://127.0.0.1:5562");
 
-        // Accept subscriber connection
-        pub_socket
-            .accept_subscriber()
-            .await
-            .expect("Failed to accept subscriber");
+        // A PUB drops messages nobody is subscribed to, so publish only once
+        // the subscriber's subscription has arrived.
+        loop {
+            let reached = pub_socket
+                .send("topic.event.0")
+                .await
+                .expect("Failed to publish");
+            if reached > 0 {
+                break;
+            }
+            rt::sleep(Duration::from_millis(10)).await;
+        }
         info!("[Monocoque PUB] Subscriber connected\n");
-
-        // Give subscriber time to send subscription
-        rt::sleep(Duration::from_millis(100)).await;
 
         // Publish messages
         for i in 1..=3 {
             let message = format!("topic.event.{i}");
             pub_socket
-                .send(vec![Bytes::from(message.clone())])
+                .send(message.clone())
                 .await
                 .expect("Failed to publish");
             info!("[Monocoque PUB] Published: {:?}", message);
-            rt::sleep(Duration::from_millis(10)).await;
         }
 
         // Give subscriber time to receive
         rt::sleep(Duration::from_millis(100)).await;
-
-        drop(pub_socket);
+        pub_socket.close().await.expect("Failed to close");
     });
 
     subscriber_handle.join().unwrap();
 
-    info!("\n✅ PUB/SUB interop test completed successfully!");
+    info!("\nPUB/SUB interop test completed successfully!");
 }

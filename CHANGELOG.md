@@ -5,6 +5,95 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.0.0 - 2026-11-02
+
+The first stable release, and one deliberate break: every socket is rebuilt
+on a single per-socket multiplexer with one message type. `docs/MIGRATION.md`
+lists every source change from 0.4; `docs/rfc-compliance.md` describes
+protocol behaviour RFC by RFC and where libzmq departs from the text.
+
+### Breaking
+
+- `Msg` replaces `Vec<Bytes>` everywhere. `recv()` returns a borrowed
+  `MsgRef`; `recv_owned()` keeps the message. `recv_into`, `try_recv_into`,
+  `send_one`, `send_buffered`, `recv_batch`, `PushFanOut`, `PullFanIn`, the
+  `small()`/`large()` presets and the write-buffer-size options are gone.
+- Every socket binds and connects endpoints (`tcp://`, `ipc://`, `inproc://`)
+  and serves any number of peers. Every public method returns
+  `Result<_, MonocoqueError>`; a receive timeout is an error, not `Ok(None)`.
+- `ZapHandler` and `PlainAuthHandler` use native `async fn` and cannot be used
+  as `dyn` trait objects; `async-trait` is no longer a dependency.
+- CURVE now implements RFC 26 and interoperates with libzmq; it does not talk
+  to the 0.4 CURVE implementation.
+- inproc is bounded by the HWM and works across threads. `vectored_write_threshold`
+  defaults to 16 KiB.
+- `monocoque_core::io::READ_SLAB_SIZE` is `MAX_READ_SIZE`, and
+  `io::take_read_buffer` is removed.
+
+### Added
+
+- `zmq_poll` (`monocoque::zmq::poll`) and per-message connection metadata
+  (`gets`), including custom handshake properties, over NULL, PLAIN and CURVE.
+- ZMTP 1.0 and 2.0 legacy peers; secured sockets refuse to downgrade.
+- Conflate, and CLIENT/SERVER, RADIO/DISH, SCATTER/GATHER and CHANNEL behind
+  the `draft` feature.
+- `xpub_manual`, `xpub_welcome_msg`, `connect_routing_id` and
+  `max_reconnect_attempts` take effect.
+- STREAM messages and notifications carry `Peer-Address`.
+- Failed authentications slow the offending address down (per-IP backoff).
+
+### Fixed
+
+- Coalesced large messages could be lost on `close()` and bypass the HWM.
+- Lost wakeups between sockets on different threads; a cross-thread inproc
+  `flush()` could wait forever.
+- A STREAM peer's last data before it closed could be dropped on tokio and smol.
+- A smol receiver with an unbounded HWM was starved by streaming peers.
+- compio runtime creation retries with smaller rings on `ENOMEM`.
+- An eager send stops waiting on a peer that took under 16 KiB during a
+  `write_stall` window (50 ms by default, `with_write_stall` to change or
+  disable), so one peer that stopped reading cannot block sends to the others.
+  A slow peer that keeps reading is waited for. The monitor reports
+  `SocketEvent::PeerStalled`.
+- A PING flood from a peer that never reads cannot grow its PONG queue past
+  64 KB. A manual-mode XPUB holds at most its receive HWM of subscriptions for
+  `recv`; past the HWM a default XPUB cancels opposite reports for a prefix and
+  drops repeats and data frames, so a subscriber toggling a topic cannot grow
+  its inbox.
+- A cancelled REQ send leaves the request outstanding; a REP reply that times
+  out or is cancelled stays owed and can be retried.
+- Reconnect backoff resets only after a peer came up, and a failed handshake
+  counts toward `max_reconnect_attempts` like a refused connect.
+
+### Security
+
+- tokio is at 1.54.1, past RUSTSEC-2026-0386 (unsound `AsyncFd`
+  constructors). monocoque never called them; the lockfile pinned the
+  affected version through its dev dependencies.
+
+### Performance
+
+- compio's `LocalRuntime` polls for completions for up to 20 us before
+  sleeping (`MONOCOQUE_SPIN_US`), which closes its IPC latency gap to tokio.
+- Small writes go out directly on io_uring; timers are armed only when an
+  operation waits; long frames are read into a buffer of their own (one
+  allocation instead of three); CURVE encrypts in place; a single-frame
+  message is encoded without walking its frames twice; a wakeup no longer
+  clones the thread's `Arc` to check which thread it is on.
+- A borrowed receive of a queued message executes no atomic instruction on
+  any backend, measured under callgrind.
+
+### Testing and tooling
+
+- New gates: allocations per message on every socket type, instruction counts
+  for CURVE, fragmented frames and envelopes, type sizes and estimated cycles,
+  and atomics per message (`scripts/count_atomics.sh`).
+- CURVE interop against libzmq in both roles (`interop_tests/`), loom models
+  of the cross-thread wakeup protocols, a fuzz target for CURVE MESSAGE
+  decryption, and Miri over the owned-buffer unsafe in CI.
+- `flume`, `compio-io` and `compio-buf` are no longer dependencies of
+  `monocoque-rs`.
+
 ## 0.4.2 - 2026-09-22
 
 A maintenance release. No API, wire-format or behaviour change: the library code

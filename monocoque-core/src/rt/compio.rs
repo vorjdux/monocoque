@@ -2,7 +2,12 @@
 //!
 //! See [`super`](crate::rt) for the facade contract this implements.
 
+use crate::spin::{SpinBackoff, spin_budget};
 use std::future::Future;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::{Context, Poll, Wake, Waker};
+use std::time::{Duration, Instant};
 
 pub use compio::net::{TcpListener, TcpStream, ToSocketAddrsAsync as ToSocketAddrs};
 pub use compio::time::{sleep, timeout};
@@ -76,22 +81,106 @@ pub async fn join<T>(handle: JoinHandle<T>) -> T {
 
 /// A self-contained runtime owned by a single thread.
 ///
-/// Used by worker threads that drive their own event loop independently of
-/// the caller's runtime (for example the publisher's fan-out workers).
+/// For a thread that drives its own event loop, such as a test or a helper
+/// thread that runs a socket outside the caller's runtime.
 pub struct LocalRuntime {
     inner: compio::runtime::Runtime,
 }
 
 impl LocalRuntime {
     /// Build a new single-threaded runtime.
+    ///
+    /// A ring needs physically contiguous kernel memory, so with many rings
+    /// alive and memory fragmented `io_uring_setup` can fail with `ENOMEM`.
+    /// Rather than fail, this retries with smaller rings: a socket keeps only
+    /// a few operations in flight per peer, and ring size does not change the
+    /// cost of an operation.
     pub fn new() -> std::io::Result<Self> {
-        Ok(Self {
-            inner: compio::runtime::Runtime::new()?,
-        })
+        let mut result = compio::runtime::Runtime::new();
+        for entries in [256, 64] {
+            match &result {
+                Err(e) if e.kind() == std::io::ErrorKind::OutOfMemory => {
+                    let mut proactor = compio::driver::ProactorBuilder::new();
+                    proactor.capacity(entries);
+                    result = compio::runtime::RuntimeBuilder::new()
+                        .with_proactor(proactor)
+                        .build();
+                }
+                _ => break,
+            }
+        }
+        Ok(Self { inner: result? })
     }
 
     /// Run a future to completion on this runtime, blocking the thread.
     pub fn block_on<F: Future>(&self, fut: F) -> F::Output {
-        self.inner.block_on(fut)
+        let spin = spin_budget();
+        if spin.is_zero() {
+            return self.inner.block_on(fut);
+        }
+        let rt = &self.inner;
+        rt.enter(|| {
+            let flag = Arc::new(WokenFlag {
+                woken: AtomicBool::new(true),
+                driver: rt.waker(),
+            });
+            let waker = Waker::from(Arc::clone(&flag));
+            let mut cx = Context::from_waker(&waker);
+            let mut fut = std::pin::pin!(fut);
+            let mut backoff = SpinBackoff::default();
+            loop {
+                if flag.woken.swap(false, Ordering::Acquire)
+                    && let Poll::Ready(out) = fut.as_mut().poll(&mut cx)
+                {
+                    rt.run();
+                    return out;
+                }
+                if rt.run() {
+                    rt.poll_with(Some(Duration::ZERO));
+                    continue;
+                }
+                if !backoff.should_spin() {
+                    rt.poll();
+                    continue;
+                }
+                // Nothing runnable. Reap completions without entering the
+                // kernel's wait for a while: sleeping in io_uring_enter and
+                // being woken costs more than a round trip on a local socket.
+                // Yielding lets a peer that shares this core run meanwhile.
+                let deadline = Instant::now() + spin;
+                loop {
+                    rt.poll_with(Some(Duration::ZERO));
+                    let more = rt.run();
+                    if more || flag.woken.load(Ordering::Acquire) {
+                        backoff.hit();
+                        break;
+                    }
+                    if Instant::now() >= deadline {
+                        backoff.miss();
+                        rt.poll();
+                        break;
+                    }
+                    std::thread::yield_now();
+                }
+            }
+        })
+    }
+}
+
+/// The waker of the future `block_on` drives: records that it needs polling,
+/// then wakes the driver in case the thread is asleep in it.
+struct WokenFlag {
+    woken: AtomicBool,
+    driver: Waker,
+}
+
+impl Wake for WokenFlag {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.woken.store(true, Ordering::Release);
+        self.driver.wake_by_ref();
     }
 }

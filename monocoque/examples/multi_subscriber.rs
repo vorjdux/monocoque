@@ -1,19 +1,22 @@
-/// Multi-subscriber PUB/SUB example demonstrating:
-/// - Multiple SUB sockets connecting to a single PUB socket
-/// - Topic-based filtering per subscriber
-/// - High-performance broadcast with minimal overhead
-use bytes::Bytes;
+//! Multi-subscriber PUB/SUB example demonstrating:
+//! - Multiple SUB sockets connecting to a single PUB socket
+//! - Topic-based filtering per subscriber
+//! - High-performance broadcast with minimal overhead
+//!
+//! Run with: `cargo run --example multi_subscriber --features zmq`
+
 use monocoque::rt::{self, LocalRuntime};
-use monocoque::zmq::prelude::*;
+use monocoque::zmq::prelude::{Bytes, MonocoqueError, Msg, PubSocket, SocketOptions, SubSocket};
 use std::time::Duration;
 use tracing::{error, info};
 use tracing_subscriber::FmtSubscriber;
+
+const SUBSCRIBERS: usize = 3;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     LocalRuntime::new()?.block_on(async_main())
 }
 
-#[allow(clippy::future_not_send)]
 async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     // Set up logging
     let subscriber = FmtSubscriber::builder()
@@ -24,49 +27,40 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     info!("=== Multi-Subscriber PUB/SUB Test ===");
 
     // Create publisher on random port
-    let mut pub_socket = PubSocket::bind("127.0.0.1:0").await?;
-    let actual_port = pub_socket.local_addr()?.port();
-    info!("Publisher bound to port {}", actual_port);
+    let mut pub_socket = PubSocket::new();
+    let endpoint = pub_socket.bind("tcp://127.0.0.1:0").await?;
+    info!("Publisher bound to {}", endpoint);
 
     // Spawn 3 subscribers with different topic subscriptions
-    let port1 = actual_port;
-    let sub1_handle = rt::spawn(async move {
-        if let Err(e) = run_subscriber(port1, "weather", 1).await {
-            error!("Subscriber 1 failed: {}", e);
-        }
-    });
-
-    let port2 = actual_port;
-    let sub2_handle = rt::spawn(async move {
-        if let Err(e) = run_subscriber(port2, "news", 2).await {
-            error!("Subscriber 2 failed: {}", e);
-        }
-    });
-
-    let port3 = actual_port;
-    let sub3_handle = rt::spawn(async move {
-        if let Err(e) = run_subscriber(port3, "", 3).await {
-            error!("Subscriber 3 (all topics) failed: {}", e);
-        }
-    });
-
-    // Wait for subscribers to connect
-    info!("[PUB] Waiting for subscribers to connect...");
-    for i in 1..=3 {
-        let id = pub_socket.accept_subscriber().await?;
-        info!("[PUB] Subscriber {} connected (id={})", i, id);
+    let mut handles = Vec::new();
+    for (id, topic) in [(1, "weather"), (2, "news"), (3, "")] {
+        let endpoint = endpoint.clone();
+        handles.push(rt::spawn(async move {
+            if let Err(e) = run_subscriber(&endpoint, topic, id).await {
+                error!("Subscriber {} failed: {}", id, e);
+            }
+        }));
     }
 
-    // Give subscribers time to send subscriptions
-    std::thread::sleep(Duration::from_millis(100));
+    // Wait until every subscriber is connected and its subscription has
+    // arrived; a PUB drops whatever nobody is subscribed to yet.
+    info!("[PUB] Waiting for subscribers to connect...");
+    loop {
+        let ids = pub_socket.peer_ids();
+        if ids.len() == SUBSCRIBERS && ids.iter().all(|&id| pub_socket.subscriber_prefixes(id) > 0)
+        {
+            break;
+        }
+        rt::sleep(Duration::from_millis(10)).await;
+    }
 
     info!(
         "[PUB] Broadcasting to {} subscribers",
-        pub_socket.subscriber_count()
+        pub_socket.peer_count()
     );
 
     // Publish messages on different topics
-    let topics = vec![
+    let topics = [
         ("weather.temp", "22C in New York"),
         ("weather.wind", "15 km/h from NE"),
         ("news.tech", "Rust 1.75 released!"),
@@ -77,70 +71,59 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     ];
 
     for (topic, msg) in topics {
-        info!("[PUB] Publishing: {} -> {}", topic, msg);
-
         // Send as multipart: [topic, message]
-        pub_socket
-            .send(vec![
-                Bytes::from(topic.as_bytes()),
-                Bytes::from(msg.as_bytes()),
-            ])
+        let reached = pub_socket
+            .send(Msg::from([
+                Bytes::from_static(topic.as_bytes()),
+                Bytes::from_static(msg.as_bytes()),
+            ]))
             .await?;
-
-        std::thread::sleep(Duration::from_millis(100));
+        info!(
+            "[PUB] Published: {} -> {} ({} subscribers)",
+            topic, msg, reached
+        );
     }
 
     info!("[PUB] Publisher finished");
-
-    // Give subscribers time to receive all messages
-    std::thread::sleep(Duration::from_secs(1));
+    pub_socket.flush().await?;
 
     // Wait for all subscribers to complete
-    let _ = futures::join!(
-        rt::join(sub1_handle),
-        rt::join(sub2_handle),
-        rt::join(sub3_handle)
-    );
+    for handle in handles {
+        rt::join(handle).await;
+    }
 
     info!("=== Test Complete ===");
     Ok(())
 }
 
-#[allow(clippy::future_not_send)]
-async fn run_subscriber(port: u16, topic: &str, id: u8) -> std::io::Result<()> {
+async fn run_subscriber(endpoint: &str, topic: &str, id: u8) -> monocoque::zmq::Result<()> {
     info!("[SUB{}] Starting subscriber for topic: '{}'", id, topic);
 
-    // Connect to publisher
-    let endpoint = format!("127.0.0.1:{port}");
-    let mut sub_socket = SubSocket::connect(&endpoint).await?;
-    info!("[SUB{}] Connected to {}", id, endpoint);
+    // Stop once the publisher has gone quiet for a second
+    let mut sub_socket =
+        SubSocket::with_options(SocketOptions::default().with_recv_timeout(Duration::from_secs(1)));
+    sub_socket.connect(endpoint).await?;
+    info!("[SUB{}] Connecting to {}", id, endpoint);
 
     // Subscribe to topic
     sub_socket.subscribe(topic.as_bytes()).await?;
     info!("[SUB{}] Subscribed to '{}'", id, topic);
 
-    // Give publisher time to process subscription
-    std::thread::sleep(Duration::from_millis(50));
-
     // Receive messages
     let mut msg_count = 0;
-    let start = std::time::Instant::now();
-
-    while start.elapsed() < Duration::from_secs(3) {
-        match sub_socket.recv().await? {
-            Some(frames) if frames.len() >= 2 => {
-                let topic_frame = String::from_utf8_lossy(&frames[0]);
-                let msg_frame = String::from_utf8_lossy(&frames[1]);
+    loop {
+        match sub_socket.recv().await {
+            Ok(frames) if frames.len() >= 2 => {
+                let topic_frame = String::from_utf8_lossy(frames.get(0).unwrap_or_default());
+                let msg_frame = String::from_utf8_lossy(frames.get(1).unwrap_or_default());
                 info!("[SUB{}] Received: {} -> {}", id, topic_frame, msg_frame);
                 msg_count += 1;
             }
-            Some(_) => {
+            Ok(_) => {
                 info!("[SUB{}] Received incomplete message", id);
             }
-            None => {
-                // No message available, brief sleep
-                std::thread::sleep(Duration::from_millis(50));
-            }
+            Err(MonocoqueError::TimedOut) => break,
+            Err(e) => return Err(e),
         }
     }
 

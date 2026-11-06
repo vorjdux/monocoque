@@ -2,9 +2,12 @@ name: Instruction Counts
 
 # Runs the IO-free hot-path instruction-count bench (benches/instr_hotpath.rs)
 # under callgrind. Deterministic instruction counts catch small CPU regressions
-# that the noisy wall-clock benches cannot. The bench fails the job if any
-# benchmark's instruction count (Ir) rises more than 5% above the baseline
-# persisted in the cached target dir.
+# that the noisy wall-clock benches cannot. The job fails if any benchmark's
+# instruction count (Ir) rises more than 5% above docs/perf/instr-baseline.json,
+# or if a benchmark is on only one side. The baseline is committed, so a cold
+# cache cannot pass by default and small rises cannot add up across pushes. The
+# toolchain is pinned because counts move with it: bump it together with the
+# baseline (scripts/check_instr_baseline.py --update).
 
 on:
   push:
@@ -21,6 +24,8 @@ env:
 jobs:
   instr-hotpath:
     name: Hot-path instruction counts
+    env:
+      RUSTUP_TOOLCHAIN: 1.98.1
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -28,9 +33,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
         with:
-          toolchain: stable
-      # Persists target/ across runs so callgrind has a baseline to compare a PR
-      # against (keyed on the workflow + lockfile).
+          toolchain: 1.98.1
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
       - name: Install valgrind
         run: sudo apt-get update && sudo apt-get install -y valgrind
@@ -51,4 +54,8 @@ jobs:
       # The hot path is runtime-agnostic (codec, buffer, vectored-slice builder),
       # so one backend leg suffices; use the default (compio) plus zmq.
       - name: Run hot-path instruction-count bench
-        run: cargo bench --bench instr_hotpath --features zmq
+        run: |
+          set -euo pipefail
+          cargo bench --bench instr_hotpath --features zmq 2>&1 | tee instr.out
+      - name: Compare with the committed baseline
+        run: python3 scripts/check_instr_baseline.py instr.out

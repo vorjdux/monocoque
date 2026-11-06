@@ -1,7 +1,8 @@
 //! Integration tests for CURVE encryption
 //!
-//! Note: These tests verify that CURVE security options and key pairs work correctly.
-//! Full end-to-end encrypted communication requires complete handshake implementation.
+//! These tests cover CURVE key pairs and security options only. End-to-end
+//! encrypted traffic is covered by the libzmq interop test
+//! `monocoque/tests/interop_curve.rs`.
 
 use monocoque_core::options::SocketOptions;
 use monocoque_zmtp::security::curve::CurveKeyPair;

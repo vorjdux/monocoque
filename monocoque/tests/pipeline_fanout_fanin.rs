@@ -1,19 +1,13 @@
-//! Fan-out and fan-in pipeline tests.
+//! Fan-out and fan-in pipelines on multi-peer PUSH and PULL sockets.
 //!
-//! These cover the two pool topologies that a single-connection PUSH/PULL pair
-//! cannot express on its own:
+//! - Fan-out: one bound PUSH spreads tasks round-robin across N PULL workers.
+//! - Fan-in: one bound PULL merges results from N PUSH workers.
 //!
-//! - Fan-out: one `PushFanOut` ventilator spreads tasks across N PULL workers.
-//! - Fan-in: N PUSH workers feed one `PullFanIn` sink.
-//!
-//! Each socket runs in its own thread with its own runtime, matching the
-//! pattern used by the other multi-peer tests. Addresses are handed back over a
-//! std channel so workers only connect once the bound port is known.
+//! Every socket runs on its own thread with its own runtime, so peers are truly
+//! concurrent. Nothing may be lost or duplicated.
 
-use bytes::Bytes;
-use monocoque::SocketOptions;
-use monocoque::rt::TcpListener;
-use monocoque::zmq::{PullFanIn, PullSocket, PushFanOut, PushSocket};
+use monocoque::rt::LocalRuntime;
+use monocoque::zmq::{Msg, PullSocket, PushSocket, SocketOptions};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -22,203 +16,124 @@ const WORKERS: usize = 4;
 const PER_WORKER: usize = 50;
 const TOTAL: usize = WORKERS * PER_WORKER;
 
-/// One ventilator hands `TOTAL` tasks to `WORKERS` PULL workers. Round-robin
-/// delivery means each worker should end up with exactly `PER_WORKER` of them,
-/// and together they should see every task with none lost or duplicated.
+fn opts() -> SocketOptions {
+    SocketOptions::default().with_recv_timeout(Duration::from_secs(10))
+}
+
 #[test]
 fn test_fanout_round_robin_reaches_every_worker() {
-    let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
+    let (ep_tx, ep_rx) = mpsc::channel::<String>();
+    let (go_tx, go_rx) = mpsc::channel::<()>();
 
-    // Ventilator: bind, announce the port, accept the pool, then send.
     let ventilator = thread::spawn(move || {
-        monocoque::rt::LocalRuntime::new()
-            .unwrap()
-            .block_on(async move {
-                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-                addr_tx.send(listener.local_addr().unwrap()).unwrap();
-
-                let mut vent =
-                    PushFanOut::accept_workers(&listener, WORKERS, SocketOptions::default())
-                        .await
-                        .unwrap();
-
-                for i in 0..TOTAL {
-                    vent.send(vec![Bytes::from(format!("task-{i}"))])
-                        .await
-                        .unwrap();
-                }
-                vent.flush().await.unwrap();
-            });
+        LocalRuntime::new().unwrap().block_on(async move {
+            let mut push = PushSocket::new();
+            ep_tx
+                .send(push.bind("tcp://127.0.0.1:0").await.unwrap())
+                .unwrap();
+            // Wait for the whole pool so round-robin covers every worker.
+            go_rx.recv().unwrap();
+            while push.peer_count() < WORKERS {
+                monocoque::rt::sleep(Duration::from_millis(5)).await;
+            }
+            for i in 0..TOTAL {
+                push.send(Msg::from(i.to_string())).await.unwrap();
+            }
+            push.close().await.unwrap();
+        });
     });
 
-    let addr = addr_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-
-    // Each worker pulls exactly its share, then reports how many it received.
+    let endpoint = ep_rx.recv().unwrap();
+    let (got_tx, got_rx) = mpsc::channel::<Vec<usize>>();
     let workers: Vec<_> = (0..WORKERS)
         .map(|_| {
+            let endpoint = endpoint.clone();
+            let got_tx = got_tx.clone();
             thread::spawn(move || {
-                monocoque::rt::LocalRuntime::new()
-                    .unwrap()
-                    .block_on(async move {
-                        let mut pull = PullSocket::connect(addr).await.unwrap();
-                        let mut count = 0usize;
-                        for _ in 0..PER_WORKER {
-                            let msg = monocoque::rt::timeout(Duration::from_secs(10), pull.recv())
-                                .await
-                                .expect("worker recv timed out")
-                                .expect("io error")
-                                .expect("connection closed");
-                            assert!(msg[0].starts_with(b"task-"), "unexpected payload: {msg:?}");
-                            count += 1;
-                        }
-                        count
-                    })
+                LocalRuntime::new().unwrap().block_on(async move {
+                    let mut pull = PullSocket::with_options(opts());
+                    pull.connect(&endpoint).await.unwrap();
+                    let mut mine = Vec::new();
+                    for _ in 0..PER_WORKER {
+                        let m = pull.recv().await.unwrap();
+                        mine.push(
+                            std::str::from_utf8(m.first().unwrap())
+                                .unwrap()
+                                .parse()
+                                .unwrap(),
+                        );
+                    }
+                    got_tx.send(mine).unwrap();
+                });
             })
         })
         .collect();
+    go_tx.send(()).unwrap();
 
-    let mut total = 0usize;
-    for (i, handle) in workers.into_iter().enumerate() {
-        let count = handle.join().expect("worker thread panicked");
+    let mut all = Vec::new();
+    for _ in 0..WORKERS {
+        let mine = got_rx.recv_timeout(Duration::from_secs(20)).unwrap();
         assert_eq!(
-            count, PER_WORKER,
-            "worker {i} received {count}/{PER_WORKER} tasks"
+            mine.len(),
+            PER_WORKER,
+            "round-robin gives each worker an equal share"
         );
-        total += count;
+        all.extend(mine);
     }
-    assert_eq!(total, TOTAL, "fan-out delivered {total}/{TOTAL} tasks");
-
-    ventilator.join().expect("ventilator thread panicked");
+    for w in workers {
+        w.join().unwrap();
+    }
+    ventilator.join().unwrap();
+    all.sort_unstable();
+    assert_eq!(
+        all,
+        (0..TOTAL).collect::<Vec<_>>(),
+        "every task exactly once"
+    );
 }
 
-/// `WORKERS` PUSH workers each send `PER_WORKER` results to one sink. The sink
-/// should merge them all and see exactly `TOTAL` messages.
 #[test]
-fn test_fanin_merges_every_worker() {
-    let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
-    let (ready_tx, ready_rx) = mpsc::channel::<()>();
-
-    // Sink: bind, announce the port, accept the pool, then drain TOTAL messages.
+fn test_fanin_sink_receives_every_result() {
+    let (ep_tx, ep_rx) = mpsc::channel::<String>();
     let sink = thread::spawn(move || {
-        monocoque::rt::LocalRuntime::new()
-            .unwrap()
-            .block_on(async move {
-                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-                addr_tx.send(listener.local_addr().unwrap()).unwrap();
-
-                let mut sink =
-                    PullFanIn::accept_workers(&listener, WORKERS, SocketOptions::default())
-                        .await
-                        .unwrap();
-                // Every worker is connected now; let them start sending.
-                ready_tx.send(()).unwrap();
-
-                let mut count = 0usize;
-                while count < TOTAL {
-                    let recvd = monocoque::rt::timeout(Duration::from_secs(10), sink.recv())
-                        .await
-                        .unwrap_or_else(|_| panic!("sink recv timed out at {count}/{TOTAL}"));
-                    match recvd {
-                        Ok(Some(_)) => count += 1,
-                        Ok(None) => break,
-                        Err(e) => panic!("sink recv error: {e}"),
-                    }
-                }
-                count
-            })
+        LocalRuntime::new().unwrap().block_on(async move {
+            let mut pull = PullSocket::with_options(opts());
+            ep_tx
+                .send(pull.bind("tcp://127.0.0.1:0").await.unwrap())
+                .unwrap();
+            let mut all = Vec::new();
+            for _ in 0..TOTAL {
+                let m = pull.recv().await.unwrap();
+                all.push(std::str::from_utf8(m.first().unwrap()).unwrap().to_string());
+            }
+            all
+        })
     });
 
-    let addr = addr_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-
+    let endpoint = ep_rx.recv().unwrap();
     let workers: Vec<_> = (0..WORKERS)
         .map(|w| {
+            let endpoint = endpoint.clone();
             thread::spawn(move || {
-                monocoque::rt::LocalRuntime::new()
-                    .unwrap()
-                    .block_on(async move {
-                        let mut push = PushSocket::connect(addr).await.unwrap();
-                        for i in 0..PER_WORKER {
-                            push.send(vec![Bytes::from(format!("result-{w}-{i}"))])
-                                .await
-                                .unwrap();
-                        }
-                        push.flush().await.unwrap();
-                    });
+                LocalRuntime::new().unwrap().block_on(async move {
+                    let mut push = PushSocket::new();
+                    push.connect(&endpoint).await.unwrap();
+                    for i in 0..PER_WORKER {
+                        push.send(Msg::from(format!("{w}-{i}"))).await.unwrap();
+                    }
+                    push.close().await.unwrap();
+                });
             })
         })
         .collect();
-
-    // Make sure the sink accepted everyone before we wait on the workers.
-    ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-
-    for handle in workers {
-        handle.join().expect("worker thread panicked");
+    for w in workers {
+        w.join().unwrap();
     }
-
-    let count = sink.join().expect("sink thread panicked");
-    assert_eq!(count, TOTAL, "fan-in merged {count}/{TOTAL} results");
-}
-
-/// Write coalescing and its options must reach the per-worker sockets through
-/// `PushFanOut`. With coalescing on and the flush threshold set far above the
-/// total payload, the only way the buffered bytes leave userspace is the explicit
-/// `flush()`: if `flush()` did not drain every worker, the drain below would hang
-/// and fail on its timeout. Receiving every message in order confirms the
-/// coalesced-send plus per-worker-flush path works end to end.
-#[test]
-fn test_fanout_coalescing_send_then_flush_delivers_all() {
-    const MSGS: usize = 20;
-
-    let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
-
-    let ventilator = thread::spawn(move || {
-        monocoque::rt::LocalRuntime::new()
-            .unwrap()
-            .block_on(async move {
-                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-                addr_tx.send(listener.local_addr().unwrap()).unwrap();
-
-                // Coalescing on, threshold at 1 MiB so the tiny payloads never reach
-                // it on their own: nothing is sent until the explicit flush.
-                let options = SocketOptions::default()
-                    .with_write_coalescing(true)
-                    .with_write_coalesce_threshold(1 << 20);
-                let mut vent = PushFanOut::accept_workers(&listener, 1, options)
-                    .await
-                    .unwrap();
-
-                for i in 0..MSGS {
-                    vent.send(vec![Bytes::from(format!("m{i}"))]).await.unwrap();
-                }
-                // All MSGS are buffered in the worker's coalesce buffer; one flush
-                // sends the whole batch.
-                vent.flush().await.unwrap();
-            });
-    });
-
-    let addr = addr_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-
-    let worker = thread::spawn(move || {
-        monocoque::rt::LocalRuntime::new()
-            .unwrap()
-            .block_on(async move {
-                let mut pull = PullSocket::connect(addr).await.unwrap();
-                let mut count = 0usize;
-                for i in 0..MSGS {
-                    let msg = monocoque::rt::timeout(Duration::from_secs(10), pull.recv())
-                        .await
-                        .expect("recv timed out: flush did not deliver the batch")
-                        .expect("io error")
-                        .expect("connection closed");
-                    assert_eq!(msg[0], Bytes::from(format!("m{i}")), "out-of-order frame");
-                    count += 1;
-                }
-                count
-            })
-    });
-
-    let count = worker.join().expect("worker thread panicked");
-    assert_eq!(count, MSGS, "worker received {count}/{MSGS} after flush");
-
-    ventilator.join().expect("ventilator thread panicked");
+    let mut all = sink.join().unwrap();
+    all.sort();
+    let mut expected: Vec<String> = (0..WORKERS)
+        .flat_map(|w| (0..PER_WORKER).map(move |i| format!("{w}-{i}")))
+        .collect();
+    expected.sort();
+    assert_eq!(all, expected);
 }

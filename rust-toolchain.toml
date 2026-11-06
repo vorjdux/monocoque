@@ -1,0 +1,7 @@
+# Local development toolchain. Matches CLIPPY_TOOLCHAIN in
+# .github/workflows/ci.yml, so `cargo clippy` here reports exactly what the
+# gating clippy job reports. Bump both together. The other CI jobs set
+# RUSTUP_TOOLCHAIN to override this file (stable, beta, nightly, the MSRV).
+[toolchain]
+channel = "1.98"
+components = ["clippy", "rustfmt"]

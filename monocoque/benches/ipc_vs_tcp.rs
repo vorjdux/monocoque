@@ -4,13 +4,13 @@
 //!
 //! ## Methodology
 //!
-//! - Server always runs on a separate OS thread with its own compio runtime.
+//! - Server always runs on a separate OS thread with its own runtime.
 //! - Latency: `iter_batched`, server exits after warmup+1, one round-trip measured.
-//! - Throughput: `iter_custom`, PULL side owns the timer (PUSH/PULL one-way).
+//! - Throughput: `iter_custom`, PULL side owns the timer (PUSH/PULL one-way). It
+//!   receives one warmup message first, so the timer starts on a live connection.
 //! - IPC socket paths include pid + atomic counter to avoid conflicts across iterations.
+//! - TCP and IPC run the same code; only the endpoint differs.
 
-#[cfg(unix)]
-use bytes::Bytes;
 #[cfg(unix)]
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 
@@ -24,9 +24,7 @@ const BENCH_BACKEND: &str = if cfg!(feature = "runtime-tokio") {
     "compio"
 };
 #[cfg(unix)]
-use monocoque::rt::{TcpListener, UnixListener};
-#[cfg(unix)]
-use monocoque::zmq::{PullSocket, PushSocket, RepSocket, ReqSocket, SocketOptions};
+use monocoque::zmq::{Msg, PullSocket, PushSocket, RepSocket, ReqSocket, SocketOptions};
 #[cfg(unix)]
 use std::hint::black_box;
 #[cfg(unix)]
@@ -60,12 +58,65 @@ fn ipc_path(label: &str) -> String {
     )
 }
 
+/// The transport under test.
 #[cfg(unix)]
-/// Benchmark monocoque REQ/REP latency over TCP.
-///
-/// Server on its own thread; client connects, warms up, measures one round-trip.
-fn monocoque_tcp_latency(c: &mut Criterion) {
-    let mut group = c.benchmark_group(format!("ipc_vs_tcp/monocoque-{BENCH_BACKEND}/tcp_latency"));
+#[derive(Clone, Copy)]
+enum Transport {
+    Tcp,
+    Ipc,
+}
+
+#[cfg(unix)]
+impl Transport {
+    /// An endpoint to bind, plus the socket file to remove afterwards (IPC).
+    fn bind_endpoint(self, label: &str) -> (String, Option<String>) {
+        match self {
+            Self::Tcp => ("tcp://127.0.0.1:0".to_owned(), None),
+            Self::Ipc => {
+                let path = ipc_path(label);
+                let _ = std::fs::remove_file(&path);
+                (format!("ipc://{path}"), Some(path))
+            }
+        }
+    }
+}
+
+/// Spawn a REP server that echoes `WARMUP_ROUNDS + 1` requests, returning its
+/// thread and the endpoint to connect to.
+#[cfg(unix)]
+fn spawn_rep(transport: Transport) -> (thread::JoinHandle<()>, String) {
+    let (ep_tx, ep_rx) = mpsc::channel::<String>();
+    let server_thread = thread::spawn(move || {
+        let rt = monocoque::rt::LocalRuntime::new().unwrap();
+        rt.block_on(async move {
+            let (endpoint, path) = transport.bind_endpoint("lat");
+            let mut rep =
+                RepSocket::with_options(SocketOptions::default().with_read_buffer_size(4096));
+            ep_tx.send(rep.bind(&endpoint).await.unwrap()).unwrap();
+
+            for _ in 0..=WARMUP_ROUNDS {
+                let Ok(msg) = rep.recv_owned().await else {
+                    break;
+                };
+                if rep.send(msg).await.is_err() {
+                    break;
+                }
+            }
+            let _ = rep.close().await;
+            if let Some(path) = path {
+                let _ = std::fs::remove_file(&path);
+            }
+        });
+    });
+    let endpoint = ep_rx.recv().unwrap();
+    (server_thread, endpoint)
+}
+
+/// REQ/REP latency over `transport`: the server runs on its own thread; the
+/// client connects, warms up, then one round-trip is measured.
+#[cfg(unix)]
+fn monocoque_latency(c: &mut Criterion, name: &str, transport: Transport) {
+    let mut group = c.benchmark_group(format!("ipc_vs_tcp/monocoque-{BENCH_BACKEND}/{name}"));
     group.measurement_time(Duration::from_secs(10));
     group.sample_size(100);
 
@@ -73,7 +124,7 @@ fn monocoque_tcp_latency(c: &mut Criterion) {
     let rt = monocoque::rt::LocalRuntime::new().unwrap();
 
     for &size in MESSAGE_SIZES {
-        let payload = Bytes::from(vec![0u8; size]);
+        let payload = Msg::from(vec![0u8; size]);
 
         group.bench_with_input(
             BenchmarkId::new("round_trip", format!("{size}B")),
@@ -81,50 +132,16 @@ fn monocoque_tcp_latency(c: &mut Criterion) {
             |b, _| {
                 b.iter_batched(
                     || {
-                        let (port_tx, port_rx) = mpsc::channel::<u16>();
-
-                        let server_thread = thread::spawn(move || {
-                            let rt = monocoque::rt::LocalRuntime::new().unwrap();
-                            rt.block_on(async move {
-                                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-                                let port = listener.local_addr().unwrap().port();
-                                port_tx.send(port).unwrap();
-
-                                let (stream, _) = listener.accept().await.unwrap();
-                                let mut rep = RepSocket::from_tcp_with_options(
-                                    stream,
-                                    SocketOptions::default().with_buffer_sizes(4096, 4096),
-                                )
-                                .await
-                                .unwrap();
-
-                                for _ in 0..=WARMUP_ROUNDS {
-                                    if let Ok(Some(msg)) = rep.recv().await {
-                                        if rep.send(msg).await.is_err() {
-                                            break;
-                                        }
-                                    } else {
-                                        break;
-                                    }
-                                }
-                            });
-                        });
-
-                        let port = port_rx.recv().unwrap();
+                        let (server_thread, endpoint) = spawn_rep(transport);
 
                         let req = rt.block_on(async {
-                            let stream = monocoque::rt::TcpStream::connect(("127.0.0.1", port))
-                                .await
-                                .unwrap();
-                            let mut req = ReqSocket::from_tcp_with_options(
-                                stream,
-                                SocketOptions::default().with_buffer_sizes(4096, 4096),
-                            )
-                            .await
-                            .unwrap();
+                            let mut req = ReqSocket::with_options(
+                                SocketOptions::default().with_read_buffer_size(4096),
+                            );
+                            req.connect(&endpoint).await.unwrap();
 
                             for _ in 0..WARMUP_ROUNDS {
-                                req.send(vec![payload.clone()]).await.unwrap();
+                                req.send(payload.clone()).await.unwrap();
                                 req.recv().await.unwrap();
                             }
 
@@ -136,7 +153,7 @@ fn monocoque_tcp_latency(c: &mut Criterion) {
                     |(mut req, server_thread)| {
                         let payload = payload.clone();
                         rt.block_on(async move {
-                            req.send(vec![black_box(payload)]).await.unwrap();
+                            req.send(black_box(payload)).await.unwrap();
                             let _ = req.recv().await.unwrap();
                             drop(req);
                         });
@@ -151,248 +168,95 @@ fn monocoque_tcp_latency(c: &mut Criterion) {
 }
 
 #[cfg(unix)]
-/// Benchmark monocoque REQ/REP latency over IPC (Unix domain sockets).
-///
-/// Server on its own thread; client connects via a unique socket path, warms up,
-/// measures one round-trip.
-fn monocoque_ipc_latency(c: &mut Criterion) {
-    let mut group = c.benchmark_group(format!("ipc_vs_tcp/monocoque-{BENCH_BACKEND}/ipc_latency"));
-    group.measurement_time(Duration::from_secs(10));
-    group.sample_size(100);
+/// Benchmark monocoque REQ/REP latency over TCP.
+fn monocoque_tcp_latency(c: &mut Criterion) {
+    monocoque_latency(c, "tcp_latency", Transport::Tcp);
+}
 
-    let rt = monocoque::rt::LocalRuntime::new().unwrap();
+#[cfg(unix)]
+/// Benchmark monocoque REQ/REP latency over IPC (Unix domain sockets).
+fn monocoque_ipc_latency(c: &mut Criterion) {
+    monocoque_latency(c, "ipc_latency", Transport::Ipc);
+}
+
+/// One timed PUSH/PULL run over `transport`. PULL binds on its own thread and
+/// times `MESSAGE_COUNT` receives after a warmup message.
+#[cfg(unix)]
+fn run_throughput(payload: &Msg, transport: Transport) -> Duration {
+    let (ep_tx, ep_rx) = mpsc::channel::<String>();
+    let (elapsed_tx, elapsed_rx) = mpsc::channel::<Duration>();
+
+    let pull_thread = thread::spawn(move || {
+        let rt = monocoque::rt::LocalRuntime::new().unwrap();
+        rt.block_on(async move {
+            let (endpoint, path) = transport.bind_endpoint("tp");
+            let mut pull =
+                PullSocket::with_options(SocketOptions::default().with_read_buffer_size(16384));
+            ep_tx.send(pull.bind(&endpoint).await.unwrap()).unwrap();
+
+            pull.recv().await.unwrap();
+            let t0 = std::time::Instant::now();
+            for _ in 0..MESSAGE_COUNT {
+                pull.recv().await.unwrap();
+            }
+            elapsed_tx.send(t0.elapsed()).unwrap();
+            if let Some(path) = path {
+                let _ = std::fs::remove_file(&path);
+            }
+        });
+    });
+
+    let endpoint = ep_rx.recv().unwrap();
+    let payload = payload.clone();
+    let push_rt = monocoque::rt::LocalRuntime::new().unwrap();
+    let elapsed = push_rt.block_on(async move {
+        let mut push =
+            PushSocket::with_options(SocketOptions::default().with_read_buffer_size(16384));
+        push.connect(&endpoint).await.unwrap();
+        for _ in 0..=MESSAGE_COUNT {
+            push.send(black_box(payload.clone())).await.unwrap();
+        }
+        // Keep the connection up until the receiver has everything.
+        let elapsed = elapsed_rx.recv().unwrap();
+        let _ = push.close().await;
+        elapsed
+    });
+    pull_thread.join().unwrap();
+    elapsed
+}
+
+/// PUSH/PULL throughput over `transport`. PULL binds in a separate thread,
+/// PUSH connects in the bench thread. Timer on the PULL side.
+#[cfg(unix)]
+fn monocoque_throughput(c: &mut Criterion, name: &str, transport: Transport) {
+    let mut group = c.benchmark_group(format!("ipc_vs_tcp/monocoque-{BENCH_BACKEND}/{name}"));
+    group.measurement_time(Duration::from_secs(15));
+    group.sample_size(10);
 
     for &size in MESSAGE_SIZES {
-        let payload = Bytes::from(vec![0u8; size]);
+        let payload = Msg::from(vec![0u8; size]);
 
-        group.bench_with_input(
-            BenchmarkId::new("round_trip", format!("{size}B")),
-            &size,
-            |b, _| {
-                b.iter_batched(
-                    || {
-                        let (path_tx, path_rx) = mpsc::channel::<String>();
-
-                        let server_thread = thread::spawn(move || {
-                            let rt = monocoque::rt::LocalRuntime::new().unwrap();
-                            rt.block_on(async move {
-                                let path = ipc_path("lat");
-                                let _ = std::fs::remove_file(&path);
-                                let listener = UnixListener::bind(&path).await.unwrap();
-                                path_tx.send(path.clone()).unwrap();
-
-                                let (stream, _) = listener.accept().await.unwrap();
-                                let mut rep =
-                                    RepSocket::<monocoque::rt::UnixStream>::from_unix_stream_with_options(
-                                        stream,
-                                        SocketOptions::default().with_buffer_sizes(4096, 4096),
-                                    )
-                                    .await
-                                    .unwrap();
-
-                                for _ in 0..=WARMUP_ROUNDS {
-                                    if let Ok(Some(msg)) = rep.recv().await {
-                                        if rep.send(msg).await.is_err() {
-                                            break;
-                                        }
-                                    } else {
-                                        break;
-                                    }
-                                }
-                                let _ = std::fs::remove_file(&path);
-                            });
-                        });
-
-                        let path = path_rx.recv().unwrap();
-
-                        let req = rt.block_on(async {
-                            let stream =
-                                monocoque::rt::UnixStream::connect(&path).await.unwrap();
-                            let mut req =
-                                ReqSocket::<monocoque::rt::UnixStream>::from_unix_stream_with_options(
-                                    stream,
-                                    SocketOptions::default().with_buffer_sizes(4096, 4096),
-                                )
-                                .await
-                                .unwrap();
-
-                            for _ in 0..WARMUP_ROUNDS {
-                                req.send(vec![payload.clone()]).await.unwrap();
-                                req.recv().await.unwrap();
-                            }
-
-                            req
-                        });
-
-                        (req, server_thread)
-                    },
-                    |(mut req, server_thread)| {
-                        let payload = payload.clone();
-                        rt.block_on(async move {
-                            req.send(vec![black_box(payload)]).await.unwrap();
-                            let _ = req.recv().await.unwrap();
-                            drop(req);
-                        });
-                        server_thread.join().unwrap();
-                    },
-                    criterion::BatchSize::PerIteration,
-                );
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
+            b.iter_custom(|iters| {
+                (0..iters)
+                    .map(|_| run_throughput(&payload, transport))
+                    .sum()
+            });
+        });
     }
     group.finish();
 }
 
 #[cfg(unix)]
 /// Benchmark monocoque PUSH/PULL throughput over TCP.
-///
-/// PULL binds in a separate thread. PUSH connects in the bench thread.
-/// Timer on PULL side.
 fn monocoque_tcp_throughput(c: &mut Criterion) {
-    let mut group = c.benchmark_group(format!(
-        "ipc_vs_tcp/monocoque-{BENCH_BACKEND}/tcp_throughput"
-    ));
-    group.measurement_time(Duration::from_secs(15));
-    group.sample_size(10);
-
-    for &size in MESSAGE_SIZES {
-        let payload = Bytes::from(vec![0u8; size]);
-
-        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
-            b.iter_custom(|iters| {
-                let mut total = Duration::ZERO;
-
-                for _ in 0..iters {
-                    let (port_tx, port_rx) = mpsc::channel::<u16>();
-                    let (elapsed_tx, elapsed_rx) = mpsc::channel::<Duration>();
-                    let payload_clone = payload.clone();
-
-                    let pull_thread = thread::spawn(move || {
-                        let rt = monocoque::rt::LocalRuntime::new().unwrap();
-                        rt.block_on(async move {
-                            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-                            let port = listener.local_addr().unwrap().port();
-                            port_tx.send(port).unwrap();
-
-                            let (stream, _) = listener.accept().await.unwrap();
-                            let mut pull = PullSocket::from_tcp_with_options(
-                                stream,
-                                SocketOptions::default().with_buffer_sizes(16384, 16384),
-                            )
-                            .await
-                            .unwrap();
-
-                            let t0 = std::time::Instant::now();
-                            for _ in 0..MESSAGE_COUNT {
-                                pull.recv().await.unwrap();
-                            }
-                            elapsed_tx.send(t0.elapsed()).unwrap();
-                        });
-                    });
-
-                    let port = port_rx.recv().unwrap();
-
-                    let push_rt = monocoque::rt::LocalRuntime::new().unwrap();
-                    push_rt.block_on(async move {
-                        let mut push = PushSocket::connect(("127.0.0.1", port)).await.unwrap();
-                        for _ in 0..MESSAGE_COUNT {
-                            push.send(vec![black_box(payload_clone.clone())])
-                                .await
-                                .unwrap();
-                        }
-                    });
-
-                    pull_thread.join().unwrap();
-                    total += elapsed_rx.recv().unwrap();
-                }
-
-                total
-            });
-        });
-    }
-    group.finish();
+    monocoque_throughput(c, "tcp_throughput", Transport::Tcp);
 }
 
 #[cfg(unix)]
 /// Benchmark monocoque PUSH/PULL throughput over IPC (Unix domain sockets).
-///
-/// PULL binds in a separate thread. PUSH connects in the bench thread.
-/// Timer on PULL side.
 fn monocoque_ipc_throughput(c: &mut Criterion) {
-    let mut group = c.benchmark_group(format!(
-        "ipc_vs_tcp/monocoque-{BENCH_BACKEND}/ipc_throughput"
-    ));
-    group.measurement_time(Duration::from_secs(15));
-    group.sample_size(10);
-
-    for &size in MESSAGE_SIZES {
-        let payload = Bytes::from(vec![0u8; size]);
-
-        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
-            b.iter_custom(|iters| {
-                let mut total = Duration::ZERO;
-
-                for _ in 0..iters {
-                    let (path_tx, path_rx) = mpsc::channel::<String>();
-                    let (elapsed_tx, elapsed_rx) = mpsc::channel::<Duration>();
-                    let payload_clone = payload.clone();
-
-                    let pull_thread = thread::spawn(move || {
-                        let rt = monocoque::rt::LocalRuntime::new().unwrap();
-                        rt.block_on(async move {
-                            let path = ipc_path("tp");
-                            let _ = std::fs::remove_file(&path);
-                            let listener = UnixListener::bind(&path).await.unwrap();
-                            path_tx.send(path.clone()).unwrap();
-
-                            let (stream, _) = listener.accept().await.unwrap();
-                            let mut pull =
-                                PullSocket::<monocoque::rt::UnixStream>::from_unix_stream_with_options(
-                                    stream,
-                                    SocketOptions::default().with_buffer_sizes(16384, 16384),
-                                )
-                                .await
-                                .unwrap();
-
-                            let t0 = std::time::Instant::now();
-                            for _ in 0..MESSAGE_COUNT {
-                                pull.recv().await.unwrap();
-                            }
-                            elapsed_tx.send(t0.elapsed()).unwrap();
-                            let _ = std::fs::remove_file(&path);
-                        });
-                    });
-
-                    let path = path_rx.recv().unwrap();
-
-                    let push_rt = monocoque::rt::LocalRuntime::new().unwrap();
-                    push_rt.block_on(async move {
-                        let stream =
-                            monocoque::rt::UnixStream::connect(&path).await.unwrap();
-                        let mut push =
-                            PushSocket::<monocoque::rt::UnixStream>::from_unix_stream_with_options(
-                                stream,
-                                SocketOptions::default().with_buffer_sizes(16384, 16384),
-                            )
-                            .await
-                            .unwrap();
-
-                        for _ in 0..MESSAGE_COUNT {
-                            push.send(vec![black_box(payload_clone.clone())])
-                                .await
-                                .unwrap();
-                        }
-                    });
-
-                    pull_thread.join().unwrap();
-                    total += elapsed_rx.recv().unwrap();
-                }
-
-                total
-            });
-        });
-    }
-    group.finish();
+    monocoque_throughput(c, "ipc_throughput", Transport::Ipc);
 }
 
 #[cfg(unix)]

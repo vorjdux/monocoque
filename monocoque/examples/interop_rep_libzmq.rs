@@ -1,4 +1,4 @@
-//! Interoperability test: Monocoque REP ↔ libzmq REQ
+//! Interoperability test: Monocoque REP <-> libzmq REQ
 //!
 //! This example demonstrates that Monocoque REP can communicate with libzmq REQ.
 //!
@@ -7,75 +7,65 @@
 //! cargo run --example interop_rep_libzmq --features zmq
 //! ```
 
-use bytes::Bytes;
-use monocoque::rt::{self, LocalRuntime, TcpListener};
-use monocoque_zmtp::rep::RepSocket;
+use monocoque::rt::LocalRuntime;
+use monocoque::zmq::RepSocket;
+use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 use tracing::info;
 
 fn main() {
-    info!("=== Monocoque REP ↔ libzmq REQ Interop Test ===\n");
+    info!("=== Monocoque REP <-> libzmq REQ Interop Test ===\n");
 
     // Spawn Monocoque REP server in background thread
-    let server_handle = thread::spawn(|| {
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let server_handle = thread::spawn(move || {
         LocalRuntime::new().unwrap().block_on(async {
-            let listener = TcpListener::bind("127.0.0.1:5562")
+            let mut socket = RepSocket::new();
+            socket
+                .bind("tcp://127.0.0.1:5562")
                 .await
                 .expect("Failed to bind");
             info!("[Monocoque REP] Listening on tcp://127.0.0.1:5562");
-
-            let (stream, _) = listener.accept().await.expect("Failed to accept");
-            let mut socket = RepSocket::new(stream).await.unwrap();
-            info!("[Monocoque REP] Client connected\n");
+            ready_tx.send(()).unwrap();
 
             // First request-reply cycle
-            let request = socket
-                .recv()
-                .await
-                .expect("Failed to receive")
-                .expect("Connection closed");
             {
-                let msg = request;
+                let msg = socket.recv().await.expect("Failed to receive");
                 info!("[Monocoque REP] Received request:");
-                for (i, frame) in msg.iter().enumerate() {
+                for (i, frame) in msg.frames().enumerate() {
                     info!("  Frame {}: {:?}", i, String::from_utf8_lossy(frame));
                 }
-
-                info!("[Monocoque REP] Sending reply");
-                socket
-                    .send(vec![Bytes::from_static(b"Reply from Monocoque REP")])
-                    .await
-                    .expect("Failed to send");
             }
+            info!("[Monocoque REP] Sending reply");
+            socket
+                .send("Reply from Monocoque REP")
+                .await
+                .expect("Failed to send");
 
             // Second request-reply cycle
-            let request = socket
-                .recv()
-                .await
-                .expect("Failed to receive second request")
-                .expect("Connection closed");
             {
-                let msg = request;
+                let msg = socket
+                    .recv()
+                    .await
+                    .expect("Failed to receive second request");
                 info!("\n[Monocoque REP] Received second request:");
-                for (i, frame) in msg.iter().enumerate() {
+                for (i, frame) in msg.frames().enumerate() {
                     info!("  Frame {}: {:?}", i, String::from_utf8_lossy(frame));
                 }
-
-                info!("[Monocoque REP] Sending second reply");
-                socket
-                    .send(vec![Bytes::from_static(b"Second reply from Monocoque")])
-                    .await
-                    .expect("Failed to send second reply");
             }
+            info!("[Monocoque REP] Sending second reply");
+            socket
+                .send("Second reply from Monocoque")
+                .await
+                .expect("Failed to send second reply");
 
-            // Keep connection alive
-            rt::sleep(Duration::from_millis(100)).await;
+            // Wait for the reply to be written before the runtime exits
+            socket.close().await.expect("Failed to close");
         });
     });
 
-    // Give server time to start
-    thread::sleep(Duration::from_millis(50));
+    // Wait until the server is bound
+    ready_rx.recv().unwrap();
 
     // Run libzmq REQ client in main thread
     info!("[libzmq REQ] Connecting to tcp://127.0.0.1:5562");
@@ -108,5 +98,5 @@ fn main() {
 
     server_handle.join().unwrap();
 
-    info!("✅ REP interop test completed successfully!");
+    info!("REP interop test completed successfully!");
 }
