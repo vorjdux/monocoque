@@ -23,7 +23,10 @@ pub const MAX_IOV: usize = 64;
 /// A write the socket buffer cannot take whole leaves the writer asleep until much of
 /// the buffer is free and the reader asleep once it has drained the rest, so
 /// large frames go faster written a few at a time.
+#[cfg(not(feature = "runtime-compio"))]
 pub const MAX_VECTORED_JOB: usize = 32 * 1024;
+#[cfg(feature = "runtime-compio")]
+pub const MAX_VECTORED_JOB: usize = 128 * 1024;
 
 /// Bytes waiting to be written to one peer.
 #[derive(Default)]

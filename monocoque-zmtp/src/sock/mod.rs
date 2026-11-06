@@ -356,26 +356,27 @@ impl<K: Kind> Socket<K> {
     /// [`send_lb`](Self::send_lb) as a public `send` returns it: tried at once,
     /// so a message a peer has room for never enters a future. Through an
     /// `async fn` it was copied into the future, then into the slot.
+    ///
+    /// A send that has to wait is boxed. Unboxed, the waiting states made the
+    /// returned future over 500 bytes, and `.await` copied all of it on every
+    /// send, finished or not. The box costs one allocation per wait, which a
+    /// coalescing sender at its HWM pays about once per batch written.
     pub(crate) fn send_lb_now(&mut self, msg: Msg) -> impl Future<Output = Result<()>> + '_ {
+        type Wait<'a> = std::pin::Pin<Box<dyn Future<Output = Result<()>> + 'a>>;
         let mut slot = Some(msg);
         let tried = self.core.borrow_mut().try_send_lb_prefixed(&[], &mut slot);
-        let done = match tried {
-            Some(Ok(peer)) if !self.core.borrow().write_pending(peer) => Some(Ok(())),
-            Some(Err(e)) => Some(Err(e)),
-            Some(Ok(peer)) => {
-                return futures::future::Either::Right(futures::future::Either::Left(async move {
-                    self.wait_written(peer).await;
-                    Ok(())
-                }));
+        let wait: Wait<'_> = match tried {
+            Some(Ok(peer)) if !self.core.borrow().write_pending(peer) => {
+                return futures::future::Either::Left(std::future::ready(Ok(())));
             }
-            None => None,
+            Some(Err(e)) => return futures::future::Either::Left(std::future::ready(Err(e))),
+            Some(Ok(peer)) => Box::pin(async move {
+                self.wait_written(peer).await;
+                Ok(())
+            }),
+            None => Box::pin(async move { self.send_lb(&mut slot).await.map(drop) }),
         };
-        match done {
-            Some(result) => futures::future::Either::Left(std::future::ready(result)),
-            None => futures::future::Either::Right(futures::future::Either::Right(async move {
-                self.send_lb(&mut slot).await.map(drop)
-            })),
-        }
+        futures::future::Either::Right(wait)
     }
 
     /// Queue to the next writable peer, with envelope frames ahead of the

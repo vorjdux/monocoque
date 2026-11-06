@@ -229,7 +229,7 @@ macro_rules! impl_shared_io {
                                 // `readable()`.
                                 poll_fn(|cx| inner.poll_read_ready(cx)).await?;
                             }
-                            Ok(n) if n > 0 && n < len && n < 4096 => {
+                            Ok(n) if n > 0 && n < len && n < 1024 => {
                                 // A small short read drained the socket: a
                                 // larger one is a stream, whose next bytes may
                                 // already be here, and sleeping on `epoll` for

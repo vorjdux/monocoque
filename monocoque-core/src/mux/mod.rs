@@ -1262,12 +1262,36 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
     /// `None` means nothing is queued and the caller has to wait.
     pub fn try_recv_ready_into(&mut self, slot: &mut Msg) -> Option<PeerId> {
         self.wakeups.enter();
-        let taken = self.take_ready().map(|(id, msg)| {
-            *slot = msg;
-            id
+        let taken = self.take_lone_ready(slot).or_else(|| {
+            self.take_ready().map(|(id, msg)| {
+                *slot = msg;
+                id
+            })
         });
         self.wakeups.exit();
         taken
+    }
+
+    /// The usual receive: one peer, with more queued behind this message, so
+    /// the fair queue and the peer's place in it stay as they are. Anything
+    /// else, including the peer's last message, goes the general way.
+    #[inline]
+    fn take_lone_ready(&mut self, slot: &mut Msg) -> Option<PeerId> {
+        if !self.inbox.is_empty() || self.fair.len() != 1 {
+            return None;
+        }
+        let id = self.fair[0];
+        let msg = {
+            let entry = self.peers.get(id.index as usize)?.as_ref()?;
+            let mut st = entry.state.borrow_mut();
+            if st.ready.len() < 2 {
+                return None;
+            }
+            st.pop_ready()?
+        };
+        let msg = self.hooks.on_inbound(id, msg)?;
+        *slot = msg;
+        Some(id)
     }
 
     /// Poll for the next message from any peer.

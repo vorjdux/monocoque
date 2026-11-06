@@ -38,7 +38,7 @@ pub const WRITE_PROGRESS_FLOOR: u64 = 16 * 1024;
 const MAX_READ_TARGET: usize = 64 * 1024;
 
 /// Below this, a read that did not fill the buffer means the socket is drained.
-const SMALL_READ: usize = 4096;
+const SMALL_READ: usize = 1024;
 
 /// Smallest spare capacity a read is issued with.
 const MIN_READ: usize = 512;
