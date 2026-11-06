@@ -66,10 +66,13 @@ pub trait Codec: 'static {
     /// `deliver` and consuming its bytes. A partial frame is left in place; the
     /// decoder may `reserve` room for the rest of it. Protocol replies (a PONG)
     /// go into `replies`.
-    fn decode(
+    ///
+    /// Generic over `deliver` so it inlines and each `Msg`, 112 bytes, is
+    /// built where it is queued: through a `dyn` call it was built, then copied.
+    fn decode<D: FnMut(Msg)>(
         &mut self,
         buf: &mut BytesMut,
-        deliver: &mut dyn FnMut(Msg),
+        deliver: &mut D,
         replies: &mut OutQueue,
     ) -> Result<()>;
 

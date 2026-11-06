@@ -33,10 +33,10 @@ pub struct RawCodec {
 }
 
 impl Codec for RawCodec {
-    fn decode(
+    fn decode<D: FnMut(Msg)>(
         &mut self,
         buf: &mut BytesMut,
-        deliver: &mut dyn FnMut(Msg),
+        deliver: &mut D,
         _replies: &mut OutQueue,
     ) -> Result<()> {
         if !buf.is_empty() {

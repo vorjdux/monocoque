@@ -95,9 +95,8 @@ kind!(
 
 impl Socket<Pair> {
     /// Send to the peer, waiting for one if none is connected.
-    pub async fn send(&mut self, msg: impl Into<Msg>) -> Result<()> {
-        let mut slot = Some(msg.into());
-        self.send_lb(&mut slot).await.map(drop)
+    pub fn send(&mut self, msg: impl Into<Msg>) -> impl Future<Output = Result<()>> + '_ {
+        self.send_lb_now(msg.into())
     }
 
     /// Receive the next message.
@@ -120,9 +119,8 @@ kind!(
 
 impl Socket<Dealer> {
     /// Send to the next peer with room, waiting while none has.
-    pub async fn send(&mut self, msg: impl Into<Msg>) -> Result<()> {
-        let mut slot = Some(msg.into());
-        self.send_lb(&mut slot).await.map(drop)
+    pub fn send(&mut self, msg: impl Into<Msg>) -> impl Future<Output = Result<()>> + '_ {
+        self.send_lb_now(msg.into())
     }
 
     /// Receive the next message from any peer.
@@ -145,9 +143,8 @@ kind!(
 
 impl Socket<Push> {
     /// Send to the next peer with room, waiting while none has.
-    pub async fn send(&mut self, msg: impl Into<Msg>) -> Result<()> {
-        let mut slot = Some(msg.into());
-        self.send_lb(&mut slot).await.map(drop)
+    pub fn send(&mut self, msg: impl Into<Msg>) -> impl Future<Output = Result<()>> + '_ {
+        self.send_lb_now(msg.into())
     }
 }
 

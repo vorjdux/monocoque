@@ -10,10 +10,10 @@ struct Lp;
 struct LpCodec;
 
 impl Codec for LpCodec {
-    fn decode(
+    fn decode<D: FnMut(Msg)>(
         &mut self,
         buf: &mut BytesMut,
-        deliver: &mut dyn FnMut(Msg),
+        deliver: &mut D,
         _replies: &mut OutQueue,
     ) -> Result<()> {
         loop {

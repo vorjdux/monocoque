@@ -353,6 +353,31 @@ impl<K: Kind> Socket<K> {
         Ok(peer)
     }
 
+    /// [`send_lb`](Self::send_lb) as a public `send` returns it: tried at once,
+    /// so a message a peer has room for never enters a future. Through an
+    /// `async fn` it was copied into the future, then into the slot.
+    pub(crate) fn send_lb_now(&mut self, msg: Msg) -> impl Future<Output = Result<()>> + '_ {
+        let mut slot = Some(msg);
+        let tried = self.core.borrow_mut().try_send_lb_prefixed(&[], &mut slot);
+        let done = match tried {
+            Some(Ok(peer)) if !self.core.borrow().write_pending(peer) => Some(Ok(())),
+            Some(Err(e)) => Some(Err(e)),
+            Some(Ok(peer)) => {
+                return futures::future::Either::Right(futures::future::Either::Left(async move {
+                    self.wait_written(peer).await;
+                    Ok(())
+                }));
+            }
+            None => None,
+        };
+        match done {
+            Some(result) => futures::future::Either::Left(std::future::ready(result)),
+            None => futures::future::Either::Right(futures::future::Either::Right(async move {
+                self.send_lb(&mut slot).await.map(drop)
+            })),
+        }
+    }
+
     /// Queue to the next writable peer, with envelope frames ahead of the
     /// message, without waiting for the write.
     pub(crate) async fn queue_lb_prefixed(

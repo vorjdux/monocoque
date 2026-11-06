@@ -404,10 +404,10 @@ fn put_command(out: &mut OutQueue, body: &[u8]) {
 }
 
 impl Codec for ZmtpCodec {
-    fn decode(
+    fn decode<D: FnMut(Msg)>(
         &mut self,
         buf: &mut BytesMut,
-        deliver: &mut dyn FnMut(Msg),
+        deliver: &mut D,
         replies: &mut OutQueue,
     ) -> Result<()> {
         if self.framing == Framing::V1 {
