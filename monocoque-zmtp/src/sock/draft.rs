@@ -25,8 +25,12 @@ use std::collections::{HashMap, HashSet};
 pub const MAX_GROUP: usize = 255;
 
 fn single(msg: Msg) -> Result<Msg> {
+    check_single(&msg).map(|()| msg)
+}
+
+fn check_single(msg: &Msg) -> Result<()> {
     if msg.len() == 1 {
-        Ok(msg)
+        Ok(())
     } else {
         Err(MonocoqueError::InvalidState(
             "draft socket types send single-part messages",
@@ -342,21 +346,46 @@ pub struct RadioExt {
 impl Socket<Radio> {
     /// Publish `msg` to the members of `group`. Peers at their HWM miss it;
     /// a send never waits. Returns how many peers got it.
-    pub async fn send(&mut self, group: impl Into<Bytes>, msg: impl Into<Msg>) -> Result<usize> {
+    ///
+    /// Publishing is done before this returns, so the future is already
+    /// finished, as for PUB.
+    pub fn send(
+        &mut self,
+        group: impl Into<Bytes>,
+        msg: impl Into<Msg>,
+    ) -> impl Future<Output = Result<usize>> {
         let group = group.into();
+        std::future::ready(single(msg.into()).and_then(|msg| self.publish(group, &msg)))
+    }
+
+    /// [`send`](Self::send) a message the caller keeps, which publishing only
+    /// reads: no clone per send for one published again and again.
+    pub fn send_ref(
+        &mut self,
+        group: impl Into<Bytes>,
+        msg: &Msg,
+    ) -> impl Future<Output = Result<usize>> {
+        let group = group.into();
+        std::future::ready(check_single(msg).and_then(|()| self.publish(group, msg)))
+    }
+
+    fn publish(&mut self, group: Bytes, msg: &Msg) -> Result<usize> {
         check_group(&group)?;
-        let msg = single(msg.into())?;
-        let body = msg.frame_bytes(0).unwrap_or_default();
-        let wire = Msg::from([group, body]);
         let mut ids = std::mem::take(&mut self.ext.ids);
         ids.clear();
         let sent = {
             let mut core = self.core.borrow_mut();
             core.progress();
-            if let Some(peers) = core.hooks().members.get(wire.first().unwrap_or_default()) {
+            if let Some(peers) = core.hooks().members.get(&group[..]) {
                 ids.extend_from_slice(peers);
             }
-            core.fanout_to(&wire, &ids)
+            // A group nobody joined costs no wire message.
+            if ids.is_empty() {
+                0
+            } else {
+                let body = msg.frame_bytes(0).unwrap_or_default();
+                core.fanout_to(&Msg::from([group, body]), &ids)
+            }
         };
         self.ext.ids = ids;
         Ok(sent)

@@ -96,6 +96,18 @@ async fn radio_dish(endpoint: &str) {
     }
     assert!(bodies.iter().all(|b| b == b"probe"));
 
+    // `send_ref` publishes a message the caller keeps, as often as it likes.
+    let kept = Msg::from("kept");
+    assert_eq!(radio.send_ref("weather", &kept).await.unwrap(), 1);
+    assert_eq!(radio.send_ref("weather", &kept).await.unwrap(), 1);
+    assert_eq!(kept, [&b"kept"[..]]);
+    for _ in 0..2 {
+        let m = dish.recv_owned().await.unwrap();
+        assert_eq!(m, [&b"weather"[..], b"kept"]);
+    }
+    let two = Msg::from([Bytes::from_static(b"a"), Bytes::from_static(b"b")]);
+    assert!(radio.send_ref("weather", &two).await.is_err());
+
     dish.leave("weather").await.unwrap();
     while radio.send("weather", "after leave").await.unwrap() != 0 {
         sleep(Duration::from_millis(5)).await;

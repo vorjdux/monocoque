@@ -92,7 +92,7 @@ fn run_fanout_slow(iters: u64, coalesce: bool) -> Duration {
             ep_tx
                 .send(pub_socket.bind("tcp://127.0.0.1:0").await.unwrap())
                 .unwrap();
-            while pub_socket.send(payload.clone()).await.unwrap_or(0) < TOTAL_SUBS {
+            while pub_socket.send_ref(&payload).await.unwrap_or(0) < TOTAL_SUBS {
                 monocoque::rt::sleep(Duration::from_millis(1)).await;
             }
             thread::sleep(SETTLE);
@@ -102,7 +102,7 @@ fn run_fanout_slow(iters: u64, coalesce: bool) -> Duration {
                 // the writers run. A timed wait here would measure the
                 // runtime's timer resolution instead: tokio rounds sub-ms
                 // deadlines up to whole milliseconds.
-                if pub_socket.send(payload.clone()).await.unwrap_or(0) < TOTAL_SUBS {
+                if pub_socket.send_ref(&payload).await.unwrap_or(0) < TOTAL_SUBS {
                     yield_once().await;
                 }
             }

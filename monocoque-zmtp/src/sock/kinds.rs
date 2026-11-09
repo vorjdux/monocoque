@@ -724,6 +724,13 @@ impl Socket<Pub> {
         std::future::ready(Ok(publish_split(self, &msg, |h| &h.index)))
     }
 
+    /// [`send`](Self::send) a message the caller keeps. Publishing only reads
+    /// the message, so one published again and again needs no clone per
+    /// send: for a two-frame message the clone cost more than publishing it.
+    pub fn send_ref(&mut self, msg: &Msg) -> impl Future<Output = Result<usize>> {
+        std::future::ready(Ok(publish_split(self, msg, |h| &h.index)))
+    }
+
     /// Distinct prefixes the subscriber `peer` holds.
     #[must_use]
     pub fn subscriber_prefixes(&self, peer: PeerId) -> usize {
@@ -736,6 +743,11 @@ impl Socket<XPub> {
     pub fn send(&mut self, msg: impl Into<Msg>) -> impl Future<Output = Result<usize>> {
         let msg = msg.into();
         std::future::ready(Ok(publish_split(self, &msg, |h| &h.0.index)))
+    }
+
+    /// Publish a message the caller keeps. See [`Socket::<Pub>::send_ref`].
+    pub fn send_ref(&mut self, msg: &Msg) -> impl Future<Output = Result<usize>> {
+        std::future::ready(Ok(publish_split(self, msg, |h| &h.0.index)))
     }
 
     /// Receive the next subscription (`\x01topic`) or unsubscription

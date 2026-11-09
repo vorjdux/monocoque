@@ -226,6 +226,37 @@ fn pub_sub_filters_by_prefix() {
     }
 }
 
+/// `send_ref` publishes like `send` and leaves the message with the caller,
+/// who can publish it again.
+#[test]
+fn pub_send_ref_publishes_a_kept_message() {
+    rt().block_on(async {
+        let mut publisher = PubSocket::new();
+        let bound = publisher.bind("tcp://127.0.0.1:0").await.unwrap();
+        let mut weather = SubSocket::with_options(timeout_opts());
+        weather.subscribe(b"weather.").await.unwrap();
+        weather.connect(&bound).await.unwrap();
+        let report = Msg::from([
+            Bytes::from_static(b"weather.london"),
+            Bytes::from_static(b"sunny"),
+        ]);
+        let other = Msg::from([Bytes::from_static(b"stocks.x"), Bytes::from_static(b"1")]);
+        while publisher.send_ref(&report).await.unwrap() < 1 {
+            sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(publisher.send_ref(&other).await.unwrap(), 0);
+        assert_eq!(publisher.send_ref(&report).await.unwrap(), 1);
+        assert_eq!(report, [&b"weather.london"[..], b"sunny"]);
+        // Every delivery is the kept message; the unmatched one never arrives.
+        for _ in 0..2 {
+            assert_eq!(
+                weather.recv_owned().await.unwrap(),
+                [&b"weather.london"[..], b"sunny"]
+            );
+        }
+    });
+}
+
 #[test]
 fn xpub_reports_subscriptions_and_xsub_forwards_them() {
     rt().block_on(async {

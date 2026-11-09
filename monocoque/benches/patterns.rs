@@ -120,7 +120,7 @@ fn run_monocoque_fanout(num_subs: usize, iters: u64, coalesce: bool) -> Duration
 /// Publish until `msg` reaches `subs` subscribers, sleeping between attempts
 /// so the connections and subscriptions can complete.
 async fn wait_subscribed(pub_socket: &mut PubSocket, msg: &Msg, subs: usize) {
-    while pub_socket.send(msg.clone()).await.unwrap_or(0) < subs {
+    while pub_socket.send_ref(msg).await.unwrap_or(0) < subs {
         monocoque::rt::sleep(Duration::from_millis(1)).await;
     }
 }
@@ -128,8 +128,9 @@ async fn wait_subscribed(pub_socket: &mut PubSocket, msg: &Msg, subs: usize) {
 /// Publish one message. PUB never waits on a send, so when a subscriber's
 /// queue is full (`msg` reached fewer than `subs`), wait for the queued bytes
 /// to be written; that also hands the runtime its turn to run the I/O.
+/// Published by reference, as 0.4's bench did with `send_frames(&[..])`.
 async fn oversend(pub_socket: &mut PubSocket, msg: &Msg, subs: usize) {
-    if pub_socket.send(msg.clone()).await.unwrap_or(0) < subs {
+    if pub_socket.send_ref(msg).await.unwrap_or(0) < subs {
         let _ = pub_socket.flush().await;
     }
 }
