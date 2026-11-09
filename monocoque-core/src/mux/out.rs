@@ -28,6 +28,16 @@ pub const MAX_VECTORED_JOB: usize = 32 * 1024;
 #[cfg(feature = "runtime-compio")]
 pub const MAX_VECTORED_JOB: usize = 128 * 1024;
 
+/// [`MAX_VECTORED_JOB`] for a coalescing peer.
+///
+/// On smol a coalescing peer writes in batches anyway, and 128 KiB jobs halved its send calls on 16 KiB frames;
+/// an eager one at that size lost 14%, so it keeps the smaller job. On tokio
+/// the larger job did not help.
+#[cfg(feature = "runtime-smol")]
+pub const MAX_COALESCED_VECTORED_JOB: usize = 128 * 1024;
+#[cfg(not(feature = "runtime-smol"))]
+pub const MAX_COALESCED_VECTORED_JOB: usize = MAX_VECTORED_JOB;
+
 /// Bytes waiting to be written to one peer.
 #[derive(Default)]
 pub struct OutQueue {
@@ -94,6 +104,16 @@ impl OutQueue {
     /// `spare` is swapped in as the new tail so the steady state allocates
     /// nothing; `iov` is reused for the vectored case.
     pub fn take_job(&mut self, spare: &mut BytesMut, iov: &mut Vec<Bytes>) -> Option<WriteJob> {
+        self.take_job_capped(spare, iov, MAX_VECTORED_JOB)
+    }
+
+    /// [`take_job`](Self::take_job) with a vectored job held to `max_bytes`.
+    pub fn take_job_capped(
+        &mut self,
+        spare: &mut BytesMut,
+        iov: &mut Vec<Bytes>,
+        max_bytes: usize,
+    ) -> Option<WriteJob> {
         if self.is_empty() {
             return None;
         }
@@ -109,7 +129,7 @@ impl OutQueue {
         iov.clear();
         let mut bytes = 0;
         while iov.len() < MAX_IOV
-            && bytes < MAX_VECTORED_JOB
+            && bytes < max_bytes
             && let Some(seg) = self.segs.pop_front()
         {
             bytes += seg.len();

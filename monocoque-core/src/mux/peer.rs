@@ -40,6 +40,15 @@ const MAX_READ_TARGET: usize = 64 * 1024;
 /// Below this, a read that did not fill the buffer means the socket is drained.
 const SMALL_READ: usize = 1024;
 
+/// On smol, while reads keep filling the buffer (a stream with data waiting),
+/// each read is given a full `read_size` even if that means a fresh buffer,
+/// rather than whatever tail the last one left. Into the tail, 16 KiB frames
+/// straddled every read and took two reads each, and coalesced 16 KiB
+/// throughput trailed 0.4 by about 18%. Request-reply reads come back short,
+/// so they keep reusing the tail and allocate nothing per message. tokio and
+/// compio do not gain from it and keep the tail.
+const STREAM_FULL_READS: bool = cfg!(feature = "runtime-smol");
+
 /// Smallest spare capacity a read is issued with.
 const MIN_READ: usize = 512;
 
@@ -490,12 +499,20 @@ impl<C: Codec> PeerState<C> {
         }
         let released = self.released();
         let Outbound::Wire {
-            out, writer_waker, ..
+            out,
+            writer_waker,
+            hold,
+            ..
         } = &mut self.outbound
         else {
             return Poll::Ready(None);
         };
-        if released && let Some(job) = out.take_job(spare, iov) {
+        let cap = if hold.is_some() {
+            super::out::MAX_COALESCED_VECTORED_JOB
+        } else {
+            super::out::MAX_VECTORED_JOB
+        };
+        if released && let Some(job) = out.take_job_capped(spare, iov, cap) {
             return Poll::Ready(Some(job));
         }
         if self.close_when_drained {
@@ -605,6 +622,7 @@ pub async fn reader_loop<C: Codec>(
     let mut reads = 0u32;
     let mut target = read_size;
     let mut short_read = false;
+    let mut filled = false;
     loop {
         poll_fn(|cx| peer.borrow_mut().poll_reader_room(cx)).await;
         if peer.borrow().closed.is_some() {
@@ -622,7 +640,8 @@ pub async fn reader_loop<C: Codec>(
         // `reserve` reclaims the front of a unique buffer instead of
         // reallocating, so the steady state reuses one allocation. A frame
         // longer than the buffer has already asked for its full size.
-        if buf.capacity() - buf.len() < MIN_READ
+        let spare = buf.capacity() - buf.len();
+        if (spare < MIN_READ || (STREAM_FULL_READS && filled && spare < read_size))
             && !matches!(&peer.borrow().outbound, Outbound::Wire { codec, .. } if codec.filling_frame())
         {
             buf.reserve(target);
@@ -650,6 +669,7 @@ pub async fn reader_loop<C: Codec>(
                 // with nothing more coming until this side answers. A larger
                 // one is a stream, whose next bytes may already be here.
                 short_read = n < spare && n < SMALL_READ;
+                filled = n == spare;
                 target = next_read_target(target, read_size, spare, n);
             }
         }
