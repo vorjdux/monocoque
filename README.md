@@ -208,9 +208,11 @@ rt.block_on(async {
 })?;
 ```
 
-On compio, `LocalRuntime` polls for completions briefly before it sleeps on
-io_uring, which cuts round-trip latency; set `MONOCOQUE_SPIN_US` to change the
-budget in microseconds (0 disables it).
+Before a receive sleeps, it keeps looking for up to 20 µs: on compio
+`LocalRuntime` polls for completions, and on tokio and smol the receive yields
+to the runtime. Sleeping and being woken costs more than a local round trip, so
+this cuts latency, at the cost of some CPU while traffic flows. Set
+`MONOCOQUE_SPIN_US` to change the budget in microseconds (0 disables it).
 
 The `runtime_backends` example is the same program run both ways:
 

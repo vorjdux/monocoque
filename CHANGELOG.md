@@ -41,6 +41,9 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
   `max_reconnect_attempts` take effect.
 - STREAM messages and notifications carry `Peer-Address`.
 - Failed authentications slow the offending address down (per-IP backoff).
+- `send_ref(&Msg)` on PUB, XPUB and RADIO publishes a message the caller
+  keeps, without cloning it. Publishing only reads the message; for a
+  two-frame topic message the clone cost more than the publish.
 
 ### Fixed
 
@@ -64,6 +67,14 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
   out or is cancelled stays owed and can be retried.
 - Reconnect backoff resets only after a peer came up, and a failed handshake
   counts toward `max_reconnect_attempts` like a refused connect.
+- On smol, closing a socket and dropping its `LocalRuntime` left its TCP
+  connections open until the thread exited: every task ran on one executor
+  per thread, which only runs inside `block_on`. Each `LocalRuntime` now owns
+  its executor, and dropping it drops its tasks, as on compio and tokio.
+- On compio, two-frame messages were received at a sixth of the rate of
+  single-frame ones (3.3 M against 19.5 M msg/s): reads shrank to a few
+  hundred bytes as frames were split off the read buffer. They now run at
+  12.2 M msg/s.
 
 ### Security
 
@@ -73,8 +84,38 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
 
 ### Performance
 
-- compio's `LocalRuntime` polls for completions for up to 20 us before
-  sleeping (`MONOCOQUE_SPIN_US`), which closes its IPC latency gap to tokio.
+- Against 0.4.2 on the same machine, every PUSH/PULL throughput cell, eager and
+  coalesced, 64 B to 16 KiB, is level or ahead on all three backends, and
+  REQ/REP round trips are about 30% faster on tokio and smol. PUB fan-out and
+  topic filtering with coalescing pass 0.4, whose PUB batched on worker
+  threads; an eager PUB pays one send per subscriber per message.
+- A receive about to sleep keeps looking for up to 20 us first
+  (`MONOCOQUE_SPIN_US`): compio's `LocalRuntime` polls for completions, and on
+  tokio and smol the receive yields to the runtime. It costs some CPU while
+  traffic flows.
+- An eager send with the writer idle writes to the kernel from `send` itself
+  on every backend, with no task woken.
+- A send to a peer with room, and a receive of a queued message, run without
+  building a future, timer or park. `send` returns a 32-byte future (the
+  waiting path is boxed; it was over 500 bytes, copied on every `.await`), and
+  on PUSH, DEALER, PAIR, PUB, XPUB and RADIO it returns a finished future
+  rather than being an `async fn`. A `Msg` is no longer copied through each
+  layer of a send or out of the decoder.
+- `Msg` is 112 bytes, keeping three frames inline instead of four (a message
+  of four or more frames allocates), and `Msg::from(Vec<u8>)` of 64 bytes or
+  less is stored inline.
+- A socket's driver is woken once per batch of pending work, not on every
+  operation, and a lone peer keeps its place in the fair queue.
+- Reads grow from `read_buffer_size` up to 64 KiB while they keep filling, and
+  the read buffer is reused in place once the last message is released. On
+  compio a frame under 64 KiB that does not fit gets room for several; smol
+  reads in full while a stream keeps filling its reads. A vectored write
+  carries at most 128 KiB, or 32 KiB for an eager peer on tokio and smol.
+- tokio waits through `poll_read_ready`/`poll_write_ready` rather than a
+  readiness future per wait, and only a read under 1 KiB counts as draining
+  the socket on tokio and smol.
+- PUB, XPUB and RADIO stop before any fan-out work when no subscriber wants the
+  topic or group.
 - Small writes go out directly on io_uring; timers are armed only when an
   operation waits; long frames are read into a buffer of their own (one
   allocation instead of three); CURVE encrypts in place; a single-frame
@@ -93,6 +134,12 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
   decryption, and Miri over the owned-buffer unsafe in CI.
 - `flume`, `compio-io` and `compio-buf` are no longer dependencies of
   `monocoque-rs`.
+- The PUB benches run each case with an eager and a coalescing publisher
+  (`_coalesced`), so 0.4 comparisons are like for like, and publish with
+  `send_ref` as 0.4's did with `send_frames`. `BENCH_SECS` shortens the
+  throughput bench while iterating.
+- A test checks that a closed socket's peer sees end of stream on every
+  backend.
 
 ## 0.4.2 - 2026-09-22
 

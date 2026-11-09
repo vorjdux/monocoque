@@ -127,6 +127,14 @@ message type. It is a single break with no compatibility shims.
   balance and fair-queue natively.
 - `connect` returns once the dial is started. Sends wait for a peer (or fail
   with `Again`/`TimedOut` per the options), as in libzmq.
+- PUB is eager by default, like every socket: `send()` puts the message into
+  every matching subscriber's kernel buffer before it returns, one send per
+  subscriber. 0.4's PUB queued messages to worker threads that batched them,
+  so a publisher that relied on that throughput should turn on
+  `with_write_coalescing(true)`.
+- PUB's `send_frames(&[Bytes])` is gone. `send(msg)` takes a `Msg`, and
+  `send_ref(&msg)` publishes one the caller keeps without cloning it; XPUB and
+  RADIO have both.
 
 ### Options
 

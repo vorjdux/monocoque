@@ -29,7 +29,7 @@ Rule for anything that touches a shared core: borrow, do the work, drop the borr
 
 - one small frame (up to `INLINE_CAP` bytes) inline in the `Msg`, with no allocation or refcount;
 - one larger frame as a single `Bytes`;
-- up to four frames in a `SmallVec`;
+- up to three frames in a `SmallVec`;
 - `Msg::into_shared` puts the frames behind one `Arc` so a fan-out to N peers costs one allocation and N refcount bumps.
 
 `recv()` returns a `MsgRef<'_>` that borrows the socket's receive slot; `recv_owned()` returns a `Msg` that outlives it.

@@ -98,14 +98,20 @@ while let Ok(msg) = sub_sock.recv().await {
 }
 ```
 
-A PUB socket serves every subscriber that connects. Publishers pushing many
-small frames usually want write coalescing on:
+A PUB socket serves every subscriber that connects. By default it is eager:
+each `send()` puts the message into every matching subscriber's kernel buffer
+before it returns, which is the lowest latency and costs one send per
+subscriber per message. Publishers pushing many small frames usually want write
+coalescing on, which batches them into one write per subscriber:
 
 ```rust
 let opts = SocketOptions::default().with_write_coalescing(true);
 let mut pub_sock = PubSocket::with_options(opts);
 pub_sock.bind("tcp://127.0.0.1:5556").await?;
 ```
+
+Publishing only reads the message. To publish one you keep, such as the same
+message on a timer, use `send_ref(&msg)` instead of cloning it for `send`.
 
 The first frame is the topic. SUB filters by prefix match against subscribed topics. Subscribe to `b""` to receive everything.
 
@@ -180,7 +186,7 @@ Key options:
 - `conflate` - keep only the most recent message in the receive queue. Useful for telemetry or status updates where stale data is useless.
 - `tcp_keepalive` - detect dead connections. Use `with_tcp_keepalive(1)`, `with_tcp_keepalive_idle(60)`, `with_tcp_keepalive_intvl(10)`, `with_tcp_keepalive_cnt(3)` to enable.
 
-Buffer sizing: the default read buffer is 32KB. The outbound buffer has no fixed size; it grows on demand and is reused across sends. Use `with_read_buffer_size(4096)` to trade throughput for latency on small messages, or `with_read_buffer_size(65_536)` to widen the read batch for bulk transfers. The read buffer is clamped to 64KB and floored at 64 bytes.
+Buffer sizing: the default read buffer is 32KB. The outbound buffer has no fixed size; it grows on demand and is reused across sends. Use `with_read_buffer_size(4096)` to trade throughput for latency on small messages, or `with_read_buffer_size(65_536)` to widen the read batch for bulk transfers. The read buffer is clamped to 64KB and floored at 64 bytes. It is the size a connection starts at: while reads keep filling the buffer, a busy connection reads more at once, up to 64KB, and returns to the configured size when traffic quiets.
 
 ---
 

@@ -844,6 +844,10 @@ impl SocketOptions {
 
     /// Set read buffer size.
     ///
+    /// This is the size a connection starts at. While reads keep filling the
+    /// buffer, a busy connection reads more at once, up to 64 KiB, and returns
+    /// to this size when traffic quiets.
+    ///
     /// # Examples
     ///
     /// ```

@@ -390,7 +390,11 @@ cargo build --release
   `push-fanout` / `pull-fanin` bench-peer subcommands exist, but a measured
   cross-implementation comparison has not been collected yet
 - IPC coalesced throughput against competing IPC implementations
-- A clean on/off A/B for PUB coalescing (the cap is a compile-time constant)
+
+The `patterns` and `fanout_slow_subscriber` benches run each PUB case twice,
+with an eager publisher and with a coalescing one (`_coalesced`). 0.4's PUB
+batched on worker threads without being asked, so compare 0.4 against the
+coalesced cases.
 
 ---
 
@@ -433,6 +437,14 @@ cargo bench -p monocoque-rs --bench throughput --features zmq -- --test
 # Cross-implementation comparison bench peer
 cd scripts/monocoque_bench_peer && cargo build --release
 ```
+
+`BENCH_SECS=2` shortens the `throughput` bench's measurement from 15 seconds
+per size while iterating; publish numbers from the default.
+
+On a CPU with performance and efficiency cores, pin a run to two performance
+cores (`taskset -c 0,2 ...`, after checking `lscpu -e`): left to the
+scheduler, the same build moved by 10% or more from run to run as threads
+landed on different core types.
 
 For stable numbers, avoid running other benchmarks in parallel and disable
 CPU frequency scaling if available:

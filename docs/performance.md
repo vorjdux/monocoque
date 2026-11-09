@@ -239,10 +239,13 @@ overhead and no TCP framing cost.
 Sender and subscribers run on separate OS threads.
 
 These figures predate the 1.0 multiplexer and have not been re-measured on
-a quiet machine since. A 1.0 run on another host measured about 427 K msg/s
-for fan-out and 2.9 M msg/s for topic filtering, with libzmq ahead on both,
-so read the tables below as out of date until they are refreshed. The bench
-now also covers four subscribers.
+a quiet machine since, so read the tables below as out of date until they are
+refreshed. The bench now also covers four subscribers, and runs each case both
+eager and with a coalescing publisher. A 1.0 run on another host measured
+about 427 K msg/s for fan-out and 2.9 M msg/s for topic filtering: that was the
+eager publisher, which pays one send per subscriber per message (see
+[PUB/SUB broadcast coalescing](#pubsub-broadcast-coalescing)), and before
+two-frame receive on compio was fixed.
 
 **Fan-out** (single subscriber, 256 B messages):
 
@@ -412,6 +415,15 @@ Notes and limits:
   a fresh buffer regardless, so there is no copy to avoid.
 - Uses compio's `write_vectored_all` (`writev`). The further `IORING_OP_SEND_ZC`
   (kernel-buffer zero-copy) lever is not yet wired up.
+- One vectored write carries at most 128 KiB, or 32 KiB for an eager peer on
+  tokio and smol. A write the socket buffer cannot take whole leaves the
+  writer waiting for room and the reader idle once it has drained the rest; an
+  uncapped job of 64 segments was about 512 KiB at 16 KiB frames.
+- On compio, a frame under 64 KiB that does not fit the read buffer gets room
+  for several like it, so one read brings in several large frames. The
+  readiness backends lost about as much from this as compio gained, and keep a
+  buffer per frame. smol instead finishes a frame that straddles a read from
+  the next ordinary read, and reads in full while a stream keeps filling them.
 
 ---
 
@@ -501,12 +513,32 @@ See `examples/pipeline_worker_pool.rs` and `examples/router_worker_pool.rs`.
 A `PubSocket` encodes each message once and appends the same refcounted wire
 bytes to every matching subscriber's outbound queue, so the fan-out never copies
 the payload. Each subscriber's writer drains everything queued for it as one
-job: when a producer outpaces a subscriber and several broadcasts queue up while
-a write is in flight, they go out together in the next vectored write,
-amortizing the syscall cost across the burst.
+job, so broadcasts that queued up while a write was in flight go out together.
 
-This is automatic and requires no API change; it is what lets PUB fan-out keep
-up under load rather than paying one syscall per message per subscriber.
+A PUB is eager by default, like every socket: `send()` runs each matching
+subscriber's writer before it returns, so the message is in every kernel buffer
+and the latency is the lowest available. That costs one send per subscriber per
+message, and with a hundred subscribers a hundred sends per message. For
+throughput, turn on write coalescing, which batches each subscriber's messages
+into one write:
+
+```rust
+use monocoque::zmq::{PubSocket, SocketOptions};
+
+let mut publisher =
+    PubSocket::with_options(SocketOptions::default().with_write_coalescing(true));
+```
+
+0.4's PUB batched like this on its own, on worker threads, so compare 0.4
+against the coalesced cases (`pubsub_fanout_coalesced`,
+`topic_filtering_coalesced`, and the `_coalesced` slow-subscriber case), not the
+eager ones.
+
+Publishing only reads the message. `send_ref(&msg)` publishes one the caller
+keeps, so a message published repeatedly needs no clone per send: for a
+two-frame topic message the clone cost more than the publish. XPUB and RADIO
+have it too. A topic or group no subscriber wants is dropped before any fan-out
+work.
 
 ---
 
@@ -515,6 +547,14 @@ up under load rather than paying one syscall per message per subscriber.
 The read buffer size affects how many bytes fit before an extra read syscall is
 needed. The default is a 32 KB read buffer. There is no write buffer setting:
 the outbound buffer grows on demand and is reused. The read buffer is clamped to 64 KB and floored at 64 bytes.
+
+The setting is the size a connection starts at. While reads keep filling the
+buffer, a busy connection doubles its read size up to 64 KB, and halves it back
+toward the setting once reads come back well short. The buffer is also
+refreshed once less than a quarter of a read is left in it: frames are split off
+its front as they are delivered, and reading into whatever tail remained let
+reads shrink to a few hundred bytes. Two-frame messages on io_uring, where every
+read is a submission, ran at a sixth of single-frame throughput that way.
 
 ```rust
 use monocoque_core::options::SocketOptions;
@@ -554,8 +594,9 @@ Setting HWM to 0 disables the limit (unbounded queue, use with care), as in libz
 
 ## io_uring tuning
 
-This section applies to the default compio backend. The tokio and smol backends
-do not use io_uring, so these knobs do not apply to them.
+The ring settings apply to the default compio backend; the tokio and smol
+backends do not use io_uring. Spinning before sleeping, below, applies to all
+three.
 
 compio drives one io_uring per runtime, and so one per thread; every socket on
 that thread shares it.
@@ -591,7 +632,12 @@ with or ahead of tokio, and over TCP from 11.1 µs to 10.5 µs.
 - On tokio and smol a receive about to sleep yields to the runtime instead for
   the same budget, under the same rules. Other tasks on that runtime keep
   running meanwhile, and a fast sender no longer pays to wake the receiver
-  inside every `send`.
+  inside every `send`. On a development host a 64 B REQ/REP round trip on TCP
+  went from about 11 µs to about 5.3 µs on tokio, and from about 16 µs to about
+  7 µs on smol.
+- Spinning costs CPU while traffic flows: on tokio, with 100 000 messages per
+  connection, about 5% to 15% more CPU per message than with it off. With
+  `MONOCOQUE_SPIN_US=0` a receive sleeps and is woken per message again.
 
 ---
 
