@@ -716,9 +716,12 @@ impl PubExtAccess for Socket<XPub> {
 impl Socket<Pub> {
     /// Publish `msg` to every matching subscriber. Subscribers at their HWM
     /// miss it; publishing never waits. Returns how many got it.
-    pub async fn send(&mut self, msg: impl Into<Msg>) -> Result<usize> {
+    ///
+    /// Publishing is done before this returns, so the future is already
+    /// finished: as an `async fn` it copied the message into itself first.
+    pub fn send(&mut self, msg: impl Into<Msg>) -> impl Future<Output = Result<usize>> {
         let msg = msg.into();
-        Ok(publish_split(self, &msg, |h| &h.index))
+        std::future::ready(Ok(publish_split(self, &msg, |h| &h.index)))
     }
 
     /// Distinct prefixes the subscriber `peer` holds.
@@ -730,9 +733,9 @@ impl Socket<Pub> {
 
 impl Socket<XPub> {
     /// Publish `msg` to every matching subscriber. See [`Socket::<Pub>::send`].
-    pub async fn send(&mut self, msg: impl Into<Msg>) -> Result<usize> {
+    pub fn send(&mut self, msg: impl Into<Msg>) -> impl Future<Output = Result<usize>> {
         let msg = msg.into();
-        Ok(publish_split(self, &msg, |h| &h.0.index))
+        std::future::ready(Ok(publish_split(self, &msg, |h| &h.0.index)))
     }
 
     /// Receive the next subscription (`\x01topic`) or unsubscription
@@ -822,7 +825,13 @@ where
             idx.match_peers(topic, &mut keys);
             ids.extend(keys.iter().map(|&k| PeerId::from_u64(k)));
         }
-        core.fanout_to(msg, &ids)
+        // A topic nobody wants is done here; most messages are, when
+        // subscribers are selective.
+        if ids.is_empty() {
+            0
+        } else {
+            core.fanout_to(msg, &ids)
+        }
     };
     let ext = socket.ext_pub();
     ext.ids = ids;

@@ -49,6 +49,26 @@ const SMALL_READ: usize = 1024;
 /// compio do not gain from it and keep the tail.
 const STREAM_FULL_READS: bool = cfg!(feature = "runtime-smol");
 
+/// Whether a read buffer with `spare` room left should be refreshed to the
+/// read target before the next read.
+///
+/// The room left shrinks as frames are split off the front. Waiting until it
+/// was nearly gone let reads drift down to a few hundred bytes: two-frame
+/// messages, whose first frame keeps the buffer shared, fell to about 830
+/// bytes a read, and on io_uring, where every read is a submission, to a sixth
+/// of single-frame throughput. Refreshing once under a quarter of a read keeps
+/// reads large, at one allocation per few dozen KiB when the buffer is still
+/// shared. `filled` says the last read filled its buffer (see
+/// [`STREAM_FULL_READS`]).
+const fn needs_refresh(spare: usize, read_size: usize, filled: bool) -> bool {
+    let floor = if read_size / 4 > MIN_READ {
+        read_size / 4
+    } else {
+        MIN_READ
+    };
+    spare < floor || (STREAM_FULL_READS && filled && spare < read_size)
+}
+
 /// Smallest spare capacity a read is issued with.
 const MIN_READ: usize = 512;
 
@@ -640,8 +660,7 @@ pub async fn reader_loop<C: Codec>(
         // `reserve` reclaims the front of a unique buffer instead of
         // reallocating, so the steady state reuses one allocation. A frame
         // longer than the buffer has already asked for its full size.
-        let spare = buf.capacity() - buf.len();
-        if (spare < MIN_READ || (STREAM_FULL_READS && filled && spare < read_size))
+        if needs_refresh(buf.capacity() - buf.len(), read_size, filled)
             && !matches!(&peer.borrow().outbound, Outbound::Wire { codec, .. } if codec.filling_frame())
         {
             buf.reserve(target);
