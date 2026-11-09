@@ -104,10 +104,10 @@ async fn idle_switches() -> Option<Window> {
     })
 }
 
-/// Park a receive on `socket`, keeping the task's handle in `$parked`. smol's
-/// executor is thread-local and outlives a `LocalRuntime`, so a detached task
-/// from one case would keep its socket (and its reconnect loop) alive into the
-/// next case's window; dropping the handle at the end of the case cancels it.
+/// Park a receive on `socket`, keeping the task's handle in `$parked`. On smol
+/// a dropped `JoinHandle` cancels its task, so the case keeps the handle for
+/// as long as the receive should stay parked, and dropping it at the end of
+/// the case ends the receive and its socket before the next case's window.
 macro_rules! park_recv {
     ($parked:ident, $socket:expr) => {{
         let mut socket = $socket;
