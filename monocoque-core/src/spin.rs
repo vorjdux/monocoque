@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 const DEFAULT_SPIN: Duration = Duration::from_micros(20);
 
 /// The spin budget: `MONOCOQUE_SPIN_US` if set (0 disables), otherwise
-/// [`DEFAULT_SPIN`], or none when this thread may run on one CPU only, where
+/// 20 µs, or none when this thread may run on one CPU only, where
 /// spinning only delays the peer it waits for.
 #[must_use]
 pub fn spin_budget() -> Duration {
