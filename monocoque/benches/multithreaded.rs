@@ -105,8 +105,9 @@ fn monocoque_multithreaded_dealers(c: &mut Criterion) {
                     let rt = monocoque::rt::LocalRuntime::new().unwrap();
 
                     rt.block_on(async {
-                        // One ROUTER serves every DEALER connection.
-                        let mut router = RouterSocket::with_options(coalescing());
+                        // One ROUTER serves every DEALER connection. Eager, as
+                        // 0.4's version of this case was.
+                        let mut router = RouterSocket::new();
                         let endpoint = router.bind("tcp://127.0.0.1:0").await.unwrap();
                         let router_task = monocoque::rt::spawn(echo(router, total_messages));
 
@@ -119,7 +120,7 @@ fn monocoque_multithreaded_dealers(c: &mut Criterion) {
                             let handle = std::thread::spawn(move || {
                                 let rt = monocoque::rt::LocalRuntime::new().unwrap();
                                 rt.block_on(async {
-                                    let mut dealer = DealerSocket::with_options(coalescing());
+                                    let mut dealer = DealerSocket::new();
                                     dealer.connect(&endpoint).await.unwrap();
                                     dealer_rounds(&mut dealer, &payload).await;
                                 });

@@ -74,7 +74,9 @@ async fn recv_n(sub: &mut SubSocket, n: usize) {
 /// Time delivery of `iters * MESSAGE_COUNT` messages to each FAST subscriber
 /// while one slow subscriber lags and the publisher oversends. Returns the
 /// slowest fast subscriber's elapsed time.
-fn run_fanout_slow(iters: u64) -> Duration {
+/// `coalesce` sets the publisher's write coalescing: eager by default, or
+/// batched as 0.4's PUB did on worker threads without being asked.
+fn run_fanout_slow(iters: u64, coalesce: bool) -> Duration {
     let target = usize::try_from(iters).expect("iteration count fits usize") * MESSAGE_COUNT;
     let payload = Msg::from(vec![0u8; MESSAGE_SIZE]);
 
@@ -85,7 +87,8 @@ fn run_fanout_slow(iters: u64) -> Duration {
     let pub_handle = thread::spawn(move || {
         let rt = monocoque::rt::LocalRuntime::new().unwrap();
         rt.block_on(async move {
-            let mut pub_socket = PubSocket::new();
+            let mut pub_socket =
+                PubSocket::with_options(SocketOptions::default().with_write_coalescing(coalesce));
             ep_tx
                 .send(pub_socket.bind("tcp://127.0.0.1:0").await.unwrap())
                 .unwrap();
@@ -168,7 +171,11 @@ fn fanout_slow_subscriber(c: &mut Criterion) {
     group.sample_size(10);
     group.throughput(Throughput::Elements(MESSAGE_COUNT as u64));
     group.bench_function("fast_delivery_with_1_slow_of_100", |b| {
-        b.iter_custom(run_fanout_slow);
+        b.iter_custom(|iters| run_fanout_slow(iters, false));
+    });
+    // The case to compare with 0.4, whose PUB batched on worker threads.
+    group.bench_function("fast_delivery_with_1_slow_of_100_coalesced", |b| {
+        b.iter_custom(|iters| run_fanout_slow(iters, true));
     });
     group.finish();
 }

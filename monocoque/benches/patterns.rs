@@ -57,7 +57,11 @@ const MATCHED_PER_ROUND: usize = MESSAGE_COUNT / 10;
 
 /// Time the delivery of `iters * MESSAGE_COUNT` messages to each subscriber
 /// while the publisher oversends. Returns the slowest subscriber's elapsed time.
-fn run_monocoque_fanout(num_subs: usize, iters: u64) -> Duration {
+///
+/// `coalesce` sets the publisher's write coalescing. Eager (the default) puts
+/// every message into each subscriber's kernel buffer as it is sent, for the
+/// lowest latency; coalescing batches them, for throughput.
+fn run_monocoque_fanout(num_subs: usize, iters: u64, coalesce: bool) -> Duration {
     let target = usize::try_from(iters).expect("iteration count fits usize") * MESSAGE_COUNT;
     let payload = Msg::from(vec![0u8; MESSAGE_SIZE]);
 
@@ -67,7 +71,8 @@ fn run_monocoque_fanout(num_subs: usize, iters: u64) -> Duration {
     let pub_handle = thread::spawn(move || {
         let rt = monocoque::rt::LocalRuntime::new().unwrap();
         rt.block_on(async move {
-            let mut pub_socket = PubSocket::new();
+            let mut pub_socket =
+                PubSocket::with_options(SocketOptions::default().with_write_coalescing(coalesce));
             ep_tx
                 .send(pub_socket.bind("tcp://127.0.0.1:0").await.unwrap())
                 .unwrap();
@@ -138,20 +143,32 @@ async fn recv_n(sub: &mut SubSocket, n: usize) {
     }
 }
 
-fn monocoque_pubsub_fanout(c: &mut Criterion) {
+fn monocoque_fanout_group(c: &mut Criterion, name: &str, coalesce: bool) {
     monocoque::dev_tracing::init_tracing();
-    let mut group = c.benchmark_group(format!("patterns/monocoque-{BENCH_BACKEND}/pubsub_fanout"));
+    let mut group = c.benchmark_group(format!("patterns/monocoque-{BENCH_BACKEND}/{name}"));
     for &num_subs in FANOUT_SUBSCRIBERS {
         group.throughput(Throughput::Elements((MESSAGE_COUNT * num_subs) as u64));
         group.bench_with_input(
             BenchmarkId::new("subscribers", num_subs),
             &num_subs,
             |b, &num_subs| {
-                b.iter_custom(|iters| run_monocoque_fanout(num_subs, iters));
+                b.iter_custom(|iters| run_monocoque_fanout(num_subs, iters, coalesce));
             },
         );
     }
     group.finish();
+}
+
+/// PUB fan-out, eager: each send reaches every subscriber's kernel buffer.
+fn monocoque_pubsub_fanout(c: &mut Criterion) {
+    monocoque_fanout_group(c, "pubsub_fanout", false);
+}
+
+/// PUB fan-out with write coalescing: sends are batched into one write per
+/// subscriber per buffer. 0.4's PUB batched like this on worker threads
+/// without being asked; compare against this case, not the eager one.
+fn monocoque_pubsub_fanout_coalesced(c: &mut Criterion) {
+    monocoque_fanout_group(c, "pubsub_fanout_coalesced", true);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -257,7 +274,8 @@ fn zmq_pubsub_fanout(c: &mut Criterion) {
 // match pattern. Throughput is reported per `MESSAGE_COUNT` published, so the
 // number reflects the publish/filter rate the subscriber can sustain.
 
-fn run_monocoque_topic_filtering(iters: u64) -> Duration {
+/// `coalesce` as in [`run_monocoque_fanout`].
+fn run_monocoque_topic_filtering(iters: u64, coalesce: bool) -> Duration {
     let target_matches =
         usize::try_from(iters).expect("iteration count fits usize") * MATCHED_PER_ROUND;
     let payload = Bytes::from(vec![0u8; MESSAGE_SIZE]);
@@ -270,7 +288,8 @@ fn run_monocoque_topic_filtering(iters: u64) -> Duration {
     let pub_handle = thread::spawn(move || {
         let rt = monocoque::rt::LocalRuntime::new().unwrap();
         rt.block_on(async move {
-            let mut pub_socket = PubSocket::new();
+            let mut pub_socket =
+                PubSocket::with_options(SocketOptions::default().with_write_coalescing(coalesce));
             ep_tx
                 .send(pub_socket.bind("tcp://127.0.0.1:0").await.unwrap())
                 .unwrap();
@@ -309,16 +328,25 @@ fn run_monocoque_topic_filtering(iters: u64) -> Duration {
     elapsed
 }
 
-fn monocoque_topic_filtering(c: &mut Criterion) {
+fn monocoque_topic_filtering_group(c: &mut Criterion, name: &str, coalesce: bool) {
     monocoque::dev_tracing::init_tracing();
-    let mut group = c.benchmark_group(format!(
-        "patterns/monocoque-{BENCH_BACKEND}/topic_filtering"
-    ));
+    let mut group = c.benchmark_group(format!("patterns/monocoque-{BENCH_BACKEND}/{name}"));
     group.throughput(Throughput::Elements(MESSAGE_COUNT as u64));
     group.bench_function("filter_10_percent", |b| {
-        b.iter_custom(run_monocoque_topic_filtering);
+        b.iter_custom(|iters| run_monocoque_topic_filtering(iters, coalesce));
     });
     group.finish();
+}
+
+/// Topic filtering, eager publisher.
+fn monocoque_topic_filtering(c: &mut Criterion) {
+    monocoque_topic_filtering_group(c, "topic_filtering", false);
+}
+
+/// Topic filtering with a coalescing publisher: the case to compare with 0.4,
+/// whose PUB batched on worker threads.
+fn monocoque_topic_filtering_coalesced(c: &mut Criterion) {
+    monocoque_topic_filtering_group(c, "topic_filtering_coalesced", true);
 }
 
 fn run_zmq_topic_filtering(iters: u64) -> Duration {
@@ -408,8 +436,10 @@ criterion_group!(
         .sample_size(10);
     targets =
         monocoque_pubsub_fanout,
+        monocoque_pubsub_fanout_coalesced,
         zmq_pubsub_fanout,
         monocoque_topic_filtering,
+        monocoque_topic_filtering_coalesced,
         zmq_topic_filtering
 );
 criterion_main!(benches);
