@@ -1831,22 +1831,24 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         }
     }
 
-    /// A figure that rises as `id` takes bytes, or `None` once it is gone.
-    /// Costs a syscall: for a send that has already waited a while.
-    pub fn write_progress(&self, id: PeerId) -> Option<i128> {
-        self.entry(id)
-            .filter(|e| !e.closed)
-            .map(|e| e.state.borrow().write_progress())
-    }
-
-    /// Stop eager sends waiting on `id`'s writes until it reads again.
-    pub fn mark_write_stalled(&mut self, id: PeerId) {
-        let Some(e) = self.entry(id) else { return };
-        let newly = e.state.borrow_mut().mark_write_stalled();
-        let endpoint = e.info.endpoint.clone();
-        if newly && let Some(ep) = endpoint {
+    /// A send waited `window` or its timeout, whichever came first, and
+    /// `id`'s writes are still unfinished. Feeds the peer's stall watch, which
+    /// lasts across sends, and marks the peer stalled (stopping eager sends
+    /// waiting on it until it reads again) once it has taken almost nothing
+    /// for a whole `window`. `true` when the send should stop waiting: the
+    /// peer was marked, or is gone. Costs a syscall: for a send that has
+    /// already waited a while.
+    pub fn observe_unfinished_write(&mut self, id: PeerId, window: Duration) -> bool {
+        let Some(e) = self.entry(id).filter(|e| !e.closed) else {
+            return true;
+        };
+        if !e.state.borrow_mut().observe_unfinished_write(window) {
+            return false;
+        }
+        if let Some(ep) = e.info.endpoint.clone() {
             self.emit(SocketEvent::PeerStalled(ep));
         }
+        true
     }
 
     /// Messages queued toward `id` and not yet written.

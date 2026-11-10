@@ -145,6 +145,11 @@ pub struct PeerState<C> {
     pub(crate) write_stalled: bool,
     /// `bytes_written` when the peer was marked stalled.
     stalled_at: u64,
+    /// Progress and the time it was read, since sends began finding this
+    /// peer's writes unfinished. Kept on the peer, across sends: a wait cut
+    /// short by a `send_timeout` shorter than `write_stall` never saw a whole
+    /// window by itself, so a peer that stopped reading was never marked.
+    stall_watch: Option<(i128, Instant)>,
     /// The wire stream, to ask how much of what was written the peer has
     /// taken. Weak: the reader and writer alone keep the socket open.
     pub(crate) stream: Weak<Stream>,
@@ -177,6 +182,7 @@ impl<C: Codec> PeerState<C> {
             bytes_written: 0,
             write_stalled: false,
             stalled_at: 0,
+            stall_watch: None,
             stream: Weak::new(),
         }
     }
@@ -548,6 +554,7 @@ impl<C: Codec> PeerState<C> {
             if out.pending_msgs() == 0 {
                 *flushing = false;
                 self.write_stalled = false;
+                self.stall_watch = None;
             }
         }
         self.events.push(super::Event::Writable(self.id));
@@ -570,6 +577,31 @@ impl<C: Codec> PeerState<C> {
     pub(crate) fn write_progress(&self) -> i128 {
         let unacked = self.stream.upgrade().map_or(0, |s| s.unacked_bytes());
         i128::from(self.bytes_written) - i128::from(unacked)
+    }
+
+    /// A send found this peer's writes unfinished. Watch its progress across
+    /// sends, and mark it stalled once a whole `window` has passed with it
+    /// taking under [`WRITE_PROGRESS_FLOOR`]. A peer taking that much starts
+    /// the watch over: it is reading, however it is paced. `true` if this
+    /// observation marked the peer.
+    pub(crate) fn observe_unfinished_write(&mut self, window: std::time::Duration) -> bool {
+        let now = self.write_progress();
+        let Some((from, since)) = self.stall_watch else {
+            self.stall_watch = Some((now, Instant::now()));
+            return false;
+        };
+        if now - from >= i128::from(WRITE_PROGRESS_FLOOR) {
+            self.stall_watch = Some((now, Instant::now()));
+            return false;
+        }
+        // Within a tenth of the window, for timer granularity: without a
+        // timeout the watch starts after one slice of a window and is judged
+        // after the next.
+        if since.elapsed() < window.saturating_sub(window / 10) {
+            return false;
+        }
+        self.stall_watch = None;
+        self.mark_write_stalled()
     }
 
     /// Stop eager sends waiting on this peer. `true` if it was not stalled.

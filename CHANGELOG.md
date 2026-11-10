@@ -86,16 +86,19 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
 - With a `send_timeout` of two `write_stall` windows or less, a peer that
   stopped reading was never marked stalled, so every send to it waited out
   the whole timeout until its HWM filled (100 s for 20 000 sends at 100 ms).
-  A send with a timeout now checks progress from the start.
+  The peer's progress is now watched across sends, as below.
 - An XPUB past its receive HWM scanned every queued report for each new one,
   so a subscriber holding many unread prefixes and toggling a topic cost
   quadratic CPU (21.6 us a report at 9 000 prefixes). Reports past the HWM
   are now indexed by prefix. A data frame from an XSUB arriving while reports
   wait waits behind them, up to the receive HWM of them, instead of being
   dropped while the inbox has room.
-- A peer is judged stalled only over a whole `write_stall` window. With a
-  shorter `send_timeout`, a reader taking a steady 6 MB/s in bursts was
-  reported stalled, since a 2 ms wait could fall between its reads.
+- A peer is judged stalled over a whole `write_stall` window of waiting,
+  counted across sends. Judged within each send, a `send_timeout` below the
+  window either reported a reader taking a steady 6 MB/s in bursts as stalled
+  (a 2 ms wait could fall between its reads) or never marked a peer that had
+  stopped (each send then waited out its timeout: 5.2 s for 20 000 sends at
+  5 ms).
 - A socket whose runtime was dropped never got a driver again when used from
   another runtime: the flag saying one was running was cleared only when the
   driver finished, not when it was dropped.

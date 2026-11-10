@@ -99,13 +99,14 @@ fn router_sends_never_wait_on_a_peer_that_stopped_reading() {
     assert!(elapsed < BUDGET, "sends took {elapsed:?}");
 }
 
-/// With a send timeout of two `write_stall` windows or less there may be no
-/// second window to compare progress against. The stalled peer must still be
-/// marked, or every send to it waits out the whole timeout until its HWM
-/// fills (100 ms a send, 100 s for this run, before the fix).
+/// A peer that stopped reading must be marked whatever the send timeout,
+/// or every send to it waits out the whole timeout until its HWM fills (100 ms
+/// a send, 100 s for this run). A timeout shorter than `write_stall` never
+/// sees a whole window in one send, so the watch has to last across sends.
 #[test]
 fn a_short_send_timeout_still_marks_a_stalled_peer() {
-    for timeout in [Duration::from_millis(50), Duration::from_millis(100)] {
+    for ms in [5, 20, 40, 50, 100] {
+        let timeout = Duration::from_millis(ms);
         let (elapsed, got) = run(Some(timeout));
         assert_eq!(
             got,
@@ -169,8 +170,14 @@ fn a_short_send_timeout_does_not_report_a_steady_reader_stalled() {
     });
 
     let events = LocalRuntime::new().unwrap().block_on(async move {
+        // The window is longer than the default so that the reader's thread,
+        // descheduled while this binary's other tests run, cannot pause long
+        // enough to count as a reader that really stopped. What is tested is
+        // that 2 ms waits are not judged on their own.
         let mut push = PushSocket::with_options(
-            SocketOptions::default().with_send_timeout(Duration::from_millis(2)),
+            SocketOptions::default()
+                .with_send_timeout(Duration::from_millis(2))
+                .with_write_stall(Some(Duration::from_millis(200))),
         );
         let monitor = push.monitor();
         push.connect(&ep).await.unwrap();

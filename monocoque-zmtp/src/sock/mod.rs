@@ -20,7 +20,6 @@ use bytes::Bytes;
 use monocoque_core::error::{MonocoqueError, Result};
 use monocoque_core::monitor::{SocketMonitor, create_monitor};
 use monocoque_core::msg::{Metadata, Msg, MsgRef};
-use monocoque_core::mux::peer::WRITE_PROGRESS_FLOOR;
 use monocoque_core::mux::{Hooks, PeerId, PeerInfo, SendTo, Shared, SocketCore, op};
 use monocoque_core::options::SocketOptions;
 use monocoque_core::transport::Stream;
@@ -404,7 +403,7 @@ impl<K: Kind> Socket<K> {
     /// gets the message out. Bounded by `send_timeout`; the message is already
     /// queued, so running out of time here is not a send failure.
     ///
-    /// A peer taking under [`WRITE_PROGRESS_FLOOR`] bytes during a
+    /// A peer taking under [`WRITE_PROGRESS_FLOOR`](monocoque_core::mux::peer::WRITE_PROGRESS_FLOOR) bytes during a
     /// `write_stall` window has stopped reading. It is marked stalled and no
     /// send waits on it until it reads again, so it cannot hold up sends to
     /// other peers. A slow peer that keeps reading is waited for.
@@ -415,21 +414,12 @@ impl<K: Kind> Socket<K> {
         let timeout = self.send_timeout();
         let stall = self.core.borrow().options().write_stall;
         let deadline = timeout.map(|t| Instant::now() + t);
-        // Asking the kernel costs a syscall, so without a timeout a send that
-        // finishes within the first window, as nearly all do, never asks: that
-        // window only takes the first reading, and the next one compares
-        // against it. With a timeout of two windows or less there may be no
-        // second window, and a peer that stopped reading was never marked:
-        // every send waited out the whole timeout. So with a timeout the first
-        // reading is taken here, and running out of time still checks.
-        let mut before = if deadline.is_some() {
-            self.core
-                .borrow()
-                .write_progress(peer)
-                .map(|p| (p, Instant::now()))
-        } else {
-            None
-        };
+        // A send that finishes within the first slice, as nearly all do, never
+        // asks the kernel for progress (a syscall). Each slice that ends with
+        // the write unfinished feeds the peer's stall watch, which lasts across
+        // sends: so a peer that stopped reading is marked after a window of
+        // waiting in all, whatever the `send_timeout`, and a reader in bursts
+        // is judged over a whole window, never over one short wait.
         loop {
             let left = deadline.map(|d| d.saturating_duration_since(Instant::now()));
             let slice = match (left, stall) {
@@ -441,22 +431,17 @@ impl<K: Kind> Socket<K> {
             if written.is_ok() {
                 return;
             }
-            let expired = deadline.is_some_and(|d| Instant::now() >= d);
-            let mut core = self.core.borrow_mut();
-            let Some(now) = core.write_progress(peer) else {
-                return;
-            };
-            if let (Some(window), Some((b, since))) = (stall, before)
-                && watched_a_window(since.elapsed(), window)
-                && now - b < i128::from(WRITE_PROGRESS_FLOOR)
+            if let Some(window) = stall
+                && self
+                    .core
+                    .borrow_mut()
+                    .observe_unfinished_write(peer, window)
             {
-                core.mark_write_stalled(peer);
                 return;
             }
-            if expired {
+            if deadline.is_some_and(|d| Instant::now() >= d) {
                 return;
             }
-            before = Some((now, Instant::now()));
         }
     }
 
@@ -464,17 +449,6 @@ impl<K: Kind> Socket<K> {
     pub(crate) fn send_to_now(&mut self, peer: PeerId, msg: Msg) -> SendTo {
         self.core.borrow_mut().send_to(peer, msg)
     }
-}
-
-/// `true` once a peer's progress has been watched for a whole `write_stall`
-/// window (within a tenth, for timer granularity), the least that tells a
-/// peer that stopped reading from one reading in bursts. A wait cut short by a
-/// `send_timeout` below the window judges nobody: a reader taking a steady
-/// 6 MB/s, 12 KiB then a 2 ms pause, acknowledges nothing for a 2 ms wait that
-/// falls in a pause, and was reported stalled. Such a send just waits out its
-/// timeout.
-fn watched_a_window(elapsed: Duration, window: Duration) -> bool {
-    elapsed >= window.saturating_sub(window / 10)
 }
 
 impl<K: Kind> Drop for Socket<K> {

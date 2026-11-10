@@ -158,8 +158,11 @@ fn toggle_time(held: usize) -> Duration {
 fn reports_past_the_hwm_cost_the_same_with_many_held() {
     let empty = toggle_time(0);
     let held = toggle_time(9_000);
+    // Loose enough for a debug build, where holding the prefixes costs about
+    // 6 to 7 times as much and varies, and still far under the scan's roughly
+    // 280 times.
     assert!(
-        held < empty * 4 + Duration::from_millis(50),
+        held < empty * 20 + Duration::from_millis(200),
         "with 9 000 prefixes held the toggles took {held:?}, against {empty:?} with none"
     );
 }

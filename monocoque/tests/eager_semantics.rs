@@ -145,7 +145,12 @@ fn throttled_sends_arrive(count: usize, size: usize) {
     let endpoint = format!("tcp://{}", l.local_addr().unwrap());
     let sender = thread::spawn(move || {
         LocalRuntime::new().unwrap().block_on(async move {
-            let mut push = PushSocket::new();
+            // A window well over the reader's pacing: under heavy outside load
+            // its thread can pause past the default 50 ms, which would then
+            // count as a reader that really stopped.
+            let mut push = PushSocket::with_options(
+                SocketOptions::default().with_write_stall(Some(Duration::from_millis(200))),
+            );
             push.connect(&endpoint).await.unwrap();
             let body = monocoque::Bytes::from(vec![9u8; size]);
             for _ in 0..count {
