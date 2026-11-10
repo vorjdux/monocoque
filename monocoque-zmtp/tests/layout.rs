@@ -44,5 +44,5 @@ fn connection_state_keeps_its_size() {
         248
     };
     assert_eq!(size_of::<ZmtpCodec>(), codec, "ZmtpCodec changed size");
-    assert_eq!(size_of::<OutQueue>(), 80, "OutQueue changed size");
+    assert_eq!(size_of::<OutQueue>(), 88, "OutQueue changed size");
 }

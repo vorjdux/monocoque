@@ -346,12 +346,20 @@ The consequence is that batching requires a deliberate choice. When eager mode
 When coalescing is enabled, they may still be in a userspace buffer waiting for
 the 64 KB threshold to fill. The one exception in eager mode is a peer that
 stopped reading: once it has taken under 16 KiB in a `write_stall` window
-(50 ms by default; noticing takes up to two windows), sends stop waiting on it
-until it reads again, so it cannot hold up the socket's other peers. A slow
-peer that keeps reading is waited for. The socket's monitor reports
-`PeerStalled`, `with_write_stall(None)` always waits, and `close()` waits for
-everything up to `linger`, so call it before a sender exits. That difference
-matters in a few real situations:
+(50 ms by default; noticing takes up to two windows, or one when `send_timeout`
+is set), sends stop waiting on it until it reads again, so it cannot hold up
+the socket's other peers. A slow peer that keeps reading is waited for. The
+socket's monitor reports `PeerStalled`, `with_write_stall(None)` always waits,
+and `close()` waits for everything up to `linger`, so call it before a sender
+exits.
+
+This protection is Linux only in full. On Linux a peer's progress is what it
+acknowledged (`TIOCOUTQ`); elsewhere it is what was written into the local
+socket, which a peer that stopped reading still accepts until both kernel
+buffers are full. So on macOS and the BSDs a slow reader can still lose
+messages left in kernel buffers when the sender exits without `close()`.
+
+That difference matters in a few real situations:
 
 - If your process crashes between `send()` and `flush()`, coalesced messages
   are lost. Eager-mode messages are already in the kernel buffer and will

@@ -193,6 +193,20 @@ pub trait Hooks: 'static {
         inbox.push_back((id, msg));
     }
 
+    /// Messages [`keep_past_hwm`] parked in the hook instead of the inbox,
+    /// handed out after the inbox, oldest first. While any is parked, later
+    /// kept messages go to [`keep_past_hwm`] too, so none overtakes them.
+    ///
+    /// [`keep_past_hwm`]: Self::keep_past_hwm
+    fn take_parked(&mut self) -> Option<(PeerId, Msg)> {
+        None
+    }
+
+    /// `true` while [`take_parked`](Self::take_parked) has a message.
+    fn has_parked(&self) -> bool {
+        false
+    }
+
     /// Inspect an inbound message. Return it to make it receivable, or `None`
     /// to consume it.
     fn on_inbound(&mut self, _id: PeerId, msg: Msg) -> Option<Msg> {
@@ -912,7 +926,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
                 let Some(msg) = msg else { break };
                 if let Some(keep) = self.hooks.on_inbound(id, msg) {
                     let hwm = self.options.recv_hwm;
-                    if hwm != 0 && self.inbox.len() >= hwm {
+                    if hwm != 0 && (self.inbox.len() >= hwm || self.hooks.has_parked()) {
                         self.hooks.keep_past_hwm(&mut self.inbox, id, keep);
                     } else {
                         self.inbox.push_back((id, keep));
@@ -1225,6 +1239,9 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         if let Some(m) = self.inbox.pop_front() {
             return Some(m);
         }
+        if let Some(m) = self.hooks.take_parked() {
+            return Some(m);
+        }
         while let Some(&id) = self.fair.front() {
             let i = id.index as usize;
             let Some(entry) = self.peers.get_mut(i).and_then(Option::as_mut) else {
@@ -1277,7 +1294,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
     /// else, including the peer's last message, goes the general way.
     #[inline]
     fn take_lone_ready(&mut self, slot: &mut Msg) -> Option<PeerId> {
-        if !self.inbox.is_empty() || self.fair.len() != 1 {
+        if !self.inbox.is_empty() || self.fair.len() != 1 || self.hooks.has_parked() {
             return None;
         }
         let id = self.fair[0];
@@ -1401,6 +1418,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
     pub fn has_ready(&mut self) -> bool {
         self.progress();
         !self.inbox.is_empty()
+            || self.hooks.has_parked()
             || self.fair.iter().any(|id| {
                 self.entry(*id)
                     .is_some_and(|e| !e.state.borrow().ready.is_empty())

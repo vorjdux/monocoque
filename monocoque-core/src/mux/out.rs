@@ -45,6 +45,11 @@ pub struct OutQueue {
     tail: BytesMut,
     queued_msgs: usize,
     in_flight_msgs: usize,
+    /// A job is out with the writer. `in_flight_msgs` cannot say so: protocol
+    /// commands (a PONG, a heartbeat PING) are not counted as messages, so a
+    /// job of commands alone leaves it at zero while its bytes are still
+    /// being written.
+    job_in_flight: bool,
 }
 
 /// One unit of work for a peer's writer.
@@ -73,9 +78,10 @@ impl OutQueue {
     }
 
     /// The bytes of the one message just encoded, if it is all there is: no
-    /// segment, nothing queued before it and no write in flight.
+    /// segment, nothing queued before it and no write in flight. Writing them
+    /// while a job is out would let them overtake or split it on the wire.
     pub fn sole_message(&mut self) -> Option<&mut BytesMut> {
-        (self.segs.is_empty() && self.queued_msgs == 0 && self.in_flight_msgs == 0)
+        (self.segs.is_empty() && self.queued_msgs == 0 && !self.job_in_flight)
             .then_some(&mut self.tail)
     }
 
@@ -117,6 +123,7 @@ impl OutQueue {
         if self.is_empty() {
             return None;
         }
+        self.job_in_flight = true;
         if self.segs.is_empty() {
             self.take_queued_msgs();
             spare.clear();
@@ -152,6 +159,7 @@ impl OutQueue {
     /// The job handed out by [`take_job`](Self::take_job) has completed.
     pub const fn complete_job(&mut self) {
         self.in_flight_msgs = 0;
+        self.job_in_flight = false;
     }
 
     /// Discard everything queued (the peer is gone, or linger is zero).
@@ -189,6 +197,24 @@ mod tests {
         assert_eq!(q.pending_msgs(), 2);
         q.complete_job();
         assert_eq!(q.pending_msgs(), 0);
+    }
+
+    /// A job of commands alone (PONGs, a heartbeat PING) counts no message,
+    /// but while it is out a message must not go around it to the kernel: it
+    /// would split the job's frames or overtake them.
+    #[test]
+    fn no_direct_write_while_a_command_only_job_is_out() {
+        let mut q = OutQueue::default();
+        q.buf().extend_from_slice(b"\x04\x05PONG!");
+        assert!(q.sole_message().is_some(), "nothing is out yet");
+        let (mut spare, mut iov) = (BytesMut::new(), Vec::new());
+        let job = q.take_job(&mut spare, &mut iov).unwrap();
+        assert_eq!(q.pending_msgs(), 0, "commands are not messages");
+        q.buf().extend_from_slice(b"\x00\x01m");
+        assert!(q.sole_message().is_none(), "the command job is still out");
+        drop(job);
+        q.complete_job();
+        assert!(q.sole_message().is_some());
     }
 
     #[test]

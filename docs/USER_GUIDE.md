@@ -264,6 +264,32 @@ socket.peer_count();      // connected peers
 socket.options();         // current option values
 ```
 
+### Peers that stop reading
+
+An eager send waits until its bytes are in the kernel. A peer that stops
+reading would hold every such send up, so once it takes almost nothing for a
+`write_stall` window (50 ms by default), sends stop waiting on it until it reads
+again, and the socket's monitor reports `PeerStalled`. Watch for it to find a
+consumer that has fallen over:
+
+```rust
+use monocoque::zmq::SocketEvent;
+
+let monitor = socket.monitor();
+monocoque::rt::spawn_detached(async move {
+    while let Ok(event) = monitor.recv_async().await {
+        if let SocketEvent::PeerStalled(endpoint) = event {
+            eprintln!("peer on {endpoint} stopped reading");
+        }
+    }
+});
+```
+
+Messages queued for a stalled peer wait in its queue, up to the HWM. A reader
+that pauses for longer than a window, say 100 ms with `recv_hwm(1)`, can lose
+some when the sender drops its socket. `close()` waits for them up to `linger`;
+`with_write_stall(None)` makes every send wait for a slow reader instead.
+
 ---
 
 See [monocoque/examples/](../monocoque/examples/) for complete working programs, [MIGRATION.md](MIGRATION.md) if you're coming from libzmq or rust-zmq, and [SECURITY_GUIDE.md](SECURITY_GUIDE.md) for production security setup.

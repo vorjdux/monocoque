@@ -111,6 +111,43 @@ async fn wait_peers(c: &Core, n: usize) {
     .await;
 }
 
+/// A socket whose runtime was dropped gets a driver again on the next one.
+/// The flag that says a driver is running was cleared only when the driver
+/// finished, so a driver dropped with its runtime left it set for good.
+///
+/// Not on tokio: a tokio socket's listener and timers belong to the reactor
+/// of the runtime that made them, so the socket cannot outlive that runtime
+/// whatever its driver does.
+#[test]
+#[cfg(not(feature = "runtime-tokio"))]
+fn a_socket_gets_a_driver_again_after_its_runtime_is_dropped() {
+    let server = core(SocketOptions::default());
+    {
+        let rt = LocalRuntime::new().unwrap();
+        rt.block_on(async {
+            SocketCore::bind(&server, "tcp://127.0.0.1:0")
+                .await
+                .unwrap();
+        });
+        assert!(server.borrow().driver_running);
+    }
+    assert!(
+        !server.borrow().driver_running,
+        "the dropped runtime's driver still counts as running"
+    );
+    LocalRuntime::new().unwrap().block_on(async {
+        let ep = SocketCore::bind(&server, "tcp://127.0.0.1:0")
+            .await
+            .unwrap();
+        assert!(server.borrow().driver_running, "no driver was started");
+        let client = core(SocketOptions::default());
+        SocketCore::connect(&client, &ep.to_string()).unwrap();
+        send(&client, Msg::from("hello")).await;
+        let (_, msg) = recv(&server).await;
+        assert_eq!(msg, [&b"hello"[..]]);
+    });
+}
+
 #[test]
 fn ping_pong_over_tcp() {
     LocalRuntime::new().unwrap().block_on(async {

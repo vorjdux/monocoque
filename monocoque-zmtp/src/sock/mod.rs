@@ -415,10 +415,18 @@ impl<K: Kind> Socket<K> {
         let timeout = self.send_timeout();
         let stall = self.core.borrow().options().write_stall;
         let deadline = timeout.map(|t| Instant::now() + t);
-        // Asking the kernel costs a syscall, so a send that finishes within
-        // the first window, as nearly all do, never asks: that window only
-        // takes the first reading, and the next one compares against it.
-        let mut before = None;
+        // Asking the kernel costs a syscall, so without a timeout a send that
+        // finishes within the first window, as nearly all do, never asks: that
+        // window only takes the first reading, and the next one compares
+        // against it. With a timeout of two windows or less there may be no
+        // second window, and a peer that stopped reading was never marked:
+        // every send waited out the whole timeout. So with a timeout the first
+        // reading is taken here, and running out of time still checks.
+        let mut before = if deadline.is_some() {
+            self.core.borrow().write_progress(peer)
+        } else {
+            None
+        };
         loop {
             let left = deadline.map(|d| d.saturating_duration_since(Instant::now()));
             let slice = match (left, stall) {
@@ -427,15 +435,20 @@ impl<K: Kind> Socket<K> {
             };
             let written =
                 with_timeout(op(&self.core, move |c, cx| c.poll_written(cx, peer)), slice).await;
-            if written.is_ok() || deadline.is_some_and(|d| Instant::now() >= d) {
+            if written.is_ok() {
                 return;
             }
+            let expired = deadline.is_some_and(|d| Instant::now() >= d);
             let mut core = self.core.borrow_mut();
             let Some(now) = core.write_progress(peer) else {
                 return;
             };
-            if before.is_some_and(|b| now - b < i128::from(WRITE_PROGRESS_FLOOR)) {
+            if stall.is_some() && before.is_some_and(|b| now - b < i128::from(WRITE_PROGRESS_FLOOR))
+            {
                 core.mark_write_stalled(peer);
+                return;
+            }
+            if expired {
                 return;
             }
             before = Some(now);

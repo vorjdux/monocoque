@@ -27,6 +27,9 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
   to the 0.4 CURVE implementation.
 - inproc is bounded by the HWM and works across threads. `vectored_write_threshold`
   defaults to 16 KiB.
+- `send` on PUSH, DEALER and PAIR, and `send`/`send_ref` on PUB, XPUB and
+  RADIO, do their work when called rather than when the returned future is
+  first polled: a future dropped without being polled has still sent.
 - `monocoque_core::io::READ_SLAB_SIZE` is `MAX_READ_SIZE`, and
   `io::take_read_buffer` is removed.
 
@@ -75,6 +78,22 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
   single-frame ones (3.3 M against 19.5 M msg/s): reads shrank to a few
   hundred bytes as frames were split off the read buffer. They now run at
   12.2 M msg/s.
+- A send writing straight to the kernel could split or overtake a write of
+  protocol commands still in flight (PONGs answering a PING flood, a
+  heartbeat PING), corrupting the stream, or breaking CURVE's frame order.
+  Commands count as no message, so the writer looked idle while it wrote
+  them.
+- With a `send_timeout` of two `write_stall` windows or less, a peer that
+  stopped reading was never marked stalled, so every send to it waited out
+  the whole timeout until its HWM filled (100 s for 20 000 sends at 100 ms).
+  A send with a timeout now checks progress from the start.
+- An XPUB past its receive HWM scanned every queued report for each new one,
+  so a subscriber holding many unread prefixes and toggling a topic cost
+  quadratic CPU (21.6 us a report at 9 000 prefixes). Reports past the HWM
+  are now indexed by prefix.
+- A socket whose runtime was dropped never got a driver again when used from
+  another runtime: the flag saying one was running was cleared only when the
+  driver finished, not when it was dropped.
 
 ### Security
 

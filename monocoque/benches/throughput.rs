@@ -41,9 +41,16 @@ enum Mode {
     CoalescedOwned,
 }
 
-/// One timed PUSH/PULL run. PULL binds on its own OS thread and times
-/// `BATCH_SIZE` receives after a warmup message; PUSH sends `BATCH_SIZE + 1`.
-fn run_once(payload: &Msg, mode: Mode) -> Duration {
+/// One criterion sample: `iters * BATCH_SIZE` messages over one PUSH/PULL
+/// connection. PULL binds on its own OS thread and times the receives after a
+/// warmup message, so the clock starts on a live connection.
+///
+/// One connection per sample rather than per `BATCH_SIZE`: a fresh connection
+/// for every 10 000 messages left each closed one's port in `TIME_WAIT`, and
+/// once the bench ran fast enough that exhausted the ephemeral ports and the
+/// bind failed with `AddrInUse`.
+fn run_sample(payload: &Msg, mode: Mode, iters: u64) -> Duration {
+    let total = usize::try_from(iters).expect("iteration count fits usize") * BATCH_SIZE;
     let (ep_tx, ep_rx) = mpsc::channel::<String>();
     let (elapsed_tx, elapsed_rx) = mpsc::channel::<Duration>();
 
@@ -58,11 +65,11 @@ fn run_once(payload: &Msg, mode: Mode) -> Duration {
             pull.recv().await.unwrap();
             let t0 = Instant::now();
             if matches!(mode, Mode::CoalescedOwned) {
-                for _ in 0..BATCH_SIZE {
+                for _ in 0..total {
                     std::hint::black_box(pull.recv_owned().await.unwrap());
                 }
             } else {
-                for _ in 0..BATCH_SIZE {
+                for _ in 0..total {
                     std::hint::black_box(pull.recv().await.unwrap());
                 }
             }
@@ -80,7 +87,7 @@ fn run_once(payload: &Msg, mode: Mode) -> Duration {
         }
         let mut push = PushSocket::with_options(options);
         push.connect(&endpoint).await.unwrap();
-        for _ in 0..=BATCH_SIZE {
+        for _ in 0..=total {
             push.send(payload.clone()).await.unwrap();
         }
         // Release bytes that did not reach the coalescing threshold.
@@ -109,7 +116,7 @@ fn monocoque_group(c: &mut Criterion, name: &str, mode: Mode) {
         group.throughput(Throughput::Elements(BATCH_SIZE as u64));
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
             let payload = Msg::from(vec![0u8; size]);
-            b.iter_custom(|iters| (0..iters).map(|_| run_once(&payload, mode)).sum());
+            b.iter_custom(|iters| run_sample(&payload, mode, iters));
         });
     }
 
@@ -134,7 +141,8 @@ fn monocoque_push_pull_coalesced_owned(c: &mut Criterion) {
 /// Benchmark rust-zmq (libzmq) PUSH/PULL throughput.
 ///
 /// Same structure as the monocoque path: PULL binds in a separate thread,
-/// PUSH connects in the bench thread. Timer on the PULL side.
+/// PUSH connects in the bench thread, one connection per criterion sample.
+/// Timer on the PULL side.
 fn zmq_push_pull(c: &mut Criterion) {
     let mut group = c.benchmark_group("throughput/zmq/push_pull");
     group.measurement_time(Duration::from_secs(15));
@@ -146,43 +154,39 @@ fn zmq_push_pull(c: &mut Criterion) {
             let payload = vec![0u8; size];
 
             b.iter_custom(|iters| {
-                let mut total = Duration::ZERO;
+                let total =
+                    usize::try_from(iters).expect("iteration count fits usize") * BATCH_SIZE;
+                let (endpoint_tx, endpoint_rx) = mpsc::channel::<String>();
+                let (elapsed_tx, elapsed_rx) = mpsc::channel::<Duration>();
 
-                for _ in 0..iters {
-                    let (endpoint_tx, endpoint_rx) = mpsc::channel::<String>();
-                    let (elapsed_tx, elapsed_rx) = mpsc::channel::<Duration>();
-
-                    let pull_thread = thread::spawn(move || {
-                        let ctx = zmq::Context::new();
-                        let pull = ctx.socket(zmq::PULL).unwrap();
-                        pull.bind("tcp://127.0.0.1:*").unwrap();
-                        let endpoint = pull.get_last_endpoint().unwrap().unwrap();
-                        endpoint_tx.send(endpoint).unwrap();
-
-                        // Warmup message: the timer starts on a live connection.
-                        pull.recv_bytes(0).unwrap();
-                        let t0 = Instant::now();
-                        for _ in 0..BATCH_SIZE {
-                            pull.recv_bytes(0).unwrap();
-                        }
-                        elapsed_tx.send(t0.elapsed()).unwrap();
-                    });
-
-                    let endpoint = endpoint_rx.recv().unwrap();
-
+                let pull_thread = thread::spawn(move || {
                     let ctx = zmq::Context::new();
-                    let push = ctx.socket(zmq::PUSH).unwrap();
-                    push.connect(&endpoint).unwrap();
+                    let pull = ctx.socket(zmq::PULL).unwrap();
+                    pull.bind("tcp://127.0.0.1:*").unwrap();
+                    let endpoint = pull.get_last_endpoint().unwrap().unwrap();
+                    endpoint_tx.send(endpoint).unwrap();
 
-                    for _ in 0..=BATCH_SIZE {
-                        push.send(&payload, 0).unwrap();
+                    // Warmup message: the timer starts on a live connection.
+                    pull.recv_bytes(0).unwrap();
+                    let t0 = Instant::now();
+                    for _ in 0..total {
+                        pull.recv_bytes(0).unwrap();
                     }
+                    elapsed_tx.send(t0.elapsed()).unwrap();
+                });
 
-                    pull_thread.join().unwrap();
-                    total += elapsed_rx.recv().unwrap();
+                let endpoint = endpoint_rx.recv().unwrap();
+
+                let ctx = zmq::Context::new();
+                let push = ctx.socket(zmq::PUSH).unwrap();
+                push.connect(&endpoint).unwrap();
+
+                for _ in 0..=total {
+                    push.send(&payload, 0).unwrap();
                 }
 
-                total
+                pull_thread.join().unwrap();
+                elapsed_rx.recv().unwrap()
             });
         });
     }

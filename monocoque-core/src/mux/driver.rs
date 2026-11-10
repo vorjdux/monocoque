@@ -48,6 +48,19 @@ impl<P: Protocol, H: Hooks> Future for Driver<P, H> {
     }
 }
 
+/// A driver dropped before it finished, with the runtime that ran it, leaves
+/// the socket without one. Clearing the flag lets the socket's next bind or
+/// connect, on whatever runtime it is then used from, start another; left
+/// set, the socket would never get a driver again.
+impl<P: Protocol, H: Hooks> Drop for Driver<P, H> {
+    fn drop(&mut self) {
+        if let Ok(mut core) = self.core.try_borrow_mut() {
+            core.driver_running = false;
+            core.wakeups.clear_driver();
+        }
+    }
+}
+
 /// A one-shot, re-armable notification between a connector and the core.
 #[derive(Default)]
 pub struct Signal {

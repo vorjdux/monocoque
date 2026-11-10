@@ -104,3 +104,62 @@ fn manual_xpub_reports_past_the_recv_hwm_all_arrive_in_order() {
         }
     });
 }
+
+/// Time for an XPUB that never reads its reports to apply `TOGGLES` toggles of
+/// one topic, from a subscriber already holding `held` unread prefixes.
+fn toggle_time(held: usize) -> Duration {
+    const TOGGLES: usize = 20_000;
+    LocalRuntime::new().unwrap().block_on(async {
+        let mut xpub = XPubSocket::with_options(opts());
+        let ep = xpub.bind("tcp://127.0.0.1:0").await.unwrap();
+        let mut sub = SubSocket::with_options(opts());
+        sub.connect(&ep).await.unwrap();
+        for i in 0..held {
+            sub.subscribe(format!("held-{i:05}")).await.unwrap();
+        }
+        // Wait for the held prefixes to be applied, so only the toggles are
+        // timed.
+        if held > 0 {
+            let last = format!("held-{:05}", held - 1);
+            loop {
+                xpub.send(last.clone()).await.unwrap();
+                if monocoque::rt::timeout(Duration::from_millis(20), sub.recv_owned())
+                    .await
+                    .is_ok()
+                {
+                    break;
+                }
+            }
+        }
+        let start = std::time::Instant::now();
+        for _ in 0..TOGGLES {
+            sub.subscribe("toggled").await.unwrap();
+            sub.unsubscribe("toggled").await.unwrap();
+        }
+        sub.subscribe("after").await.unwrap();
+        loop {
+            xpub.send("after").await.unwrap();
+            if monocoque::rt::timeout(Duration::from_millis(1), sub.recv_owned())
+                .await
+                .is_ok()
+            {
+                break;
+            }
+        }
+        start.elapsed()
+    })
+}
+
+/// A report past the HWM costs the same however many reports are already
+/// waiting: each one scanned all of them, so a subscriber holding many
+/// unread prefixes and toggling a topic cost quadratic CPU (21.6 us a report
+/// at 9 000 prefixes, against 0.08 us with none).
+#[test]
+fn reports_past_the_hwm_cost_the_same_with_many_held() {
+    let empty = toggle_time(0);
+    let held = toggle_time(9_000);
+    assert!(
+        held < empty * 4 + Duration::from_millis(50),
+        "with 9 000 prefixes held the toggles took {held:?}, against {empty:?} with none"
+    );
+}
