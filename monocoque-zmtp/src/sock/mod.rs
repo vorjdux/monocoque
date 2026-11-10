@@ -423,7 +423,10 @@ impl<K: Kind> Socket<K> {
         // every send waited out the whole timeout. So with a timeout the first
         // reading is taken here, and running out of time still checks.
         let mut before = if deadline.is_some() {
-            self.core.borrow().write_progress(peer)
+            self.core
+                .borrow()
+                .write_progress(peer)
+                .map(|p| (p, Instant::now()))
         } else {
             None
         };
@@ -443,7 +446,9 @@ impl<K: Kind> Socket<K> {
             let Some(now) = core.write_progress(peer) else {
                 return;
             };
-            if stall.is_some() && before.is_some_and(|b| now - b < i128::from(WRITE_PROGRESS_FLOOR))
+            if let (Some(window), Some((b, since))) = (stall, before)
+                && watched_a_window(since.elapsed(), window)
+                && now - b < i128::from(WRITE_PROGRESS_FLOOR)
             {
                 core.mark_write_stalled(peer);
                 return;
@@ -451,7 +456,7 @@ impl<K: Kind> Socket<K> {
             if expired {
                 return;
             }
-            before = Some(now);
+            before = Some((now, Instant::now()));
         }
     }
 
@@ -459,6 +464,17 @@ impl<K: Kind> Socket<K> {
     pub(crate) fn send_to_now(&mut self, peer: PeerId, msg: Msg) -> SendTo {
         self.core.borrow_mut().send_to(peer, msg)
     }
+}
+
+/// `true` once a peer's progress has been watched for a whole `write_stall`
+/// window (within a tenth, for timer granularity), the least that tells a
+/// peer that stopped reading from one reading in bursts. A wait cut short by a
+/// `send_timeout` below the window judges nobody: a reader taking a steady
+/// 6 MB/s, 12 KiB then a 2 ms pause, acknowledges nothing for a 2 ms wait that
+/// falls in a pause, and was reported stalled. Such a send just waits out its
+/// timeout.
+fn watched_a_window(elapsed: Duration, window: Duration) -> bool {
+    elapsed >= window.saturating_sub(window / 10)
 }
 
 impl<K: Kind> Drop for Socket<K> {

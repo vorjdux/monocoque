@@ -186,10 +186,18 @@ pub trait Hooks: 'static {
     }
 
     /// With [`eager_inbound`], decide what happens to a message the hook kept
-    /// while `inbox` already holds the receive HWM. Keeps it by default.
+    /// while `inbox` already holds the receive HWM (`hwm`), or while some are
+    /// parked. Keeps it by default.
     ///
     /// [`eager_inbound`]: Self::eager_inbound
-    fn keep_past_hwm(&mut self, inbox: &mut VecDeque<(PeerId, Msg)>, id: PeerId, msg: Msg) {
+    fn keep_past_hwm(
+        &mut self,
+        inbox: &mut VecDeque<(PeerId, Msg)>,
+        hwm: usize,
+        id: PeerId,
+        msg: Msg,
+    ) {
+        let _ = hwm;
         inbox.push_back((id, msg));
     }
 
@@ -927,7 +935,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
                 if let Some(keep) = self.hooks.on_inbound(id, msg) {
                     let hwm = self.options.recv_hwm;
                     if hwm != 0 && (self.inbox.len() >= hwm || self.hooks.has_parked()) {
-                        self.hooks.keep_past_hwm(&mut self.inbox, id, keep);
+                        self.hooks.keep_past_hwm(&mut self.inbox, hwm, id, keep);
                     } else {
                         self.inbox.push_back((id, keep));
                     }

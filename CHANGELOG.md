@@ -90,7 +90,12 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
 - An XPUB past its receive HWM scanned every queued report for each new one,
   so a subscriber holding many unread prefixes and toggling a topic cost
   quadratic CPU (21.6 us a report at 9 000 prefixes). Reports past the HWM
-  are now indexed by prefix.
+  are now indexed by prefix. A data frame from an XSUB arriving while reports
+  wait waits behind them, up to the receive HWM of them, instead of being
+  dropped while the inbox has room.
+- A peer is judged stalled only over a whole `write_stall` window. With a
+  shorter `send_timeout`, a reader taking a steady 6 MB/s in bursts was
+  reported stalled, since a 2 ms wait could fall between its reads.
 - A socket whose runtime was dropped never got a driver again when used from
   another runtime: the flag saying one was running was cleared only when the
   driver finished, not when it was dropped.

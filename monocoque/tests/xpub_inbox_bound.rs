@@ -4,7 +4,7 @@
 //! receive HWM and the rest arrive later, in order, with none lost.
 
 use monocoque::rt::LocalRuntime;
-use monocoque::zmq::{SocketOptions, SubSocket, XPubSocket};
+use monocoque::zmq::{SocketOptions, SubSocket, XPubSocket, XSubSocket};
 use std::time::Duration;
 
 fn opts() -> SocketOptions {
@@ -162,4 +162,59 @@ fn reports_past_the_hwm_cost_the_same_with_many_held() {
         held < empty * 4 + Duration::from_millis(50),
         "with 9 000 prefixes held the toggles took {held:?}, against {empty:?} with none"
     );
+}
+
+/// A data frame from an XSUB that arrives while reports are parked, with the
+/// inbox below its HWM, waits behind them instead of being dropped.
+#[test]
+fn a_data_frame_behind_parked_reports_is_kept() {
+    const REPORTS: usize = 10;
+    LocalRuntime::new().unwrap().block_on(async {
+        let mut xpub = XPubSocket::with_options(opts());
+        let ep = xpub.bind("tcp://127.0.0.1:0").await.unwrap();
+        let mut xsub = XSubSocket::with_options(opts());
+        xsub.connect(&ep).await.unwrap();
+        for i in 0..REPORTS {
+            xsub.send(format!("\x01t-{i}")).await.unwrap();
+        }
+        // Wait for the last subscription: four reports fill the inbox and
+        // the rest are parked.
+        let last = format!("t-{}", REPORTS - 1);
+        loop {
+            xpub.send(last.clone()).await.unwrap();
+            if monocoque::rt::timeout(Duration::from_millis(20), xsub.recv_owned())
+                .await
+                .is_ok()
+            {
+                break;
+            }
+        }
+        // Read two: the inbox is below its HWM, reports still parked.
+        for _ in 0..2 {
+            xpub.recv_owned().await.unwrap();
+        }
+        xsub.send("data").await.unwrap();
+        // Let the XPUB take the data frame in while the reports are still
+        // parked: a receive takes queued messages before reading more.
+        monocoque::rt::sleep(Duration::from_millis(50)).await;
+        assert!(xpub.has_message());
+        let mut rest = Vec::new();
+        while let Ok(m) = xpub.recv_owned().await {
+            rest.push(m.frames().next().unwrap().to_vec());
+            if rest.last().is_some_and(|f| f == b"data") {
+                break;
+            }
+        }
+        assert_eq!(
+            rest.last().map(Vec::as_slice),
+            Some(&b"data"[..]),
+            "the data frame was lost"
+        );
+        assert_eq!(
+            rest.len(),
+            REPORTS - 2 + 1,
+            "every report comes before it: {rest:?}"
+        );
+        assert!(rest[..REPORTS - 2].iter().all(|r| r[0] == 1));
+    });
 }

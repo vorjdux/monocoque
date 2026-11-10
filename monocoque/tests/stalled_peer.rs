@@ -118,3 +118,78 @@ fn a_short_send_timeout_still_marks_a_stalled_peer() {
         );
     }
 }
+
+/// Answer a ZMTP 3 NULL handshake as a PULL socket.
+fn pull_handshake(s: &mut std::net::TcpStream) {
+    use std::io::{Read, Write};
+    let mut greeting = [0u8; 64];
+    greeting[0] = 0xff;
+    greeting[9] = 0x7f;
+    greeting[10] = 3;
+    greeting[12..16].copy_from_slice(b"NULL");
+    s.write_all(&greeting).unwrap();
+    let mut peer = [0u8; 64];
+    s.read_exact(&mut peer).unwrap();
+    let mut ready = vec![5u8];
+    ready.extend_from_slice(b"READY");
+    ready.push(11);
+    ready.extend_from_slice(b"Socket-Type");
+    ready.extend_from_slice(&4u32.to_be_bytes());
+    ready.extend_from_slice(b"PULL");
+    s.write_all(&[0x04, u8::try_from(ready.len()).unwrap()])
+        .unwrap();
+    s.write_all(&ready).unwrap();
+}
+
+/// A `send_timeout` below `write_stall` shortens the wait a peer's progress is
+/// judged over, not what it has to take per window. A reader taking a steady
+/// 6 MB/s, 12 KiB per 2 ms, never stopped reading and must not be reported
+/// stalled; held to a whole window's 16 KiB in each 2 ms wait, it was.
+#[test]
+fn a_short_send_timeout_does_not_report_a_steady_reader_stalled() {
+    use monocoque::zmq::{PushSocket, SocketEvent};
+    use std::io::Read;
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let ep = format!("tcp://{}", listener.local_addr().unwrap());
+    let reader = thread::spawn(move || {
+        let (mut s, _) = listener.accept().unwrap();
+        pull_handshake(&mut s);
+        let mut buf = vec![0u8; 12 * 1024];
+        let mut got = 0usize;
+        // About 6 MB/s: 12 KiB, then 2 ms, until the sender closes.
+        loop {
+            match s.read(&mut buf) {
+                Ok(0) | Err(_) => return got,
+                Ok(n) => got += n,
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+    });
+
+    let events = LocalRuntime::new().unwrap().block_on(async move {
+        let mut push = PushSocket::with_options(
+            SocketOptions::default().with_send_timeout(Duration::from_millis(2)),
+        );
+        let monitor = push.monitor();
+        push.connect(&ep).await.unwrap();
+        let body = Msg::from(vec![1u8; 1024]);
+        let until = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < until {
+            let _ = push.send(body.clone()).await;
+        }
+        drop(push);
+        monitor.drain().collect::<Vec<_>>()
+    });
+    let got = reader.join().unwrap();
+    assert!(got > 1 << 20, "the reader took only {got} bytes");
+    let stalled: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, SocketEvent::PeerStalled(_)))
+        .collect();
+    assert!(
+        stalled.is_empty(),
+        "a steady reader was reported stalled: {stalled:?}"
+    );
+}

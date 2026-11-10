@@ -348,7 +348,10 @@ the 64 KB threshold to fill. The one exception in eager mode is a peer that
 stopped reading: once it has taken under 16 KiB in a `write_stall` window
 (50 ms by default; noticing takes up to two windows, or one when `send_timeout`
 is set), sends stop waiting on it until it reads again, so it cannot hold up
-the socket's other peers. A slow peer that keeps reading is waited for. The
+the socket's other peers. A peer is judged only over a whole window, since a
+reader taking data in bursts acknowledges nothing for a moment between them:
+with a `send_timeout` below `write_stall`, no peer is marked, and each send
+waits at most its timeout. A slow peer that keeps reading is waited for. The
 socket's monitor reports `PeerStalled`, `with_write_stall(None)` always waits,
 and `close()` waits for everything up to `linger`, so call it before a sender
 exits.

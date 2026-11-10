@@ -568,14 +568,30 @@ impl FromOptions for XPubHooks {
 /// costs a lookup: scanning the inbox for an earlier one cost every report
 /// time in proportion to the reports already queued, and a subscriber
 /// toggling a topic made that quadratic.
+///
+/// While reports are parked, other kept messages (an XSUB's data frames) park
+/// behind them, so none overtakes a report, up to the receive HWM of them.
+/// Dropping them instead lost data whenever reports were parked, even with
+/// the inbox below its HWM.
 #[derive(Default)]
 struct ParkedReports {
-    by_seq: std::collections::BTreeMap<u64, (PeerId, Msg)>,
+    /// In arrival order; a report carries its prefix, a data frame none.
+    by_seq: std::collections::BTreeMap<u64, (PeerId, Msg, Option<Bytes>)>,
     by_prefix: HashMap<Bytes, (u64, u8)>,
     next: u64,
+    data: usize,
 }
 
 impl ParkedReports {
+    /// Park a data frame behind the reports, if fewer than `limit` are parked.
+    fn park_data(&mut self, id: PeerId, msg: Msg, limit: usize) {
+        if self.data < limit {
+            self.data += 1;
+            self.by_seq.insert(self.next, (id, msg, None));
+            self.next += 1;
+        }
+    }
+
     /// Park `msg`, a report of `kind` for `prefix`. One meeting its opposite
     /// still unread cancels it: neither needs reading. The same report already
     /// parked says nothing new.
@@ -589,16 +605,19 @@ impl ParkedReports {
             None => {
                 let seq = self.next;
                 self.next += 1;
-                self.by_seq.insert(seq, (id, msg));
+                self.by_seq.insert(seq, (id, msg, Some(prefix.clone())));
                 self.by_prefix.insert(prefix, (seq, kind));
             }
         }
     }
 
     fn take(&mut self) -> Option<(PeerId, Msg)> {
-        let (_, (id, msg)) = self.by_seq.pop_first()?;
-        if let Some(frame) = msg.frame_bytes(0) {
-            self.by_prefix.remove(&frame.slice(1..));
+        let (_, (id, msg, prefix)) = self.by_seq.pop_first()?;
+        match prefix {
+            Some(prefix) => {
+                self.by_prefix.remove(&prefix);
+            }
+            None => self.data -= 1,
         }
         Some((id, msg))
     }
@@ -680,11 +699,22 @@ impl Hooks for XPubHooks {
     /// forwarding these upstream still ends up with the right subscriptions.
     /// Reports are parked beside the inbox, indexed by prefix, at most one per
     /// prefix; data frames are dropped.
-    fn keep_past_hwm(&mut self, _inbox: &mut VecDeque<(PeerId, Msg)>, id: PeerId, msg: Msg) {
+    fn keep_past_hwm(
+        &mut self,
+        inbox: &mut VecDeque<(PeerId, Msg)>,
+        hwm: usize,
+        id: PeerId,
+        msg: Msg,
+    ) {
         let Some(frame) = msg.frame_bytes(0) else {
             return;
         };
         let (Some(&kind @ (0 | 1)), prefix) = (frame.first(), frame.slice(1..)) else {
+            // A data frame. With the inbox at its HWM it is dropped, as
+            // before; with room there, it only waits behind parked reports.
+            if inbox.len() < hwm {
+                self.2.park_data(id, msg, hwm);
+            }
             return;
         };
         self.2.park(id, msg, kind, prefix);
