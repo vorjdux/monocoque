@@ -208,9 +208,9 @@ rt.block_on(async {
 })?;
 ```
 
-Before a receive sleeps, it keeps looking for up to 20 µs: on compio
-`LocalRuntime` polls for completions, and on tokio and smol the receive yields
-to the runtime. Sleeping and being woken costs more than a local round trip, so
+Before a receive sleeps, it keeps looking for up to 20 µs (100 µs on smol): on
+compio `LocalRuntime` polls for completions, and on tokio and smol the receive
+yields to the runtime. Sleeping and being woken costs more than a local round trip, so
 this cuts latency, at the cost of some CPU while traffic flows. Set
 `MONOCOQUE_SPIN_US` to change the budget in microseconds (0 disables it).
 
