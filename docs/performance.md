@@ -299,8 +299,12 @@ batch is rarely a whole number of them: 64 KB of 256 B frames comes to 65 720
 bytes against a loopback segment of 65 483, and the kernel sends the odd 237
 bytes as a segment of their own, a second pass through the stack on the
 sender for almost nothing. The writer asks the socket for its segment size
-(`TCP_MAXSEG`) and, when the bytes left over are few, keeps them for the next
-batch; `flush()`, a close and a queue at its HWM write everything. Measured
+(`TCP_MAXSEG`) and sends the bytes left over with the next batch while the
+sender keeps sending. They never wait for a `flush()`: once the sending task
+yields to the runtime the socket's driver writes them, with anything queued
+since, so a sender that crosses the threshold and then waits for a reply does
+not strand part of a message. `flush()`, a close and a queue at its HWM write
+everything. Measured
 on a PUSH/PULL pair of 256 B frames on smol, one development host:
 
 | Bytes per write | Segments | Throughput |
@@ -444,9 +448,12 @@ Notes and limits:
 - On compio, a frame under 64 KiB that does not fit the read buffer gets room
   for several like it, so one read brings in several large frames. The
   readiness backends lost about as much from this as compio gained, and keep a
-  buffer per frame. tokio and smol instead finish a frame that straddles a
-  read from the next ordinary read, and read in full while a stream keeps
-  filling them.
+  buffer per frame. tokio and smol read in full while a stream keeps filling
+  their reads; on tokio only a read given a whole `read_buffer_size` counts as
+  filled, since an eager message fills the tail a buffer had left by chance.
+  smol also finishes a frame that straddles a read from the next ordinary
+  read; on tokio that copy cost an eager 16 KiB stream more than the read it
+  saved.
 
 ---
 

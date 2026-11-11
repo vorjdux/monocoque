@@ -360,6 +360,8 @@ pub enum Event {
     Writable(PeerId),
     /// A peer is gone.
     Closed(PeerId, CloseReason),
+    /// A coalescing peer wrote whole segments and kept the rest queued.
+    Rest,
     /// Heartbeat interval elapsed.
     Tick,
     /// The close linger period ended.
@@ -472,6 +474,9 @@ pub struct SocketCore<P: Protocol, H: Hooks> {
     heartbeat: Option<ChildId>,
     shared_wire: BytesMut,
     driver_running: bool,
+    /// Some peer holds the rest of a whole-segment write, and the driver has
+    /// been woken to write it once the sending task yields.
+    rests_held: bool,
     closing: bool,
     linger_expired: bool,
 }
@@ -508,6 +513,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             heartbeat: None,
             shared_wire: BytesMut::new(),
             driver_running: false,
+            rests_held: false,
             closing: false,
             linger_expired: false,
         }))
@@ -617,6 +623,17 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
 
     // ── progress ─────────────────────────────────────────────────────────
 
+    /// Write what whole-segment jobs left queued. The driver calls this: it
+    /// runs only once the task using the socket has yielded, so nothing more
+    /// is on its way for those bytes to go out with.
+    pub(crate) fn release_rests(&mut self) {
+        if std::mem::take(&mut self.rests_held) {
+            for entry in self.peers.iter().flatten() {
+                entry.state.borrow_mut().release_rest();
+            }
+        }
+    }
+
     /// Poll every woken child and process what they reported, until quiet.
     #[inline]
     pub fn progress(&mut self) {
@@ -671,6 +688,13 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
                 Event::Writable(_) => self.wakeups.wake_user(),
                 Event::Closed(id, reason) => self.on_closed(id, &reason),
                 Event::Tick => self.on_tick(),
+                Event::Rest => {
+                    // One wake covers every rest held until the driver runs,
+                    // which it cannot while the sending task keeps going.
+                    if !std::mem::replace(&mut self.rests_held, true) {
+                        self.wakeups.wake_driver();
+                    }
+                }
                 Event::LingerExpired => self.linger_expired = true,
             }
         }

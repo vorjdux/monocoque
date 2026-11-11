@@ -37,6 +37,7 @@ impl<P: Protocol, H: Hooks> Future for Driver<P, H> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         let mut core = self.core.borrow_mut();
         core.wakeups.set_driver(cx.waker());
+        core.release_rests();
         core.progress();
         if core.finished() {
             core.shutdown_now();

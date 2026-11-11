@@ -11,14 +11,18 @@
 //!
 //! The reader keeps the buffers it moves off instead, and takes one back once
 //! its messages are gone. A steady stream then reads into the same few
-//! buffers, already mapped and warm.
+//! buffers, already mapped and warm. They are let go when a read comes back
+//! under half full, so a connection that goes idle keeps one read buffer.
 
 use bytes::BytesMut;
 
-/// Most buffers kept. Messages queued up to a receive high-water mark can
-/// hold more than this many alive at once; the oldest is then let go and
-/// freed as before.
-const KEPT: usize = 4;
+/// Most buffers kept: the one the last read's messages still point into and
+/// one that is free again, which is what a steady stream cycles through.
+/// Messages queued up to a receive high-water mark can hold more alive at
+/// once; the oldest is then let go and freed as before. It also bounds what a
+/// connection can hold if it goes idle straight after a read that came back
+/// more than half full, which [`Retired::after_read`] does not catch.
+const KEPT: usize = 2;
 
 /// Room a new buffer gets beyond what was asked for.
 const SLACK: usize = 4096;
@@ -73,7 +77,17 @@ impl Retired {
         })
     }
 
-    /// Let every kept buffer go (the stream went quiet).
+    /// A read of `n` bytes came back with `room` to fill. One that used less
+    /// than half of it means the stream is not keeping the reader busy, and
+    /// the kept buffers go: an idle connection should hold one read buffer,
+    /// not several. A busy stream's reads come back full or nearly so.
+    pub fn after_read(&mut self, n: usize, room: usize) {
+        if n < room / 2 {
+            self.clear();
+        }
+    }
+
+    /// Let every kept buffer go.
     pub fn clear(&mut self) {
         self.kept = Default::default();
     }
@@ -162,6 +176,22 @@ mod tests {
             buf[..10].fill(7);
             held.push(msg);
         }
+    }
+
+    /// A burst that ends on a read neither full nor tiny leaves nothing kept.
+    #[test]
+    fn a_read_under_half_its_room_lets_the_kept_buffers_go() {
+        let mut retired = Retired::default();
+        let mut buf = BytesMut::new();
+        retired.make_room(&mut buf, READ);
+        let msg = read_and_split(&mut buf, 10);
+        retired.make_room(&mut buf, READ);
+        assert!(!retired.is_empty());
+        retired.after_read(READ - 1, READ);
+        assert!(!retired.is_empty(), "a nearly full read is a busy stream");
+        retired.after_read(8 * 1024, READ);
+        assert!(retired.is_empty());
+        drop(msg);
     }
 
     #[test]

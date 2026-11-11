@@ -130,15 +130,18 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
   layer of a send or out of the decoder: a wire peer with room encodes it
   from where the caller's future holds it.
 - A coalescing peer released by its threshold writes whole TCP segments and
-  keeps what is left over, less than one segment, for the next batch or for
-  `flush()`. A 64 KiB threshold on loopback wrote 65 720 bytes, one segment
-  and a few hundred bytes the kernel sent as a segment of their own; writing
-  65 483 took a PUSH/PULL pair of 256 B frames from 15.1 to 15.9 M msg/s. The
-  cut is made only when the bytes left over are few, and a flush, a close and
-  a queue at its HWM write everything.
+  sends what is left over, less than one segment, with the next batch while
+  the sender keeps sending. A 64 KiB threshold on loopback wrote 65 720
+  bytes, one segment and a few hundred bytes the kernel sent as a segment of
+  their own; writing 65 483 took a PUSH/PULL pair of 256 B frames from 15.1 to
+  15.9 M msg/s. What is left over never waits for a `flush()`: the socket's
+  driver writes it, with anything queued since, as soon as the sending task
+  yields to the runtime. A flush, a close and a queue at its HWM write
+  everything.
 - A reader keeps the buffers its undelivered messages still point into and
-  takes one back when they are gone, up to four on a busy stream and none on
-  a quiet one. Each read used to take a new 64 KiB buffer and free the old
+  takes one back when they are gone, up to two on a busy stream, and lets
+  them go when a read comes back under half full. Each read used to take a
+  new 64 KiB buffer and free the old
   one, which the allocator could return to the system: a tokio receiver in a
   plain program took 217 000 page faults over six million 256 B messages and
   ran at 13.7 M msg/s, against about 500 faults and 15.6 M now.
@@ -150,7 +153,8 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
 - Reads grow from `read_buffer_size` up to 64 KiB while they keep filling, and
   the read buffer is reused in place once the last message is released. On
   compio a frame under 64 KiB that does not fit gets room for several; tokio
-  and smol read in full while a stream keeps filling their reads. A vectored
+  and smol read in full while a stream keeps filling their reads (on tokio, a
+  read given a whole `read_buffer_size`). A vectored
   write carries at most 128 KiB, or 32 KiB for an eager peer on tokio and
   smol. The bytes queued for a peer are counted as they are queued: summing
   the segments on every coalesced send walked some 2 000 of them per send

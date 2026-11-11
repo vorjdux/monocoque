@@ -21,9 +21,11 @@ const DEFAULT_SPIN: Duration = Duration::from_micros(20);
 #[cfg(feature = "runtime-smol")]
 const DEFAULT_SPIN: Duration = Duration::from_micros(100);
 
-/// The spin budget: `MONOCOQUE_SPIN_US` if set (0 disables), otherwise
-/// 20 µs, or none when this thread may run on one CPU only, where
-/// spinning only delays the peer it waits for.
+/// The spin budget.
+///
+/// `MONOCOQUE_SPIN_US` if set (0 disables), otherwise 20 µs on compio and
+/// tokio and 100 µs on smol, or none when this thread may run on one CPU
+/// only, where spinning only delays the peer it waits for.
 #[must_use]
 pub fn spin_budget() -> Duration {
     if let Some(us) = std::env::var("MONOCOQUE_SPIN_US")

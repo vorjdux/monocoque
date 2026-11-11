@@ -49,6 +49,14 @@ const SMALL_READ: usize = 1024;
 /// compio reads several large frames per read instead and keeps the tail.
 const STREAM_FULL_READS: bool = cfg!(not(feature = "runtime-compio"));
 
+/// On tokio a read counts as filling its buffer only if it was given a whole
+/// `read_size`. One into the tail a buffer had left fills it by chance: a
+/// 4 KiB eager message fills 3 KiB of tail, and taking that for a busy stream
+/// gave every such message a fresh buffer, 392 K msg/s against 437 K. smol
+/// needs the tail's word for it: with this rule its coalesced 16 KiB stream
+/// fell from 457 K to 307 K.
+const FILLED_NEEDS_A_WHOLE_READ: bool = cfg!(feature = "runtime-tokio");
+
 /// Whether a read buffer with `spare` room left should be refreshed to the
 /// read target before the next read.
 ///
@@ -143,6 +151,9 @@ pub struct PeerState<C> {
     /// waiting on it until it takes [`WRITE_PROGRESS_FLOOR`] more bytes or
     /// its queue drains.
     pub(crate) write_stalled: bool,
+    /// A coalesced job was cut to whole segments and its rest is queued
+    /// below the threshold, waiting for the next batch or an idle sender.
+    rest_held: bool,
     /// `bytes_written` when the peer was marked stalled.
     stalled_at: u64,
     /// Progress and the time it was read, since sends began finding this
@@ -181,6 +192,7 @@ impl<C: Codec> PeerState<C> {
             close_when_drained: false,
             bytes_written: 0,
             write_stalled: false,
+            rest_held: false,
             stalled_at: 0,
             stall_watch: None,
             stream: Weak::new(),
@@ -506,6 +518,16 @@ impl<C: Codec> PeerState<C> {
         }
     }
 
+    /// Write what a whole-segment job left behind, with anything queued
+    /// since. Called once the sending task has yielded: the bytes belong to
+    /// messages a threshold already released, and with the sender idle there
+    /// is no next batch for them to ride with.
+    pub(crate) fn release_rest(&mut self) {
+        if std::mem::take(&mut self.rest_held) {
+            self.flush();
+        }
+    }
+
     /// Set the coalescing threshold; `None` writes eagerly.
     pub(crate) fn set_hold(&mut self, threshold: Option<usize>) {
         if let Outbound::Wire { hold, .. } = &mut self.outbound {
@@ -539,7 +561,8 @@ impl<C: Codec> PeerState<C> {
     ///
     /// `segment` is the payload of one TCP segment on this connection. A
     /// coalescing peer released by its threshold writes whole segments and
-    /// keeps the rest for the next batch. A batch is rarely a whole number of
+    /// keeps the rest for the next batch, or for the driver to write once the
+    /// sending task yields. A batch is rarely a whole number of
     /// segments, and the kernel sends the odd bytes at its end as a segment of
     /// their own, which costs the sender a second pass through the stack for
     /// a few hundred bytes: a 64 KiB threshold on loopback (65 483 bytes a
@@ -579,6 +602,13 @@ impl<C: Codec> PeerState<C> {
             (super::out::MAX_VECTORED_JOB, 0)
         };
         if released && let Some(job) = out.take_job_capped(spare, iov, cap, segment) {
+            // The rest rides with the next batch only if one comes. The
+            // socket's driver, which runs once the sending task yields,
+            // writes it otherwise (see `release_rest`).
+            if segment != 0 && !out.is_empty() && !self.rest_held {
+                self.rest_held = true;
+                self.events.push(super::Event::Rest);
+            }
             return Poll::Ready(Some(job));
         }
         if self.close_when_drained {
@@ -739,8 +769,6 @@ pub async fn reader_loop<C: Codec>(
             retired.make_room(&mut buf, target);
         }
         if short_read {
-            // Nothing more is coming for now: keep one buffer, not several.
-            retired.clear();
             stream.wait_after_short_read().await;
         }
         let len = buf.len();
@@ -763,7 +791,8 @@ pub async fn reader_loop<C: Codec>(
                 // with nothing more coming until this side answers. A larger
                 // one is a stream, whose next bytes may already be here.
                 short_read = n < spare && n < SMALL_READ;
-                filled = n == spare;
+                retired.after_read(n, spare);
+                filled = n == spare && (!FILLED_NEEDS_A_WHOLE_READ || spare >= read_size);
                 target = next_read_target(target, read_size, spare, n);
             }
         }
