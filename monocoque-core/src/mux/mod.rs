@@ -27,6 +27,7 @@ mod driver;
 pub mod inproc;
 pub mod out;
 pub mod peer;
+mod readbuf;
 #[cfg(test)]
 mod tests;
 
@@ -430,6 +431,17 @@ pub enum SendTo {
     Full(Msg),
     /// No such live peer; the message is handed back.
     Gone(Msg),
+}
+
+/// What [`SocketCore::try_send_lb_ref`] did with a message.
+#[derive(Debug)]
+pub enum SendNow {
+    /// Sent with nothing left to wait for, or failed.
+    Done(Result<()>),
+    /// Queued toward this peer, whose write has yet to reach the kernel.
+    Pending(PeerId),
+    /// Not sent; send it by value.
+    Owned,
 }
 
 /// The multiplexer behind one socket. See the [module docs](self).
@@ -1584,6 +1596,51 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         }
         self.wakeups.exit();
         sent
+    }
+
+    /// Send `msg` to the next peer with room without taking it: a wire peer
+    /// encodes from the reference. Moving the 112-byte `Msg` into a slot first,
+    /// and looking the peer up again to ask whether its write was pending,
+    /// together took over half the time `send` spent outside this call.
+    ///
+    /// [`SendNow::Owned`] means nothing was sent: no peer has room, or the
+    /// peer is inproc and takes the message itself. The caller then sends it
+    /// by value.
+    pub fn try_send_lb_ref(&mut self, msg: &Msg) -> SendNow {
+        self.wakeups.enter();
+        self.progress();
+        let cursor = self.lb_cursor;
+        let picked = if let [id] = self.lb[..] {
+            Some(id)
+        } else {
+            self.pick_writable()
+        };
+        let sent = picked.and_then(|id| {
+            let e = self.entry(id).filter(|e| !e.closed)?;
+            let mut st = e.state.borrow_mut();
+            st.enqueue_ref(msg).map(|r| r.map(|eager| (id, eager)))
+        });
+        let now = match sent {
+            None => {
+                // Not sent: leave the round-robin where it was for the send
+                // by value that follows.
+                self.lb_cursor = cursor;
+                SendNow::Owned
+            }
+            Some(Err(e)) => SendNow::Done(Err(e)),
+            Some(Ok((id, eager))) => {
+                self.progress();
+                // A coalescing peer holds its writes for a flush, so only an
+                // eager one can have a write to wait for.
+                if eager && self.write_pending(id) {
+                    SendNow::Pending(id)
+                } else {
+                    SendNow::Done(Ok(()))
+                }
+            }
+        };
+        self.wakeups.exit();
+        now
     }
 
     fn pick_writable(&mut self) -> Option<PeerId> {

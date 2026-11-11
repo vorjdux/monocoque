@@ -490,6 +490,11 @@ pub struct SocketOptions {
     /// buffer is written to the kernel as a single syscall once it reaches
     /// this many bytes.
     ///
+    /// On TCP that write carries a whole number of segments when the bytes
+    /// left over are few: the rest, less than one segment, waits for the next
+    /// batch or for `flush()`, rather than leaving as a short segment of its
+    /// own. A batch smaller than one segment is written whole.
+    ///
     /// - Default: 65536 (64 KB) - one typical TCP segment on loopback
     pub write_coalesce_threshold: usize,
 

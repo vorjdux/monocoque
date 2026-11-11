@@ -34,6 +34,37 @@ pub fn unacked_bytes<S: std::os::unix::io::AsRawFd>(stream: &S) -> u32 {
     }
 }
 
+/// Payload bytes the connection carries per TCP segment (`TCP_MAXSEG`), as
+/// negotiated and net of the options each segment carries. 0 if the call fails
+/// or the socket is not TCP.
+#[cfg(target_os = "linux")]
+pub fn segment_size<S: std::os::unix::io::AsRawFd>(stream: &S) -> usize {
+    let mut mss: libc::c_int = 0;
+    let mut len = libc::socklen_t::try_from(size_of::<libc::c_int>()).unwrap_or(0);
+    // SAFETY: the fd is valid while `stream` is borrowed; the kernel writes at
+    // most `len` bytes, one c_int, through pointers that outlive the call.
+    let rc = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::IPPROTO_TCP,
+            libc::TCP_MAXSEG,
+            (&raw mut mss).cast(),
+            &raw mut len,
+        )
+    };
+    if rc == 0 {
+        usize::try_from(mss).unwrap_or(0)
+    } else {
+        0
+    }
+}
+
+/// Elsewhere writes are not cut to segments.
+#[cfg(not(target_os = "linux"))]
+pub const fn segment_size<S>(_stream: &S) -> usize {
+    0
+}
+
 /// Write what the socket takes right now, without blocking or the runtime.
 ///
 /// `None` if it took nothing, for whatever reason: the caller's writer retries

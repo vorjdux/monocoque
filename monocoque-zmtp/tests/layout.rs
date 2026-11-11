@@ -37,12 +37,12 @@ fn connection_state_keeps_its_size() {
     // The codec copies the two options it reads per frame (max frame size,
     // vectored threshold) instead of holding a `SocketOptions` (664 bytes),
     // so options can grow without moving the decoder's fields.
-    // smol adds the staged frame a read just short of it waits in.
-    let codec = if cfg!(feature = "runtime-smol") {
+    // tokio and smol add the staged frame a read just short of it waits in.
+    let codec = if cfg!(not(feature = "runtime-compio")) {
         288
     } else {
         248
     };
     assert_eq!(size_of::<ZmtpCodec>(), codec, "ZmtpCodec changed size");
-    assert_eq!(size_of::<OutQueue>(), 88, "OutQueue changed size");
+    assert_eq!(size_of::<OutQueue>(), 96, "OutQueue changed size");
 }

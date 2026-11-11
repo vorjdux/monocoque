@@ -124,9 +124,10 @@ pub struct ZmtpCodec {
     /// The read buffer, set aside while a frame too long for it is read into
     /// a buffer of its own.
     parked: Option<BytesMut>,
-    /// On smol, a frame whose rest fits one more read, and its full length:
-    /// reads keep going to the read buffer and the rest is copied out of it.
-    #[cfg(feature = "runtime-smol")]
+    /// On tokio and smol, a frame whose rest fits one more read, and its full
+    /// length: reads keep going to the read buffer and the rest is copied out
+    /// of it.
+    #[cfg(not(feature = "runtime-compio"))]
     staged: Option<(BytesMut, usize)>,
 }
 
@@ -146,7 +147,7 @@ impl ZmtpCodec {
             dish: false,
             unusual_encode: false,
             parked: None,
-            #[cfg(feature = "runtime-smol")]
+            #[cfg(not(feature = "runtime-compio"))]
             staged: None,
         }
     }
@@ -158,12 +159,12 @@ impl ZmtpCodec {
     /// is one allocation per long frame, the frame's own, and the read buffer
     /// is neither regrown nor shared.
     fn await_frame(&mut self, buf: &mut BytesMut, total: usize) {
-        // On smol, a frame whose rest fits one more read is staged instead:
-        // reading only that rest into the frame's own buffer took a read of a
-        // few bytes per frame (16 KiB frames into 16 KiB reads). Its rest is
-        // copied out of the next ordinary read, which brings the following
-        // frame along. tokio and compio gained nothing from it.
-        #[cfg(feature = "runtime-smol")]
+        // On tokio and smol, a frame whose rest fits one more read is staged
+        // instead: reading only that rest into the frame's own buffer took a
+        // read of a few bytes per frame (16 KiB frames into 16 KiB reads). Its
+        // rest is copied out of the next ordinary read, which brings the
+        // following frame along. compio gives such a frame room for several.
+        #[cfg(not(feature = "runtime-compio"))]
         if self.parked.is_none()
             && total >= LONG_FRAME
             && total > buf.capacity()
@@ -436,7 +437,7 @@ impl Codec for ZmtpCodec {
         if self.framing == Framing::V1 {
             return self.decode_v1(buf, deliver);
         }
-        #[cfg(feature = "runtime-smol")]
+        #[cfg(not(feature = "runtime-compio"))]
         if let Some((mut frame, total)) = self.staged.take() {
             let take = (total - frame.len()).min(buf.len());
             frame.extend_from_slice(&buf[..take]);

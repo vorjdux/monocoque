@@ -20,7 +20,7 @@ use bytes::Bytes;
 use monocoque_core::error::{MonocoqueError, Result};
 use monocoque_core::monitor::{SocketMonitor, create_monitor};
 use monocoque_core::msg::{Metadata, Msg, MsgRef};
-use monocoque_core::mux::{Hooks, PeerId, PeerInfo, SendTo, Shared, SocketCore, op};
+use monocoque_core::mux::{Hooks, PeerId, PeerInfo, SendNow, SendTo, Shared, SocketCore, op};
 use monocoque_core::options::SocketOptions;
 use monocoque_core::transport::Stream;
 use std::future::{Future, poll_fn};
@@ -362,18 +362,21 @@ impl<K: Kind> Socket<K> {
     /// coalescing sender at its HWM pays about once per batch written.
     pub(crate) fn send_lb_now(&mut self, msg: Msg) -> impl Future<Output = Result<()>> + '_ {
         type Wait<'a> = std::pin::Pin<Box<dyn Future<Output = Result<()>> + 'a>>;
-        let mut slot = Some(msg);
-        let tried = self.core.borrow_mut().try_send_lb_prefixed(&[], &mut slot);
-        let wait: Wait<'_> = match tried {
-            Some(Ok(peer)) if !self.core.borrow().write_pending(peer) => {
-                return futures::future::Either::Left(std::future::ready(Ok(())));
+        // By reference first: a wire peer with room encodes the message where
+        // it is, and it is only moved if it has to wait or change hands.
+        let now = self.core.borrow_mut().try_send_lb_ref(&msg);
+        let wait: Wait<'_> = match now {
+            SendNow::Done(result) => {
+                return futures::future::Either::Left(std::future::ready(result));
             }
-            Some(Err(e)) => return futures::future::Either::Left(std::future::ready(Err(e))),
-            Some(Ok(peer)) => Box::pin(async move {
+            SendNow::Pending(peer) => Box::pin(async move {
                 self.wait_written(peer).await;
                 Ok(())
             }),
-            None => Box::pin(async move { self.send_lb(&mut slot).await.map(drop) }),
+            SendNow::Owned => {
+                let mut slot = Some(msg);
+                Box::pin(async move { self.send_lb(&mut slot).await.map(drop) })
+            }
         };
         futures::future::Either::Right(wait)
     }

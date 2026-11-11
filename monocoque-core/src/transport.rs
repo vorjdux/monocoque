@@ -124,6 +124,17 @@ impl Stream {
         }
     }
 
+    /// Payload bytes per TCP segment on this connection; 0 for a stream that
+    /// has no segments (IPC) or where the platform cannot tell.
+    #[must_use]
+    pub fn segment_size(&self) -> usize {
+        match self {
+            Self::Tcp(s) => crate::tcp::segment_size(s),
+            #[cfg(unix)]
+            Self::Ipc(_) => 0,
+        }
+    }
+
     /// Bytes in the socket's send queue the peer has not acknowledged; 0 where
     /// the platform cannot tell.
     #[must_use]

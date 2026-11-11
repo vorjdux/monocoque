@@ -116,10 +116,10 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
   REQ/REP round trips are about 30% faster on tokio and smol. PUB fan-out and
   topic filtering with coalescing pass 0.4, whose PUB batched on worker
   threads; an eager PUB pays one send per subscriber per message.
-- A receive about to sleep keeps looking for up to 20 us first
-  (`MONOCOQUE_SPIN_US`): compio's `LocalRuntime` polls for completions, and on
-  tokio and smol the receive yields to the runtime. It costs some CPU while
-  traffic flows.
+- A receive about to sleep keeps looking first (`MONOCOQUE_SPIN_US`), for up
+  to 20 us on compio and tokio and 100 us on smol, where a wakeup costs more:
+  compio's `LocalRuntime` polls for completions, and on tokio and smol the
+  receive yields to the runtime. It costs some CPU while traffic flows.
 - An eager send with the writer idle writes to the kernel from `send` itself
   on every backend, with no task woken.
 - A send to a peer with room, and a receive of a queued message, run without
@@ -127,7 +127,21 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
   waiting path is boxed; it was over 500 bytes, copied on every `.await`), and
   on PUSH, DEALER, PAIR, PUB, XPUB and RADIO it returns a finished future
   rather than being an `async fn`. A `Msg` is no longer copied through each
-  layer of a send or out of the decoder.
+  layer of a send or out of the decoder: a wire peer with room encodes it
+  from where the caller's future holds it.
+- A coalescing peer released by its threshold writes whole TCP segments and
+  keeps what is left over, less than one segment, for the next batch or for
+  `flush()`. A 64 KiB threshold on loopback wrote 65 720 bytes, one segment
+  and a few hundred bytes the kernel sent as a segment of their own; writing
+  65 483 took a PUSH/PULL pair of 256 B frames from 15.1 to 15.9 M msg/s. The
+  cut is made only when the bytes left over are few, and a flush, a close and
+  a queue at its HWM write everything.
+- A reader keeps the buffers its undelivered messages still point into and
+  takes one back when they are gone, up to four on a busy stream and none on
+  a quiet one. Each read used to take a new 64 KiB buffer and free the old
+  one, which the allocator could return to the system: a tokio receiver in a
+  plain program took 217 000 page faults over six million 256 B messages and
+  ran at 13.7 M msg/s, against about 500 faults and 15.6 M now.
 - `Msg` is 112 bytes, keeping three frames inline instead of four (a message
   of four or more frames allocates), and `Msg::from(Vec<u8>)` of 64 bytes or
   less is stored inline.
@@ -135,9 +149,12 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
   operation, and a lone peer keeps its place in the fair queue.
 - Reads grow from `read_buffer_size` up to 64 KiB while they keep filling, and
   the read buffer is reused in place once the last message is released. On
-  compio a frame under 64 KiB that does not fit gets room for several; smol
-  reads in full while a stream keeps filling its reads. A vectored write
-  carries at most 128 KiB, or 32 KiB for an eager peer on tokio and smol.
+  compio a frame under 64 KiB that does not fit gets room for several; tokio
+  and smol read in full while a stream keeps filling their reads. A vectored
+  write carries at most 128 KiB, or 32 KiB for an eager peer on tokio and
+  smol. The bytes queued for a peer are counted as they are queued: summing
+  the segments on every coalesced send walked some 2 000 of them per send
+  with 16 KiB frames queued to the HWM.
 - tokio waits through `poll_read_ready`/`poll_write_ready` rather than a
   readiness future per wait, and only a read under 1 KiB counts as draining
   the socket on tokio and smol.

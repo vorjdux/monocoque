@@ -40,14 +40,14 @@ const MAX_READ_TARGET: usize = 64 * 1024;
 /// Below this, a read that did not fill the buffer means the socket is drained.
 const SMALL_READ: usize = 1024;
 
-/// On smol, while reads keep filling the buffer (a stream with data waiting),
-/// each read is given a full `read_size` even if that means a fresh buffer,
-/// rather than whatever tail the last one left. Into the tail, 16 KiB frames
-/// straddled every read and took two reads each, and coalesced 16 KiB
-/// throughput trailed 0.4 by about 18%. Request-reply reads come back short,
-/// so they keep reusing the tail and allocate nothing per message. tokio and
-/// compio do not gain from it and keep the tail.
-const STREAM_FULL_READS: bool = cfg!(feature = "runtime-smol");
+/// On tokio and smol, while reads keep filling the buffer (a stream with data
+/// waiting), each read is given a full `read_size` even if that means a fresh
+/// buffer, rather than whatever tail the last one left. Into the tail, 16 KiB
+/// frames straddled every read and took two reads each, and coalesced 16 KiB
+/// throughput trailed 0.4 by about 20% on both. Request-reply reads come back
+/// short, so they keep reusing the tail and allocate nothing per message.
+/// compio reads several large frames per read instead and keeps the tail.
+const STREAM_FULL_READS: bool = cfg!(not(feature = "runtime-compio"));
 
 /// Whether a read buffer with `spare` room left should be refreshed to the
 /// read target before the next read.
@@ -380,6 +380,28 @@ impl<C: Codec> PeerState<C> {
         self.wake_writer_if_released();
     }
 
+    /// Queue `msg` toward a wire peer with room, encoding from the reference.
+    /// `None` if the peer has no room or is not a wire peer; otherwise whether
+    /// the peer is eager, the only kind whose write a sender waits for.
+    #[inline]
+    pub(crate) fn enqueue_ref(&mut self, msg: &Msg) -> Option<crate::error::Result<bool>> {
+        if !self.writable() {
+            return None;
+        }
+        let Outbound::Wire {
+            codec, out, hold, ..
+        } = &mut self.outbound
+        else {
+            return None;
+        };
+        let eager = hold.is_none();
+        if let Err(e) = codec.encode(msg, out) {
+            return Some(Err(e));
+        }
+        self.finish_encoded();
+        Some(Ok(eager))
+    }
+
     /// Queue the message in `slot`, leaving it empty. A wire peer encodes it
     /// where it is: a `Msg` is large, and moving it here costs a real copy.
     #[inline]
@@ -514,31 +536,49 @@ impl<C: Codec> PeerState<C> {
     }
 
     /// Writer side: take the next job, or park until there is one.
+    ///
+    /// `segment` is the payload of one TCP segment on this connection. A
+    /// coalescing peer released by its threshold writes whole segments and
+    /// keeps the rest for the next batch. A batch is rarely a whole number of
+    /// segments, and the kernel sends the odd bytes at its end as a segment of
+    /// their own, which costs the sender a second pass through the stack for
+    /// a few hundred bytes: a 64 KiB threshold on loopback (65 483 bytes a
+    /// segment) wrote 65 720, and writing 65 483 instead moved 256 B frames
+    /// from 15.1 to 15.9 M msg/s. A flush, a close and a full queue write
+    /// everything, as does a batch under one segment.
     fn poll_job(
         &mut self,
         cx: &mut Context<'_>,
         spare: &mut BytesMut,
         iov: &mut Vec<Bytes>,
+        stream: &Stream,
     ) -> Poll<Option<WriteJob>> {
         if self.closed.is_some() {
             return Poll::Ready(None);
         }
         let released = self.released();
+        let (hwm, closing) = (self.send_hwm, self.close_when_drained);
         let Outbound::Wire {
             out,
             writer_waker,
             hold,
+            flushing,
             ..
         } = &mut self.outbound
         else {
             return Poll::Ready(None);
         };
-        let cap = if hold.is_some() {
-            super::out::MAX_COALESCED_VECTORED_JOB
+        let (cap, segment) = if hold.is_some() {
+            // Asked for each batch: the kernel holds a young connection to
+            // half its window (32 KiB on loopback) and raises it later.
+            let whole =
+                released && !*flushing && !closing && (hwm == 0 || out.pending_msgs() < hwm);
+            let segment = if whole { stream.segment_size() } else { 0 };
+            (super::out::MAX_COALESCED_VECTORED_JOB, segment)
         } else {
-            super::out::MAX_VECTORED_JOB
+            (super::out::MAX_VECTORED_JOB, 0)
         };
-        if released && let Some(job) = out.take_job_capped(spare, iov, cap) {
+        if released && let Some(job) = out.take_job_capped(spare, iov, cap, segment) {
             return Poll::Ready(Some(job));
         }
         if self.close_when_drained {
@@ -671,8 +711,8 @@ pub async fn reader_loop<C: Codec>(
             st.signal_readable();
         }
     }
-    let mut reads = 0u32;
-    let mut target = read_size;
+    let (mut reads, mut target) = (0u32, read_size);
+    let mut retired = super::readbuf::Retired::default();
     let mut short_read = false;
     let mut filled = false;
     loop {
@@ -689,15 +729,18 @@ pub async fn reader_loop<C: Codec>(
         if reads.is_multiple_of(READS_PER_YIELD) {
             yield_now().await;
         }
-        // `reserve` reclaims the front of a unique buffer instead of
-        // reallocating, so the steady state reuses one allocation. A frame
-        // longer than the buffer has already asked for its full size.
+        // A unique buffer is reclaimed from its front, and one still held by
+        // undelivered messages is swapped for a kept one, so the steady state
+        // allocates nothing. A frame longer than the buffer has already asked
+        // for its full size.
         if needs_refresh(buf.capacity() - buf.len(), read_size, filled)
             && !matches!(&peer.borrow().outbound, Outbound::Wire { codec, .. } if codec.filling_frame())
         {
-            buf.reserve(target);
+            retired.make_room(&mut buf, target);
         }
         if short_read {
+            // Nothing more is coming for now: keep one buffer, not several.
+            retired.clear();
             stream.wait_after_short_read().await;
         }
         let len = buf.len();
@@ -812,7 +855,11 @@ pub async fn writer_loop<C: Codec>(peer: Rc<RefCell<PeerState<C>>>, stream: Rc<S
     let mut spare = BytesMut::new();
     let mut iov: Vec<Bytes> = Vec::new();
     loop {
-        let job = poll_fn(|cx| peer.borrow_mut().poll_job(cx, &mut spare, &mut iov)).await;
+        let job = poll_fn(|cx| {
+            peer.borrow_mut()
+                .poll_job(cx, &mut spare, &mut iov, &stream)
+        })
+        .await;
         let Some(job) = job else {
             if peer.borrow().close_when_drained && peer.borrow().closed.is_none() {
                 let _ = stream.shutdown().await;

@@ -9,7 +9,17 @@ use std::time::{Duration, Instant};
 /// Default time to look before sleeping. On a Unix socket REQ/REP round trip
 /// (64 B, two cores) 5 µs and 20 µs measured alike, 7.0 µs against 10.0 without
 /// spinning; 20 µs leaves room for a slower peer.
+#[cfg(not(feature = "runtime-smol"))]
 const DEFAULT_SPIN: Duration = Duration::from_micros(20);
+/// smol wakes a sleeping thread through one reactor shared by the whole
+/// process, re-armed on every wait, so a sleep costs far more there. One
+/// sender feeding four workers gives each a batch every few dozen
+/// microseconds: at 20 µs each worker slept between them and the pool ran at
+/// half of 0.4's rate (5.4 M against 9.8 M msg/s at 64 B); at 100 µs it
+/// passed it (10.3 M). compio and tokio lose at large frames with a longer
+/// budget and keep 20 µs.
+#[cfg(feature = "runtime-smol")]
+const DEFAULT_SPIN: Duration = Duration::from_micros(100);
 
 /// The spin budget: `MONOCOQUE_SPIN_US` if set (0 disables), otherwise
 /// 20 µs, or none when this thread may run on one CPU only, where
