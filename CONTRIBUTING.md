@@ -69,8 +69,12 @@ scripts/run_interop_tests.sh
 Benchmarks, built on criterion:
 
 ```
-scripts/bench_all.sh
+scripts/bench_all.sh                                # compio, every benchmark
+scripts/bench_all.sh --backend all --pin 0,2        # all three backends, pinned
+scripts/bench_pair.py --against main --pin 0,2      # working tree against a revision
 ```
+
+`bench_pair.py` runs the two revisions in alternating rounds, which is the way to check a performance change: a saved baseline is measured at another time, so it also counts whatever changed on the machine since. Pin to two separate physical cores (`lscpu -e` shows which CPUs share one).
 
 Fuzzing needs a nightly toolchain and cargo-fuzz. The targets cover the decoder, the frame codec, the greeting parser, command parsing, the CURVE handshake, PLAIN security, the subscription trie, and ZAP request decoding:
 
