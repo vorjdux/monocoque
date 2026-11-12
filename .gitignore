@@ -97,6 +97,7 @@ ehthumbs_vista.db
 # Benchmark results
 criterion/
 bench_results/
+external-benchs/
 
 # Flamegraph profiling
 flamegraph.svg

@@ -96,8 +96,11 @@ def measure(binary, pattern, pin, scratch, env):
     env = dict(env, CARGO_TARGET_DIR=str(scratch))
     done = subprocess.run(cmd, cwd=scratch, env=env, capture_output=True, text=True)
     if done.returncode != 0:
+        # One failed run should not throw away the rounds already measured.
+        # The cases it finished before failing are kept.
         tail = "\n".join((done.stdout + done.stderr).strip().splitlines()[-8:])
-        sys.exit(f"{binary} failed:\n{tail}")
+        print(f"  a run of {binary.name} failed and is counted as far as it got:\n{tail}",
+              file=sys.stderr, flush=True)
     lines = ANSI.sub("", done.stdout).splitlines()
     times = {}
     for i, line in enumerate(lines):
