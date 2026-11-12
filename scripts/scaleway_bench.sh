@@ -601,6 +601,11 @@ cd "$HOME/bench" || exit 1
 . "$HOME/.cargo/env"
 SUDO=""
 [ "$(id -u)" = 0 ] || SUDO="sudo"
+# An io_uring ring counts against a user's locked-memory limit, and a server
+# session starts with 8 MiB. Benchmarks that start a runtime per thread run
+# out of it and fail with "Cannot allocate memory" while creating one.
+$SUDO prlimit --pid $$ --memlock=unlimited:unlimited 2>/dev/null \
+    || ulimit -l unlimited 2>/dev/null || true
 mkdir -p logs
 exec > logs/run.log 2>&1
 
@@ -630,6 +635,7 @@ stage host
     echo "smt: $(cat /sys/devices/system/cpu/smt/control 2>/dev/null)"
     echo "governor: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null)"
     echo "boost: $(cat /sys/devices/system/cpu/cpufreq/boost 2>/dev/null)"
+    echo "memlock limit: $(ulimit -l)"
     echo "rustc: $(rustc --version 2>/dev/null | tail -1)"
 } > ../logs/host.txt
 lscpu > ../logs/lscpu.txt
@@ -664,6 +670,9 @@ echo "$rc" > ../logs/build.exit
 [ "$rc" -eq 0 ] || exit "$rc"
 
 stage "$MODE"
+# Let the machine settle after the build: the first real run started with a
+# load average near 5 left over from compiling.
+sleep 90
 uptime > ../logs/uptime-before.txt
 bench_flags=()
 for b in $BENCHES; do bench_flags+=(--bench "$b"); done

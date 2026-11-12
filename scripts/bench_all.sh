@@ -207,6 +207,18 @@ fi
 cd "${BENCH_DIR}"
 
 first_backend=true
+failed=()
+
+# The compio backend creates an io_uring ring per runtime, and a ring counts
+# against the locked-memory limit. With a small limit (8 MiB is a common
+# default on servers) the benchmarks that start a runtime per thread fail with
+# "Cannot allocate memory".
+memlock=$(ulimit -l)
+if [[ "$memlock" != unlimited ]] && ((memlock < 1048576)) && [[ " ${backends[*]} " == *" compio "* ]]; then
+    echo -e "${YELLOW}⚠ Locked-memory limit is ${memlock} KiB. If a compio benchmark fails with${NC}"
+    echo -e "${YELLOW}  \"Cannot allocate memory\", raise it first: ulimit -l unlimited${NC}"
+    echo ""
+fi
 for backend in "${backends[@]}"; do
     read -r -a features <<< "$(backend_features "$backend")"
 
@@ -242,8 +254,13 @@ for backend in "${backends[@]}"; do
 
         # The ${a[@]+...} form is for bash before 4.4, where expanding an
         # empty array under `set -u` is an error.
-        ${runner[@]+"${runner[@]}"} cargo bench --bench "$bench" "${features[@]}" -- \
-            ${filter[@]+"${filter[@]}"} ${criterion_args[@]+"${criterion_args[@]}"}
+        # One failed benchmark does not stop the rest: the others still have
+        # results worth keeping. It is listed at the end and fails the run.
+        if ! ${runner[@]+"${runner[@]}"} cargo bench --bench "$bench" "${features[@]}" -- \
+            ${filter[@]+"${filter[@]}"} ${criterion_args[@]+"${criterion_args[@]}"}; then
+            echo -e "${RED}  ✗ $bench ($backend) failed${NC}"
+            failed+=("$bench ($backend)")
+        fi
         echo ""
     done
 
@@ -427,3 +444,11 @@ if [[ -t 0 ]] && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] && command -v xdg-o
 fi
 
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+
+if [[ ${#failed[@]} -gt 0 ]]; then
+    echo -e "${RED}${#failed[@]} benchmark(s) failed and have no results:${NC}"
+    for name in "${failed[@]}"; do
+        echo -e "${RED}  ✗ ${name}${NC}"
+    done
+    exit 1
+fi
