@@ -154,7 +154,16 @@ fn monocoque_multithreaded_independent_pairs(c: &mut Criterion) {
 
     let payload = Msg::from(vec![0u8; MESSAGE_SIZE]);
 
+    // Each pair is one busy thread. With more pairs than CPUs the threads
+    // take turns on a core and the case measures the scheduler, so it is
+    // left out on a machine that small.
+    let cpus = std::thread::available_parallelism().map_or(usize::MAX, usize::from);
+
     for &num_threads in THREAD_COUNTS {
+        if num_threads > cpus {
+            eprintln!("skipping pairs/{num_threads}: this machine has {cpus} CPUs");
+            continue;
+        }
         let total_messages = num_threads * MESSAGES_PER_THREAD;
         group.throughput(Throughput::Elements(total_messages as u64));
 
