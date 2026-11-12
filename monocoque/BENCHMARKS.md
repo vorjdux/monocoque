@@ -459,3 +459,121 @@ cargo bench -p monocoque-rs --features zmq \
     --bench throughput --bench latency --bench ipc_vs_tcp \
     --bench pipelined_throughput --bench patterns
 ```
+
+---
+
+## Benchmarking on Scaleway
+
+`scripts/scaleway_bench.sh` rents one Scaleway Elastic Metal server, runs the
+benchmarks on it, copies the results back and deletes the server. It uses the
+same zone (`fr-par-1`), the same offer (`EM-B130E-NVME`: AMD EPYC 4245P, 6
+cores, 32 GB, NVMe) and the same OS (Ubuntu 26.04 LTS) every time, so runs
+weeks apart are on comparable hardware. The server gets SMT turned off and the
+`performance` governor before anything is measured.
+
+Six cores are enough for everything except the 8-pair case of the
+`multithreaded` bench, which leaves itself out on a machine with fewer CPUs
+than pairs. `--offer` picks another machine, but numbers from two different
+offers are not comparable with each other.
+
+> **Only deleting the server stops the billing.** A server that is powered off
+> or stopped is still charged by the hour. The script deletes it on every way
+> out, including Ctrl-C, and confirms that it is gone. If a run is ever killed
+> hard (`kill -9`, a lost machine), delete the server by hand as shown below.
+
+### Prerequisites
+
+- The [Scaleway CLI](https://github.com/scaleway/scaleway-cli) (`scw`), plus
+  `jq`, `curl` and `ssh`.
+- An API key in the environment: `SCW_ACCESS_KEY`, `SCW_SECRET_KEY`,
+  `SCW_DEFAULT_PROJECT_ID` and `SCW_DEFAULT_ORGANIZATION_ID`. The script reads
+  them from there only and writes them nowhere.
+- An SSH key whose public half is registered in the Scaleway project. The
+  private key is `~/.ssh/id_ed25519` unless `SSH_KEY` names another. It must
+  have no passphrase.
+- **A billing alert of about €15 a month** in the Scaleway console (Billing,
+  then Alerts). It is the one safeguard that does not depend on this
+  repository's code working.
+
+### Cost
+
+The offer is €0.247 an hour. A run costs under €1: installing the OS takes
+most of the first hour, and the suite takes a little over one more. The script
+prints the billed time and an estimate when it finishes.
+
+### Running it
+
+```bash
+# See every command without creating anything (needs no credentials)
+scripts/scaleway_bench.sh --dry-run
+
+# The full suite on HEAD: all three backends, pinned
+scripts/scaleway_bench.sh
+
+# The working revision against another, in alternating rounds
+scripts/scaleway_bench.sh --mode pair --against v0.4.2 --rounds 5
+
+# Instruction counts against the committed baseline
+scripts/scaleway_bench.sh --mode instr
+
+# Any other command, run in the unpacked source tree
+scripts/scaleway_bench.sh --mode arena --arena-cmd 'make dev-bench'
+```
+
+`--ref` picks the revision to test (the committed tree is shipped, never
+uncommitted changes), `--backend` and `--bench` narrow the run, and `--help`
+lists the rest. The source goes to the server as a `git archive` tarball, so
+the server never holds a GitHub credential.
+
+Results land in `bench-results/<UTC date>-<short sha>-<mode>/`, which git
+ignores: the criterion data, every log, the host description (`lscpu`, kernel,
+microcode, SMT, governor, boost), the load averages before and after, and a
+`run.json` with the zone, offer, server ID, revisions, times and exit codes.
+
+### How long a server can live
+
+A server never outlives its maximum lifetime, which is the script's hard cap
+plus 15 minutes (4 h 15 min by default; `--max-lifetime MIN` changes it). Four
+things enforce that, each independent of the one before:
+
+1. The script deletes the server on every exit and confirms that it is gone.
+2. A watchdog, started detached just before the server is created, deletes it
+   as soon as the run is gone without having deleted it (`kill -9`, a closed
+   terminal), and at the maximum lifetime even if the run is still alive and
+   stuck. It applies to `--keep` too.
+3. In CI, a final step deletes the run's server even when the job is
+   cancelled, and an hourly job deletes any tagged server older than 4 hours.
+4. The billing alert.
+
+The watchdog runs on the machine that started the run, so it stops if that
+machine is shut down or loses its network. The hourly CI job covers that case
+once the workflow is on the default branch with its secrets set; until then,
+after such an interruption, run `--reap --max-age 0` by hand.
+
+Nothing on the server can end the billing: it would need a Scaleway
+credential there, and powering the server off does not stop the charge.
+
+### Leftover servers
+
+Every server the script creates is tagged `monocoque-bench`, and its ID is
+written to `.scaleway-bench-server` as soon as it exists. To delete whatever
+is left:
+
+```bash
+scripts/scaleway_bench.sh --reap --max-age 0     # every tagged server, now
+scripts/scaleway_bench.sh --reap                 # only those older than 4 hours
+scw baremetal server list zone=all tags.0=monocoque-bench   # check by hand
+```
+
+`--reap` exits non-zero if a server is still listed afterwards. `--keep`
+leaves the server running on purpose, for looking at a result on the machine
+itself, and prints the command that deletes it.
+
+### Weekly run
+
+`.github/workflows/scaleway-bench.yml` runs the suite once a week and can be
+started by hand with a mode, a revision and a backend. It uploads the results
+as a workflow artifact kept for 90 days, deletes its server in a final step
+that runs even when the job is cancelled, and runs `--reap` every hour as a
+separate job. It needs the four `SCW_*` values and `SSH_PRIVATE_KEY` as
+repository secrets.

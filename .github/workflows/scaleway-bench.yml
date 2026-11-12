@@ -1,0 +1,176 @@
+name: Scaleway Benchmarks
+
+# Rents one Scaleway Elastic Metal server, benchmarks on it and deletes it.
+# The server is billed by the hour until it is DELETED, so this workflow has
+# three separate ways of deleting it: the script's own exit trap, a final
+# step that runs even when the job is cancelled, and an hourly job that
+# deletes any tagged server older than four hours.
+#
+# Every `uses:` is pinned to a commit SHA, like the other workflows here.
+
+on:
+  schedule:
+    # Weekly run: Sunday 02:17 UTC, which is Saturday evening Pacific time,
+    # well away from 06:00-09:00 PT in both winter and summer time.
+    - cron: "17 2 * * 0"
+    # Hourly reaper.
+    - cron: "41 * * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: What to run
+        type: choice
+        default: suite
+        options: [suite, pair, instr]
+      ref:
+        description: Revision under test (branch, tag or commit)
+        default: main
+      against:
+        description: Revision to compare with (pair mode only)
+        default: ""
+      backend:
+        description: Runtime backend
+        type: choice
+        default: all
+        options: [all, compio, tokio, smol]
+      rounds:
+        description: Rounds per revision (pair mode only)
+        default: "5"
+
+permissions:
+  contents: read
+
+env:
+  SCW_VERSION: "2.65.2"
+  SCW_SHA256: 184e697e6ab8a8e825be1c5cf61d104341abe3598bb0e20b7a54618cb05231b3
+
+jobs:
+  bench:
+    name: Benchmark on Elastic Metal
+    # Scheduled runs only in the home repository: a fork has no credentials.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.schedule == '17 2 * * 0' && github.repository == 'vorjdux/monocoque')
+    runs-on: ubuntu-latest
+    timeout-minutes: 270
+    permissions:
+      contents: read
+    # On the job, not the workflow: a queued run in a group replaces the one
+    # already waiting, and the hourly reaper must never push a benchmark run
+    # out of the queue (or wait behind one).
+    concurrency:
+      group: scaleway-bench
+      cancel-in-progress: false
+    env:
+      SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}
+      SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
+      SCW_DEFAULT_PROJECT_ID: ${{ secrets.SCW_DEFAULT_PROJECT_ID }}
+      SCW_DEFAULT_ORGANIZATION_ID: ${{ secrets.SCW_DEFAULT_ORGANIZATION_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history, so any ref or --against revision can be archived.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install the Scaleway CLI
+        run: |
+          set -euo pipefail
+          curl -sSfL -o "$RUNNER_TEMP/scw" \
+            "https://github.com/scaleway/scaleway-cli/releases/download/v${SCW_VERSION}/scaleway-cli_${SCW_VERSION}_linux_amd64"
+          echo "${SCW_SHA256}  $RUNNER_TEMP/scw" | sha256sum -c -
+          sudo install -m 0755 "$RUNNER_TEMP/scw" /usr/local/bin/scw
+          scw version
+
+      - name: Write the SSH key
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$RUNNER_TEMP/scw_bench_key"
+          chmod 600 "$RUNNER_TEMP/scw_bench_key"
+          echo "SSH_KEY=$RUNNER_TEMP/scw_bench_key" >> "$GITHUB_ENV"
+
+      - name: Run the benchmark
+        # Inputs arrive through the environment, never spliced into the
+        # script text.
+        env:
+          IN_MODE: ${{ inputs.mode || 'suite' }}
+          IN_REF: ${{ inputs.ref || 'main' }}
+          IN_AGAINST: ${{ inputs.against }}
+          IN_BACKEND: ${{ inputs.backend || 'all' }}
+          IN_ROUNDS: ${{ inputs.rounds || '5' }}
+        run: |
+          set -euo pipefail
+          # A branch that is not the one checked out exists only as origin/<name>.
+          resolve() {
+            if git rev-parse --verify --quiet "$1^{commit}" > /dev/null; then
+              echo "$1"
+            else
+              echo "origin/$1"
+            fi
+          }
+          args=(--mode "$IN_MODE" --ref "$(resolve "$IN_REF")" --backend "$IN_BACKEND")
+          if [[ "$IN_MODE" == pair ]]; then
+            [[ -n "$IN_AGAINST" ]] || { echo "pair mode needs the 'against' input"; exit 1; }
+            args+=(--against "$(resolve "$IN_AGAINST")" --rounds "$IN_ROUNDS")
+          fi
+          scripts/scaleway_bench.sh "${args[@]}"
+
+      - name: Upload the results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: scaleway-bench-${{ github.run_id }}
+          path: bench-results/
+          retention-days: 90
+          if-no-files-found: warn
+
+      # A cancelled job gets only a few seconds before it is killed, which is
+      # not enough for the script's own trap to confirm a deletion. This step
+      # still runs, and deletes this run's server if its ID file is left.
+      - name: Delete this run's server if it is still there
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ -s .scaleway-bench-server ]]; then
+            read -r server_id _ < .scaleway-bench-server
+            scripts/scaleway_bench.sh --reap --max-age 0 --server-id "$server_id"
+          else
+            echo "no server left by this run"
+          fi
+
+      - name: Remove the SSH key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/scw_bench_key"
+
+  reap:
+    name: Delete leftover servers
+    if: github.event.schedule == '41 * * * *' && github.repository == 'vorjdux/monocoque'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}
+      SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
+      SCW_DEFAULT_PROJECT_ID: ${{ secrets.SCW_DEFAULT_PROJECT_ID }}
+      SCW_DEFAULT_ORGANIZATION_ID: ${{ secrets.SCW_DEFAULT_ORGANIZATION_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the Scaleway CLI
+        run: |
+          set -euo pipefail
+          curl -sSfL -o "$RUNNER_TEMP/scw" \
+            "https://github.com/scaleway/scaleway-cli/releases/download/v${SCW_VERSION}/scaleway-cli_${SCW_VERSION}_linux_amd64"
+          echo "${SCW_SHA256}  $RUNNER_TEMP/scw" | sha256sum -c -
+          sudo install -m 0755 "$RUNNER_TEMP/scw" /usr/local/bin/scw
+
+      # Fails, and so sends the usual failure notification, if a server older
+      # than four hours could not be deleted.
+      - name: Reap servers older than four hours
+        run: scripts/scaleway_bench.sh --reap --max-age 4h
