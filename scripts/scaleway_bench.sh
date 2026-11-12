@@ -604,7 +604,7 @@ SUDO=""
 mkdir -p logs
 exec > logs/run.log 2>&1
 
-stage() { echo "$1" > logs/stage; echo "== $(date -u +%H:%M:%S) $1"; }
+stage() { echo "$1" > "$HOME/bench/logs/stage"; echo "== $(date -u +%H:%M:%S) $1"; }
 
 stage unpack
 rm -rf repo && mkdir repo && cd repo || exit 1
@@ -630,10 +630,11 @@ stage host
     echo "smt: $(cat /sys/devices/system/cpu/smt/control 2>/dev/null)"
     echo "governor: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null)"
     echo "boost: $(cat /sys/devices/system/cpu/cpufreq/boost 2>/dev/null)"
-    echo "rustc: $(rustc --version 2>&1)"
+    echo "rustc: $(rustc --version 2>/dev/null | tail -1)"
 } > ../logs/host.txt
 lscpu > ../logs/lscpu.txt
 lscpu -e > ../logs/lscpu-e.txt
+cloud-init status --long > ../logs/cloud-init.txt 2>&1
 $SUDO cat /root/bench-host.txt > ../logs/bench-host.txt 2>/dev/null
 
 # Two online CPUs on two different physical cores, neither of them core 0,
@@ -850,7 +851,10 @@ cleanup() {
             rm -f "$STATE_FILE"
             if [[ -n "$WATCHDOG_PID" ]]; then
                 kill "$WATCHDOG_PID" 2> /dev/null || true
-                rm -f "$WATCHDOG_DIR/$SERVER_NAME.log"
+                # Its log goes with the results: it is the record of whether
+                # the watchdog had a hand in the deletion.
+                mkdir -p "$RESULTS_DIR/logs"
+                mv "$WATCHDOG_DIR/$SERVER_NAME.log" "$RESULTS_DIR/logs/watchdog.log" 2> /dev/null || true
             fi
         else
             DELETED="FAILED"
@@ -1095,8 +1099,11 @@ if ! $DRY_RUN; then
 fi
 
 log "waiting for cloud-init"
+# A non-zero status here is not a failure by itself: cloud-init also returns
+# one when it finished with warnings. What matters is whether the server got
+# prepared, and prepare.sh below checks exactly that and does what is missing.
 remote 2400 'cloud-init status --wait > /dev/null 2>&1' \
-    || warn "cloud-init reported a problem or is absent; preparing over SSH instead"
+    || log "cloud-init ended with a non-zero status; the preparation is checked over SSH next"
 check_hard_cap
 
 # ── Prepare, upload, run ───────────────────────────────────────────────────
@@ -1112,7 +1119,12 @@ fi
 remote 1800 'bash ~/bench/prepare.sh' || die "could not prepare the server"
 
 log "building and running $MODE (up to $MODE_TIMEOUT_MIN minutes for the benchmark)"
-remote 60 'cd ~/bench && setsid nohup bash run.sh > /dev/null 2>&1 < /dev/null & echo started'
+# The redirections have to sit on the one backgrounded command. On a list
+# such as `cd dir && cmd &` the shell forks a copy of itself to run the list,
+# that copy keeps the SSH session's output open for as long as the run
+# lasts, and ssh then never returns.
+# shellcheck disable=SC2016
+remote 60 'setsid nohup bash "$HOME/bench/run.sh" > /dev/null 2>&1 < /dev/null &'
 
 if ! $DRY_RUN; then
     last_stage=""
