@@ -76,29 +76,32 @@ fn monocoque_fanout(c: &mut Criterion) {
             let payload = Msg::from(vec![0u8; size]);
 
             b.iter_custom(|iters| {
-                let mut total = Duration::ZERO;
+                // The pool is connected once and carries all `iters` batches.
+                // A fresh pool per batch leaves every connection's port in
+                // TIME_WAIT, and on a fast machine that uses up the ephemeral
+                // ports and fails a later bind with AddrInUse.
+                let (ep_tx, ep_rx) = mpsc::channel::<String>();
+                let (elapsed_tx, elapsed_rx) = mpsc::channel::<Duration>();
+                // WORKERS receivers plus the ventilator align on this barrier
+                // at the start of each batch.
+                let barrier = Arc::new(Barrier::new(WORKERS + 1));
+                // Reached once every worker has its share of a batch, so the
+                // next batch starts with nothing in flight.
+                let done = Arc::new(Barrier::new(WORKERS + 1));
 
-                for _ in 0..iters {
-                    let (ep_tx, ep_rx) = mpsc::channel::<String>();
-                    let (elapsed_tx, elapsed_rx) = mpsc::channel::<Duration>();
-                    // WORKERS receivers plus the ventilator align on this barrier.
-                    let barrier = Arc::new(Barrier::new(WORKERS + 1));
-                    // Reached once every worker has its share, so the ventilator
-                    // keeps its connections up until then.
-                    let done = Arc::new(Barrier::new(WORKERS + 1));
+                let vent_payload = payload.clone();
+                let vent_barrier = barrier.clone();
+                let vent_done = done.clone();
+                let ventilator = thread::spawn(move || {
+                    let rt = monocoque::rt::LocalRuntime::new().unwrap();
+                    rt.block_on(async move {
+                        let mut fanout = PushSocket::with_options(coalescing_options());
+                        ep_tx
+                            .send(fanout.bind("tcp://127.0.0.1:0").await.unwrap())
+                            .unwrap();
+                        wait_peers(|| fanout.peer_count(), WORKERS).await;
 
-                    let vent_payload = payload.clone();
-                    let vent_barrier = barrier.clone();
-                    let vent_done = done.clone();
-                    let ventilator = thread::spawn(move || {
-                        let rt = monocoque::rt::LocalRuntime::new().unwrap();
-                        rt.block_on(async move {
-                            let mut fanout = PushSocket::with_options(coalescing_options());
-                            ep_tx
-                                .send(fanout.bind("tcp://127.0.0.1:0").await.unwrap())
-                                .unwrap();
-                            wait_peers(|| fanout.peer_count(), WORKERS).await;
-
+                        for _ in 0..iters {
                             // Per-message round-robin with coalescing keeps all
                             // workers interleaved and batches each worker's writes
                             // until the next flush. Batching a whole worker share
@@ -113,23 +116,26 @@ fn monocoque_fanout(c: &mut Criterion) {
                             }
                             fanout.flush().await.unwrap();
                             vent_done.wait();
-                            let _ = fanout.close().await;
-                        });
+                        }
+                        let _ = fanout.close().await;
                     });
+                });
 
-                    let endpoint = ep_rx.recv().unwrap();
+                let endpoint = ep_rx.recv().unwrap();
 
-                    for _ in 0..WORKERS {
-                        let worker_barrier = barrier.clone();
-                        let worker_done = done.clone();
-                        let worker_elapsed = elapsed_tx.clone();
-                        let endpoint = endpoint.clone();
-                        thread::spawn(move || {
-                            let rt = monocoque::rt::LocalRuntime::new().unwrap();
-                            rt.block_on(async move {
-                                let mut pull = PullSocket::new();
-                                pull.connect(&endpoint).await.unwrap();
-                                wait_peers(|| pull.peer_count(), 1).await;
+                let mut workers = Vec::with_capacity(WORKERS);
+                for _ in 0..WORKERS {
+                    let worker_barrier = barrier.clone();
+                    let worker_done = done.clone();
+                    let worker_elapsed = elapsed_tx.clone();
+                    let endpoint = endpoint.clone();
+                    workers.push(thread::spawn(move || {
+                        let rt = monocoque::rt::LocalRuntime::new().unwrap();
+                        rt.block_on(async move {
+                            let mut pull = PullSocket::new();
+                            pull.connect(&endpoint).await.unwrap();
+                            wait_peers(|| pull.peer_count(), 1).await;
+                            for _ in 0..iters {
                                 worker_barrier.wait();
                                 let t0 = Instant::now();
                                 for _ in 0..PER_WORKER {
@@ -137,17 +143,26 @@ fn monocoque_fanout(c: &mut Criterion) {
                                 }
                                 worker_elapsed.send(t0.elapsed()).unwrap();
                                 worker_done.wait();
-                            });
+                            }
                         });
-                    }
-                    drop(elapsed_tx);
+                    }));
+                }
+                drop(elapsed_tx);
 
+                // Each worker reports once per batch, and no batch starts
+                // before the one before it is done, so every WORKERS reports
+                // belong to one batch.
+                let mut total = Duration::ZERO;
+                for _ in 0..iters {
                     let mut slowest = Duration::ZERO;
                     for _ in 0..WORKERS {
                         slowest = slowest.max(elapsed_rx.recv().unwrap());
                     }
-                    ventilator.join().unwrap();
                     total += slowest;
+                }
+                ventilator.join().unwrap();
+                for worker in workers {
+                    worker.join().unwrap();
                 }
 
                 total
@@ -183,7 +198,8 @@ fn monocoque_fanin_eager(c: &mut Criterion) {
 /// sink.
 ///
 /// The sink is the single receiver, so the timer lives on its side: it starts
-/// once every worker is connected and stops after the whole batch is drained.
+/// together with the workers, once every one of them is connected, and stops
+/// after the whole batch is drained.
 /// `coalesce` selects whether the senders batch writes or send eagerly.
 fn fanin(c: &mut Criterion, group_name: &str, coalesce: bool) {
     monocoque::dev_tracing::init_tracing();
@@ -197,53 +213,67 @@ fn fanin(c: &mut Criterion, group_name: &str, coalesce: bool) {
             let payload = Msg::from(vec![0u8; size]);
 
             b.iter_custom(|iters| {
-                let mut total = Duration::ZERO;
+                // One set of connections carries all `iters` batches, for the
+                // same reason as in the fan-out case.
+                let (ep_tx, ep_rx) = mpsc::channel::<String>();
+                let (elapsed_tx, elapsed_rx) = mpsc::channel::<Duration>();
+                // Reached once the sink has drained a batch, so the next one
+                // starts with nothing in flight and no worker disconnects
+                // while its messages are.
+                let done = Arc::new(Barrier::new(WORKERS + 1));
+                // The sink and the workers start each batch together. Without
+                // it the workers send while the sink is still waiting for the
+                // last of them to connect, and those messages are not timed.
+                let start = Arc::new(Barrier::new(WORKERS + 1));
 
-                for _ in 0..iters {
-                    let (ep_tx, ep_rx) = mpsc::channel::<String>();
-                    let (elapsed_tx, elapsed_rx) = mpsc::channel::<Duration>();
-                    // Reached once the sink has drained the batch, so no worker
-                    // disconnects while its messages are in flight.
-                    let done = Arc::new(Barrier::new(WORKERS + 1));
+                let sink_start = start.clone();
+                let sink_done = done.clone();
+                let sink_thread = thread::spawn(move || {
+                    let rt = monocoque::rt::LocalRuntime::new().unwrap();
+                    rt.block_on(async move {
+                        let mut sink = PullSocket::with_options(
+                            SocketOptions::default().with_read_buffer_size(16384),
+                        );
+                        ep_tx
+                            .send(sink.bind("tcp://127.0.0.1:0").await.unwrap())
+                            .unwrap();
+                        wait_peers(|| sink.peer_count(), WORKERS).await;
 
-                    let sink_done = done.clone();
-                    let sink_thread = thread::spawn(move || {
-                        let rt = monocoque::rt::LocalRuntime::new().unwrap();
-                        rt.block_on(async move {
-                            let mut sink = PullSocket::with_options(
-                                SocketOptions::default().with_read_buffer_size(16384),
-                            );
-                            ep_tx
-                                .send(sink.bind("tcp://127.0.0.1:0").await.unwrap())
-                                .unwrap();
-                            wait_peers(|| sink.peer_count(), WORKERS).await;
-
+                        let mut total = Duration::ZERO;
+                        for _ in 0..iters {
+                            sink_start.wait();
                             let t0 = Instant::now();
                             for _ in 0..BATCH_SIZE {
                                 sink.recv().await.unwrap();
                             }
-                            elapsed_tx.send(t0.elapsed()).unwrap();
+                            total += t0.elapsed();
                             sink_done.wait();
-                        });
+                        }
+                        elapsed_tx.send(total).unwrap();
                     });
+                });
 
-                    let endpoint = ep_rx.recv().unwrap();
+                let endpoint = ep_rx.recv().unwrap();
 
-                    let mut workers = Vec::with_capacity(WORKERS);
-                    for _ in 0..WORKERS {
-                        let worker_payload = payload.clone();
-                        let worker_done = done.clone();
-                        let endpoint = endpoint.clone();
-                        workers.push(thread::spawn(move || {
-                            let rt = monocoque::rt::LocalRuntime::new().unwrap();
-                            rt.block_on(async move {
-                                let options = if coalesce {
-                                    coalescing_options()
-                                } else {
-                                    SocketOptions::default().with_read_buffer_size(16384)
-                                };
-                                let mut push = PushSocket::with_options(options);
-                                push.connect(&endpoint).await.unwrap();
+                let mut workers = Vec::with_capacity(WORKERS);
+                for _ in 0..WORKERS {
+                    let worker_payload = payload.clone();
+                    let worker_start = start.clone();
+                    let worker_done = done.clone();
+                    let endpoint = endpoint.clone();
+                    workers.push(thread::spawn(move || {
+                        let rt = monocoque::rt::LocalRuntime::new().unwrap();
+                        rt.block_on(async move {
+                            let options = if coalesce {
+                                coalescing_options()
+                            } else {
+                                SocketOptions::default().with_read_buffer_size(16384)
+                            };
+                            let mut push = PushSocket::with_options(options);
+                            push.connect(&endpoint).await.unwrap();
+                            wait_peers(|| push.peer_count(), 1).await;
+                            for _ in 0..iters {
+                                worker_start.wait();
                                 for i in 1..=PER_WORKER {
                                     push.send(worker_payload.clone()).await.unwrap();
                                     if coalesce && i % COALESCE_BATCH == 0 {
@@ -253,19 +283,17 @@ fn fanin(c: &mut Criterion, group_name: &str, coalesce: bool) {
                                 // No-op in eager mode; drains the buffer when coalescing.
                                 push.flush().await.unwrap();
                                 worker_done.wait();
-                                let _ = push.close().await;
-                            });
-                        }));
-                    }
-
-                    for worker in workers {
-                        worker.join().unwrap();
-                    }
-                    sink_thread.join().unwrap();
-                    total += elapsed_rx.recv().unwrap();
+                            }
+                            let _ = push.close().await;
+                        });
+                    }));
                 }
 
-                total
+                for worker in workers {
+                    worker.join().unwrap();
+                }
+                sink_thread.join().unwrap();
+                elapsed_rx.recv().unwrap()
             });
         });
     }
