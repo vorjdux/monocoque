@@ -1,10 +1,36 @@
 # Interoperability Testing with libzmq
 
-These examples verify that Monocoque is wire-compatible with libzmq across DEALER/ROUTER, PUB/SUB, and security mechanisms.
+Monocoque is tested against real libzmq in two suites, and a few examples let
+you watch an exchange by hand.
+
+## Automated suites
+
+**Rust, against the system libzmq** (`monocoque/tests/interop_*.rs`, through the
+`zmq` crate): PAIR, PUB/SUB, PUSH/PULL, REQ/REP, ROUTER, STREAM, PLAIN and
+CURVE. The CURVE cases skip when the system libzmq was built without CURVE.
+
+```bash
+cargo test -p monocoque-rs --features zmq \
+    --test interop_pair --test interop_pubsub --test interop_push_pull \
+    --test interop_req_rep --test interop_router --test interop_stream \
+    --test interop_plain --test interop_curve
+```
+
+**Python, against the libzmq bundled with pyzmq** (`interop_tests/`, which has
+CURVE built in): REQ/REP, PUB/SUB, and CURVE in both roles, with multipart and
+large frames, heartbeats and custom handshake properties. See
+[interop_tests/README.md](../interop_tests/README.md).
+
+```bash
+pip install pyzmq pytest pytest-timeout
+interop_tests/run_all_tests.sh
+```
+
+CI runs both in `.github/workflows/interop.yml`.
 
 ## Prerequisites
 
-Install libzmq:
+The Rust suite and the examples link the system libzmq:
 
 ```bash
 # Ubuntu/Debian
@@ -19,8 +45,6 @@ sudo pacman -S zeromq
 # Fedora/RHEL
 sudo dnf install zeromq-devel
 ```
-
-For the Python scripts below, install pyzmq: `pip install pyzmq`.
 
 ## Running the Examples
 
@@ -37,116 +61,57 @@ cargo run --example interop_router_libzmq --features zmq
 cargo run --example interop_pubsub_libzmq --features zmq
 ```
 
-Successful output ends with `Interop test completed successfully!`. If the build fails with `error: failed to run custom build command for 'zmq-sys'`, libzmq is not installed or not on the linker path.
+Successful output ends with `interop test completed successfully!` (logged at
+INFO level). If the build fails with `error: failed to run custom build command for 'zmq-sys'`, libzmq is not installed or not on the linker path.
 
 ## PLAIN Authentication Interop
 
-To test Monocoque against a libzmq PLAIN server, run the ZAP authenticator and server in two terminals, then connect with Monocoque.
+libzmq checks PLAIN credentials through ZAP, and its ZAP handler has to live
+in the server's own process and context. `monocoque/tests/interop_plain.rs`
+does exactly that: a libzmq PLAIN server with a ZAP handler on
+`inproc://zeromq.zap.01`, and a Monocoque PLAIN client that authenticates and
+exchanges a request and reply. Read it as the reference setup.
 
-Terminal 1 - ZAP authenticator:
-
-```python
-from zmq.auth.thread import ThreadAuthenticator
-import zmq, time
-
-context = zmq.Context()
-auth = ThreadAuthenticator(context)
-auth.start()
-auth.configure_plain(domain='*', passwords={'alice': 'password123', 'bob': 'secret'})
-print("[ZAP] Running. Ctrl+C to stop.")
-time.sleep(999999)
-```
-
-Terminal 2 - PLAIN server:
-
-```python
-import zmq
-
-context = zmq.Context()
-socket = context.socket(zmq.REP)
-socket.plain_server = True
-socket.zap_domain = b'global'
-socket.bind("tcp://127.0.0.1:5563")
-print("[Server] Listening on port 5563")
-while True:
-    msg = socket.recv_string()
-    socket.send_string(f"Echo: {msg}")
-```
-
-Terminal 3 - Monocoque PLAIN client:
+For Monocoque on both sides, `plain_auth_demo` runs a PLAIN server with a ZAP
+handler, a client with valid credentials and one with wrong ones:
 
 ```bash
-cargo run --example interop_plain_client
-```
-
-To test the reverse (Monocoque PLAIN server, libzmq client):
-
-```bash
-# Terminal 1
-cargo run --example plain_auth_demo
-
-# Terminal 2
-python3 <<EOF
-import zmq
-ctx = zmq.Context()
-s = ctx.socket(zmq.REQ)
-s.plain_username = b'alice'
-s.plain_password = b'password123'
-s.connect("tcp://127.0.0.1:5555")
-s.send_string("Hello from libzmq")
-print("Received:", s.recv_string())
-EOF
+cargo run --example plain_auth_demo --features zmq
 ```
 
 ## CURVE Encryption Interop
 
-Monocoque implements CURVE (RFC 26) using X25519 + XSalsa20-Poly1305 (NaCl `crypto_box`). Key exchange and message encryption are compatible with libzmq, but note that libzmq uses Z85 encoding for keys while Monocoque uses raw 32-byte keys - conversion is required.
+Monocoque implements CURVE (RFC 26) with X25519 and XSalsa20-Poly1305 (NaCl
+`crypto_box`), and interoperates with libzmq in both roles.
+`interop_tests/test_curve_interop.py` is the end-to-end reference: it drives
+the `curve_echo` example against pyzmq as both client and server.
 
-Generate keypairs:
-
-```python
-import zmq.auth
-server_public, server_secret = zmq.auth.create_certificates(".", "server")
-client_public, client_secret = zmq.auth.create_certificates(".", "client")
-```
-
-Run a libzmq CURVE server:
+libzmq writes keys in Z85; Monocoque takes raw 32-byte keys, which its
+examples read as 64 hex characters. pyzmq converts between them:
 
 ```python
-import zmq, zmq.auth
-
-context = zmq.Context()
-socket = context.socket(zmq.REP)
-pub, sec = zmq.auth.load_certificate("server.key_secret")
-socket.curve_secretkey = sec
-socket.curve_publickey = pub
-socket.curve_server = True
-socket.bind("tcp://127.0.0.1:5564")
-while True:
-    msg = socket.recv_string()
-    socket.send_string(f"Encrypted reply: {msg}")
+import binascii, zmq
+from zmq.utils import z85
+public, secret = zmq.curve_keypair()          # Z85
+print(binascii.hexlify(z85.decode(public)))   # hex for Monocoque
 ```
 
-Connect with Monocoque, providing the server's public key in hex:
+`curve_demo` shows the Monocoque API on its own:
 
 ```bash
-cargo run --example curve_demo -- --server-key <public_key_hex>
+cargo run --example curve_demo --features zmq -- keygen            # print a key pair
+cargo run --example curve_demo --features zmq -- server <secret_hex>
+cargo run --example curve_demo --features zmq -- client <public_hex>
+cargo run --example curve_demo --features zmq -- demo              # both in one process
 ```
 
 ## Troubleshooting
 
-**Tests hang and don't exit.** Use the standalone `cargo run --example` commands rather than `cargo test` - the compio runtime has known lifecycle issues inside the test harness.
+**A CURVE test skips.** The Rust CURVE tests need a system libzmq built with
+libsodium; the pyzmq suite covers CURVE either way.
 
-**Connection refused.** Check that ports 5560-5564 are free before running examples.
+**Connection refused.** The examples use fixed loopback ports; check that
+nothing else holds them.
 
-## What Is Verified
-
-- ZMTP 3.1 greeting and handshake
-- Frame encoding and multipart messages (MORE flag)
-- ROUTER identity envelope handling
-- PUB/SUB topic filtering
-- PLAIN authentication (RFC 23)
-- CURVE encryption (RFC 26)
-- ZAP protocol (RFC 27)
-
-GSSAPI is not implemented and is not a compatibility target.
+**Debugging a handshake.** Set `RUST_LOG=monocoque_zmtp=debug` on the Monocoque
+side to log each handshake step.

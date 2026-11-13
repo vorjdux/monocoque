@@ -3,7 +3,7 @@ updates:
   # Keep the SHA-pinned GitHub Actions current. Every `uses:` in the workflows is
   # pinned to a 40-char commit SHA; dependabot proposes the SHA bumps (with the
   # human-readable version in the trailing comment) so pinning does not mean
-  # rotting.
+  # rotting. All action bumps for a week arrive as one PR.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -11,9 +11,14 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "ci"
+    groups:
+      actions:
+        patterns: ["*"]
 
-  # Cargo dependencies for the workspace. Security updates land promptly; routine
-  # version bumps are batched weekly so the tracked Cargo.lock stays fresh.
+  # Cargo dependencies for the workspace. Security updates land promptly and
+  # individually (groups apply to version updates only). Routine bumps are
+  # batched into one weekly PR so the tracked Cargo.lock stays fresh without a
+  # PR per crate.
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:
@@ -21,3 +26,16 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "deps"
+    groups:
+      cargo-weekly:
+        update-types: ["minor", "patch"]
+    ignore:
+      # Documented pin in the workspace Cargo.toml: 0.11 moves to aead 0.6, which
+      # crypto_box 0.9 (aead 0.5) cannot interoperate with, breaking the RFC-26
+      # CURVE message path. Lift together with crypto_box.
+      - dependency-name: "chacha20poly1305"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      # Same pin from the other side: crypto_box 0.10 is the aead 0.6 generation
+      # and only ships as a pre-release. Move both crates in one deliberate PR.
+      - dependency-name: "crypto_box"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]

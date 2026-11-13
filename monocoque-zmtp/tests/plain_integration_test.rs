@@ -1,8 +1,8 @@
 //! Integration tests for PLAIN authentication with REQ/REP flows
 //!
-//! Note: These tests verify that PLAIN security options are correctly applied.
-//! Full end-to-end authentication requires ZAP handler integration which is
-//! implemented but requires inproc transport setup.
+//! These tests cover PLAIN security options and the static credential handler
+//! only. End-to-end authentication through a ZAP handler is covered by
+//! `monocoque/tests/zap_integration.rs` and `monocoque/tests/interop_plain.rs`.
 
 use monocoque_core::options::SocketOptions;
 use monocoque_zmtp::security::PlainAuthHandler;

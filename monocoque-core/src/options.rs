@@ -12,15 +12,11 @@ use std::{fmt, time::Duration};
 const MIN_READ_BUFFER_SIZE: usize = 64;
 
 /// Clamp a caller-supplied read buffer size into the usable range.
-///
-/// Both [`SocketOptions::with_read_buffer_size`] and
-/// [`SocketOptions::with_buffer_sizes`] write the same field, so they share one
-/// clamp rather than each carrying its own and drifting apart.
 const fn clamp_read_buffer_size(size: usize) -> usize {
     if size < MIN_READ_BUFFER_SIZE {
         MIN_READ_BUFFER_SIZE
-    } else if size > crate::io::READ_SLAB_SIZE {
-        crate::io::READ_SLAB_SIZE
+    } else if size > crate::io::MAX_READ_SIZE {
+        crate::io::MAX_READ_SIZE
     } else {
         size
     }
@@ -45,31 +41,23 @@ const fn clamp_read_buffer_size(size: usize) -> usize {
 /// let opts = SocketOptions::default()
 ///     .with_recv_timeout(Duration::from_secs(5))
 ///     .with_send_timeout(Duration::from_secs(5))
-///     .with_buffer_sizes(65536, 16384);  // widen the read batch for bulk transfers
+///     .with_read_buffer_size(65536); // widen the read batch for bulk transfers
 /// ```
 #[derive(Clone)]
 pub struct SocketOptions {
     /// Read buffer size (bytes)
     ///
-    /// Size of the per-read carve taken from the shared read slab.
-    /// - Default: 32768 (32KB) - cuts recv syscalls on bulk transfers while
-    ///   staying at half the 64KB slab so small-read trickle still reclaims
+    /// How much room each peer's reader reserves in its read buffer before a
+    /// read, and so the most one read can return.
+    /// - Default: 32768 (32KB) - cuts recv syscalls on bulk transfers
     /// - Small (4KB): Low-latency with small messages (< 1KB)
-    /// - Large (up to 65536, the slab size): fewer recv syscalls on bulk
-    ///   transfers, at the cost of one slab carve per read
+    /// - Large (up to 65536): fewer recv syscalls on bulk transfers, at the
+    ///   cost of a larger buffer per peer
     ///
     /// Values below 64 are raised to 64 and values above 65536 are lowered to
     /// 65536. Note that anything under the 32KB default trades throughput away,
     /// so reach for a smaller buffer only to cut latency, not to "tune".
     pub read_buffer_size: usize,
-
-    /// Write buffer size (bytes)
-    ///
-    /// Initial capacity of `BytesMut` buffer for sending data.
-    /// - Default: 8192 (8KB) - balanced for most workloads
-    /// - Small (4KB): Low-latency with small messages
-    /// - Large (16KB): High-throughput with large messages
-    pub write_buffer_size: usize,
 
     /// Receive timeout (`ZMQ_RCVTIMEO`)
     ///
@@ -102,6 +90,16 @@ pub struct SocketOptions {
     /// - `Some(duration)`: Wait up to duration for messages to be sent
     pub linger: Option<Duration>,
 
+    /// How long an eager send waits on a peer taking under 16 KiB of bytes
+    /// before treating it as no longer reading (default 50 ms; noticing takes
+    /// up to two windows). Sends to it then stop waiting, so it cannot hold up
+    /// the socket's other peers, and the monitor reports `PeerStalled`.
+    ///
+    /// - `Some(window)`: give up on such a peer after `window`
+    /// - `None`: always wait until the bytes are in the kernel, bounded only by
+    ///   `send_timeout`; one peer that stops reading then blocks the sender
+    pub write_stall: Option<Duration>,
+
     /// Reconnect interval (`ZMQ_RECONNECT_IVL`)
     ///
     /// Initial reconnection delay after connection loss.
@@ -124,16 +122,24 @@ pub struct SocketOptions {
 
     /// High water mark for receiving (`ZMQ_RCVHWM`)
     ///
-    /// Maximum number of messages to queue for receiving.
-    /// When reached, socket will block or drop messages depending on socket type.
+    /// Complete messages queued per peer and not yet received. A peer at the
+    /// mark is not read from until the application receives, so TCP flow
+    /// control (or the inproc queue) pushes back on that sender alone; the
+    /// socket's other peers keep flowing. Ignored under [`conflate`].
     /// - Default: 1000 messages
+    /// - `0`: unbounded, as in libzmq. A peer that outpaces the application
+    ///   then grows memory without limit.
+    ///
+    /// [`conflate`]: Self::conflate
     pub recv_hwm: usize,
 
     /// High water mark for sending (`ZMQ_SNDHWM`)
     ///
-    /// Maximum number of messages to queue for sending.
-    /// When reached, socket will block or drop messages depending on socket type.
+    /// Messages queued per peer and not yet written. At the mark, a socket
+    /// whose pattern waits (PUSH, DEALER, REQ, PAIR) waits for room, and one
+    /// whose pattern drops (PUB, XPUB, ROUTER) drops the message for that peer.
     /// - Default: 1000 messages
+    /// - `0`: unbounded, as in libzmq.
     pub send_hwm: usize,
 
     /// Enable immediate connect mode (`ZMQ_IMMEDIATE`)
@@ -158,12 +164,20 @@ pub struct SocketOptions {
 
     /// Connect routing ID (`ZMQ_CONNECT_ROUTING_ID`)
     ///
-    /// Identity to assign to the next outgoing connection.
-    /// Used by ROUTER sockets to assign a specific identity to a peer.
-    /// - Default: None (auto-generate)
-    /// - Custom: Assign explicit identity to next connection
-    /// - Consumed after each connect operation
+    /// The routing id a ROUTER gives the peer of its first `connect`, in place
+    /// of the identity that peer announces. It is used by that connection
+    /// only; later connects route by the announced identity as usual.
+    /// - Default: None
     pub connect_routing_id: Option<bytes::Bytes>,
+
+    /// Custom handshake properties (`ZMQ_METADATA`)
+    ///
+    /// Sent in this socket's `READY` or `INITIATE` command (inside the box
+    /// under CURVE), so the peer sees them as message metadata. libzmq expects
+    /// names starting with `X-`. Peers reject a clear-text `READY` above 512
+    /// bytes, so keep these short.
+    /// - Default: none
+    pub metadata: Vec<(String, bytes::Bytes)>,
 
     /// ROUTER mandatory mode (`ZMQ_ROUTER_MANDATORY`)
     ///
@@ -191,8 +205,11 @@ pub struct SocketOptions {
 
     /// XPUB manual mode (`ZMQ_XPUB_MANUAL`)
     ///
-    /// - `false` (default): Automatic subscription management
-    /// - `true`: Manual subscription control via `send()`
+    /// - `false` (default): subscriptions from peers take effect as they
+    ///   arrive
+    /// - `true`: they are only reported; `XPubSocket::subscribe` and
+    ///   `unsubscribe` apply a prefix to the peer whose subscription message
+    ///   was received last
     pub xpub_manual: bool,
 
     /// XPUB welcome message (`ZMQ_XPUB_WELCOME_MSG`)
@@ -210,7 +227,11 @@ pub struct SocketOptions {
     /// Conflate messages (`ZMQ_CONFLATE`)
     ///
     /// - `false` (default): Queue all messages
-    /// - `true`: Keep only last message (overwrite queue)
+    /// - `true`: Keep only the newest inbound message from each peer; each
+    ///   arrival replaces the one waiting. A multipart message is kept or
+    ///   replaced whole. [`recv_hwm`](Self::recv_hwm) no longer applies.
+    ///   Publishers (PUB, XPUB) ignore it, since what they receive is
+    ///   subscriptions, which must all be applied.
     pub conflate: bool,
 
     /// TCP keepalive (`ZMQ_TCP_KEEPALIVE`)
@@ -394,9 +415,11 @@ pub struct SocketOptions {
 
     /// Maximum reconnection attempts (`ZMQ_RECONNECT_STOP`)
     ///
-    /// Maximum number of times to attempt reconnection after a disconnect.
+    /// How many dials in a row may fail before a connected endpoint stops
+    /// being dialed. A connection that succeeds resets the count.
     /// - `None`: Retry indefinitely (default, matches libzmq behaviour)
-    /// - `Some(n)`: Give up and return `NotConnected` after n attempts
+    /// - `Some(n)`: Stop after `n` consecutive failures; each failure is
+    ///   reported as `SocketEvent::ConnectFailed`
     pub max_reconnect_attempts: Option<u32>,
 
     /// ZMTP heartbeat interval (`ZMQ_HEARTBEAT_IVL` = 75)
@@ -467,6 +490,13 @@ pub struct SocketOptions {
     /// buffer is written to the kernel as a single syscall once it reaches
     /// this many bytes.
     ///
+    /// On TCP that write carries a whole number of segments. The rest, less
+    /// than one segment (which is up to 64 KB on loopback), goes out with the
+    /// next batch while the sender keeps sending, rather than leaving as a
+    /// short segment of its own. It never waits for a `flush()`: it is written
+    /// as soon as the sending task yields to the runtime, along with anything
+    /// queued since. A batch smaller than one segment is written whole.
+    ///
     /// - Default: 65536 (64 KB) - one typical TCP segment on loopback
     pub write_coalesce_threshold: usize,
 
@@ -481,13 +511,14 @@ pub struct SocketOptions {
     /// stay on the copy path, where a single `write` of one contiguous buffer
     /// beats the per-iovec bookkeeping.
     ///
-    /// Only applies in eager mode (write coalescing disabled) and when the
-    /// connection is not CURVE-encrypted (encryption must transform the body
-    /// into a fresh buffer regardless).
+    /// Applies with and without write coalescing, but not on a CURVE
+    /// connection, where encryption writes every body into the outbound
+    /// buffer anyway.
     ///
-    /// - Default: 32768 (32 KB) - the measured crossover on loopback below which
-    ///   copying the body into one contiguous buffer beats a two-segment
-    ///   `writev`; tune for your hardware and message sizes
+    /// - Default: 16384 (16 KiB). Measured on loopback against 8 and 32 KiB:
+    ///   at 16 KiB bodies it beats 32 KiB by about half on coalesced
+    ///   throughput and 3% on round-trip latency, and 8 KiB gains nothing
+    ///   more. Tune for your hardware and message sizes.
     pub vectored_write_threshold: usize,
 }
 
@@ -495,11 +526,11 @@ impl fmt::Debug for SocketOptions {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SocketOptions")
             .field("read_buffer_size", &self.read_buffer_size())
-            .field("write_buffer_size", &self.write_buffer_size)
             .field("recv_timeout", &self.recv_timeout)
             .field("send_timeout", &self.send_timeout)
             .field("handshake_timeout", &self.handshake_timeout)
             .field("linger", &self.linger)
+            .field("write_stall", &self.write_stall)
             .field("reconnect_ivl", &self.reconnect_ivl)
             .field("reconnect_ivl_max", &self.reconnect_ivl_max)
             .field("connect_timeout", &self.connect_timeout)
@@ -571,6 +602,7 @@ impl Default for SocketOptions {
             send_timeout: None, // Block indefinitely
             handshake_timeout: Duration::from_secs(30),
             linger: Some(Duration::from_secs(30)), // Wait 30s for pending messages
+            write_stall: Some(Duration::from_millis(50)),
             reconnect_ivl: Duration::from_millis(100),
             reconnect_ivl_max: Duration::ZERO, // No maximum
             connect_timeout: Duration::ZERO,   // Use OS default
@@ -578,19 +610,15 @@ impl Default for SocketOptions {
             send_hwm: 1000,
             immediate: false,
             max_msg_size: None, // No limit
-            // 32 KiB read batch (half the 64 KiB slab). Larger batches cut recv
-            // syscalls on bulk transfers roughly in proportion to their size
-            // (measured over a 64 MiB PUSH/PULL flow: 8 KiB -> 8379 recvfrom,
-            // 16 KiB -> 4178, 32 KiB -> 2104, 64 KiB -> 1037), while the reclaim
-            // keeps short reads from wasting the slab. It is capped below the
-            // slab size: a batch equal to the slab would carve the whole slab per
-            // read, so an uncoalesced trickle of small reads would allocate a
-            // fresh slab each time. 32 KiB leaves room for ~512 small reads per
-            // slab and does not raise the per-connection footprint.
+            // 32 KiB read batch. Larger batches cut recv syscalls on bulk
+            // transfers roughly in proportion to their size (measured over a
+            // 64 MiB PUSH/PULL flow: 8 KiB -> 8379 recvfrom, 16 KiB -> 4178,
+            // 32 KiB -> 2104, 64 KiB -> 1037), but every peer keeps a buffer
+            // this large, so the default stays at half the 64 KiB ceiling.
             read_buffer_size: 32768,
-            write_buffer_size: 8192, // 8KB - balanced default
             routing_id: None,
             connect_routing_id: None,
+            metadata: Vec::new(),
             router_mandatory: false,
             router_handover: false,
             probe_router: false,
@@ -636,7 +664,7 @@ impl Default for SocketOptions {
             invert_matching: false,
             write_coalescing: false,
             write_coalesce_threshold: 65536,
-            vectored_write_threshold: 32768,
+            vectored_write_threshold: 16384,
         }
     }
 }
@@ -646,54 +674,6 @@ impl SocketOptions {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Create socket options optimized for small messages (< 1KB).
-    ///
-    /// Sets 4KB buffers, suitable for low-latency request-reply patterns.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use monocoque_core::options::SocketOptions;
-    ///
-    /// let opts = SocketOptions::small();  // 4KB buffers for REQ/REP
-    /// ```
-    #[must_use]
-    #[deprecated(
-        since = "0.4.1",
-        note = "sets a 4KB read buffer, which is below the 32KB default. Use SocketOptions::new().with_read_buffer_size(4096) if that is really what you want."
-    )]
-    pub fn small() -> Self {
-        Self {
-            read_buffer_size: 4096,
-            write_buffer_size: 4096,
-            ..Self::default()
-        }
-    }
-
-    /// Create socket options optimized for large messages (> 8KB).
-    ///
-    /// Sets 16KB buffers, suitable for high-throughput async patterns.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use monocoque_core::options::SocketOptions;
-    ///
-    /// let opts = SocketOptions::large();  // 16KB buffers for DEALER/ROUTER
-    /// ```
-    #[must_use]
-    #[deprecated(
-        since = "0.4.1",
-        note = "sets a 16KB read buffer, which is below the 32KB default and so is slower, not faster. Use SocketOptions::new() and set what your workload needs."
-    )]
-    pub fn large() -> Self {
-        Self {
-            read_buffer_size: 16384,
-            write_buffer_size: 16384,
-            ..Self::default()
-        }
     }
 
     /// Set receive timeout.
@@ -836,10 +816,10 @@ impl SocketOptions {
         self.curve_secretkey.as_deref()
     }
 
-    /// Get the configured read buffer size after applying the read-slab cap.
+    /// Get the configured read buffer size after applying the 64 KiB read cap.
     pub const fn read_buffer_size(&self) -> usize {
-        if self.read_buffer_size > crate::io::READ_SLAB_SIZE {
-            crate::io::READ_SLAB_SIZE
+        if self.read_buffer_size > crate::io::MAX_READ_SIZE {
+            crate::io::MAX_READ_SIZE
         } else {
             self.read_buffer_size
         }
@@ -871,6 +851,10 @@ impl SocketOptions {
 
     /// Set read buffer size.
     ///
+    /// This is the size a connection starts at. While reads keep filling the
+    /// buffer, a busy connection reads more at once, up to 64 KiB, and returns
+    /// to this size when traffic quiets.
+    ///
     /// # Examples
     ///
     /// ```
@@ -887,28 +871,6 @@ impl SocketOptions {
         self
     }
 
-    /// Set write buffer size.
-    pub const fn with_write_buffer_size(mut self, size: usize) -> Self {
-        self.write_buffer_size = size;
-        self
-    }
-
-    /// Set both read and write buffer sizes (convenience method).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use monocoque_core::options::SocketOptions;
-    ///
-    /// // Small buffers for both
-    /// let opts = SocketOptions::new().with_buffer_sizes(4096, 4096);
-    /// ```
-    pub const fn with_buffer_sizes(mut self, read_size: usize, write_size: usize) -> Self {
-        self.read_buffer_size = clamp_read_buffer_size(read_size);
-        self.write_buffer_size = write_size;
-        self
-    }
-
     /// Set socket routing ID / identity.
     ///
     /// # Examples
@@ -922,6 +884,18 @@ impl SocketOptions {
     /// ```
     pub fn with_routing_id(mut self, id: bytes::Bytes) -> Self {
         self.routing_id = Some(id);
+        self
+    }
+
+    /// Announce a custom handshake property (`ZMQ_METADATA`), such as
+    /// `X-Service`. See [`metadata`](Self::metadata).
+    #[must_use]
+    pub fn with_metadata(
+        mut self,
+        name: impl Into<String>,
+        value: impl Into<bytes::Bytes>,
+    ) -> Self {
+        self.metadata.push((name.into(), value.into()));
         self
     }
 
@@ -968,6 +942,13 @@ impl SocketOptions {
         self
     }
 
+    /// Set how long an eager send waits on a peer that stopped reading; see
+    /// [`write_stall`](Self::write_stall).
+    pub const fn with_write_stall(mut self, window: Option<Duration>) -> Self {
+        self.write_stall = window;
+        self
+    }
+
     /// Enable XPUB manual mode.
     pub const fn with_xpub_manual(mut self, enabled: bool) -> Self {
         self.xpub_manual = enabled;
@@ -986,7 +967,8 @@ impl SocketOptions {
         self
     }
 
-    /// Enable message conflation (keep only last message).
+    /// Keep only the newest inbound message from each peer. See
+    /// [`conflate`](Self::conflate).
     pub const fn with_conflate(mut self, enabled: bool) -> Self {
         self.conflate = enabled;
         self
@@ -1488,40 +1470,25 @@ mod tests {
     }
 
     #[test]
-    fn read_buffer_size_cannot_exceed_read_slab_size() {
-        let opts = SocketOptions::new().with_read_buffer_size(crate::io::READ_SLAB_SIZE + 1);
+    fn read_buffer_size_cannot_exceed_max_read_size() {
+        let opts = SocketOptions::new().with_read_buffer_size(crate::io::MAX_READ_SIZE + 1);
 
         assert!(
-            opts.read_buffer_size <= crate::io::READ_SLAB_SIZE,
-            "SocketOptions allowed a read buffer size larger than the read slab"
+            opts.read_buffer_size <= crate::io::MAX_READ_SIZE,
+            "SocketOptions allowed a read buffer size larger than MAX_READ_SIZE"
         );
     }
 
     #[test]
-    fn both_read_buffer_setters_clamp_identically() {
-        // `with_buffer_sizes` writes the same field as `with_read_buffer_size`
-        // but used to skip the lower bound, so a zero read buffer slipped
-        // through it and turned the read loop into a spin or a false EOF.
-        for size in [
-            0,
-            1,
-            63,
-            64,
-            4096,
-            crate::io::READ_SLAB_SIZE + 1,
-            usize::MAX,
-        ] {
-            let via_single = SocketOptions::new().with_read_buffer_size(size);
-            let via_pair = SocketOptions::new().with_buffer_sizes(size, 8192);
-
-            assert_eq!(
-                via_single.read_buffer_size, via_pair.read_buffer_size,
-                "the two read-buffer setters disagree for {size}"
-            );
+    fn read_buffer_size_is_clamped_into_range() {
+        // A zero read buffer would turn the read loop into a spin or a false
+        // EOF.
+        for size in [0, 1, 63, 64, 4096, crate::io::MAX_READ_SIZE + 1, usize::MAX] {
+            let opts = SocketOptions::new().with_read_buffer_size(size);
             assert!(
-                via_pair.read_buffer_size >= MIN_READ_BUFFER_SIZE
-                    && via_pair.read_buffer_size <= crate::io::READ_SLAB_SIZE,
-                "with_buffer_sizes({size}) left the read buffer out of range"
+                opts.read_buffer_size >= MIN_READ_BUFFER_SIZE
+                    && opts.read_buffer_size <= crate::io::MAX_READ_SIZE,
+                "with_read_buffer_size({size}) left the read buffer out of range"
             );
         }
     }

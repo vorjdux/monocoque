@@ -8,7 +8,8 @@
 
 ## Migration
 
-- [Migration from libzmq](MIGRATION.md) - API differences and how to port existing code
+- [Migration](MIGRATION.md) - porting from libzmq, and every breaking change since 0.4
+- [RFC compliance](rfc-compliance.md) - what each ZeroMQ RFC covers here and where libzmq differs
 
 ## Protocol and compatibility
 

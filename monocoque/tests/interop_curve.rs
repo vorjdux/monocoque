@@ -10,9 +10,9 @@
 //! REQ/REP empty-delimiter envelope nor ROUTER routing-id framing, so a failure
 //! here is a CURVE failure and nothing else.
 
-use bytes::Bytes;
 use monocoque::zmq::{DealerSocket, SocketOptions};
 use monocoque_zmtp::security::curve::CurveSecretKey;
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
@@ -21,11 +21,8 @@ use std::time::Duration;
 /// path so it matches what libzmq computes from the same secret.
 fn keypair(seed: u8) -> (/* public */ [u8; 32], /* secret */ [u8; 32]) {
     let mut sec = [0u8; 32];
-    for (i, b) in sec.iter_mut().enumerate() {
-        *b = (i as u8)
-            .wrapping_mul(31)
-            .wrapping_add(seed)
-            .wrapping_add(1);
+    for (i, b) in (0u8..).zip(sec.iter_mut()) {
+        *b = i.wrapping_mul(31).wrapping_add(seed).wrapping_add(1);
     }
     let public = *CurveSecretKey::from_bytes(sec).public_key().as_bytes();
     (public, sec)
@@ -42,7 +39,11 @@ fn curve_unavailable() -> bool {
     true
 }
 
-/// monocoque is the CURVE server (binds/accepts); libzmq is the CURVE client.
+fn timeout() -> SocketOptions {
+    SocketOptions::default().with_recv_timeout(Duration::from_secs(5))
+}
+
+/// monocoque is the CURVE server (binds); libzmq is the CURVE client.
 #[test]
 fn curve_interop_monocoque_server_libzmq_client() {
     if curve_unavailable() {
@@ -51,77 +52,44 @@ fn curve_interop_monocoque_server_libzmq_client() {
     let (server_pub, server_sec) = keypair(7);
     let (client_pub, client_sec) = keypair(19);
 
-    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<std::net::SocketAddr>();
-    let (result_tx, result_rx) = std::sync::mpsc::channel::<Result<(), String>>();
-
-    thread::spawn(move || {
+    let (ready_tx, ready_rx) = mpsc::channel::<String>();
+    let server = thread::spawn(move || {
         monocoque::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
-                let listener = monocoque::rt::TcpListener::bind("127.0.0.1:0")
-                    .await
+                let mut dealer = DealerSocket::with_options(
+                    timeout()
+                        .with_curve_server(true)
+                        .with_curve_keypair(server_pub, server_sec),
+                );
+                ready_tx
+                    .send(dealer.bind("tcp://127.0.0.1:0").await.unwrap())
                     .unwrap();
-                ready_tx.send(listener.local_addr().unwrap()).unwrap();
-                let (stream, _) = listener.accept().await.unwrap();
-
-                let opts = SocketOptions::default()
-                    .with_curve_server(true)
-                    .with_curve_keypair(server_pub, server_sec);
-                let mut dealer = match DealerSocket::from_tcp_with_options(stream, opts).await {
-                    Ok(d) => d,
-                    Err(e) => {
-                        let _ = result_tx.send(Err(format!("server CURVE handshake failed: {e}")));
-                        return;
-                    }
-                };
-
                 // Decrypt a MESSAGE that libzmq sealed with CurveZMQ.
-                match dealer.recv().await {
-                    Ok(Some(msg)) if msg[0].as_ref() == b"ping-from-libzmq" => {}
-                    other => {
-                        let _ = result_tx.send(Err(format!(
-                            "server could not decrypt libzmq MESSAGE: {other:?}"
-                        )));
-                        return;
-                    }
-                }
-
+                assert_eq!(dealer.recv().await.unwrap(), [b"ping-from-libzmq"]);
                 // Seal a MESSAGE for libzmq to decrypt.
-                dealer
-                    .send(vec![Bytes::from_static(b"pong-from-monocoque")])
-                    .await
-                    .unwrap();
-                let _ = result_tx.send(Ok(()));
+                dealer.send("pong-from-monocoque").await.unwrap();
+                dealer.close().await.unwrap();
             });
     });
 
-    let addr = ready_rx.recv().unwrap();
-
+    let endpoint = ready_rx.recv().unwrap();
     let ctx = zmq::Context::new();
     let sock = ctx.socket(zmq::DEALER).unwrap();
     sock.set_curve_serverkey(&server_pub).unwrap();
     sock.set_curve_publickey(&client_pub).unwrap();
     sock.set_curve_secretkey(&client_sec).unwrap();
     sock.set_rcvtimeo(5000).unwrap();
-    sock.set_sndtimeo(5000).unwrap();
-    sock.connect(&format!("tcp://{addr}")).unwrap();
-
+    sock.connect(&endpoint).unwrap();
     sock.send("ping-from-libzmq", 0).unwrap();
     let reply = sock
         .recv_bytes(0)
         .expect("libzmq client did not receive/decrypt monocoque's CURVE reply");
-    assert_eq!(
-        reply, b"pong-from-monocoque",
-        "libzmq could not decrypt monocoque's CURVE MESSAGE"
-    );
-
-    result_rx
-        .recv_timeout(Duration::from_secs(10))
-        .expect("monocoque server thread did not report")
-        .expect("monocoque server side failed");
+    assert_eq!(reply, b"pong-from-monocoque");
+    server.join().unwrap();
 }
 
-/// libzmq is the CURVE server (binds); monocoque is the CURVE client (connects).
+/// libzmq is the CURVE server (binds); monocoque is the CURVE client.
 #[test]
 fn curve_interop_libzmq_server_monocoque_client() {
     if curve_unavailable() {
@@ -136,61 +104,28 @@ fn curve_interop_libzmq_server_monocoque_client() {
     server.set_curve_secretkey(&server_sec).unwrap();
     server.set_curve_publickey(&server_pub).unwrap();
     server.set_rcvtimeo(5000).unwrap();
-    server.set_sndtimeo(5000).unwrap();
-    server.bind("tcp://127.0.0.1:0").unwrap();
+    server.bind("tcp://127.0.0.1:*").unwrap();
     let endpoint = server.get_last_endpoint().unwrap().unwrap();
-    let addr = endpoint.trim_start_matches("tcp://").to_string();
 
-    let (result_tx, result_rx) = std::sync::mpsc::channel::<Result<(), String>>();
-
-    thread::spawn(move || {
+    let client = thread::spawn(move || {
         monocoque::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
-                let opts = SocketOptions::default()
-                    .with_curve_serverkey(server_pub)
-                    .with_curve_keypair(client_pub, client_sec);
-                let mut dealer = match DealerSocket::connect_with_options(
-                    &format!("tcp://{addr}"),
-                    opts,
-                )
-                .await
-                {
-                    Ok(d) => d,
-                    Err(e) => {
-                        let _ = result_tx.send(Err(format!("client CURVE handshake failed: {e}")));
-                        return;
-                    }
-                };
-                dealer
-                    .send(vec![Bytes::from_static(b"ping-from-monocoque")])
-                    .await
-                    .unwrap();
-                match dealer.recv().await {
-                    Ok(Some(msg)) if msg[0].as_ref() == b"pong-from-libzmq" => {
-                        let _ = result_tx.send(Ok(()));
-                    }
-                    other => {
-                        let _ = result_tx.send(Err(format!(
-                            "client could not decrypt libzmq MESSAGE: {other:?}"
-                        )));
-                    }
-                }
+                let mut dealer = DealerSocket::with_options(
+                    timeout()
+                        .with_curve_serverkey(server_pub)
+                        .with_curve_keypair(client_pub, client_sec),
+                );
+                dealer.connect(&endpoint).await.unwrap();
+                dealer.send("ping-from-monocoque").await.unwrap();
+                assert_eq!(dealer.recv().await.unwrap(), [b"pong-from-libzmq"]);
             });
     });
 
-    // libzmq server: decrypt monocoque's MESSAGE, reply with one it must decrypt.
     let msg = server
         .recv_bytes(0)
         .expect("libzmq server did not receive/decrypt monocoque's CURVE MESSAGE");
-    assert_eq!(
-        msg, b"ping-from-monocoque",
-        "libzmq could not decrypt monocoque's CURVE MESSAGE"
-    );
+    assert_eq!(msg, b"ping-from-monocoque");
     server.send("pong-from-libzmq", 0).unwrap();
-
-    result_rx
-        .recv_timeout(Duration::from_secs(10))
-        .expect("monocoque client thread did not report")
-        .expect("monocoque client side failed");
+    client.join().unwrap();
 }

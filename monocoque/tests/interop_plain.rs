@@ -6,7 +6,6 @@
 //! the server's context) that approves the credentials, exactly as libzmq's own
 //! authenticator would. This exercises the ZMTP PLAIN handshake on the wire.
 
-use bytes::Bytes;
 use monocoque::zmq::{ReqSocket, SocketOptions};
 use std::thread;
 use std::time::Duration;
@@ -49,7 +48,6 @@ fn interop_monocoque_plain_client_libzmq_server() {
     rep.set_sndtimeo(5000).unwrap();
     rep.bind("tcp://127.0.0.1:0").unwrap();
     let endpoint = rep.get_last_endpoint().unwrap().unwrap();
-    let addr = endpoint.trim_start_matches("tcp://").to_string();
 
     let (result_tx, result_rx) = std::sync::mpsc::channel::<Result<(), String>>();
 
@@ -57,24 +55,17 @@ fn interop_monocoque_plain_client_libzmq_server() {
         monocoque::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
-                let opts = SocketOptions::default().with_plain_credentials("alice", "secret");
-                let mut req =
-                    match ReqSocket::connect_with_options(&format!("tcp://{addr}"), opts).await {
-                        Ok(r) => r,
-                        Err(e) => {
-                            let _ = result_tx.send(Err(format!("PLAIN handshake failed: {e}")));
-                            return;
-                        }
-                    };
-                req.send(vec![Bytes::from_static(b"ping")]).await.unwrap();
-                match req.recv().await {
-                    Ok(Some(reply)) if reply.len() == 1 && reply[0].as_ref() == b"pong" => {
-                        let _ = result_tx.send(Ok(()));
-                    }
-                    other => {
-                        let _ = result_tx.send(Err(format!("unexpected reply: {other:?}")));
-                    }
-                }
+                let opts = SocketOptions::default()
+                    .with_plain_credentials("alice", "secret")
+                    .with_recv_timeout(Duration::from_secs(5));
+                let mut req = ReqSocket::with_options(opts);
+                req.connect(&endpoint).await.unwrap();
+                req.send("ping").await.unwrap();
+                let outcome = match req.recv().await {
+                    Ok(reply) if reply == [b"pong"] => Ok(()),
+                    other => Err(format!("unexpected reply: {other:?}")),
+                };
+                let _ = result_tx.send(outcome);
             });
     });
 

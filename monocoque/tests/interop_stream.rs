@@ -1,89 +1,72 @@
 //! STREAM raw-TCP interop.
 //!
-//! A monocoque STREAM socket bridges plain TCP with no ZMTP handshake, so its
-//! interop peer is an ordinary TCP client. This drives a real std TcpStream
-//! against it and also exercises the multi-frame send fix: sending
-//! `[routing_id, "", "wor", "ld"]` must write all payload frames in order
-//! ("world"), not just the first.
+//! A STREAM socket bridges plain TCP with no ZMTP handshake, so its interop
+//! peer is an ordinary TCP client. Checks libzmq's framing: a connect
+//! notification, `[identity, data]` on receive, every data frame of a send
+//! written in order, and `[identity, ""]` closing the connection.
 
 use bytes::Bytes;
-use monocoque::zmq::StreamSocket;
+use monocoque::zmq::{Msg, SocketOptions, StreamSocket};
 use std::io::{Read, Write};
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
 #[test]
 fn interop_stream_raw_tcp_roundtrip() {
-    let (addr_tx, addr_rx) = std::sync::mpsc::channel::<std::net::SocketAddr>();
-    let (result_tx, result_rx) = std::sync::mpsc::channel::<Result<(), String>>();
-
-    thread::spawn(move || {
+    let (ready_tx, ready_rx) = mpsc::channel::<String>();
+    let server = thread::spawn(move || {
         monocoque::rt::LocalRuntime::new()
             .unwrap()
             .block_on(async move {
-                let mut server = StreamSocket::bind("127.0.0.1:0").await.unwrap();
-                addr_tx.send(server.local_addr().unwrap()).unwrap();
-
-                let routing_id = server.accept_raw().await.unwrap();
-
-                // recv() surfaces connect/disconnect notifications ([id, "", ""])
-                // as well as data. Skip empty-payload notifications and read
-                // until the client's actual request bytes arrive.
-                loop {
-                    match server.recv().await {
-                        Ok(Some(msg)) if msg.len() == 3 && !msg[2].is_empty() => {
-                            if msg[2].as_ref() == b"hello" {
-                                break;
-                            }
-                            let _ = result_tx
-                                .send(Err(format!("STREAM recv wrong data: {:?}", msg[2])));
-                            return;
-                        }
-                        Ok(Some(_)) => continue, // connect/disconnect notification
-                        other => {
-                            let _ = result_tx
-                                .send(Err(format!("STREAM recv failed before data: {other:?}")));
-                            return;
-                        }
-                    }
-                }
-
-                // Reply with several payload frames; all must reach the wire in
-                // order, forming "world".
-                server
-                    .send(vec![
-                        routing_id.clone(),
-                        Bytes::new(),
-                        Bytes::from_static(b"wor"),
-                        Bytes::from_static(b"ld"),
-                    ])
-                    .await
+                let mut server = StreamSocket::with_options(
+                    SocketOptions::default().with_recv_timeout(Duration::from_secs(5)),
+                );
+                ready_tx
+                    .send(server.bind("tcp://127.0.0.1:0").await.unwrap())
                     .unwrap();
 
-                let _ = result_tx.send(Ok(()));
-                // Keep the peer alive briefly so the reply flushes before drop.
-                monocoque::rt::sleep(Duration::from_millis(200)).await;
+                let hello = server.recv_owned().await.unwrap();
+                assert_eq!(hello.len(), 2);
+                assert!(
+                    hello.get(1).unwrap().is_empty(),
+                    "first comes the connect notification"
+                );
+                let identity = hello.frame_bytes(0).unwrap();
+
+                let data = server.recv_owned().await.unwrap();
+                assert_eq!(data.get(0), Some(&identity[..]));
+                assert_eq!(data.get(1), Some(&b"hello"[..]));
+
+                server
+                    .send(Msg::from([
+                        identity.clone(),
+                        Bytes::from_static(b"wor"),
+                        Bytes::from_static(b"ld"),
+                    ]))
+                    .await
+                    .unwrap();
+                server
+                    .send(Msg::from([identity.clone(), Bytes::new()]))
+                    .await
+                    .unwrap();
+                let bye = server.recv_owned().await.unwrap();
+                assert_eq!(
+                    bye,
+                    [&identity[..], b""],
+                    "then the disconnect notification"
+                );
             });
     });
 
-    let addr = addr_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    let mut client = std::net::TcpStream::connect(addr).unwrap();
+    let endpoint = ready_rx.recv().unwrap();
+    let mut client = std::net::TcpStream::connect(endpoint.trim_start_matches("tcp://")).unwrap();
     client
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
     client.write_all(b"hello").unwrap();
-
-    let mut reply = [0u8; 5];
-    client
-        .read_exact(&mut reply)
-        .expect("raw TCP client did not receive the STREAM reply");
-    assert_eq!(
-        &reply, b"world",
-        "STREAM send must write all payload frames in order"
-    );
-
-    result_rx
-        .recv_timeout(Duration::from_secs(10))
-        .expect("STREAM server thread did not report")
-        .expect("STREAM server side failed");
+    let mut reply = Vec::new();
+    client.read_to_end(&mut reply).unwrap();
+    assert_eq!(reply, b"world", "all data frames in order, then close");
+    server.join().unwrap();
 }

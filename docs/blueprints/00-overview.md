@@ -99,17 +99,19 @@ This ensures:
 
 ## 4. Phases Overview
 
-| Phase     | Name                            | Status                   |
-| --------- | ------------------------------- | ------------------------ |
-| Phase 0   | Foundations & Allocator         | 🚧 Partial (needs fixes) |
-| Phase 1   | ZMTP Core + PAIR                | 🚧 Partial (needs fixes) |
-| Phase 2   | DEALER / ROUTER + Load Balancer | 🚧 Skeleton (incomplete) |
-| Phase 2.1 | Robust Hub + Ghost Peer Fix     | 📝 Designed only         |
-| Phase 3   | PUB/SUB (Sorted Prefix Table)   | 🚧 Skeleton (incomplete) |
-| Phase 4   | REQ/REP Semantics               | ⏳ Planned               |
-| Phase 5   | Reliability & Metrics           | ⏳ Planned               |
-| Phase 6   | Performance Hardening           | ⏳ Planned               |
-| Phase 7   | Public API & Bindings           | ⏳ Planned               |
+These phases describe how the original design was built up. All of them have
+shipped; the table is kept as a map of which blueprint covers which layer.
+
+| Phase     | Name                            | Status  |
+| --------- | ------------------------------- | ------- |
+| Phase 0   | Foundations & read-slab I/O     | Shipped |
+| Phase 1   | ZMTP Core + PAIR                | Shipped |
+| Phase 2   | DEALER / ROUTER + Load Balancer | Shipped |
+| Phase 3   | PUB/SUB                         | Shipped |
+| Phase 4   | REQ/REP Semantics               | Shipped |
+| Phase 5   | Reliability & Metrics           | Shipped |
+| Phase 6   | Performance Hardening           | Shipped |
+| Phase 7   | Public API                      | Shipped |
 
 ---
 
@@ -184,10 +186,10 @@ The foundational layers of Monocoque are complete:
 
 **Current State:**
 
--   ✅ Unit tests passing (12 tests)
--   ✅ Clean build with zero warnings
--   ✅ Safety model validated (unsafe code isolated)
--   🚧 Integration tests with libzmq pending
+-   Unit, integration, and libzmq interop tests (Rust `zmq` crate and pyzmq) run
+    in CI on all three runtime backends
+-   Clippy with `-D warnings` on all three backends
+-   `unsafe` inventoried in the README's Safety section
 
 ### Architecture
 

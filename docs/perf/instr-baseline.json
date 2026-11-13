@@ -1,0 +1,16 @@
+{
+  "instr_hotpath::hotpath::curve_decode long:(curve_decode_input(4, 1024))": 128921,
+  "instr_hotpath::hotpath::curve_decode short:(curve_decode_input(16, 64))": 156044,
+  "instr_hotpath::hotpath::curve_encode long:(curve_encode_input(1024))": 33105,
+  "instr_hotpath::hotpath::curve_encode short:(curve_encode_input(64))": 10474,
+  "instr_hotpath::hotpath::decode_fragmented fits:(fragmented_input(16 * 1024, 4096))": 3260,
+  "instr_hotpath::hotpath::decode_fragmented own_buffer:(fragmented_input(64 * 1024, 4096))": 10625,
+  "instr_hotpath::hotpath::decode_frames inline:(decode_input(64, 16))": 8758,
+  "instr_hotpath::hotpath::decode_frames shared:(decode_input(16, 1024))": 3499,
+  "instr_hotpath::hotpath::encode_envelope req:(envelope_input(b\"\"))": 1145,
+  "instr_hotpath::hotpath::encode_envelope router:(envelope_input(b\"\\x00\\x6b\\x8b\\x45\\x67\"))": 1302,
+  "instr_hotpath::hotpath::encode_multi three:(multipart_msg())": 853,
+  "instr_hotpath::hotpath::encode_one long:(payload(300))": 527,
+  "instr_hotpath::hotpath::encode_one short:(payload(64))": 471,
+  "instr_hotpath::hotpath::vectored_slices frames:(multipart_frames())": 423
+}

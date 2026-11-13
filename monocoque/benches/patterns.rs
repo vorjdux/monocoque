@@ -32,24 +32,20 @@ const BENCH_BACKEND: &str = if cfg!(feature = "runtime-tokio") {
 } else {
     "compio"
 };
-use monocoque::zmq::{PubSocket, SocketOptions, SubSocket};
+use monocoque::zmq::{Msg, PubSocket, SocketOptions, SubSocket};
 use std::hint::black_box;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-// NOTE: Multi-subscriber fanout is currently not benchmarked here because the
-// direct-stream PUB/SUB sockets do not yet support stable multi-peer fanout.
-const FANOUT_SUBSCRIBERS: &[usize] = &[1];
+const FANOUT_SUBSCRIBERS: &[usize] = &[1, 4];
 const MESSAGE_COUNT: usize = 100; // elements counted per criterion iteration
 const MESSAGE_SIZE: usize = 256;
 /// Messages received (untimed) to confirm the stream is flowing and warm the
 /// pipeline before timing starts.
 const WARMUP_MSGS: usize = 200;
 /// Brief settle after the subscription is issued, to cut the initial
-/// slow-joiner drop burst (untimed). Uses `thread::sleep`, not
-/// `monocoque::rt::sleep`, which would block on the stalled `io_uring` handshake
-/// timer left behind by `accept_subscriber`.
+/// slow-joiner drop burst (untimed).
 const SETTLE: Duration = Duration::from_millis(50);
 /// Of every `MESSAGE_COUNT` published in the topic-filtering test, this many
 /// match the subscription.
@@ -61,49 +57,46 @@ const MATCHED_PER_ROUND: usize = MESSAGE_COUNT / 10;
 
 /// Time the delivery of `iters * MESSAGE_COUNT` messages to each subscriber
 /// while the publisher oversends. Returns the slowest subscriber's elapsed time.
-fn run_monocoque_fanout(num_subs: usize, iters: u64) -> Duration {
-    let target = iters as usize * MESSAGE_COUNT;
-    let payload = Bytes::from(vec![0u8; MESSAGE_SIZE]);
+///
+/// `coalesce` sets the publisher's write coalescing. Eager (the default) puts
+/// every message into each subscriber's kernel buffer as it is sent, for the
+/// lowest latency; coalescing batches them, for throughput.
+fn run_monocoque_fanout(num_subs: usize, iters: u64, coalesce: bool) -> Duration {
+    let target = usize::try_from(iters).expect("iteration count fits usize") * MESSAGE_COUNT;
+    let payload = Msg::from(vec![0u8; MESSAGE_SIZE]);
 
-    let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
+    let (ep_tx, ep_rx) = mpsc::channel::<String>();
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
 
     let pub_handle = thread::spawn(move || {
         let rt = monocoque::rt::LocalRuntime::new().unwrap();
         rt.block_on(async move {
-            let mut pub_socket = PubSocket::bind("127.0.0.1:0").await.unwrap();
-            addr_tx.send(pub_socket.local_addr().unwrap()).unwrap();
-            for _ in 0..num_subs {
-                pub_socket.accept_subscriber().await.unwrap();
-            }
+            let mut pub_socket =
+                PubSocket::with_options(SocketOptions::default().with_write_coalescing(coalesce));
+            ep_tx
+                .send(pub_socket.bind("tcp://127.0.0.1:0").await.unwrap())
+                .unwrap();
+            wait_subscribed(&mut pub_socket, &payload, num_subs).await;
             thread::sleep(SETTLE);
             // Oversend until every subscriber has measured its window.
             while stop_rx.try_recv().is_err() {
-                pub_socket
-                    .send_frames(std::slice::from_ref(&payload))
-                    .await
-                    .ok();
+                oversend(&mut pub_socket, &payload, num_subs).await;
             }
         });
     });
 
-    let server_addr = addr_rx.recv().unwrap();
+    let endpoint = ep_rx.recv().unwrap();
 
     let mut sub_handles = Vec::new();
     for _ in 0..num_subs {
+        let endpoint = endpoint.clone();
         sub_handles.push(thread::spawn(move || {
             let rt = monocoque::rt::LocalRuntime::new().unwrap();
             rt.block_on(async move {
-                let stream = monocoque::rt::TcpStream::connect(server_addr)
-                    .await
-                    .unwrap();
-                let mut sub = SubSocket::from_tcp_with_options(
-                    stream,
-                    SocketOptions::default().with_buffer_sizes(16384, 16384),
-                )
-                .await
-                .unwrap();
+                let mut sub =
+                    SubSocket::with_options(SocketOptions::default().with_read_buffer_size(16384));
                 sub.subscribe(b"").await.unwrap();
+                sub.connect(&endpoint).await.unwrap();
                 recv_n(&mut sub, WARMUP_MSGS).await; // untimed warmup
                 let start = Instant::now();
                 recv_n(&mut sub, target).await;
@@ -124,31 +117,59 @@ fn run_monocoque_fanout(num_subs: usize, iters: u64) -> Duration {
     elapsed
 }
 
-/// Receive exactly `n` messages, returning early only on disconnect.
+/// Publish until `msg` reaches `subs` subscribers, sleeping between attempts
+/// so the connections and subscriptions can complete.
+async fn wait_subscribed(pub_socket: &mut PubSocket, msg: &Msg, subs: usize) {
+    while pub_socket.send_ref(msg).await.unwrap_or(0) < subs {
+        monocoque::rt::sleep(Duration::from_millis(1)).await;
+    }
+}
+
+/// Publish one message. PUB never waits on a send, so when a subscriber's
+/// queue is full (`msg` reached fewer than `subs`), wait for the queued bytes
+/// to be written; that also hands the runtime its turn to run the I/O.
+/// Published by reference, as 0.4's bench did with `send_frames(&[..])`.
+async fn oversend(pub_socket: &mut PubSocket, msg: &Msg, subs: usize) {
+    if pub_socket.send_ref(msg).await.unwrap_or(0) < subs {
+        let _ = pub_socket.flush().await;
+    }
+}
+
+/// Receive exactly `n` messages, returning early only on an error.
 async fn recv_n(sub: &mut SubSocket, n: usize) {
-    let mut count = 0;
-    while count < n {
-        match sub.recv().await {
-            Ok(Some(_)) => count += 1,
-            Ok(None) | Err(_) => return,
+    for _ in 0..n {
+        if sub.recv().await.is_err() {
+            return;
         }
     }
 }
 
-fn monocoque_pubsub_fanout(c: &mut Criterion) {
+fn monocoque_fanout_group(c: &mut Criterion, name: &str, coalesce: bool) {
     monocoque::dev_tracing::init_tracing();
-    let mut group = c.benchmark_group(format!("patterns/monocoque-{BENCH_BACKEND}/pubsub_fanout"));
+    let mut group = c.benchmark_group(format!("patterns/monocoque-{BENCH_BACKEND}/{name}"));
     for &num_subs in FANOUT_SUBSCRIBERS {
         group.throughput(Throughput::Elements((MESSAGE_COUNT * num_subs) as u64));
         group.bench_with_input(
             BenchmarkId::new("subscribers", num_subs),
             &num_subs,
             |b, &num_subs| {
-                b.iter_custom(|iters| run_monocoque_fanout(num_subs, iters));
+                b.iter_custom(|iters| run_monocoque_fanout(num_subs, iters, coalesce));
             },
         );
     }
     group.finish();
+}
+
+/// PUB fan-out, eager: each send reaches every subscriber's kernel buffer.
+fn monocoque_pubsub_fanout(c: &mut Criterion) {
+    monocoque_fanout_group(c, "pubsub_fanout", false);
+}
+
+/// PUB fan-out with write coalescing: sends are batched into one write per
+/// subscriber per buffer. 0.4's PUB batched like this on worker threads
+/// without being asked; compare against this case, not the eager one.
+fn monocoque_pubsub_fanout_coalesced(c: &mut Criterion) {
+    monocoque_fanout_group(c, "pubsub_fanout_coalesced", true);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -156,7 +177,7 @@ fn monocoque_pubsub_fanout(c: &mut Criterion) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn run_zmq_fanout(num_subs: usize, iters: u64) -> Duration {
-    let target = iters as usize * MESSAGE_COUNT;
+    let target = usize::try_from(iters).expect("iteration count fits usize") * MESSAGE_COUNT;
     let payload = vec![0u8; MESSAGE_SIZE];
 
     let (ep_tx, ep_rx) = mpsc::channel::<String>();
@@ -254,43 +275,47 @@ fn zmq_pubsub_fanout(c: &mut Criterion) {
 // match pattern. Throughput is reported per `MESSAGE_COUNT` published, so the
 // number reflects the publish/filter rate the subscriber can sustain.
 
-fn run_monocoque_topic_filtering(iters: u64) -> Duration {
-    let target_matches = iters as usize * MATCHED_PER_ROUND;
+/// `coalesce` as in [`run_monocoque_fanout`].
+fn run_monocoque_topic_filtering(iters: u64, coalesce: bool) -> Duration {
+    let target_matches =
+        usize::try_from(iters).expect("iteration count fits usize") * MATCHED_PER_ROUND;
     let payload = Bytes::from(vec![0u8; MESSAGE_SIZE]);
+    let matched = Msg::from([Bytes::from_static(b"match.topic"), payload.clone()]);
+    let other = Msg::from([Bytes::from_static(b"other.topic"), payload]);
 
-    let (addr_tx, addr_rx) = mpsc::channel::<std::net::SocketAddr>();
+    let (ep_tx, ep_rx) = mpsc::channel::<String>();
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
 
     let pub_handle = thread::spawn(move || {
         let rt = monocoque::rt::LocalRuntime::new().unwrap();
         rt.block_on(async move {
-            let mut pub_socket = PubSocket::bind("127.0.0.1:0").await.unwrap();
-            addr_tx.send(pub_socket.local_addr().unwrap()).unwrap();
-            pub_socket.accept_subscriber().await.unwrap();
+            let mut pub_socket =
+                PubSocket::with_options(SocketOptions::default().with_write_coalescing(coalesce));
+            ep_tx
+                .send(pub_socket.bind("tcp://127.0.0.1:0").await.unwrap())
+                .unwrap();
+            wait_subscribed(&mut pub_socket, &matched, 1).await;
             thread::sleep(SETTLE);
             let mut i = 0usize;
             while stop_rx.try_recv().is_err() {
-                let topic = if i.is_multiple_of(10) {
-                    Bytes::from_static(b"match.topic")
+                if i.is_multiple_of(10) {
+                    oversend(&mut pub_socket, &matched, 1).await;
                 } else {
-                    Bytes::from_static(b"other.topic")
-                };
-                pub_socket.send_frames(&[topic, payload.clone()]).await.ok();
+                    oversend(&mut pub_socket, &other, 0).await;
+                }
                 i += 1;
             }
         });
     });
 
-    let server_addr = addr_rx.recv().unwrap();
+    let endpoint = ep_rx.recv().unwrap();
 
     let sub_handle = thread::spawn(move || {
         let rt = monocoque::rt::LocalRuntime::new().unwrap();
         rt.block_on(async move {
-            let stream = monocoque::rt::TcpStream::connect(server_addr)
-                .await
-                .unwrap();
-            let mut sub = SubSocket::from_tcp(stream).await.unwrap();
+            let mut sub = SubSocket::new();
             sub.subscribe(b"match.").await.unwrap();
+            sub.connect(&endpoint).await.unwrap();
             recv_n(&mut sub, MATCHED_PER_ROUND * 2).await; // untimed warmup
             let start = Instant::now();
             recv_n(&mut sub, target_matches).await;
@@ -304,20 +329,30 @@ fn run_monocoque_topic_filtering(iters: u64) -> Duration {
     elapsed
 }
 
-fn monocoque_topic_filtering(c: &mut Criterion) {
+fn monocoque_topic_filtering_group(c: &mut Criterion, name: &str, coalesce: bool) {
     monocoque::dev_tracing::init_tracing();
-    let mut group = c.benchmark_group(format!(
-        "patterns/monocoque-{BENCH_BACKEND}/topic_filtering"
-    ));
+    let mut group = c.benchmark_group(format!("patterns/monocoque-{BENCH_BACKEND}/{name}"));
     group.throughput(Throughput::Elements(MESSAGE_COUNT as u64));
     group.bench_function("filter_10_percent", |b| {
-        b.iter_custom(run_monocoque_topic_filtering);
+        b.iter_custom(|iters| run_monocoque_topic_filtering(iters, coalesce));
     });
     group.finish();
 }
 
+/// Topic filtering, eager publisher.
+fn monocoque_topic_filtering(c: &mut Criterion) {
+    monocoque_topic_filtering_group(c, "topic_filtering", false);
+}
+
+/// Topic filtering with a coalescing publisher: the case to compare with 0.4,
+/// whose PUB batched on worker threads.
+fn monocoque_topic_filtering_coalesced(c: &mut Criterion) {
+    monocoque_topic_filtering_group(c, "topic_filtering_coalesced", true);
+}
+
 fn run_zmq_topic_filtering(iters: u64) -> Duration {
-    let target_matches = iters as usize * MATCHED_PER_ROUND;
+    let target_matches =
+        usize::try_from(iters).expect("iteration count fits usize") * MATCHED_PER_ROUND;
     let payload = vec![0u8; MESSAGE_SIZE];
 
     let (ep_tx, ep_rx) = mpsc::channel::<String>();
@@ -402,8 +437,10 @@ criterion_group!(
         .sample_size(10);
     targets =
         monocoque_pubsub_fanout,
+        monocoque_pubsub_fanout_coalesced,
         zmq_pubsub_fanout,
         monocoque_topic_filtering,
+        monocoque_topic_filtering_coalesced,
         zmq_topic_filtering
 );
 criterion_main!(benches);

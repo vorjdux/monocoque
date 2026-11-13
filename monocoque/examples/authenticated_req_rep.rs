@@ -8,19 +8,18 @@
 //! - Creating REQ clients with valid credentials
 //! - Secure request-reply messaging
 
-use bytes::Bytes;
-use monocoque::rt::{self, LocalRuntime, TcpListener};
+use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::{RepSocket, ReqSocket, SocketOptions};
 use monocoque_zmtp::security::plain::StaticPlainHandler;
 use monocoque_zmtp::security::zap_handler::start_default_zap_server;
 use std::sync::Arc;
 use std::time::Duration;
 
-fn main() -> std::io::Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     LocalRuntime::new()?.block_on(async_main())
 }
 
-async fn async_main() -> std::io::Result<()> {
+async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Authenticated REQ/REP Demo ===\n");
 
     let mut plain_handler = StaticPlainHandler::new();
@@ -32,50 +31,50 @@ async fn async_main() -> std::io::Result<()> {
     start_default_zap_server(Arc::new(plain_handler), false)?;
     println!("ZAP server running\n");
 
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let local_addr = listener.local_addr()?;
-    println!("Server listening on {local_addr}");
-
     let server_options = SocketOptions::new()
         .with_plain_server(true)
         .with_recv_timeout(Duration::from_secs(10))
         .with_send_timeout(Duration::from_secs(10));
 
+    let mut server = RepSocket::with_options(server_options);
+    let endpoint = server.bind("tcp://127.0.0.1:0").await?;
+    println!("Server listening on {endpoint}");
+
     let server_task = rt::spawn(async move {
-        // Each client (alice, then bob) opens its own connection, so accept and
-        // authenticate one REP peer per request rather than looping on a single
-        // connection.
+        // One bound socket authenticates every peer that connects; alice and
+        // bob each get their own connection, and REP answers whoever asked.
         println!("[SERVER] Waiting for requests...");
         for i in 1..=2 {
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut server = RepSocket::from_tcp_with_options(stream, server_options.clone())
-                .await
-                .unwrap();
-
-            if let Ok(Some(request)) = server.recv().await {
-                let msg = String::from_utf8_lossy(&request[0]);
-                println!("[SERVER] Request {i}: {msg}");
-                let reply = vec![Bytes::from(format!("Reply {i}: OK"))];
-                server.send(reply).await.unwrap();
+            match server.recv().await {
+                Ok(request) => {
+                    let msg = String::from_utf8_lossy(request.first().unwrap_or_default());
+                    println!("[SERVER] Request {i}: {msg}");
+                }
+                Err(e) => {
+                    println!("[SERVER] Receive failed: {e}");
+                    return;
+                }
             }
+            server.send(format!("Reply {i}: OK")).await.unwrap();
         }
+        server.close().await.unwrap();
         println!("[SERVER] Done");
     });
-
-    rt::sleep(Duration::from_millis(50)).await;
 
     let alice_options = SocketOptions::new()
         .with_plain_credentials("alice", "password123")
         .with_recv_timeout(Duration::from_secs(5));
 
-    let mut alice = ReqSocket::connect_with_options(&local_addr.to_string(), alice_options).await?;
-    println!("[ALICE] Connected");
+    let mut alice = ReqSocket::with_options(alice_options);
+    alice.connect(&endpoint).await?;
+    println!("[ALICE] Connecting");
 
-    alice.send(vec![Bytes::from("Hello from Alice")]).await?;
-    if let Ok(Some(response)) = alice.recv().await {
+    alice.send("Hello from Alice").await?;
+    {
+        let response = alice.recv().await?;
         println!(
             "[ALICE] Received: {}",
-            String::from_utf8_lossy(&response[0])
+            String::from_utf8_lossy(response.first().unwrap_or_default())
         );
     }
 
@@ -83,12 +82,17 @@ async fn async_main() -> std::io::Result<()> {
         .with_plain_credentials("bob", "secretpass")
         .with_recv_timeout(Duration::from_secs(5));
 
-    let mut bob = ReqSocket::connect_with_options(&local_addr.to_string(), bob_options).await?;
-    println!("[BOB] Connected");
+    let mut bob = ReqSocket::with_options(bob_options);
+    bob.connect(&endpoint).await?;
+    println!("[BOB] Connecting");
 
-    bob.send(vec![Bytes::from("Hello from Bob")]).await?;
-    if let Ok(Some(response)) = bob.recv().await {
-        println!("[BOB] Received: {}", String::from_utf8_lossy(&response[0]));
+    bob.send("Hello from Bob").await?;
+    {
+        let response = bob.recv().await?;
+        println!(
+            "[BOB] Received: {}",
+            String::from_utf8_lossy(response.first().unwrap_or_default())
+        );
     }
 
     rt::join(server_task).await;

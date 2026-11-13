@@ -79,8 +79,7 @@ fuzz_target!(|data: &[u8]| {
     // CurveMessageCipher::is_curve_message must classify arbitrary bytes as
     // curve-or-not without panicking regardless of the input. The message
     // decrypt path (CurveMessageCipher::decrypt_frame) is reachable only after
-    // a completed handshake and is exercised by the decoder fuzz target that
-    // drives the real ZmtpDecoder.
+    // a completed handshake and is not fuzzed by any target yet.
     // -----------------------------------------------------------------------
     {
         use monocoque_zmtp::security::curve::{CurveMessageCipher, CurveServer};
@@ -97,15 +96,11 @@ fuzz_target!(|data: &[u8]| {
     }
 
     // -----------------------------------------------------------------------
-    // 5. Encrypt-then-decrypt round-trip using matched key pairs
-    //    (exercises CurveBox indirectly through the public encrypt/decrypt API
-    //    after manually setting up the shared secret via ECDH)
+    // 5. ECDH symmetry on two fresh key pairs
     //
-    // Because we cannot call the async handshake from a sync fuzz target, we
-    // use a pair of fresh key pairs to perform ECDH and then exercise
-    // encrypt_message / decrypt_message on matching client+server instances
-    // that share the same secret.  We do this by testing the ECDH layer
-    // directly (CurveSecretKey::diffie_hellman) and confirming symmetry.
+    // The async handshake cannot run in a sync fuzz target, so this checks
+    // the key agreement layer (CurveSecretKey::diffie_hellman) directly: both
+    // sides must derive the same shared secret, or both must fail.
     // -----------------------------------------------------------------------
     if data.len() >= CURVE_KEY_SIZE {
         let alice = CurveKeyPair::generate();

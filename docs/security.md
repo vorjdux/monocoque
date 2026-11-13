@@ -137,7 +137,8 @@ use monocoque_zmtp::security::zap::{ZapRequest, ZapResponse};
 
 struct MyHandler;
 
-#[async_trait::async_trait(?Send)]
+// A native `async fn` trait: no macro, and the handler is passed as a
+// concrete type (for example `Arc<MyHandler>`), not as a `dyn ZapHandler`.
 impl ZapHandler for MyHandler {
     async fn authenticate(&self, req: &ZapRequest) -> ZapResponse {
         // Reject connections from a specific IP range

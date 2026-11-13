@@ -19,6 +19,83 @@
 
 use std::io;
 
+/// Bytes in the socket's send queue the peer has not acknowledged (`TIOCOUTQ`).
+/// 0 if the call fails.
+#[cfg(target_os = "linux")]
+pub fn unacked_bytes<S: std::os::unix::io::AsRawFd>(stream: &S) -> u32 {
+    let mut queued: libc::c_int = 0;
+    // SAFETY: the fd is valid for as long as `stream` is borrowed, and
+    // TIOCOUTQ writes one c_int through the pointer, which outlives the call.
+    let rc = unsafe { libc::ioctl(stream.as_raw_fd(), libc::TIOCOUTQ, &raw mut queued) };
+    if rc == 0 {
+        u32::try_from(queued).unwrap_or(0)
+    } else {
+        0
+    }
+}
+
+/// Payload bytes the connection carries per TCP segment (`TCP_MAXSEG`), as
+/// negotiated and net of the options each segment carries. 0 if the call fails
+/// or the socket is not TCP.
+#[cfg(target_os = "linux")]
+pub fn segment_size<S: std::os::unix::io::AsRawFd>(stream: &S) -> usize {
+    let mut mss: libc::c_int = 0;
+    let mut len = libc::socklen_t::try_from(size_of::<libc::c_int>()).unwrap_or(0);
+    // SAFETY: the fd is valid while `stream` is borrowed; the kernel writes at
+    // most `len` bytes, one c_int, through pointers that outlive the call.
+    let rc = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::IPPROTO_TCP,
+            libc::TCP_MAXSEG,
+            (&raw mut mss).cast(),
+            &raw mut len,
+        )
+    };
+    if rc == 0 {
+        usize::try_from(mss).unwrap_or(0)
+    } else {
+        0
+    }
+}
+
+/// Elsewhere writes are not cut to segments.
+#[cfg(not(target_os = "linux"))]
+pub const fn segment_size<S>(_stream: &S) -> usize {
+    0
+}
+
+/// Write what the socket takes right now, without blocking or the runtime.
+///
+/// `None` if it took nothing, for whatever reason: the caller's writer retries
+/// through the runtime and reports any real error.
+#[cfg(target_os = "linux")]
+pub fn send_now<S: std::os::unix::io::AsRawFd>(stream: &S, buf: &[u8]) -> Option<usize> {
+    // SAFETY: the fd is valid while `stream` is borrowed, and the kernel only
+    // reads `buf.len()` bytes from `buf`, which outlives the call.
+    let sent = unsafe {
+        libc::send(
+            stream.as_raw_fd(),
+            buf.as_ptr().cast(),
+            buf.len(),
+            libc::MSG_DONTWAIT | libc::MSG_NOSIGNAL,
+        )
+    };
+    usize::try_from(sent).ok().filter(|&n| n > 0)
+}
+
+/// Elsewhere the writer does all the writing.
+#[cfg(not(target_os = "linux"))]
+pub const fn send_now<S>(_stream: &S, _buf: &[u8]) -> Option<usize> {
+    None
+}
+
+/// Elsewhere there is no such count: progress then comes from writes alone.
+#[cfg(not(target_os = "linux"))]
+pub const fn unacked_bytes<S>(_stream: &S) -> u32 {
+    0
+}
+
 /// Enable `TCP_NODELAY` on a TCP stream for minimal latency.
 ///
 /// This disables Nagle's algorithm, trading bandwidth efficiency for lower latency.

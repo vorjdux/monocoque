@@ -6,25 +6,28 @@
 ///
 /// ## Default-deny security model
 ///
-/// When no ZAP handler is registered, attempting to connect to the ZAP
-/// endpoint (inproc://zeromq.zap.01) returns `ErrorKind::NotFound`.  This is
+/// When no ZAP handler is registered, connecting to the ZAP endpoint
+/// (inproc://zeromq.zap.01) fails with `ErrorKind::ConnectionRefused`. This is
 /// treated as an **authentication failure** - the connecting peer is REJECTED
 /// (equivalent to a 403/400 response).  This implements the correct
 /// "default-deny" security posture: if there is no handler to approve the
 /// connection it must be denied, not silently accepted.
-use crate::security::zap::{ZapMechanism, ZapRequest, ZapResponse, ZapStatus};
-use crate::{DealerSocket, inproc_stream::InprocStream};
+use crate::security::zap::{ZapMechanism, ZapRequest, ZapResponse};
+use crate::sock::kinds::DealerSocket;
 use bytes::Bytes;
-use monocoque_core::options::SocketOptions;
+use monocoque_core::msg::Msg;
 use std::io;
 use std::time::Duration;
+
+/// The standard ZAP endpoint.
+pub const ZAP_ENDPOINT: &str = "inproc://zeromq.zap.01";
 
 /// ZAP client for sending authentication requests
 ///
 /// Server sockets use this to communicate with the ZAP handler.
-/// The client connects to inproc://zeromq.zap.01 and sends requests.
+/// The client is a DEALER connected to inproc://zeromq.zap.01.
 pub struct ZapClient {
-    socket: DealerSocket<InprocStream>,
+    socket: DealerSocket,
     timeout: Duration,
 }
 
@@ -36,44 +39,24 @@ impl ZapClient {
     /// # Default-deny when no handler is registered
     ///
     /// If the ZAP endpoint is not bound (no handler registered), connecting
-    /// returns `ErrorKind::NotFound`.  Callers MUST treat this as a connection
-    /// rejection - see [`ZapClient::authenticate`] and the helper methods.
+    /// fails with `ErrorKind::ConnectionRefused`. Callers MUST treat this as a
+    /// connection rejection.
     ///
     /// # Arguments
     /// * `timeout` - Timeout for ZAP requests (default: 5 seconds)
-    pub fn new(timeout: Duration) -> io::Result<Self> {
-        let socket =
-            DealerSocket::connect_inproc("inproc://zeromq.zap.01", SocketOptions::default())?;
-
+    pub async fn new(timeout: Duration) -> io::Result<Self> {
+        let mut socket = DealerSocket::new();
+        socket.connect(ZAP_ENDPOINT).await?;
         Ok(Self { socket, timeout })
-    }
-
-    /// Synthesise a denial response for use when no ZAP handler is reachable.
-    ///
-    /// Per the default-deny model: if the ZAP endpoint is unreachable (no
-    /// handler registered), the connection must be treated as rejected.
-    fn denial_response(request_id: impl Into<String>, reason: &str) -> ZapResponse {
-        ZapResponse {
-            version: crate::security::zap::ZAP_VERSION.to_string(),
-            request_id: request_id.into(),
-            status_code: ZapStatus::Failure,
-            status_text: reason.to_string(),
-            user_id: String::new(),
-            metadata: std::collections::HashMap::new(),
-        }
     }
 
     /// Send a ZAP authentication request and wait for response.
     ///
-    /// # Default-deny: NotFound is treated as rejection
+    /// # Default-deny
     ///
-    /// If sending to (or receiving from) the ZAP endpoint fails with
-    /// `ErrorKind::NotFound`, this means no ZAP handler is registered on
-    /// `inproc://zeromq.zap.01`.  Per the ZAP specification and the
-    /// default-deny security model, a missing handler MUST cause the
-    /// connection to be **rejected** (returned as a 400 Failure response),
-    /// not silently accepted.  Any other I/O error is propagated to the
-    /// caller as-is.
+    /// The handler going away before it answers is treated as a rejection:
+    /// the request either fails or times out, and the caller denies the
+    /// connection. A missing handler MUST never let a peer through.
     ///
     /// # Arguments
     /// * `request` - The ZAP request to send
@@ -81,39 +64,14 @@ impl ZapClient {
     /// # Returns
     /// The ZAP response from the handler, or an error if timeout/decode failed
     pub async fn authenticate(&mut self, request: &ZapRequest) -> io::Result<ZapResponse> {
-        // Encode and send the request.
-        // NotFound here means the ZAP endpoint is not bound → default-deny.
-        let frames = request.encode();
-        if let Err(e) = self.socket.send(frames).await {
-            if e.kind() == io::ErrorKind::NotFound {
-                // No ZAP handler registered - deny the connection (default-deny).
-                return Ok(Self::denial_response(
-                    &request.request_id,
-                    "No ZAP handler registered - connection denied by default",
-                ));
-            }
-            return Err(e);
-        }
-
-        // Wait for response with timeout.
-        // NotFound on recv also indicates the endpoint disappeared → deny.
-        let recv_future = self.socket.recv();
-        let response_frames = match monocoque_core::rt::timeout(self.timeout, recv_future).await {
-            Ok(Ok(Some(frames))) => frames,
-            Ok(Ok(None)) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::ConnectionReset,
-                    "ZAP handler disconnected",
-                ));
-            }
-            Ok(Err(e)) if e.kind() == io::ErrorKind::NotFound => {
-                // Endpoint vanished after send - deny (default-deny).
-                return Ok(Self::denial_response(
-                    &request.request_id,
-                    "ZAP handler unavailable - connection denied by default",
-                ));
-            }
-            Ok(Err(e)) => return Err(e),
+        let msg: Msg = request.encode().into_iter().collect();
+        let exchange = async {
+            self.socket.send(msg).await?;
+            self.socket.recv_owned().await
+        };
+        let response_frames = match monocoque_core::rt::timeout(self.timeout, exchange).await {
+            Ok(Ok(msg)) => msg.into_frames(),
+            Ok(Err(e)) => return Err(e.into()),
             Err(_) => {
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
@@ -223,17 +181,46 @@ impl ZapClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::security::zap::next_request_id;
+    use crate::security::zap::{ZapStatus, next_request_id};
 
     // ZAP client tests require a running ZAP server.
     // Integration tests are in tests/zap_integration.rs
 
+    /// No handler bound means the client cannot connect (default-deny); once a
+    /// handler is bound, a request gets its matching response. Both halves
+    /// share one test because the ZAP endpoint is process-global.
     #[test]
-    fn test_zap_client_creation() {
-        // Test that we can create a client
-        let result = ZapClient::new(Duration::from_secs(1));
-        // Client creation may fail if no ZAP server is available - this is expected
-        assert!(result.is_ok() || result.is_err());
+    fn test_zap_client_refused_then_answered() {
+        use crate::security::plain::StaticPlainHandler;
+        use crate::security::zap_handler::start_default_zap_server;
+        use std::sync::Arc;
+
+        monocoque_core::rt::LocalRuntime::new()
+            .unwrap()
+            .block_on(async {
+                let err = ZapClient::new(Duration::from_secs(1))
+                    .await
+                    .err()
+                    .expect("no ZAP handler is bound");
+                assert_eq!(err.kind(), io::ErrorKind::ConnectionRefused);
+
+                let mut users = StaticPlainHandler::new();
+                users.add_user("admin", "secret");
+                start_default_zap_server(Arc::new(users), false).unwrap();
+
+                let mut client = ZapClient::new(Duration::from_secs(5)).await.unwrap();
+                let ok = client
+                    .authenticate_plain("admin", "secret", "", "127.0.0.1")
+                    .await
+                    .unwrap();
+                assert_eq!(ok.status_code, ZapStatus::Success);
+                assert_eq!(ok.user_id, "admin");
+                let denied = client
+                    .authenticate_plain("admin", "wrong", "", "127.0.0.1")
+                    .await
+                    .unwrap();
+                assert_eq!(denied.status_code, ZapStatus::Failure);
+            });
     }
 
     /// Verify that unique request IDs are strictly increasing and never repeat.
@@ -274,25 +261,5 @@ mod tests {
             r1.request_id, r2.request_id,
             "each request must have a unique ID"
         );
-    }
-
-    /// Verify the default-deny sentinel response that is returned when the ZAP
-    /// endpoint is unreachable (no handler registered).
-    #[test]
-    fn test_denial_response_is_failure() {
-        let resp = ZapClient::denial_response(
-            "42",
-            "No ZAP handler registered - connection denied by default",
-        );
-        assert_eq!(
-            resp.status_code,
-            ZapStatus::Failure,
-            "missing ZAP handler must produce a Failure (400) response"
-        );
-        assert!(
-            resp.user_id.is_empty(),
-            "denied response must have empty user_id"
-        );
-        assert_eq!(resp.request_id, "42");
     }
 }

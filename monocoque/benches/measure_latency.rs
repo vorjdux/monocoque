@@ -2,9 +2,7 @@
 //!
 //! This measures the actual round-trip latency without Criterion overhead.
 
-use bytes::Bytes;
-use monocoque::rt::{TcpListener, TcpStream};
-use monocoque_zmtp::{RepSocket, ReqSocket};
+use monocoque::zmq::{Msg, RepSocket, ReqSocket};
 use std::time::{Duration, Instant};
 
 const WARMUP: usize = 10;
@@ -12,40 +10,40 @@ const ITERATIONS: usize = 1000;
 
 #[allow(clippy::future_not_send)]
 async fn measure_latency() -> Duration {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
+    let mut rep = RepSocket::new();
+    let endpoint = rep.bind("tcp://127.0.0.1:0").await.unwrap();
 
     // Start server
-    monocoque::rt::spawn_detached(async move {
-        let (stream, _) = listener.accept().await.unwrap();
-        let mut rep = RepSocket::new(stream).await.unwrap();
+    let server = monocoque::rt::spawn(async move {
         for _ in 0..(WARMUP + ITERATIONS) {
-            if let Ok(Some(msg)) = rep.recv().await {
-                rep.send(msg).await.ok();
-            }
+            let Ok(msg) = rep.recv_owned().await else {
+                break;
+            };
+            rep.send(msg).await.ok();
         }
+        let _ = rep.close().await;
     });
 
-    monocoque::rt::sleep(Duration::from_millis(50)).await;
-
     // Connect client
-    let stream = TcpStream::connect(addr).await.unwrap();
-    let mut socket = ReqSocket::new(stream).await.unwrap();
-    let payload = Bytes::from(vec![0u8; 64]);
+    let mut socket = ReqSocket::new();
+    socket.connect(&endpoint).await.unwrap();
+    let payload = Msg::from(vec![0u8; 64]);
 
     // Warmup
     for _ in 0..WARMUP {
-        socket.send(vec![payload.clone()]).await.unwrap();
+        socket.send(payload.clone()).await.unwrap();
         socket.recv().await.unwrap();
     }
 
     // Measure
     let start = Instant::now();
     for _ in 0..ITERATIONS {
-        socket.send(vec![payload.clone()]).await.unwrap();
+        socket.send(payload.clone()).await.unwrap();
         socket.recv().await.unwrap();
     }
-    start.elapsed()
+    let elapsed = start.elapsed();
+    monocoque::rt::join(server).await;
+    elapsed
 }
 
 fn main() {

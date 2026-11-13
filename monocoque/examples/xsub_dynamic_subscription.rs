@@ -6,118 +6,96 @@
 //! - Subscription forwarding in message brokers
 //! - Cascading publish-subscribe networks
 //!
-//! Run this example:
+//! An in-process PUB publishes a steady stream on three topics while the XSUB
+//! changes what it subscribes to over time. Run this example:
 //! ```bash
-//! cargo run --example xsub_dynamic_subscription
-//! ```
-//!
-//! First start a publisher:
-//! ```bash
-//! # Using zmq.rs or libzmq
-//! python3 -c "
-//! import zmq
-//! import time
-//! ctx = zmq.Context()
-//! pub = ctx.socket(zmq.PUB)
-//! pub.bind('tcp://127.0.0.1:5556')
-//! time.sleep(1)  # Let subscribers connect
-//! while True:
-//!     pub.send_multipart([b'events.login', b'User logged in'])
-//!     pub.send_multipart([b'events.logout', b'User logged out'])
-//!     pub.send_multipart([b'alerts.error', b'System error'])
-//!     time.sleep(1)
-//! "
+//! cargo run --example xsub_dynamic_subscription --features zmq
 //! ```
 
 use bytes::Bytes;
 use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::prelude::*;
-use std::io;
+use std::time::{Duration, Instant};
 use tracing::{Level, info};
 
-fn main() -> io::Result<()> {
+/// Run each step for this long before moving to the next one.
+const STEP: Duration = Duration::from_millis(400);
+
+fn main() -> Result<()> {
     LocalRuntime::new()?.block_on(async_main())
 }
 
-async fn async_main() -> io::Result<()> {
+async fn async_main() -> Result<()> {
     // Initialize logging
     tracing_subscriber::fmt().with_max_level(Level::INFO).init();
 
     info!("Starting XSUB dynamic subscription example");
 
-    // Connect to publisher
-    let mut xsub = XSubSocket::connect("127.0.0.1:5556").await?;
+    // Publisher
+    let mut publisher = PubSocket::new();
+    let endpoint = publisher.bind("tcp://127.0.0.1:0").await?;
+    rt::spawn_detached(async move {
+        loop {
+            for (topic, data) in [
+                ("events.login", "User logged in"),
+                ("events.logout", "User logged out"),
+                ("alerts.error", "System error"),
+            ] {
+                if publisher
+                    .send(Msg::from([Bytes::from(topic), Bytes::from(data)]))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+            rt::sleep(Duration::from_millis(100)).await;
+        }
+    });
 
-    info!("Connected to publisher at tcp://127.0.0.1:5556");
+    // A short receive timeout lets the loop below move on to the next step
+    // even while nothing matches.
+    let mut xsub = XSubSocket::with_options(
+        SocketOptions::default().with_recv_timeout(Duration::from_millis(50)),
+    );
+    xsub.connect(&endpoint).await?;
+
+    info!("Connected to publisher at {}", endpoint);
     info!("Socket type: {:?}", xsub.socket_type());
-    info!("");
 
-    // Dynamically subscribe to different topics over time
-    let subscription_plan = [
-        (2, "events.", "Subscribing to all events"),
-        (4, "alerts.", "Adding alerts subscription"),
-        (6, "events.", "Unsubscribing from events"),
-        (8, "", "Subscribing to ALL topics"),
+    // Dynamically change subscriptions over time
+    let subscription_plan: [(&str, bool, &str); 4] = [
+        ("events.", true, "Subscribing to all events"),
+        ("alerts.", true, "Adding alerts subscription"),
+        ("events.", false, "Unsubscribing from events"),
+        ("", true, "Subscribing to ALL topics"),
     ];
 
-    let start = std::time::Instant::now();
-    let mut next_action_idx = 0;
-
-    loop {
-        let elapsed = start.elapsed().as_secs();
-
-        // Check if it's time for next subscription action
-        if next_action_idx < subscription_plan.len() {
-            let (trigger_sec, topic, description) = &subscription_plan[next_action_idx];
-            if elapsed >= *trigger_sec {
-                info!("⏰ [{}s] {}", elapsed, description);
-
-                if topic.is_empty() {
-                    // Empty prefix = subscribe to all
-                    xsub.subscribe(Bytes::new()).await?;
-                } else if next_action_idx == 2 {
-                    // Unsubscribe example
-                    xsub.unsubscribe(Bytes::from_static(b"events.")).await?;
-                } else {
-                    // Normal subscribe
-                    xsub.subscribe(Bytes::from(*topic)).await?;
-                }
-
-                info!("   Active subscriptions: {}", xsub.subscription_count());
-                next_action_idx += 1;
-            }
+    for (topic, subscribe, description) in subscription_plan {
+        info!("");
+        info!("{}", description);
+        if subscribe {
+            // An empty prefix subscribes to everything
+            xsub.subscribe(topic).await?;
+        } else {
+            xsub.unsubscribe(topic).await?;
         }
 
-        // Try to receive messages
-        match xsub.recv().await? {
-            Some(msg) => {
-                if msg.is_empty() {
-                    continue;
+        let start = Instant::now();
+        while start.elapsed() < STEP {
+            match xsub.recv().await {
+                Ok(msg) => {
+                    let topic = String::from_utf8_lossy(msg.get(0).unwrap_or_default());
+                    let payload = String::from_utf8_lossy(msg.get(1).unwrap_or_default());
+                    info!("  Received: [{}] {}", topic, payload);
                 }
-
-                let topic = String::from_utf8_lossy(&msg[0]);
-                let payload = if msg.len() > 1 {
-                    String::from_utf8_lossy(&msg[1])
-                } else {
-                    "".into()
-                };
-
-                info!("📨 Received: [{}] {}", topic, payload);
+                Err(MonocoqueError::TimedOut) => {}
+                Err(e) => return Err(e),
             }
-            None => {
-                // No message available, small delay
-                rt::sleep(std::time::Duration::from_millis(100)).await;
-            }
-        }
-
-        // Exit after demonstration
-        if elapsed > 10 {
-            info!("");
-            info!("✅ Demonstration complete!");
-            info!("   Final subscription count: {}", xsub.subscription_count());
-            break;
         }
     }
 
+    info!("");
+    info!("Demonstration complete!");
     Ok(())
 }
