@@ -26,14 +26,15 @@ env:
   # user-facing signal. Real compiler breakage is caught by the test job (latest
   # stable) and the non-gating `future-toolchain` job (beta) below. Bump this
   # deliberately when `future-toolchain` reports new lints, together with the
-  # channel in rust-toolchain.toml (the clippy job relies on the two matching).
+  # channel in rust-toolchain.toml (the clippy and rustfmt jobs rely on the two
+  # matching).
   CLIPPY_TOOLCHAIN: "1.98"
 
 jobs:
   test:
     name: Test (${{ matrix.backend.name }})
     # Overrides rust-toolchain.toml (the local-dev pin) so this leg runs on the
-    # toolchain it installs below. Every non-clippy job does the same.
+    # toolchain it installs below. Every job but clippy and rustfmt does the same.
     env:
       RUSTUP_TOOLCHAIN: stable
     runs-on: ubuntu-latest
@@ -85,8 +86,10 @@ jobs:
 
   fmt:
     name: Rustfmt
-    env:
-      RUSTUP_TOOLCHAIN: stable
+    # On the pinned toolchain, like clippy and for the same reason: rustfmt's
+    # output changes between releases, so on floating stable a new Rust
+    # release fails this job without a code change. With the pin, `cargo fmt`
+    # run locally (rust-toolchain.toml) and this job always agree.
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -94,7 +97,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
         with:
-          toolchain: stable
+          toolchain: ${{ env.CLIPPY_TOOLCHAIN }}
           components: rustfmt
       - name: Check formatting
         run: cargo fmt --all -- --check
