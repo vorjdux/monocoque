@@ -722,8 +722,12 @@ for p in repo/target/criterion repo/bench_results \
     repo/target/bench-pair/run-old/criterion repo/target/bench-pair/run-new/criterion; do
     [ -e "$p" ] && paths="$paths $p"
 done
+# tar exits 1 when a file changed while it was read, which is what happens
+# when the benchmark is still writing. The archive is complete all the same,
+# so only an exit above 1 is a failure.
 # shellcheck disable=SC2086
 tar czf results.tgz $paths
+[ $? -le 1 ]
 EOF
 }
 
