@@ -93,8 +93,9 @@ Usage: $0 [OPTIONS]
 Options:
     --backend NAME       compio (default), tokio, smol, or all
     --pin CORES          Pin the two-thread benchmarks to these cores, for
-                         example 0,2. Choose two separate physical cores, not
-                         two hyperthreads of one (see: lscpu -e)
+                         example 0,2. Choose two separate physical cores that
+                         share an L3 cache, not two hyperthreads of one core
+                         (see: lscpu -e, the CORE and L3 columns)
     --bench NAME         Run only this benchmark; may be given more than once
                          (${ALL_BENCHMARKS[*]})
     --quick              Shorter run, less accurate
@@ -146,6 +147,16 @@ if [[ -n "$PIN" ]]; then
     if ! taskset -c "$PIN" true 2> /dev/null; then
         echo -e "${RED}Cannot pin to cores ${PIN}${NC}"
         exit 1
+    fi
+    # Two threads that talk across L3 caches measure the cost of moving cache
+    # lines between them. Some CPUs have several small L3 groups.
+    if [[ "$PIN" =~ ^([0-9]+),([0-9]+)$ ]]; then
+        l3_a=$(cat "/sys/devices/system/cpu/cpu${BASH_REMATCH[1]}/cache/index3/shared_cpu_list" 2> /dev/null || true)
+        l3_b=$(cat "/sys/devices/system/cpu/cpu${BASH_REMATCH[2]}/cache/index3/shared_cpu_list" 2> /dev/null || true)
+        if [[ "$l3_a" != "$l3_b" ]]; then
+            echo -e "${YELLOW}Warning: CPUs ${PIN} do not share an L3 cache (${l3_a} and ${l3_b}).${NC}"
+            echo -e "${YELLOW}Pin to two cores of one L3 group for numbers that compare across machines.${NC}"
+        fi
     fi
 fi
 

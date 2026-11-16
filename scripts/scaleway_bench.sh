@@ -130,7 +130,7 @@ What to measure:
   --rounds N                rounds per revision in pair mode (default 5)
   --pin CORES               cores for the two-thread benchmarks (default 2,4,
                             checked on the server and replaced if they are not
-                            two separate physical cores)
+                            two separate physical cores under one L3 cache)
   --arena-cmd CMD           command for --mode arena
 
 Where to run:
@@ -643,25 +643,37 @@ lscpu -e > ../logs/lscpu-e.txt
 cloud-init status --long > ../logs/cloud-init.txt 2>&1
 $SUDO cat /root/bench-host.txt > ../logs/bench-host.txt 2>/dev/null
 
-# Two online CPUs on two different physical cores, neither of them core 0,
-# which takes most of the interrupts. The requested pair is kept if it
-# passes; otherwise the first two cores that do are used.
+# Two online CPUs on two different physical cores that share an L3 cache,
+# neither of them core 0, which takes most of the interrupts. Two threads
+# that talk to each other across L3 caches measure the cost of moving cache
+# lines between them, which on a CPU with several small L3 groups is larger
+# than what is being measured. The requested pair is kept if it passes;
+# otherwise the first pair that does is used.
 stage pin
-cores=$(lscpu -p=CPU,CORE,ONLINE | grep -v '^#')
-core_of() { echo "$cores" | awk -F, -v c="$1" '$1 == c && $3 == "Y" {print $2}'; }
+# One line per online CPU: number; physical core; the CPUs it shares L3 with.
+topo=$(lscpu -p=CPU,CORE,ONLINE | grep -v '^#' | while IFS=, read -r cpu core online; do
+    [ "$online" = Y ] || continue
+    l3=$(cat "/sys/devices/system/cpu/cpu$cpu/cache/index3/shared_cpu_list" 2>/dev/null || echo all)
+    echo "$cpu;$core;$l3"
+done)
+topo_of() { echo "$topo" | awk -F';' -v c="$1" -v f="$2" '$1 == c {print $f}'; }
 a=${PIN%,*} b=${PIN#*,}
-ca=$(core_of "$a") cb=$(core_of "$b")
-if [ -z "$ca" ] || [ -z "$cb" ] || [ "$ca" = "$cb" ] || [ "$ca" = 0 ] || [ "$cb" = 0 ]; then
-    picked=$(echo "$cores" | awk -F, '$3 == "Y" && $2 != 0 && !seen[$2]++ {print $1}' | head -2 | paste -sd,)
-    echo "pin $PIN is not two separate physical cores here; using $picked"
+ca=$(topo_of "$a" 2) cb=$(topo_of "$b" 2)
+if [ -z "$ca" ] || [ -z "$cb" ] || [ "$ca" = "$cb" ] || [ "$ca" = 0 ] || [ "$cb" = 0 ] ||
+    [ "$(topo_of "$a" 3)" != "$(topo_of "$b" 3)" ]; then
+    picked=$(echo "$topo" | awk -F';' '$2 != 0 && !seen[$2]++ {
+        if ($3 in first) { print first[$3] "," $1; exit }
+        first[$3] = $1
+    }')
+    echo "pin $PIN is not two separate physical cores under one L3 cache here; using $picked"
     PIN=$picked
 fi
 case "$PIN" in
     *,*) ;;
-    *) echo "could not find two physical cores to pin to"; echo 1 > ../logs/build.exit; exit 1 ;;
+    *) echo "could not find two physical cores under one L3 cache to pin to"; echo 1 > ../logs/build.exit; exit 1 ;;
 esac
 echo "$PIN" > ../logs/pin.txt
-echo "pinned to $PIN"
+echo "pinned to $PIN, L3 shared by CPUs $(topo_of "${PIN%,*}" 3)"
 
 stage build
 timeout 45m cargo bench -p monocoque-rs --features zmq --no-run > ../logs/build.log 2>&1
