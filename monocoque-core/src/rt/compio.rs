@@ -2,7 +2,7 @@
 //!
 //! See [`super`](crate::rt) for the facade contract this implements.
 
-use crate::spin::{SpinBackoff, spin_budget};
+use crate::spin::{SpinBackoff, SpinChoice, received, spin_budget};
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -127,7 +127,11 @@ impl LocalRuntime {
             let waker = Waker::from(Arc::clone(&flag));
             let mut cx = Context::from_waker(&waker);
             let mut fut = std::pin::pin!(fut);
+            let mut choice = SpinChoice::default();
             let mut backoff = SpinBackoff::default();
+            // The last wait: how long it took, whether it spun, and the
+            // thread's message count when it began.
+            let mut stretch: Option<(Duration, bool, u64)> = None;
             loop {
                 if flag.woken.swap(false, Ordering::Acquire)
                     && let Poll::Ready(out) = fut.as_mut().poll(&mut cx)
@@ -139,29 +143,45 @@ impl LocalRuntime {
                     rt.poll_with(Some(Duration::ZERO));
                     continue;
                 }
-                if !backoff.should_spin() {
+                // Nothing runnable: wait for a completion, by spinning or by
+                // sleeping in the kernel, whichever has been moving messages
+                // faster. Sleeping in io_uring_enter and being woken can
+                // cost more than a round trip on a local socket.
+                let received = received();
+                if let Some((waited, spun, at)) = stretch.take() {
+                    let messages = u32::try_from(received - at).unwrap_or(u32::MAX);
+                    choice.record_stretch(spun, waited, messages);
+                }
+                let (spun, timed) = choice.next_wait();
+                let spinning = spun && backoff.should_spin();
+                let began = (spinning || timed).then(Instant::now);
+                if let Some(began) = began.filter(|_| spinning) {
+                    // Reap completions without entering the kernel's wait.
+                    // Yielding lets a peer that shares this core run
+                    // meanwhile.
+                    let deadline = began + spin;
+                    loop {
+                        rt.poll_with(Some(Duration::ZERO));
+                        let more = rt.run();
+                        if more || flag.woken.load(Ordering::Acquire) {
+                            backoff.hit();
+                            break;
+                        }
+                        if Instant::now() >= deadline {
+                            backoff.miss();
+                            rt.poll();
+                            break;
+                        }
+                        std::thread::yield_now();
+                    }
+                } else {
                     rt.poll();
-                    continue;
                 }
-                // Nothing runnable. Reap completions without entering the
-                // kernel's wait for a while: sleeping in io_uring_enter and
-                // being woken costs more than a round trip on a local socket.
-                // Yielding lets a peer that shares this core run meanwhile.
-                let deadline = Instant::now() + spin;
-                loop {
-                    rt.poll_with(Some(Duration::ZERO));
-                    let more = rt.run();
-                    if more || flag.woken.load(Ordering::Acquire) {
-                        backoff.hit();
-                        break;
-                    }
-                    if Instant::now() >= deadline {
-                        backoff.miss();
-                        rt.poll();
-                        break;
-                    }
-                    std::thread::yield_now();
-                }
+                stretch = began
+                    .filter(|_| timed)
+                    .map(|began| began.elapsed())
+                    .filter(|&waited| !SpinChoice::is_gap(waited, spin))
+                    .map(|waited| (waited, spun, received));
             }
         })
     }

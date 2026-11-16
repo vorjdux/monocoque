@@ -1279,6 +1279,21 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         self.take_ready()
     }
 
+    /// Messages queued for a receive to take without waiting, or 0 while the
+    /// spin is not counting them.
+    fn queued(&self) -> u32 {
+        if !self.spin.counts() {
+            return 0;
+        }
+        let in_peers: usize = self
+            .fair
+            .iter()
+            .filter_map(|id| self.peers.get(id.index as usize)?.as_ref())
+            .map(|entry| entry.state.borrow().ready.len())
+            .sum();
+        u32::try_from(self.inbox.len() + in_peers).unwrap_or(u32::MAX)
+    }
+
     fn take_ready(&mut self) -> Option<(PeerId, Msg)> {
         if let Some(m) = self.inbox.pop_front() {
             return Some(m);
@@ -1383,6 +1398,10 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         // nothing stops it, so making every receive pay for that starved the
         // consumer of a fast fan-in to a few thousand messages per second.
         if let Some((id, msg)) = self.take_ready() {
+            // Queued by another call's progress. It ends the wait, so the
+            // wait is not timed into the next one, but not the spin.
+            let more = self.queued();
+            self.spin.found_queued(more);
             *slot = msg;
             return Poll::Ready(id);
         }
@@ -1393,7 +1412,10 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         loop {
             self.progress();
             if let Some((id, msg)) = self.take_ready() {
-                self.spin.found();
+                // The receives that follow take the rest of what this read
+                // brought without coming back here, so it is counted now.
+                let more = self.queued();
+                self.spin.found(more);
                 *slot = msg;
                 return Poll::Ready(id);
             }
@@ -1435,7 +1457,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             };
             if let Some(msg) = msg {
                 if let Some(msg) = self.hooks.on_inbound(id, msg) {
-                    self.spin.found();
+                    self.spin.found(0);
                     *slot = msg;
                     return Poll::Ready(true);
                 }
