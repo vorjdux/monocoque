@@ -7,6 +7,8 @@
 //!   so a small message costs no allocation and no atomic on either side, and
 //!   holds no reference into the read buffer it was decoded from;
 //! - one larger frame is a single [`Bytes`] (the dominant network case);
+//! - a frame in front of one inline frame (a ROUTER identity and a small body)
+//!   keeps the body inline, so routing a small message allocates nothing;
 //! - up to three frames sit in a [`SmallVec`] with no allocation;
 //! - [`Msg::into_shared`] moves the frames behind one `Arc` so a fan-out to N
 //!   peers costs one allocation and N refcount bumps rather than N copies.
@@ -32,7 +34,16 @@ pub type FrameVec = SmallVec<[Bytes; 3]>;
 
 #[derive(Clone)]
 enum FrameStore {
-    Inline { len: u8, data: [u8; INLINE_CAP] },
+    /// One inline frame, with `head` in front of it when set: what a ROUTER
+    /// receives and sends for a small message. Adding or removing `head`
+    /// leaves the inline bytes where they are, so routing a small message
+    /// neither allocates nor copies it, and the whole fits in the space
+    /// `Multi` already takes.
+    Inline {
+        head: Option<Bytes>,
+        len: u8,
+        data: [u8; INLINE_CAP],
+    },
     Single(Bytes),
     Multi(FrameVec),
     Shared(Arc<[Bytes]>),
@@ -65,7 +76,11 @@ impl Msg {
             let mut inline = [0u8; INLINE_CAP];
             inline[..data.len()].copy_from_slice(data);
             return Self {
-                frames: FrameStore::Inline { len, data: inline },
+                frames: FrameStore::Inline {
+                    len,
+                    data: inline,
+                    head: None,
+                },
             };
         }
         Self {
@@ -77,7 +92,8 @@ impl Msg {
     #[must_use]
     pub fn len(&self) -> usize {
         match &self.frames {
-            FrameStore::Inline { .. } | FrameStore::Single(_) => 1,
+            FrameStore::Inline { head, .. } => 1 + usize::from(head.is_some()),
+            FrameStore::Single(_) => 1,
             FrameStore::Multi(v) => v.len(),
             FrameStore::Shared(v) => v.len(),
         }
@@ -92,14 +108,25 @@ impl Msg {
     /// Total payload bytes across all frames.
     #[must_use]
     pub fn byte_len(&self) -> usize {
-        self.frames().map(<[u8]>::len).sum()
+        match &self.frames {
+            FrameStore::Inline { head, len, .. } => {
+                usize::from(*len) + head.as_ref().map_or(0, Bytes::len)
+            }
+            FrameStore::Single(b) => b.len(),
+            FrameStore::Multi(v) => v.iter().map(Bytes::len).sum(),
+            FrameStore::Shared(v) => v.iter().map(Bytes::len).sum(),
+        }
     }
 
     /// Frame `index`, or `None` past the end.
     #[must_use]
     pub fn get(&self, index: usize) -> Option<&[u8]> {
         match &self.frames {
-            FrameStore::Inline { len, data } => (index == 0).then(|| &data[..usize::from(*len)]),
+            FrameStore::Inline { len, data, head } => match (head, index) {
+                (None, 0) | (Some(_), 1) => Some(&data[..usize::from(*len)]),
+                (Some(head), 0) => Some(&head[..]),
+                _ => None,
+            },
             FrameStore::Single(b) => (index == 0).then(|| &b[..]),
             FrameStore::Multi(v) => v.get(index).map(|b| &b[..]),
             FrameStore::Shared(v) => v.get(index).map(|b| &b[..]),
@@ -132,9 +159,13 @@ impl Msg {
     #[must_use]
     pub fn frame_bytes(&self, index: usize) -> Option<Bytes> {
         match &self.frames {
-            FrameStore::Inline { len, data } => {
-                (index == 0).then(|| Bytes::copy_from_slice(&data[..usize::from(*len)]))
-            }
+            FrameStore::Inline { len, data, head } => match (head, index) {
+                (None, 0) | (Some(_), 1) => {
+                    Some(Bytes::copy_from_slice(&data[..usize::from(*len)]))
+                }
+                (Some(head), 0) => Some(head.clone()),
+                _ => None,
+            },
             FrameStore::Single(b) => (index == 0).then(|| b.clone()),
             FrameStore::Multi(v) => v.get(index).cloned(),
             FrameStore::Shared(v) => v.get(index).cloned(),
@@ -160,13 +191,16 @@ impl Msg {
             self.frames = FrameStore::Single(frame);
             return;
         }
-        if let FrameStore::Multi(v) = &mut self.frames {
-            v.insert(0, frame);
-            return;
+        match &mut self.frames {
+            FrameStore::Multi(v) => v.insert(0, frame),
+            // The body stays inline, where it is: no allocation and no copy.
+            FrameStore::Inline { head, .. } if head.is_none() => *head = Some(frame),
+            _ => {
+                let mut v = self.take_vec();
+                v.insert(0, frame);
+                self.set_vec(v);
+            }
         }
-        let mut v = self.take_vec();
-        v.insert(0, frame);
-        self.set_vec(v);
     }
 
     /// Remove and return the first frame.
@@ -188,6 +222,7 @@ impl Msg {
                     _ => unreachable!("matched Single"),
                 }
             }
+            FrameStore::Inline { head, .. } if head.is_some() => head.take(),
             _ => {
                 let mut v = self.take_vec();
                 let first = v.remove(0);
@@ -234,7 +269,7 @@ impl Msg {
     /// `true` if the message is a single frame stored inline.
     #[must_use]
     pub const fn is_inline(&self) -> bool {
-        matches!(self.frames, FrameStore::Inline { .. })
+        matches!(self.frames, FrameStore::Inline { head: None, .. })
     }
 
     /// Consume the message, yielding its frames as `Bytes`.
@@ -246,8 +281,8 @@ impl Msg {
     /// Take the frames out as an owned list, leaving the message empty.
     fn take_vec(&mut self) -> FrameVec {
         match std::mem::replace(&mut self.frames, FrameStore::Multi(SmallVec::new())) {
-            FrameStore::Inline { len, data } => {
-                let mut v = SmallVec::new();
+            FrameStore::Inline { len, data, head } => {
+                let mut v: FrameVec = head.into_iter().collect();
                 v.push(Bytes::copy_from_slice(&data[..usize::from(len)]));
                 v
             }
@@ -265,15 +300,17 @@ impl Msg {
     /// shared `Bytes` otherwise, so an encoder can hand a large body to the
     /// kernel without copying it.
     pub fn frame_refs(&self) -> impl Iterator<Item = FrameRef<'_>> + '_ {
-        let (inline, stored): (Option<&[u8]>, &[Bytes]) = match &self.frames {
-            FrameStore::Inline { len, data } => (Some(&data[..usize::from(*len)]), &[]),
-            FrameStore::Single(b) => (None, std::slice::from_ref(b)),
-            FrameStore::Multi(v) => (None, v.as_slice()),
-            FrameStore::Shared(v) => (None, v),
+        let (head, inline, stored): (Option<&Bytes>, Option<&[u8]>, &[Bytes]) = match &self.frames {
+            FrameStore::Inline { len, data, head } => {
+                (head.as_ref(), Some(&data[..usize::from(*len)]), &[])
+            }
+            FrameStore::Single(b) => (None, None, std::slice::from_ref(b)),
+            FrameStore::Multi(v) => (None, None, v.as_slice()),
+            FrameStore::Shared(v) => (None, None, v),
         };
-        inline
-            .into_iter()
-            .map(FrameRef::Slice)
+        head.into_iter()
+            .map(FrameRef::Bytes)
+            .chain(inline.into_iter().map(FrameRef::Slice))
             .chain(stored.iter().map(FrameRef::Bytes))
     }
 }
@@ -663,6 +700,62 @@ mod tests {
         let mut msg = Msg::copy_from_slice(b"head");
         msg.push(Bytes::from_static(b"tail"));
         assert_eq!(msg, [&b"head"[..], &b"tail"[..]]);
+    }
+
+    #[test]
+    fn a_frame_in_front_of_an_inline_frame_keeps_it_inline() {
+        let mut msg = Msg::copy_from_slice(b"body");
+        msg.push_front(Bytes::from_static(b"id"));
+        assert!(matches!(
+            msg.frames,
+            FrameStore::Inline { head: Some(_), .. }
+        ));
+        assert!(!msg.is_inline());
+        assert_eq!(msg.len(), 2);
+        assert_eq!(msg, [&b"id"[..], &b"body"[..]]);
+        assert_eq!(msg.get(2), None);
+        assert_eq!(msg.frame_bytes(1).as_deref(), Some(&b"body"[..]));
+        let stored: Vec<Vec<u8>> = msg.frame_refs().map(|f| f.as_slice().to_vec()).collect();
+        assert_eq!(stored, vec![b"id".to_vec(), b"body".to_vec()]);
+        assert_eq!(msg.clone(), msg);
+
+        // Any other change goes through the general shape.
+        let mut longer = msg.clone();
+        longer.push(Bytes::from_static(b"tail"));
+        assert_eq!(longer, [&b"id"[..], &b"body"[..], &b"tail"[..]]);
+        let mut deeper = msg.clone();
+        deeper.push_front(Bytes::from_static(b"outer"));
+        assert_eq!(deeper, [&b"outer"[..], &b"id"[..], &b"body"[..]]);
+        assert_eq!(msg.clone().into_frames().len(), 2);
+
+        assert_eq!(msg.pop_front().as_deref(), Some(&b"id"[..]));
+        assert!(msg.is_inline());
+        assert_eq!(msg, [b"body"]);
+    }
+
+    #[test]
+    fn a_frame_in_front_of_a_large_frame_shares_the_body() {
+        let body = Bytes::from(vec![7u8; INLINE_CAP + 1]);
+        let mut msg = Msg::from(body.clone());
+        msg.push_front(Bytes::from_static(b"id"));
+        assert_eq!(msg.len(), 2);
+        assert_eq!(msg, [&b"id"[..], &body[..]]);
+        assert_eq!(msg.get(2), None);
+        assert_eq!(msg.frame_bytes(1), Some(body.clone()));
+        assert_eq!(msg.frame_refs().count(), 2);
+        assert_eq!(msg.clone().into_frames().len(), 2);
+
+        let mut longer = msg.clone();
+        longer.push(Bytes::from_static(b"tail"));
+        assert_eq!(longer, [&b"id"[..], &body[..], &b"tail"[..]]);
+        let mut deeper = msg.clone();
+        deeper.push_front(Bytes::from_static(b"outer"));
+        assert_eq!(deeper, [&b"outer"[..], &b"id"[..], &body[..]]);
+
+        assert_eq!(msg.pop_front().as_deref(), Some(&b"id"[..]));
+        assert!(matches!(msg.frames, FrameStore::Single(_)));
+        assert_eq!(msg.pop_front(), Some(body));
+        assert!(msg.is_empty());
     }
 
     #[test]

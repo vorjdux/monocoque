@@ -106,10 +106,11 @@ impl Protocol for Raw {
     }
 }
 
-/// Hashes the integer keys of STREAM's tables with one multiply. The keys
-/// are chosen by this socket, never by a peer, so SipHash buys nothing.
+/// Hashes the integer keys of STREAM's and ROUTER's tables with one multiply.
+/// The keys are chosen by the socket, never by a peer, so SipHash buys
+/// nothing.
 #[derive(Default)]
-struct IntHasher(u64);
+pub(super) struct IntHasher(u64);
 
 impl Hasher for IntHasher {
     fn finish(&self) -> u64 {
@@ -131,11 +132,11 @@ impl Hasher for IntHasher {
     }
 }
 
-type IntMap<K, V> = HashMap<K, V, BuildHasherDefault<IntHasher>>;
+pub(super) type IntMap<K, V> = HashMap<K, V, BuildHasherDefault<IntHasher>>;
 
-/// The counter inside a STREAM identity, `None` for bytes this socket never
-/// handed out.
-fn identity_key(identity: &[u8]) -> Option<u32> {
+/// The counter inside a generated identity, `None` for bytes the socket
+/// never handed out.
+pub(super) fn identity_key(identity: &[u8]) -> Option<u32> {
     match identity {
         [0, a, b, c, d] => Some(u32::from_be_bytes([*a, *b, *c, *d])),
         _ => None,

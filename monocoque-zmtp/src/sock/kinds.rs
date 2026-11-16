@@ -1,5 +1,6 @@
 //! The ZeroMQ patterns: what each socket type does on send and receive.
 
+use super::stream::{IntMap, identity_key};
 use super::{Kind, Socket, with_timeout};
 use crate::session::SocketType;
 use crate::wire::Zmtp;
@@ -169,15 +170,31 @@ impl Socket<Pull> {
 
 // ── ROUTER ───────────────────────────────────────────────────────────────
 
-/// ROUTER's routing table. Identities are chosen by peers, so the map uses the
-/// per-process randomly seeded SipHash to resist hash flooding.
+/// The identity of the peer that holds, or last held, one peer slot.
+struct RouterSlot {
+    peer: PeerId,
+    identity: Bytes,
+    /// `false` once the peer went away or lost its identity to a handover.
+    /// The entry stays until a new peer takes the slot, so the messages the
+    /// old one sent before leaving are still delivered with their envelope.
+    live: bool,
+}
+
+/// ROUTER's routing table.
+///
+/// Both directions are looked up for every message, so neither hashes more
+/// than it must: a received message finds its identity by the peer's slot
+/// index, and a sent one finds its peer by an identity that is usually one
+/// this socket generated.
 pub struct RouterHooks {
+    /// Identities chosen by peers, so this map uses the per-process randomly
+    /// seeded SipHash to resist hash flooding.
     by_identity: HashMap<Bytes, PeerId, RandomState>,
-    identity_of: HashMap<PeerId, Bytes, RandomState>,
-    /// Identities of peers that went away, by slot index, so the messages
-    /// they sent before leaving are still delivered with their envelope. An
-    /// entry lives until its slot is reused by a new peer.
-    departed: HashMap<u32, (PeerId, Bytes)>,
+    /// Identities this socket generated, by their counter. No peer chooses
+    /// these keys, so SipHash would buy nothing.
+    generated: IntMap<u32, PeerId>,
+    /// Indexed by `PeerId::index`.
+    slots: Vec<Option<RouterSlot>>,
     next_generated: u32,
     handover: bool,
 }
@@ -186,8 +203,8 @@ impl FromOptions for RouterHooks {
     fn from_options(options: &SocketOptions) -> Self {
         Self {
             by_identity: HashMap::default(),
-            identity_of: HashMap::default(),
-            departed: HashMap::new(),
+            generated: IntMap::default(),
+            slots: Vec::new(),
             next_generated: rand::random(),
             handover: options.router_handover,
         }
@@ -195,18 +212,45 @@ impl FromOptions for RouterHooks {
 }
 
 impl RouterHooks {
-    /// The identity `id` was routed by, live or departed.
-    fn envelope_of(&self, id: PeerId) -> Option<Bytes> {
-        self.identity_of.get(&id).cloned().or_else(|| {
-            self.departed
-                .get(&id.index())
-                .filter(|(p, _)| *p == id)
-                .map(|(_, identity)| identity.clone())
-        })
+    fn slot(&self, id: PeerId) -> Option<&RouterSlot> {
+        self.slots
+            .get(id.index() as usize)?
+            .as_ref()
+            .filter(|slot| slot.peer == id)
     }
 
-    fn depart(&mut self, id: PeerId, identity: Bytes) {
-        self.departed.insert(id.index(), (id, identity));
+    /// The identity `id` was routed by, live or departed.
+    fn envelope_of(&self, id: PeerId) -> Option<Bytes> {
+        self.slot(id).map(|slot| slot.identity.clone())
+    }
+
+    /// The identity a connected peer is routed by.
+    fn live_identity(&self, id: PeerId) -> Option<Bytes> {
+        self.slot(id)
+            .filter(|slot| slot.live)
+            .map(|slot| slot.identity.clone())
+    }
+
+    /// The peer `identity` routes to.
+    fn route(&self, identity: &[u8]) -> Option<PeerId> {
+        match identity_key(identity) {
+            Some(key) => self.generated.get(&key).copied(),
+            None => self.by_identity.get(identity).copied(),
+        }
+    }
+
+    fn set_route(&mut self, identity: &Bytes, id: PeerId) {
+        match identity_key(identity) {
+            Some(key) => self.generated.insert(key, id),
+            None => self.by_identity.insert(identity.clone(), id),
+        };
+    }
+
+    fn remove_route(&mut self, identity: &[u8]) {
+        match identity_key(identity) {
+            Some(key) => self.generated.remove(&key),
+            None => self.by_identity.remove(identity),
+        };
     }
 
     fn generate(&mut self) -> Bytes {
@@ -225,26 +269,42 @@ impl Hooks for RouterHooks {
             Some(identity) if identity.first() != Some(&0) => identity,
             _ => self.generate(),
         };
-        if let Some(&old) = self.by_identity.get(&identity) {
+        if let Some(old) = self.route(&identity) {
             if !self.handover {
                 return false;
             }
-            if let Some(identity) = self.identity_of.remove(&old) {
-                self.depart(old, identity);
+            // The old holder keeps its envelope for what it already sent,
+            // and loses the route.
+            if let Some(Some(slot)) = self.slots.get_mut(old.index() as usize)
+                && slot.peer == old
+            {
+                slot.live = false;
             }
         }
-        self.departed.remove(&id.index());
-        self.by_identity.insert(identity.clone(), id);
-        self.identity_of.insert(id, identity);
+        self.set_route(&identity, id);
+        let index = id.index() as usize;
+        if self.slots.len() <= index {
+            self.slots.resize_with(index + 1, || None);
+        }
+        self.slots[index] = Some(RouterSlot {
+            peer: id,
+            identity,
+            live: true,
+        });
         true
     }
 
     fn on_peer_down(&mut self, id: PeerId, _info: &PeerInfo) {
-        if let Some(identity) = self.identity_of.remove(&id) {
-            if self.by_identity.get(&identity) == Some(&id) {
-                self.by_identity.remove(&identity);
-            }
-            self.depart(id, identity);
+        let Some(Some(slot)) = self.slots.get_mut(id.index() as usize) else {
+            return;
+        };
+        if slot.peer != id || !slot.live {
+            return;
+        }
+        slot.live = false;
+        let identity = slot.identity.clone();
+        if self.route(&identity) == Some(id) {
+            self.remove_route(&identity);
         }
     }
 }
@@ -289,13 +349,7 @@ impl Socket<Router> {
         let Some(identity) = msg.pop_front() else {
             return Err(MonocoqueError::InvalidRoutingId);
         };
-        let peer = self
-            .core
-            .borrow()
-            .hooks()
-            .by_identity
-            .get(&identity)
-            .copied();
+        let peer = self.core.borrow().hooks().route(&identity);
         let Some(peer) = peer else {
             return if mandatory {
                 Err(MonocoqueError::HostUnreachable)
@@ -317,7 +371,7 @@ impl Socket<Router> {
     /// The identity a connected peer is routed by.
     #[must_use]
     pub fn identity_of(&self, peer: PeerId) -> Option<Bytes> {
-        self.core.borrow().hooks().identity_of.get(&peer).cloned()
+        self.core.borrow().hooks().live_identity(peer)
     }
 
     /// Identities of all connected peers.
@@ -326,9 +380,11 @@ impl Socket<Router> {
         self.core
             .borrow()
             .hooks()
-            .by_identity
-            .keys()
-            .cloned()
+            .slots
+            .iter()
+            .flatten()
+            .filter(|slot| slot.live)
+            .map(|slot| slot.identity.clone())
             .collect()
     }
 }
