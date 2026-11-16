@@ -120,6 +120,17 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
   to 20 us on compio and tokio and 100 us on smol, where a wakeup costs more:
   compio's `LocalRuntime` polls for completions, and on tokio and smol the
   receive yields to the runtime. It costs some CPU while traffic flows.
+- A socket times its waits both ways and goes on spinning only while that
+  moves messages faster than sleeping. A spinning receiver that shares no L3
+  cache with its peer slows the peer down: on an EPYC 7232P a tokio REQ/REP
+  round trip of 64 B took 13.5 us spinning and 20.9 us sleeping with both
+  threads under one L3, and 29.8 us spinning and 21.8 us sleeping under two.
+- A ROUTER routes a small message without allocating or copying it: the body
+  stays inline when the identity is added or removed, and the routing table
+  finds a received message's identity by the peer's slot and a sent one's peer
+  by the counter in a generated identity, hashing only identities that peers
+  chose. Pipelined DEALER/ROUTER at 64 B is 27 to 36% faster than before on
+  all three backends.
 - An eager send with the writer idle writes to the kernel from `send` itself
   on every backend, with no task woken.
 - A send to a peer with room, and a receive of a queued message, run without

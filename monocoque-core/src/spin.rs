@@ -322,7 +322,7 @@ impl SpinChoice {
     /// socket REQ/REP round trip has two waits in its 3 µs: timing every one
     /// and weighing the two ways before each cost it about 2 % on tokio. So
     /// the first waits of a cycle are timed, the trials among them, and one
-    /// in [`Self::TIMED`] of the rest.
+    /// in eight of the rest.
     pub fn next_wait(&mut self) -> (bool, bool) {
         let prefers = self.prefers;
         let trial = self.turn < Self::TRIAL;
