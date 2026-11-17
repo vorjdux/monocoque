@@ -195,6 +195,16 @@ impl Msg {
             FrameStore::Multi(v) => v.insert(0, frame),
             // The body stays inline, where it is: no allocation and no copy.
             FrameStore::Inline { head, .. } if head.is_none() => *head = Some(frame),
+            // What a ROUTER does to every message too long to be inline:
+            // built in place, where taking the frames out as a list and
+            // putting them back moved them three times.
+            FrameStore::Single(body) => {
+                let body = std::mem::take(body);
+                let mut v = FrameVec::new();
+                v.push(frame);
+                v.push(body);
+                self.frames = FrameStore::Multi(v);
+            }
             _ => {
                 let mut v = self.take_vec();
                 v.insert(0, frame);
