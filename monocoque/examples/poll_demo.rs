@@ -51,12 +51,16 @@ fn main() -> monocoque::zmq::Result<()> {
                 );
                 done += 1;
                 if done == 3 {
-                    // Wait for the subscription to land, then tell ourselves
-                    // to stop.
-                    while control_pub.peer_count() == 0 {
+                    // A PUB drops what nobody is subscribed to, so wait until
+                    // the subscription has reached it, then tell ourselves to
+                    // stop.
+                    while !control_pub
+                        .peer_ids()
+                        .into_iter()
+                        .any(|peer| control_pub.subscriber_prefixes(peer) > 0)
+                    {
                         monocoque::rt::sleep(Duration::from_millis(1)).await;
                     }
-                    monocoque::rt::sleep(Duration::from_millis(50)).await;
                     control_pub.send("stop").await?;
                 }
             }

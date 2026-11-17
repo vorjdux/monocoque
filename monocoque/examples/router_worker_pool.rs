@@ -43,7 +43,8 @@ async fn async_main() -> Result<()> {
     info!("Waiting for worker connections...");
     let mut workers = Vec::with_capacity(WORKERS);
     while workers.len() < WORKERS {
-        let msg = router.recv_owned().await?;
+        // Only the identity frame is kept, so the message stays borrowed.
+        let msg = router.recv().await?;
         if msg.get(1) == Some(&b"READY"[..])
             && let Some(id) = msg.frame_bytes(0)
         {
@@ -78,8 +79,13 @@ async fn worker(n: usize, endpoint: &str) -> Result<()> {
     socket.connect(endpoint).await?;
     socket.send("READY").await?;
     loop {
-        let task = socket.recv_owned().await?;
-        let text = String::from_utf8_lossy(task.first().unwrap_or_default()).into_owned();
-        socket.send(format!("{text} done by worker {n}")).await?;
+        // The task is only read, so it stays borrowed from the socket until
+        // the result is built.
+        let result = {
+            let task = socket.recv().await?;
+            let text = String::from_utf8_lossy(task.first().unwrap_or_default());
+            format!("{text} done by worker {n}")
+        };
+        socket.send(result).await?;
     }
 }

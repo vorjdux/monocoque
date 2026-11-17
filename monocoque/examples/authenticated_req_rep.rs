@@ -9,9 +9,9 @@
 //! - Secure request-reply messaging
 
 use monocoque::rt::{self, LocalRuntime};
+use monocoque::zmq::security::plain::StaticPlainHandler;
+use monocoque::zmq::security::zap_handler::start_default_zap_server;
 use monocoque::zmq::{RepSocket, ReqSocket, SocketOptions};
-use monocoque_zmtp::security::plain::StaticPlainHandler;
-use monocoque_zmtp::security::zap_handler::start_default_zap_server;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -45,20 +45,15 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         // bob each get their own connection, and REP answers whoever asked.
         println!("[SERVER] Waiting for requests...");
         for i in 1..=2 {
-            match server.recv().await {
-                Ok(request) => {
-                    let msg = String::from_utf8_lossy(request.first().unwrap_or_default());
-                    println!("[SERVER] Request {i}: {msg}");
-                }
-                Err(e) => {
-                    println!("[SERVER] Receive failed: {e}");
-                    return;
-                }
+            {
+                let request = server.recv().await?;
+                let msg = String::from_utf8_lossy(request.first().unwrap_or_default());
+                println!("[SERVER] Request {i}: {msg}");
             }
-            server.send(format!("Reply {i}: OK")).await.unwrap();
+            server.send(format!("Reply {i}: OK")).await?;
         }
-        server.close().await.unwrap();
         println!("[SERVER] Done");
+        server.close().await
     });
 
     let alice_options = SocketOptions::new()
@@ -95,7 +90,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    rt::join(server_task).await;
+    rt::join(server_task).await?;
     println!("\nDemo completed!");
     Ok(())
 }

@@ -1,150 +1,153 @@
-//! Paranoid Pirate Pattern with the built-in proxy
+//! Reliable request-reply through the built-in proxy.
 //!
-//! Same workers and client as `paranoid_pirate_simple`, but the broker is
-//! just `proxy()` between a ROUTER and a DEALER.
+//! The client and the broker of the Paranoid Pirate pattern, with the broker
+//! reduced to `proxy()` between a ROUTER and a DEALER:
 //!
 //! ```text
 //! Client (REQ) -> ROUTER (frontend) -> proxy() -> DEALER (backend) <- Workers (DEALER)
 //! ```
+//!
+//! One worker dies while it holds a request. That request never gets a reply,
+//! so the client times out, replaces its socket and sends it again; the retry
+//! reaches a live worker. A replacement worker joins while this is going on.
+//!
+//! Use this when the broker only has to forward. `paranoid_pirate` has the
+//! variant whose broker also reads READY and HEARTBEAT messages from workers.
+//!
+//! Run with: `cargo run --example paranoid_pirate_proxy --features zmq`
 
 use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::proxy::{NoCapture, proxy};
-use monocoque::zmq::{DealerSocket, MonocoqueError, Msg, ReqSocket, RouterSocket, SocketOptions};
-use std::time::{Duration, Instant};
-use tracing::{error, info, warn};
+use monocoque::zmq::{
+    DealerSocket, MonocoqueError, Msg, ReqSocket, Result, RouterSocket, SocketOptions,
+};
+use std::time::Duration;
 
-const FRONTEND: &str = "tcp://127.0.0.1:5565";
-const BACKEND: &str = "tcp://127.0.0.1:5566";
-const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
-const REQUEST_TIMEOUT: Duration = Duration::from_millis(2500);
+const REQUESTS: u32 = 6;
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(1);
+const WORK_TIME: Duration = Duration::from_millis(100);
 
-/// Worker with heartbeat logging and crash simulation.
-async fn worker(id: u32, crash_after: Option<u32>) -> monocoque::zmq::Result<()> {
-    info!("[Worker-{}] Starting", id);
+fn main() -> Result<()> {
+    LocalRuntime::new()?.block_on(async_main())
+}
 
-    // Wake up at least once per heartbeat interval even with no requests
-    let mut socket =
-        DealerSocket::with_options(SocketOptions::default().with_recv_timeout(HEARTBEAT_INTERVAL));
-    socket.connect(BACKEND).await?;
-    info!("[Worker-{}] READY", id);
+async fn async_main() -> Result<()> {
+    // Port 0: the OS picks free ports and `bind` reports them.
+    let mut frontend = RouterSocket::new();
+    let frontend_endpoint = frontend.bind("tcp://127.0.0.1:0").await?;
+    let mut backend = DealerSocket::new();
+    let backend_endpoint = backend.bind("tcp://127.0.0.1:0").await?;
+    println!("Broker: clients on {frontend_endpoint}, workers on {backend_endpoint}");
 
-    let mut heartbeat_timer = Instant::now();
-    let mut count = 0u32;
+    spawn_worker(1, backend_endpoint.clone());
+    // This one dies on its second request, without replying to it.
+    let doomed = rt::spawn(worker(2, backend_endpoint.clone(), Some(2)));
 
-    loop {
-        if heartbeat_timer.elapsed() >= HEARTBEAT_INTERVAL {
-            info!("[Worker-{}] HEARTBEAT", id);
-            heartbeat_timer = Instant::now();
+    // The backend DEALER balances requests over the workers connected at the
+    // time, so wait for both before any request can arrive.
+    while backend.peer_count() < 2 {
+        rt::sleep(Duration::from_millis(5)).await;
+    }
+
+    rt::spawn_detached(async move {
+        // `proxy` forwards until one of its sockets fails.
+        if let Err(e) = proxy(&mut frontend, &mut backend, None::<&mut NoCapture>).await {
+            eprintln!("Broker stopped: {e}");
         }
+    });
 
-        if let Some(crash_at) = crash_after
-            && count >= crash_at
-        {
-            error!("[Worker-{}] CRASH!", id);
+    let requests = rt::spawn(client(frontend_endpoint));
+
+    // Bring in a replacement as soon as the doomed worker is gone.
+    rt::join(doomed).await?;
+    println!("Starting a replacement worker");
+    spawn_worker(3, backend_endpoint);
+
+    rt::join(requests).await?;
+    println!("All {REQUESTS} requests were answered.");
+    Ok(())
+}
+
+/// Run a worker for the rest of the program, reporting why it stopped if it
+/// ever does.
+fn spawn_worker(id: u32, backend: String) {
+    rt::spawn_detached(async move {
+        if let Err(e) = worker(id, backend, None).await {
+            eprintln!("[Worker-{id}] stopped: {e}");
+        }
+    });
+}
+
+/// Serve requests. With `die_on` set, the worker dies when it receives that
+/// request, counting its own from 1, and the request is lost with it.
+async fn worker(id: u32, backend: String, die_on: Option<u32>) -> Result<()> {
+    let mut socket = DealerSocket::new();
+    socket.connect(&backend).await?;
+    println!("[Worker-{id}] Connected");
+
+    let mut count = 0u32;
+    loop {
+        // A request arrives as [client identity, empty delimiter, body]. The
+        // routing frames go back with the reply, so the message is taken by
+        // value.
+        let request = socket.recv_owned().await?;
+        count += 1;
+        let body = String::from_utf8_lossy(request.last().unwrap_or_default()).into_owned();
+
+        if die_on == Some(count) {
+            println!("[Worker-{id}] Got \"{body}\" and died before replying");
+            // Returning drops the socket, which closes the connection.
             return Ok(());
         }
 
-        // Requests arrive as [client identity, empty delimiter, body]
-        let msg = match socket.recv_owned().await {
-            Ok(msg) => msg,
-            Err(MonocoqueError::TimedOut) => continue,
-            Err(e) => return Err(e),
-        };
-        count += 1;
-        info!(
-            "[Worker-{}] Request #{}: {}",
-            id,
-            count,
-            String::from_utf8_lossy(msg.last().unwrap_or_default())
-        );
+        println!("[Worker-{id}] Working on \"{body}\"");
+        rt::sleep(WORK_TIME).await;
 
-        rt::sleep(Duration::from_millis(100)).await;
-
-        // Reply with the same envelope so the proxy can route it back
-        let mut reply: Msg = (0..msg.len() - 1)
-            .filter_map(|i| msg.frame_bytes(i))
+        // Same envelope, new body: the proxy routes it back to the client.
+        let envelope = request.len().saturating_sub(1);
+        let mut reply: Msg = (0..envelope)
+            .filter_map(|i| request.frame_bytes(i))
             .collect();
-        reply.push(format!("Worker-{id} processed request #{count}"));
+        reply.push(format!("\"{body}\" done by worker {id}"));
         socket.send(reply).await?;
     }
 }
 
-/// Client that resends on a fresh socket when a request gets no reply.
-async fn client(id: u32, requests: u32) -> monocoque::zmq::Result<()> {
+/// Send each request until it is answered.
+async fn client(frontend: String) -> Result<()> {
     let options = SocketOptions::default().with_recv_timeout(REQUEST_TIMEOUT);
     let mut socket = ReqSocket::with_options(options.clone());
-    socket.connect(FRONTEND).await?;
+    socket.connect(&frontend).await?;
 
-    for i in 1..=requests {
-        let req = format!("Request-{i} from Client-{id}");
+    for i in 1..=REQUESTS {
+        let request = format!("request {i}");
         loop {
-            info!("[Client-{}] Sending: {}", id, req);
-            socket.send(req.clone()).await?;
+            println!("[Client] Sending \"{request}\"");
+            socket.send(request.clone()).await?;
+
+            // REQ pairs a reply with its request, but nothing promises that a
+            // reply comes: a request that died with its worker is never
+            // answered. A REQ socket that is still owed a reply cannot send
+            // again, so on a timeout it is replaced and the request resent.
             match socket.recv().await {
                 Ok(reply) => {
-                    info!(
-                        "[Client-{}] Reply: {}",
-                        id,
+                    println!(
+                        "[Client] Reply: {}",
                         String::from_utf8_lossy(reply.first().unwrap_or_default())
                     );
                     break;
                 }
                 Err(MonocoqueError::TimedOut) => {
-                    warn!("[Client-{}] No reply, retrying", id);
+                    println!(
+                        "[Client] No reply to \"{request}\" in {REQUEST_TIMEOUT:?}, \
+                         retrying on a new socket"
+                    );
                     socket = ReqSocket::with_options(options.clone());
-                    socket.connect(FRONTEND).await?;
+                    socket.connect(&frontend).await?;
                 }
                 Err(e) => return Err(e),
             }
         }
-        rt::sleep(Duration::from_millis(800)).await;
     }
-
-    info!("[Client-{}] Done", id);
-    Ok(())
-}
-
-async fn broker() -> monocoque::zmq::Result<()> {
-    let mut frontend = RouterSocket::new();
-    frontend.bind(FRONTEND).await?;
-    let mut backend = DealerSocket::new();
-    backend.bind(BACKEND).await?;
-    info!("Broker: proxy between {FRONTEND} and {BACKEND}");
-    proxy(&mut frontend, &mut backend, None::<&mut NoCapture>).await
-}
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    LocalRuntime::new()?.block_on(async_main())
-}
-
-async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .with_target(false)
-        .init();
-
-    rt::spawn_detached(async {
-        if let Err(e) = broker().await {
-            error!("Broker: {}", e);
-        }
-    });
-    rt::spawn_detached(async {
-        let _ = worker(1, None).await;
-    });
-    rt::spawn_detached(async {
-        let _ = worker(2, Some(3)).await;
-    });
-
-    rt::sleep(Duration::from_millis(500)).await;
-    let c = rt::spawn(async { client(1, 6).await });
-
-    rt::sleep(Duration::from_secs(4)).await;
-    info!("Spawning recovery worker");
-    rt::spawn_detached(async {
-        let _ = worker(3, None).await;
-    });
-
-    rt::join(c).await?;
-    info!("Demo complete");
-    Ok(())
+    socket.close().await
 }

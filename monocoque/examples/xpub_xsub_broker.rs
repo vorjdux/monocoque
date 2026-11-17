@@ -1,159 +1,107 @@
-//! XPUB/XSUB Message Broker Example
+//! XPUB/XSUB message broker.
 //!
-//! This example demonstrates a complete message broker pattern using XPUB and XSUB sockets.
-//! The broker forwards subscriptions upstream and messages downstream, enabling:
-//! - Centralized message routing
-//! - Dynamic topic-based filtering
-//! - Subscription aggregation
-//! - Scalable pub/sub architecture
+//! Publishers and subscribers both connect to the broker, so neither side
+//! has to know the other's address:
 //!
-//! Architecture:
 //! ```text
-//! Publishers → XSUB (frontend) → Broker → XPUB (backend) → Subscribers
+//! Publishers -> XSUB (frontend) -> proxy() -> XPUB (backend) -> Subscribers
 //! ```
+//!
+//! `proxy` forwards in both directions: published messages go downstream to
+//! the subscribers, and their subscriptions go upstream to the publishers.
+//! That is why the pair is XSUB/XPUB and not SUB/PUB: with the subscriptions
+//! forwarded, a publisher drops a message no subscriber wants before it is
+//! ever sent to the broker.
+//!
+//! To also see the subscriptions as they pass, read them with
+//! `recv_subscription` instead: see `xpub_subscription_logging`.
 //!
 //! The example runs a publisher, the broker and a subscriber in one process:
 //! ```bash
 //! cargo run --example xpub_xsub_broker --features zmq
 //! ```
-//!
-//! External peers can join too, for example a pyzmq subscriber:
-//! ```python
-//! import zmq
-//! ctx = zmq.Context()
-//! sub = ctx.socket(zmq.SUB)
-//! sub.connect('tcp://127.0.0.1:<backend port printed by the example>')
-//! sub.subscribe(b'weather.')
-//! while True:
-//!     topic, data = sub.recv_multipart()
-//!     print(f'{topic.decode()}: {data.decode()}')
-//! ```
 
 use bytes::Bytes;
-use futures::future::{Either, select};
 use monocoque::rt::{self, LocalRuntime};
-use monocoque::zmq::SubscriptionEvent;
 use monocoque::zmq::prelude::*;
-use std::collections::HashSet;
-use std::pin::pin;
+use monocoque::zmq::proxy::{NoCapture, proxy};
 use std::time::Duration;
-use tracing::{Level, info};
+
+/// How many rounds of updates the publisher delivers before it stops.
+const ROUNDS: u32 = 3;
 
 fn main() -> Result<()> {
     LocalRuntime::new()?.block_on(async_main())
 }
 
 async fn async_main() -> Result<()> {
-    // Initialize logging
-    tracing_subscriber::fmt()
-        .with_max_level(Level::INFO)
-        .with_target(false)
-        .init();
-
-    info!("Starting XPUB/XSUB message broker");
-
-    // Create XSUB frontend for publishers
+    // Both sides of the broker are bound before anything connects.
     let mut xsub = XSubSocket::new();
     let frontend = xsub.bind("tcp://127.0.0.1:0").await?;
-    info!("Frontend (XSUB): {} (publishers connect here)", frontend);
-
-    // Create XPUB backend for subscribers, reporting every subscription message
-    let mut xpub = XPubSocket::with_options(SocketOptions::default().with_xpub_verbose(true));
+    println!("Frontend (XSUB) on {frontend}: publishers connect here");
+    let mut xpub = XPubSocket::new();
     let backend = xpub.bind("tcp://127.0.0.1:0").await?;
-    info!("Backend (XPUB): {} (subscribers connect here)", backend);
+    println!("Backend (XPUB) on {backend}: subscribers connect here");
 
     rt::spawn_detached(async move {
-        if let Err(e) = broker(xsub, xpub).await {
-            info!("Broker stopped: {e}");
+        // `proxy` forwards until one of its sockets fails.
+        if let Err(e) = proxy(&mut xsub, &mut xpub, None::<&mut NoCapture>).await {
+            eprintln!("Broker stopped: {e}");
         }
     });
 
-    // A publisher that knows nothing about the subscribers
-    rt::spawn_detached(async move {
-        let mut publisher = PubSocket::new();
-        publisher.connect(&frontend).await.unwrap();
-        let mut n = 0u64;
-        loop {
-            n += 1;
-            for (topic, data) in [
-                ("weather.temp", format!("{}C", 20 + n % 10)),
-                ("weather.humidity", format!("{}%", 50 + n % 30)),
-                ("alerts.warning", "Storm approaching".to_string()),
-            ] {
-                publisher
-                    .send(Msg::from([Bytes::from(topic), Bytes::from(data)]))
-                    .await
-                    .unwrap();
-            }
-            rt::sleep(Duration::from_millis(50)).await;
-        }
-    });
+    let publishing = rt::spawn(publisher(frontend));
 
-    // A subscriber that only wants weather updates
-    let mut sub = SubSocket::new();
-    sub.connect(&backend).await?;
-    sub.subscribe(b"weather.").await?;
-    for _ in 0..6 {
-        let msg = sub.recv().await?;
-        info!(
+    // A subscriber that only wants weather updates: two per round.
+    let mut subscriber = SubSocket::new();
+    subscriber.connect(&backend).await?;
+    subscriber.subscribe("weather.").await?;
+    for _ in 0..ROUNDS * 2 {
+        let update = subscriber.recv().await?;
+        println!(
             "[Subscriber] {}: {}",
-            String::from_utf8_lossy(msg.get(0).unwrap_or_default()),
-            String::from_utf8_lossy(msg.get(1).unwrap_or_default())
+            String::from_utf8_lossy(update.get(0).unwrap_or_default()),
+            String::from_utf8_lossy(update.get(1).unwrap_or_default())
         );
     }
+    subscriber.close().await?;
 
-    info!("Broker demonstration complete");
-    Ok(())
+    rt::join(publishing).await
 }
 
-/// Forward subscriptions upstream and messages downstream until an error.
-#[allow(clippy::future_not_send)]
-async fn broker(mut xsub: XSubSocket, mut xpub: XPubSocket) -> Result<()> {
-    // Track active subscriptions
-    let mut subscriptions = HashSet::new();
+/// Publish rounds of updates until `ROUNDS` of them have gone out, then stop.
+///
+/// The publisher knows nothing about the subscribers, only the broker.
+async fn publisher(frontend: String) -> Result<()> {
+    let mut socket = PubSocket::new();
+    socket.connect(&frontend).await?;
 
-    loop {
-        // Receives are cancel safe: a message is only taken when it is ready.
-        let next = {
-            let down = pin!(xpub.recv_owned());
-            let up = pin!(xsub.recv_owned());
-            match select(down, up).await {
-                Either::Left((msg, _)) => Either::Left(msg?),
-                Either::Right((msg, _)) => Either::Right(msg?),
-            }
-        };
-
-        match next {
-            // A subscription change from a subscriber
-            Either::Left(msg) => {
-                match msg.first().and_then(SubscriptionEvent::from_message) {
-                    Some(SubscriptionEvent::Subscribe(prefix))
-                        if subscriptions.insert(prefix.clone()) =>
-                    {
-                        info!(
-                            "Subscriber subscribed to '{}' (active: {})",
-                            String::from_utf8_lossy(&prefix),
-                            subscriptions.len()
-                        );
-                    }
-                    Some(SubscriptionEvent::Unsubscribe(prefix))
-                        if subscriptions.remove(&prefix) =>
-                    {
-                        info!(
-                            "Subscriber unsubscribed from '{}' (active: {})",
-                            String::from_utf8_lossy(&prefix),
-                            subscriptions.len()
-                        );
-                    }
-                    _ => {}
-                }
-                // Forward the raw subscription message upstream to publishers
-                xsub.send(msg).await?;
-            }
-            // A published message: fan it out to matching subscribers
-            Either::Right(msg) => {
-                xpub.send(msg).await?;
-            }
+    let mut delivered = 0;
+    let mut round = 0u32;
+    while delivered < ROUNDS {
+        round += 1;
+        let updates = [
+            ("weather.temp", format!("{}C", 20 + round % 10)),
+            ("weather.humidity", format!("{}%", 50 + round % 30)),
+            ("alerts.warning", "Storm approaching".to_string()),
+        ];
+        // `send` returns how many peers the message went to. Until the
+        // subscription has travelled up through the broker that is none.
+        let mut reached = [0usize; 3];
+        for (count, (topic, data)) in reached.iter_mut().zip(updates) {
+            *count = socket
+                .send(Msg::from([Bytes::from(topic), Bytes::from(data)]))
+                .await?;
         }
+        if reached[0] > 0 {
+            delivered += 1;
+            println!(
+                "[Publisher] Round {delivered}: weather.temp sent to {} peer(s), \
+                 weather.humidity to {}, alerts.warning to {} (nobody subscribed)",
+                reached[0], reached[1], reached[2]
+            );
+        }
+        rt::sleep(Duration::from_millis(50)).await;
     }
+    socket.close().await
 }

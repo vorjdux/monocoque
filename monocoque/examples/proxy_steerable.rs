@@ -1,4 +1,4 @@
-//! Steerable proxy example: a broker controlled through a PAIR socket.
+//! Steerable proxy: a broker controlled through a PAIR socket.
 //!
 //! Commands: PAUSE, RESUME, STATISTICS, TERMINATE.
 //!
@@ -9,6 +9,9 @@
 //!                          |
 //!                     controller
 //! ```
+//!
+//! Use it when a broker has to be paused, measured or shut down cleanly from
+//! elsewhere in the program. A plain `proxy` only stops on an error.
 //!
 //! Everything runs in one process on inproc endpoints:
 //! ```bash
@@ -22,65 +25,41 @@ use monocoque::zmq::{
     SocketOptions,
 };
 use std::time::Duration;
-use tracing::info;
 
 const FRONTEND: &str = "inproc://steerable-frontend";
 const BACKEND: &str = "inproc://steerable-backend";
 const CONTROL: &str = "inproc://steerable-control";
 
-async fn worker(id: u32) -> Result<()> {
-    let mut rep = RepSocket::new();
-    rep.connect(BACKEND).await?;
-    loop {
-        let request = rep.recv_owned().await?;
-        let text =
-            String::from_utf8_lossy(request.frames().next().unwrap_or_default()).into_owned();
-        info!("[worker-{id}] processing: {text}");
-        rep.send(format!("{text} done by worker-{id}")).await?;
-    }
+fn main() -> Result<()> {
+    LocalRuntime::new()?.block_on(async_main())
 }
 
-async fn broker() -> Result<()> {
+async fn async_main() -> Result<()> {
+    // An inproc endpoint has to be bound before anything connects to it, so
+    // the broker's sockets are bound here and then handed to its task.
     let mut frontend = RouterSocket::new();
     frontend.bind(FRONTEND).await?;
     let mut backend = DealerSocket::new();
     backend.bind(BACKEND).await?;
-    let mut control = PairSocket::new();
-    control.bind(CONTROL).await?;
-    info!("broker up: send PAUSE, RESUME, STATISTICS or TERMINATE on the control socket");
-    proxy_steerable(
-        &mut frontend,
-        &mut backend,
-        None::<&mut NoCapture>,
-        &mut control,
-    )
-    .await?;
-    info!("broker terminated");
-    Ok(())
-}
+    let mut broker_control = PairSocket::new();
+    broker_control.bind(CONTROL).await?;
 
-/// One request; `None` if no reply came within the timeout.
-async fn request(req: &mut ReqSocket, text: String) -> Result<Option<String>> {
-    req.send(text).await?;
-    match req.recv_owned().await {
-        Ok(reply) => Ok(Some(
-            String::from_utf8_lossy(reply.frames().next().unwrap_or_default()).into_owned(),
-        )),
-        Err(MonocoqueError::TimedOut) => Ok(None),
-        Err(e) => Err(e),
-    }
-}
-
-async fn async_main() -> Result<()> {
-    rt::spawn_detached(async {
-        if let Err(e) = broker().await {
-            tracing::error!("broker: {e}");
-        }
+    let broker = rt::spawn(async move {
+        // Returns `Ok` once TERMINATE arrives on the control socket.
+        proxy_steerable(
+            &mut frontend,
+            &mut backend,
+            None::<&mut NoCapture>,
+            &mut broker_control,
+        )
+        .await
     });
-    rt::sleep(Duration::from_millis(10)).await;
+
     for id in 1..=2 {
         rt::spawn_detached(async move {
-            let _ = worker(id).await;
+            if let Err(e) = worker(id).await {
+                eprintln!("[worker-{id}] stopped: {e}");
+            }
         });
     }
 
@@ -88,6 +67,8 @@ async fn async_main() -> Result<()> {
         SocketOptions::default().with_recv_timeout(Duration::from_secs(2)),
     );
     control.connect(CONTROL).await?;
+    // A relaxed REQ may send again without waiting for the reply it is owed,
+    // and correlation lets it discard a late reply to an abandoned request.
     let mut req = ReqSocket::with_options(
         SocketOptions::default()
             .with_recv_timeout(Duration::from_millis(300))
@@ -98,44 +79,77 @@ async fn async_main() -> Result<()> {
 
     for i in 1..=3 {
         let reply = request(&mut req, format!("request {i}")).await?;
-        info!("[client] reply: {reply:?}");
+        println!("[client] reply: {reply:?}");
     }
 
-    info!("[controller] PAUSE");
+    println!("[controller] PAUSE");
     control.send(ProxyCommand::Pause.as_bytes()).await?;
-    rt::sleep(Duration::from_millis(20)).await;
+    // Commands are handled in order, so once this reply is back the PAUSE
+    // has taken effect.
+    statistics(&mut control).await?;
     let reply = request(&mut req, "request while paused".to_owned()).await?;
-    info!("[client] reply while paused: {reply:?} (held in the broker's sockets)");
+    println!("[client] reply while paused: {reply:?} (the request waits in the frontend)");
 
-    info!("[controller] RESUME");
+    println!("[controller] RESUME");
     control.send(ProxyCommand::Resume.as_bytes()).await?;
-    // The held request is forwarded now. The relaxed REQ already gave up on
-    // it, so send a fresh one; correlation discards the stale reply.
+    // The held request is forwarded now. The client already gave up on it,
+    // so it sends a fresh one and the stale reply is discarded.
     let reply = request(&mut req, "request after resume".to_owned()).await?;
-    info!("[client] reply: {reply:?}");
+    println!("[client] reply: {reply:?}");
 
-    info!("[controller] STATISTICS");
-    control.send(ProxyCommand::Statistics.as_bytes()).await?;
-    let stats = control.recv_owned().await?;
-    let n: Vec<u64> = stats
-        .frames()
-        .map(|f| f[..].try_into().map_or(0, u64::from_le_bytes))
-        .collect();
-    info!(
-        "[controller] frontend: {} msgs in, {} msgs out; backend: {} msgs in, {} msgs out",
-        n[0], n[2], n[4], n[6]
-    );
+    println!("[controller] STATISTICS");
+    let stats = statistics(&mut control).await?;
+    // Messages in, bytes in, messages out, bytes out: frontend, then backend.
+    if let [front_in, _, front_out, _, back_in, _, back_out, _] = stats[..] {
+        println!(
+            "[controller] frontend: {front_in} msgs in, {front_out} msgs out; \
+             backend: {back_in} msgs in, {back_out} msgs out"
+        );
+    } else {
+        println!("[controller] unexpected statistics reply: {stats:?}");
+    }
 
-    info!("[controller] TERMINATE");
+    println!("[controller] TERMINATE");
     control.send(ProxyCommand::Terminate.as_bytes()).await?;
-    rt::sleep(Duration::from_millis(50)).await;
+    rt::join(broker).await?;
+    println!("broker terminated");
     Ok(())
 }
 
-fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .with_target(false)
-        .init();
-    LocalRuntime::new()?.block_on(async_main())
+async fn worker(id: u32) -> Result<()> {
+    let mut rep = RepSocket::new();
+    rep.connect(BACKEND).await?;
+    loop {
+        // The request is only read, so it stays borrowed from the socket
+        // until the reply is built.
+        let reply = {
+            let request = rep.recv().await?;
+            let text = String::from_utf8_lossy(request.first().unwrap_or_default());
+            println!("[worker-{id}] processing: {text}");
+            format!("{text} done by worker-{id}")
+        };
+        rep.send(reply).await?;
+    }
+}
+
+/// One request; `None` if no reply came within the timeout.
+async fn request(req: &mut ReqSocket, text: String) -> Result<Option<String>> {
+    req.send(text).await?;
+    match req.recv().await {
+        Ok(reply) => Ok(Some(
+            String::from_utf8_lossy(reply.first().unwrap_or_default()).into_owned(),
+        )),
+        Err(MonocoqueError::TimedOut) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Ask the proxy for its counters: eight little-endian 64-bit frames.
+async fn statistics(control: &mut PairSocket) -> Result<Vec<u64>> {
+    control.send(ProxyCommand::Statistics.as_bytes()).await?;
+    let reply = control.recv().await?;
+    Ok(reply
+        .frames()
+        .map(|frame| frame.try_into().map_or(0, u64::from_le_bytes))
+        .collect())
 }

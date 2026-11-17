@@ -15,13 +15,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
-    // Enable debug logging.
-    // SAFETY: set as the very first thing in `main`, before any other thread is
-    // spawned, so there is no concurrent access to the process environment.
-    unsafe {
-        std::env::set_var("RUST_LOG", "debug");
-    }
-    tracing_subscriber::fmt::init();
     // Parse port from args (default 5555)
     let args: Vec<String> = env::args().collect();
     let port = if args.len() > 2 && args[1] == "--port" {

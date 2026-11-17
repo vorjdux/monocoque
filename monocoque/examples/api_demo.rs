@@ -33,19 +33,28 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Example 2: messages are `Msg`, built from strings, bytes or frames.
     info!("2. Sending a multipart message:");
-    let msg: Msg = [&b"part one"[..], b"part two"]
-        .into_iter()
-        .map(Bytes::from_static)
-        .collect();
+    let msg = Msg::from([
+        Bytes::from_static(b"part one"),
+        Bytes::from_static(b"part two"),
+    ]);
     dealer.send(msg).await?;
 
     // A ROUTER receives [identity, ...] and routes replies by the first frame.
-    let request = router.recv_owned().await?;
-    let identity = String::from_utf8_lossy(request.first().unwrap_or_default());
-    info!("   ROUTER got {} frames from {identity:?}", request.len());
-    let mut reply = Msg::from("reply");
-    reply.push_front(request.frame_bytes(0).unwrap_or_default());
-    router.send(reply).await?;
+    // The request is only read, so it stays borrowed and just the identity
+    // frame is kept for the reply.
+    let identity = {
+        let request = router.recv().await?;
+        let identity = request.frame_bytes(0).unwrap_or_default();
+        info!(
+            "   ROUTER got {} frames from {:?}",
+            request.len(),
+            String::from_utf8_lossy(&identity)
+        );
+        identity
+    };
+    router
+        .send(Msg::from([identity, Bytes::from_static(b"reply")]))
+        .await?;
 
     // Example 3: `recv` lends the message; dropping the `MsgRef` releases it.
     info!("\n3. Borrowed receive:");

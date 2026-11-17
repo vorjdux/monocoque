@@ -102,10 +102,7 @@ async fn run_server(mut router: RouterSocket) -> Result<()> {
             String::from_utf8_lossy(identity)
         );
         router
-            .send(Msg::from([
-                Bytes::copy_from_slice(identity),
-                Bytes::from(task),
-            ]))
+            .send(Msg::from([Bytes::from_static(identity), Bytes::from(task)]))
             .await?;
     }
 

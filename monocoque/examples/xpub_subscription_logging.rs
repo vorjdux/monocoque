@@ -69,6 +69,8 @@ async fn async_main() -> Result<()> {
                 total_unsubscribes
             );
         }
+        // The enum can grow; an event this example does not know is skipped.
+        _ => {}
     };
 
     // The subscriber registers two prefixes.

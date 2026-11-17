@@ -27,23 +27,22 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         println!("[Server] Waiting for messages...");
 
         for i in 1..=3 {
-            // Receive from client
-            match server.recv().await {
-                Ok(msg) => println!(
+            {
+                // Receive from client. The message is only printed, so it
+                // stays borrowed until the end of this block.
+                let msg = server.recv().await?;
+                println!(
                     "[Server] Received from client: {:?}",
                     String::from_utf8_lossy(msg.first().unwrap_or_default())
-                ),
-                Err(e) => {
-                    println!("[Server] Receive failed: {e}");
-                    return;
-                }
+                );
             }
 
             // Send response to client
-            server.send(format!("Server response #{i}")).await.ok();
+            server.send(format!("Server response #{i}")).await?;
         }
 
         println!("[Server] Done");
+        server.close().await
     });
 
     // Client sends messages
@@ -60,7 +59,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    rt::join(server_task).await;
+    rt::join(server_task).await?;
 
     println!("\n=== Demo Complete ===");
 

@@ -40,9 +40,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     let server_task = rt::spawn(async move {
         println!("   [Server] Listening for messages...");
         for count in 1..=4 {
-            let Ok(msg) = server.recv().await else {
-                break;
-            };
+            let msg = server.recv().await?;
             let frames: Vec<String> = msg
                 .frames()
                 .map(|f| {
@@ -55,8 +53,9 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                 .collect();
             println!("   [Server] Received message #{count}: {frames:?}");
         }
-        server.unbind(ENDPOINT).ok();
+        server.unbind(ENDPOINT)?;
         println!("   [Server] Unbound endpoint, shutting down");
+        server.close().await
     });
 
     // 3. Connect multiple clients
@@ -90,7 +89,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   Sent 100 KB message (the frame is shared, not copied)");
 
     // 6. Wait for the server to receive everything and unbind
-    rt::join(server_task).await;
+    rt::join(server_task).await?;
 
     println!("\n=== Demo Complete ===");
     Ok(())

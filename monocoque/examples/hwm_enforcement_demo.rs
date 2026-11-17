@@ -1,12 +1,13 @@
-//! Demonstration of HWM (High Water Mark) enforcement in `DealerSocket`
+//! Demonstration of HWM (High Water Mark) enforcement
 //!
 //! This example shows how `send_hwm` prevents unbounded message buffering.
+//! The HWM applies to every socket type; a DEALER is used here.
 //! A send to a peer at its HWM waits for room; with a zero `send_timeout` it
 //! fails at once with `MonocoqueError::Again` instead.
 //!
 //! Run with: `cargo run --package monocoque-rs --example hwm_enforcement_demo --features zmq`
 
-use monocoque::rt::{self, LocalRuntime};
+use monocoque::rt::LocalRuntime;
 use monocoque::zmq::{DealerSocket, MonocoqueError, RouterSocket, SocketOptions};
 use std::time::Duration;
 
@@ -68,7 +69,6 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         drained += 1;
     }
     println!("\n[SERVER] Drained {drained} messages");
-    rt::sleep(Duration::from_millis(10)).await;
 
     let after = dealer.send("after drain").await;
     println!(

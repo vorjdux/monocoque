@@ -6,7 +6,8 @@
 //! - ROUTER receives, processes, and replies
 //! - DEALER receives the response
 //!
-//! This validates the complete ZMTP implementation including handshake and messaging.
+//! Start here for the identity frame: a ROUTER receives it ahead of every
+//! message and routes its replies by it.
 
 use bytes::Bytes;
 use monocoque::rt::{self, LocalRuntime};

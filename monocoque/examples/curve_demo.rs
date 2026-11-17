@@ -1,253 +1,195 @@
-//! CURVE Encryption Example
+//! CURVE encryption with client authorization.
 //!
-//! Demonstrates public-key encryption using the CURVE mechanism (`CurveZMQ`).
+//! CURVE (RFC 26) gives two things by itself:
 //!
-//! ## Security Features
+//! - every message is encrypted and authenticated (`crypto_box`), with fresh
+//!   keys for each connection;
+//! - the client knows it is talking to the server whose public key it was
+//!   given.
 //!
-//! - **Public-key authentication**: Server verifies client identity
-//! - **Perfect forward secrecy**: Ephemeral keys for each connection
-//! - **Authenticated encryption**: every message is sealed with `crypto_box`
-//! - **Man-in-the-middle protection**: Client verifies server key
+//! It does not decide which clients may connect. The server learns each
+//! client's public key during the handshake, and a ZAP handler has to check
+//! it. This example runs one with an allowlist of client keys, so a client
+//! with any other key is refused before it can send a message.
 //!
 //! ## Running
 //!
-//! Terminal 1 (generate keys):
-//! ```bash
-//! cargo run --example curve_demo --features zmq keygen
-//! ```
-//!
-//! Terminal 2 (server with generated keys):
-//! ```bash
-//! cargo run --example curve_demo --features zmq server <server_secret_key_hex>
-//! ```
-//!
-//! Terminal 3 (client with server's public key):
-//! ```bash
-//! cargo run --example curve_demo --features zmq client <server_public_key_hex>
-//! ```
-//!
-//! Or run both ends in one process:
+//! Both ends in one process, with fresh keys:
 //! ```bash
 //! cargo run --example curve_demo --features zmq demo
 //! ```
+//!
+//! Or as two programs. Generate a key pair for each side:
+//! ```bash
+//! cargo run --example curve_demo --features zmq keygen   # the server's
+//! cargo run --example curve_demo --features zmq keygen   # the client's
+//! ```
+//! then, in two terminals:
+//! ```bash
+//! cargo run --example curve_demo --features zmq server <server_secret> <client_public>
+//! cargo run --example curve_demo --features zmq client <server_public> <client_secret>
+//! ```
 
 use monocoque::rt::{self, LocalRuntime};
+use monocoque::zmq::security::curve::{CURVE_KEY_SIZE, CurveKeyPair, CurveSecretKey};
+use monocoque::zmq::security::plain::StaticPlainHandler;
+use monocoque::zmq::security::zap_handler::{DefaultZapHandler, spawn_zap_server};
 use monocoque::zmq::{RepSocket, ReqSocket, SocketOptions};
-use monocoque_zmtp::security::curve::{CURVE_KEY_SIZE, CurveSecretKey};
-use std::env;
+use std::sync::Arc;
 use std::time::Duration;
-use tracing::{error, info};
 
-const SERVER_ENDPOINT: &str = "tcp://127.0.0.1:5556";
+type Key = [u8; CURVE_KEY_SIZE];
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+const ENDPOINT: &str = "tcp://127.0.0.1:5556";
 const REQUESTS: usize = 3;
 
-fn main() {
-    LocalRuntime::new().unwrap().block_on(async_main());
+fn main() -> Result<()> {
+    LocalRuntime::new()?.block_on(async_main())
 }
 
-async fn async_main() {
-    // Initialize tracing
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .init();
+async fn async_main() -> Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    let arg = |i: usize| args.get(i).map(String::as_str);
 
-    let args: Vec<String> = env::args().collect();
-
-    if args.len() < 2 {
-        eprintln!("Usage:");
-        eprintln!(
-            "  {} keygen                          # Generate key pairs",
-            args[0]
-        );
-        eprintln!("  {} server <server_secret_key_hex>  # Run server", args[0]);
-        eprintln!("  {} client <server_public_key_hex>  # Run client", args[0]);
-        eprintln!("  {} demo                            # Run both", args[0]);
-        std::process::exit(1);
-    }
-
-    match args[1].as_str() {
-        "keygen" => generate_keys(),
-        "server" => {
-            if args.len() != 3 {
-                eprintln!("Server requires secret key");
-                eprintln!("Usage: {} server <server_secret_key_hex>", args[0]);
-                std::process::exit(1);
-            }
-            let Some(secret) = parse_key(&args[2]) else {
-                return;
-            };
-            let mut socket = bind_server(secret).await;
-            serve(&mut socket, usize::MAX).await;
+    match (arg(1), arg(2), arg(3)) {
+        (Some("keygen"), None, None) => {
+            let pair = CurveKeyPair::generate();
+            println!("public: {}", hex::encode(pair.public.as_bytes()));
+            println!(
+                "secret: {}  (keep this one private)",
+                hex::encode(pair.secret.to_bytes())
+            );
         }
-        "client" => {
-            if args.len() != 3 {
-                eprintln!("Client requires server public key");
-                eprintln!("Usage: {} client <server_public_key_hex>", args[0]);
-                std::process::exit(1);
-            }
-            let Some(server_public) = parse_key(&args[2]) else {
-                return;
-            };
-            run_client(server_public).await;
+        (Some("server"), Some(server_secret), Some(client_public)) => {
+            let (mut socket, _) = bind_server(
+                parse_key(server_secret)?,
+                parse_key(client_public)?,
+                ENDPOINT,
+            )
+            .await?;
+            serve(&mut socket, usize::MAX).await?;
         }
-        "demo" => {
-            let (server_public, server_secret) = new_keypair();
-            let mut socket = bind_server(server_secret).await;
-            let server = rt::spawn(async move {
-                serve(&mut socket, REQUESTS).await;
-                socket.close().await.ok();
+        (Some("client"), Some(server_public), Some(client_secret)) => {
+            run_client(
+                ENDPOINT,
+                parse_key(server_public)?,
+                parse_key(client_secret)?,
+            )
+            .await?;
+        }
+        (Some("demo"), None, None) => {
+            let server = CurveKeyPair::generate();
+            let client = CurveKeyPair::generate();
+            // Port 0: the OS picks a free port and `bind` reports it.
+            let (mut socket, endpoint) = bind_server(
+                server.secret.to_bytes(),
+                *client.public.as_bytes(),
+                "tcp://127.0.0.1:0",
+            )
+            .await?;
+            let serving = rt::spawn(async move {
+                let served = serve(&mut socket, REQUESTS).await;
+                socket.close().await?;
+                served
             });
-            run_client(server_public).await;
-            rt::join(server).await;
+            run_client(
+                &endpoint,
+                *server.public.as_bytes(),
+                client.secret.to_bytes(),
+            )
+            .await?;
+            rt::join(serving).await?;
         }
         _ => {
-            eprintln!("Unknown command. Use 'keygen', 'server', 'client' or 'demo'");
-            std::process::exit(1);
+            let me = arg(0).unwrap_or("curve_demo");
+            eprintln!("Usage:");
+            eprintln!("  {me} demo");
+            eprintln!("  {me} keygen");
+            eprintln!("  {me} server <server_secret_hex> <client_public_hex>");
+            eprintln!("  {me} client <server_public_hex> <client_secret_hex>");
+            std::process::exit(2);
         }
     }
+    Ok(())
 }
 
-/// A fresh CURVE key pair. The secret key is 32 random bytes from the OS
-/// generator; the public key is derived from it.
-fn new_keypair() -> ([u8; CURVE_KEY_SIZE], [u8; CURVE_KEY_SIZE]) {
-    use std::io::Read;
-    let mut secret = [0u8; CURVE_KEY_SIZE];
-    std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| f.read_exact(&mut secret))
-        .expect("failed to read /dev/urandom");
-    let public = *CurveSecretKey::from_bytes(secret).public_key().as_bytes();
-    (public, secret)
+fn parse_key(hex_key: &str) -> Result<Key> {
+    let bytes = hex::decode(hex_key)?;
+    Key::try_from(bytes.as_slice())
+        .map_err(|_| format!("a key is {CURVE_KEY_SIZE} bytes, got {}", bytes.len()).into())
 }
 
-fn parse_key(hex_key: &str) -> Option<[u8; CURVE_KEY_SIZE]> {
-    match hex::decode(hex_key) {
-        Ok(bytes) if bytes.len() == CURVE_KEY_SIZE => {
-            let mut key = [0u8; CURVE_KEY_SIZE];
-            key.copy_from_slice(&bytes);
-            Some(key)
-        }
-        Ok(bytes) => {
-            error!("Invalid key size: {} bytes (expected 32)", bytes.len());
-            None
-        }
-        Err(e) => {
-            error!("Invalid hex key: {}", e);
-            None
-        }
-    }
-}
+/// Start the ZAP handler, then bind a CURVE server that admits only the
+/// client whose public key is `allowed_client`. Returns the socket and the
+/// endpoint it is bound to.
+async fn bind_server(
+    server_secret: Key,
+    allowed_client: Key,
+    endpoint: &str,
+) -> Result<(RepSocket, String)> {
+    // The handler has to be running before the first client arrives. It is
+    // asked about every CURVE client of every server socket in this process.
+    // `true` lets it accept CURVE at all; the whitelist names who.
+    let zap = DefaultZapHandler::new(Arc::new(StaticPlainHandler::new()), true)
+        .with_curve_whitelist(vec![allowed_client]);
+    spawn_zap_server(Arc::new(zap))?;
 
-fn generate_keys() {
-    info!("Generating CURVE key pairs...\n");
-
-    let (server_public, server_secret) = new_keypair();
-    info!("Server Keys:");
-    info!("   Public:  {}", hex::encode(server_public));
-    info!(
-        "   Secret:  {} (keep secure!)\n",
-        hex::encode(server_secret)
-    );
-
-    let (client_public, _) = new_keypair();
-    info!("Client Keys:");
-    info!("   Public:  {}", hex::encode(client_public));
-    info!("   Secret:  <generated - keep secure!>\n");
-
-    info!("Usage:");
-    info!("   1. Save server secret key securely");
-    info!("   2. Share server PUBLIC key with clients");
-    info!("   3. Run server: cargo run --example curve_demo --features zmq server <server_secret>");
-    info!("   4. Run client: cargo run --example curve_demo --features zmq client <server_public>");
-}
-
-async fn bind_server(secret_array: [u8; CURVE_KEY_SIZE]) -> RepSocket {
-    info!("Starting CURVE-encrypted server on {}", SERVER_ENDPOINT);
-
-    // The public key is derived from the secret one
-    let public = CurveSecretKey::from_bytes(secret_array).public_key();
-    info!("Server public key: {}", hex::encode(public.as_bytes()));
-
-    // Create server socket with CURVE server mode. Every peer that connects
-    // to this endpoint has to complete the CURVE handshake.
-    let options = SocketOptions::new()
+    // The public key is derived from the secret one.
+    let server_public = *CurveSecretKey::from_bytes(server_secret)
+        .public_key()
+        .as_bytes();
+    let options = SocketOptions::default()
         .with_curve_server(true)
-        .with_curve_keypair(*public.as_bytes(), secret_array);
+        .with_curve_keypair(server_public, server_secret)
+        // With a domain set, clients are refused if the handler is ever not
+        // running, instead of being let in unchecked.
+        .with_zap_domain("curve_demo");
 
     let mut socket = RepSocket::with_options(options);
-    socket.bind(SERVER_ENDPOINT).await.expect("Failed to bind");
-
-    info!(
-        "Server listening for encrypted connections on {}",
-        SERVER_ENDPOINT
-    );
-    socket
+    let bound = socket.bind(endpoint).await?;
+    println!("server: listening on {bound}");
+    println!("server: public key {}", hex::encode(server_public));
+    Ok((socket, bound))
 }
 
-async fn serve(socket: &mut RepSocket, requests: usize) {
-    // Handle encrypted requests
-    for i in 1..=requests {
-        let response = match socket.recv().await {
-            Ok(msg) => {
-                let request = String::from_utf8_lossy(msg.first().unwrap_or_default());
-                info!("Encrypted request #{}: {}", i, request);
-                format!("Encrypted reply: {request}")
-            }
-            Err(e) => {
-                info!("Receive failed: {e}");
-                break;
-            }
+async fn serve(socket: &mut RepSocket, requests: usize) -> Result<()> {
+    for _ in 0..requests {
+        // The borrowed message is only read, so it is turned into the reply
+        // before the next call on the socket.
+        let reply = {
+            let request = socket.recv().await?;
+            let text = String::from_utf8_lossy(request.first().unwrap_or_default());
+            println!("server: got \"{text}\"");
+            format!("reply to: {text}")
         };
-        socket.send(response).await.ok();
-        info!("Sent encrypted response #{}", i);
+        socket.send(reply).await?;
     }
-
-    info!("Server shutting down");
+    Ok(())
 }
 
-async fn run_client(server_public_array: [u8; CURVE_KEY_SIZE]) {
-    info!("Connecting with CURVE encryption");
-
-    // Generate client keypair
-    let (client_public, client_secret) = new_keypair();
-    info!("Client public key: {}", hex::encode(client_public));
-
-    // Create client socket with CURVE client mode
-    let options = SocketOptions::new()
+async fn run_client(endpoint: &str, server_public: Key, client_secret: Key) -> Result<()> {
+    let client_public = *CurveSecretKey::from_bytes(client_secret)
+        .public_key()
+        .as_bytes();
+    let options = SocketOptions::default()
         .with_curve_keypair(client_public, client_secret)
-        .with_curve_serverkey(server_public_array)
+        // Pinning the server's key is what rules out a man in the middle.
+        .with_curve_serverkey(server_public)
         .with_recv_timeout(Duration::from_secs(5))
         .with_send_timeout(Duration::from_secs(5));
 
-    // Connect to server; the handshake runs as soon as the TCP link is up
+    // The handshake runs as soon as the connection is up. A client whose key
+    // is not on the server's list never gets a reply: its receive times out.
     let mut socket = ReqSocket::with_options(options);
-    socket
-        .connect(SERVER_ENDPOINT)
-        .await
-        .expect("Failed to connect");
+    socket.connect(endpoint).await?;
 
-    // Send encrypted requests
     for i in 1..=REQUESTS {
-        let message = format!("Secure message #{i}");
-        info!("Sending encrypted: {}", message);
-
-        if let Err(e) = socket.send(message).await {
-            error!("Send error: {}", e);
-            return;
-        }
-
-        match socket.recv().await {
-            Ok(msg) => {
-                let response = String::from_utf8_lossy(msg.first().unwrap_or_default());
-                info!("Decrypted response: {}", response);
-            }
-            Err(e) => {
-                error!("Receive error: {e}");
-                return;
-            }
-        }
-
-        rt::sleep(Duration::from_millis(100)).await;
+        socket.send(format!("secure message #{i}")).await?;
+        let reply = socket.recv().await?;
+        let text = String::from_utf8_lossy(reply.first().unwrap_or_default());
+        println!("client: got \"{text}\"");
     }
-
-    info!("Client finished successfully");
+    socket.close().await?;
+    Ok(())
 }

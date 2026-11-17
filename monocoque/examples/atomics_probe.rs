@@ -13,13 +13,26 @@
 use monocoque::zmq::{Msg, PullSocket, PushSocket, SocketOptions};
 use std::time::Duration;
 
+fn usage() -> ! {
+    eprintln!("Usage:");
+    eprintln!("  atomics_probe roundtrip <n>");
+    eprintln!("  atomics_probe queued <n> [take]   (take defaults to n)");
+    std::process::exit(2);
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let mode = args[1].clone();
-    let n: usize = args[2].parse().expect("n is a number");
-    let take: usize = args
-        .get(3)
-        .map_or(n, |s| s.parse().expect("take is a number"));
+    let (Some(mode), Some(Ok(n))) = (
+        args.get(1).cloned(),
+        args.get(2).map(|s| s.parse::<usize>()),
+    ) else {
+        usage();
+    };
+    let take = match args.get(3).map(|s| s.parse::<usize>()) {
+        None => n,
+        Some(Ok(take)) => take,
+        Some(Err(_)) => usage(),
+    };
     monocoque::rt::LocalRuntime::new()
         .unwrap()
         .block_on(async move {

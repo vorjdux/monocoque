@@ -28,9 +28,14 @@ async fn start_server(
     info!("[Server] Listening on {}", bound);
     let task = rt::spawn(async move {
         for _ in 0..count {
-            let request = rep.recv_owned().await?;
-            let text = String::from_utf8_lossy(request.first().unwrap_or_default()).into_owned();
-            rep.send(format!("Reply to {text}")).await?;
+            // The request is only read, so it stays borrowed from the socket
+            // until the reply is built.
+            let reply = {
+                let request = rep.recv().await?;
+                let text = String::from_utf8_lossy(request.first().unwrap_or_default());
+                format!("Reply to {text}")
+            };
+            rep.send(reply).await?;
         }
         rep.close().await?;
         info!("[Server] Shut down");

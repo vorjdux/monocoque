@@ -9,7 +9,7 @@
 //! Run with: `cargo run --example borrowed_recv --features zmq`
 
 use monocoque::rt::{self, LocalRuntime};
-use monocoque::zmq::{Msg, PullSocket, PushSocket};
+use monocoque::zmq::{Msg, PullSocket, PushSocket, SocketOptions};
 use std::time::Instant;
 
 const MESSAGES: usize = 200_000;
@@ -23,17 +23,19 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     let mut pull = PullSocket::new();
     let endpoint = pull.bind("tcp://127.0.0.1:0").await?;
 
-    // Sender: push MESSAGES plus two keepers, then close, which waits for
-    // everything queued to be written.
-    rt::spawn_detached(async move {
-        let mut push = PushSocket::new();
-        push.connect(&endpoint).await.unwrap();
+    // Sender: push MESSAGES plus two keepers. It coalesces its writes, so the
+    // rate printed below is not capped by one write per message on this
+    // side. `close` flushes what is buffered and waits for it to be written.
+    let sender = rt::spawn(async move {
+        let mut push =
+            PushSocket::with_options(SocketOptions::default().with_write_coalescing(true));
+        push.connect(&endpoint).await?;
         for _ in 0..MESSAGES {
-            push.send("task").await.unwrap();
+            push.send("task").await?;
         }
-        push.send("keep me").await.unwrap();
-        push.send("keep me too").await.unwrap();
-        push.close().await.unwrap();
+        push.send("keep me").await?;
+        push.send("keep me too").await?;
+        push.close().await
     });
 
     // Receiver: each `MsgRef` is read in place and dropped at the end of the
@@ -64,5 +66,6 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         String::from_utf8_lossy(kept.first().unwrap_or_default()),
         String::from_utf8_lossy(kept_too.first().unwrap_or_default()),
     );
+    rt::join(sender).await?;
     Ok(())
 }

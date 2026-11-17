@@ -32,12 +32,15 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     socket.send("Hello from Monocoque").await?;
     println!("Sent: Hello from Monocoque");
 
-    // Receive reply
-    let reply = socket.recv_owned().await?;
-    println!(
-        "Received: {}",
-        String::from_utf8_lossy(reply.first().unwrap_or_default())
-    );
+    // Receive reply. It is only printed, so it stays borrowed from the socket
+    // and the borrow ends before the socket is closed.
+    {
+        let reply = socket.recv().await?;
+        println!(
+            "Received: {}",
+            String::from_utf8_lossy(reply.first().unwrap_or_default())
+        );
+    }
 
     socket.close().await?;
     Ok(())

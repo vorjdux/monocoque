@@ -25,10 +25,14 @@ fn main() -> Result<()> {
 
         let server = rt::spawn(async move {
             // First request-reply cycle
-            let request = rep.recv_owned().await?;
-            info!("[REP] Received request:");
-            for (i, frame) in request.frames().enumerate() {
-                info!("  Frame {}: {:?}", i, String::from_utf8_lossy(frame));
+            {
+                // The request is only printed, so it stays borrowed from the
+                // socket. The borrow has to end before the reply is sent.
+                let request = rep.recv().await?;
+                info!("[REP] Received request:");
+                for (i, frame) in request.frames().enumerate() {
+                    info!("  Frame {}: {:?}", i, String::from_utf8_lossy(frame));
+                }
             }
 
             info!("[REP] Sending reply");

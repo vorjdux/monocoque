@@ -1,6 +1,7 @@
-//! Interoperability test: Monocoque ROUTER <-> libzmq DEALER
+//! Interoperability: Monocoque ROUTER <-> libzmq DEALER
 //!
-//! This example demonstrates bidirectional compatibility with libzmq.
+//! A Monocoque ROUTER runs on a background thread and a libzmq DEALER talks
+//! to it. Needs libzmq installed (the `zmq` crate links it).
 //!
 //! Run this example:
 //! ```bash
@@ -12,72 +13,75 @@ use monocoque::rt::LocalRuntime;
 use monocoque::zmq::{Msg, RouterSocket};
 use std::sync::mpsc;
 use std::thread;
-use tracing::info;
 
-fn main() {
-    info!("=== Monocoque ROUTER <-> libzmq DEALER Test ===\n");
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-    // Spawn Monocoque ROUTER server in background thread
+const ENDPOINT: &str = "tcp://127.0.0.1:5561";
+
+fn main() -> Result<()> {
+    println!("=== Monocoque ROUTER <-> libzmq DEALER ===\n");
+
     let (ready_tx, ready_rx) = mpsc::channel();
-    let server_handle = thread::spawn(move || {
-        LocalRuntime::new().unwrap().block_on(async {
-            let mut router = RouterSocket::new();
-            router
-                .bind("tcp://127.0.0.1:5561")
-                .await
-                .expect("Failed to bind");
-            info!("[Monocoque ROUTER] Listening on tcp://127.0.0.1:5561");
-            ready_tx.send(()).unwrap();
-
-            // Receive request with identity envelope
-            let msg = router.recv_owned().await.expect("Failed to receive");
-            info!("[Monocoque ROUTER] Received message:");
-            info!(
-                "  Identity (frame 0): {:?}",
-                msg.first().unwrap_or_default()
-            );
-            for (i, frame) in msg.frames().enumerate().skip(1) {
-                info!("  Frame {i}: {:?}", String::from_utf8_lossy(frame));
-            }
-
-            // Reply to the client: the first frame is the identity to route
-            // to, followed by an empty delimiter and the body.
-            let identity = msg.frame_bytes(0).expect("missing identity");
-            let reply = Msg::from([
-                identity,
-                Bytes::new(),
-                Bytes::from_static(b"Reply from Monocoque ROUTER"),
-            ]);
-            router.send(reply).await.expect("Failed to send");
-            info!("[Monocoque ROUTER] Sent reply\n");
-
-            // Wait for the reply to be written before the runtime exits
-            router.close().await.expect("Failed to close");
-        });
+    let server = thread::spawn(move || -> monocoque::zmq::Result<()> {
+        LocalRuntime::new()?.block_on(monocoque_router(ready_tx))
     });
 
-    // Wait until the server is bound
-    ready_rx.recv().unwrap();
+    // Wait until the server is bound. If it failed to bind, the sender is
+    // dropped and the join below reports why.
+    if ready_rx.recv().is_ok() {
+        libzmq_dealer()?;
+    }
 
-    // Run libzmq DEALER client
-    info!("[libzmq DEALER] Connecting to tcp://127.0.0.1:5561");
+    server.join().map_err(|_| "the server thread panicked")??;
+    println!("\nInterop run completed.");
+    Ok(())
+}
+
+async fn monocoque_router(ready: mpsc::Sender<()>) -> monocoque::zmq::Result<()> {
+    let mut router = RouterSocket::new();
+    router.bind(ENDPOINT).await?;
+    println!("[Monocoque ROUTER] Listening on {ENDPOINT}");
+    // The main thread waits on this; it only fails if that thread is gone.
+    let _ = ready.send(());
+
+    // A ROUTER receives the sender's identity as the first frame. The message
+    // is only read, so it stays borrowed and just the identity is kept.
+    let identity = {
+        let msg = router.recv().await?;
+        println!("[Monocoque ROUTER] Received message:");
+        println!(
+            "  Identity (frame 0): {:?}",
+            String::from_utf8_lossy(msg.first().unwrap_or_default())
+        );
+        for (i, frame) in msg.frames().enumerate().skip(1) {
+            println!("  Frame {i}: {:?}", String::from_utf8_lossy(frame));
+        }
+        msg.frame_bytes(0).unwrap_or_default()
+    };
+
+    // The reply's first frame is the identity to route to.
+    let reply = Msg::from([identity, Bytes::from_static(b"Reply from Monocoque ROUTER")]);
+    router.send(reply).await?;
+    println!("[Monocoque ROUTER] Sent reply");
+
+    // `close` waits for the reply to be written before the runtime exits.
+    router.close().await
+}
+
+fn libzmq_dealer() -> zmq::Result<()> {
     let ctx = zmq::Context::new();
-    let dealer = ctx.socket(zmq::DEALER).unwrap();
-    dealer.set_identity(b"CLIENT_123").unwrap();
-    dealer.connect("tcp://127.0.0.1:5561").unwrap();
-    info!("[libzmq DEALER] Connected with identity 'CLIENT_123'");
+    let dealer = ctx.socket(zmq::DEALER)?;
+    dealer.set_identity(b"CLIENT_123")?;
+    dealer.connect(ENDPOINT)?;
+    println!("[libzmq DEALER] Connecting to {ENDPOINT} with identity 'CLIENT_123'");
 
-    // Send request
-    dealer.send("Request from libzmq", 0).unwrap();
-    info!("[libzmq DEALER] Sent request\n");
+    dealer.send("Request from libzmq", 0)?;
+    println!("[libzmq DEALER] Sent request");
 
-    // Receive reply: the empty delimiter, then the body
-    let delimiter = dealer.recv_bytes(0).unwrap();
-    assert!(delimiter.is_empty());
-    let reply = dealer.recv_string(0).unwrap().unwrap();
-    info!("[libzmq DEALER] Received reply: {:?}", reply);
-
-    server_handle.join().unwrap();
-
-    info!("\nInterop test completed successfully!");
+    let reply = dealer.recv_bytes(0)?;
+    println!(
+        "[libzmq DEALER] Received reply: {:?}",
+        String::from_utf8_lossy(&reply)
+    );
+    Ok(())
 }

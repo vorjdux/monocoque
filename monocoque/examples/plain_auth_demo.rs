@@ -29,9 +29,9 @@
 //! ```
 
 use monocoque::rt::{self, LocalRuntime};
+use monocoque::zmq::security::plain::StaticPlainHandler;
+use monocoque::zmq::security::zap_handler::start_default_zap_server;
 use monocoque::zmq::{RepSocket, ReqSocket, Result, SocketOptions};
-use monocoque_zmtp::security::plain::StaticPlainHandler;
-use monocoque_zmtp::security::zap_handler::start_default_zap_server;
 use std::env;
 use std::sync::Arc;
 use std::time::Duration;

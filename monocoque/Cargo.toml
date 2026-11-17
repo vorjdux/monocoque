@@ -143,6 +143,30 @@ required-features = ["zmq"]
 name = "borrowed_recv"
 required-features = ["zmq"]
 
+[[example]]
+name = "coalesced_push_pull"
+required-features = ["zmq"]
+
+[[example]]
+name = "inproc_across_threads"
+required-features = ["zmq"]
+
+[[example]]
+name = "stream_socket"
+required-features = ["zmq"]
+
+[[example]]
+name = "heartbeats"
+required-features = ["zmq"]
+
+[[example]]
+name = "draft_client_server"
+required-features = ["zmq", "draft"]
+
+[[example]]
+name = "draft_radio_dish"
+required-features = ["zmq", "draft"]
+
 # Interoperability examples (manual verification)
 [[example]]
 name = "interop_dealer_libzmq"
@@ -217,10 +241,6 @@ name = "ipc_transport"
 required-features = ["zmq"]
 
 [[example]]
-name = "monitoring"
-required-features = ["zmq"]
-
-[[example]]
 name = "multi_subscriber"
 required-features = ["zmq"]
 
@@ -230,10 +250,6 @@ required-features = ["zmq"]
 
 [[example]]
 name = "paranoid_pirate_proxy"
-required-features = ["zmq"]
-
-[[example]]
-name = "paranoid_pirate_simple"
 required-features = ["zmq"]
 
 [[example]]
@@ -288,6 +304,18 @@ required-features = ["zmq"]
 
 [[test]]
 name = "zap_peer_address"
+required-features = ["zmq"]
+
+[[test]]
+name = "zap_curve_without_domain"
+required-features = ["zmq"]
+
+[[test]]
+name = "timeout_options"
+required-features = ["zmq"]
+
+[[test]]
+name = "send_edge_cases"
 required-features = ["zmq"]
 
 [[test]]
@@ -392,10 +420,11 @@ bytes.workspace = true
 compio = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 smol = { workspace = true, optional = true }
-tracing.workspace = true
-tracing-subscriber.workspace = true
 
 [dev-dependencies]
+# The examples and benchmarks log through these; the library crate does not.
+tracing.workspace = true
+tracing-subscriber.workspace = true
 zmq.workspace = true
 futures.workspace = true
 criterion.workspace = true
