@@ -224,7 +224,8 @@ and from the throughput below.
 | smol TCP | 587 K msg/s | 550 K msg/s | 491 K msg/s |
 | smol IPC | 2.16 M msg/s | 1.99 M msg/s | 1.84 M msg/s |
 
-IPC throughput is about 4x TCP loopback on every backend, because Unix sockets
+IPC throughput is about 4x TCP loopback on every backend (3.6x to 4.5x across
+the cells above), because Unix sockets
 have lower per-syscall overhead and no TCP framing cost.
 
 ---
@@ -587,7 +588,7 @@ reads shrink to a few hundred bytes. Two-frame messages on io_uring, where every
 read is a submission, ran at a sixth of single-frame throughput that way.
 
 ```rust
-use monocoque_core::options::SocketOptions;
+use monocoque::zmq::SocketOptions;
 
 // Low-latency REQ/REP with small messages (< 1 KB)
 let opts = SocketOptions::default().with_read_buffer_size(4096);
@@ -687,23 +688,28 @@ with or ahead of tokio, and over TCP from 11.1 µs to 10.5 µs.
 
 ## Thread model
 
-Each compio runtime is **single-threaded**. For multi-core throughput, run one
-runtime per core and connect sockets across runtimes:
+Each runtime is **single-threaded**, on every backend. For multi-core
+throughput, run one runtime per core and connect sockets across runtimes:
 
 ```rust
+use monocoque::rt::LocalRuntime;
+
 for _ in 0..num_cpus::get() {
     std::thread::spawn(|| {
-        compio::runtime::Runtime::new()
+        LocalRuntime::new()
             .unwrap()
             .block_on(async { /* worker loop */ });
     });
 }
 ```
 
-For backend-agnostic code, `monocoque::rt::LocalRuntime::new()?.block_on(...)`
-builds the right single-threaded runtime for whichever backend is enabled (a
-compio runtime, a current-thread tokio runtime in a `LocalSet`, or a
-single-threaded smol `LocalExecutor`).
+`LocalRuntime` builds the right single-threaded runtime for whichever backend
+is enabled (a compio runtime, a current-thread tokio runtime in a `LocalSet`,
+or a single-threaded smol `LocalExecutor`). Use it rather than
+`compio::runtime::Runtime::new()` or `#[compio::main]`: those work, but only
+`LocalRuntime` spins before sleeping on compio (see
+[Spinning before sleeping](#spinning-before-sleeping)), and the latency numbers
+in this document were measured with the spin.
 
 Avoid sharing sockets across threads; monocoque sockets are `!Send`. This holds
 on every backend: the tokio backend uses a current-thread runtime, not the
@@ -735,10 +741,15 @@ cross-process, TCP for cross-host.
 
 ## Reconnection
 
-Every connected endpoint is redialed automatically, with exponential backoff
-and jitter (100 ms initial, unlimited max, unlimited attempts unless
-`with_max_reconnect_attempts(Some(n))` is set).
-For latency-sensitive workloads, tighten the backoff:
+Every connected endpoint is redialed automatically, with unlimited attempts
+unless `with_max_reconnect_attempts(Some(n))` is set. By default the interval
+is constant: `reconnect_ivl` is 100 ms and `reconnect_ivl_max` is zero, which
+means no backoff, as in libzmq. Each wait is jittered to between half the
+interval and the whole of it. Setting `reconnect_ivl_max` above `reconnect_ivl`
+turns on exponential backoff: the interval doubles after each failed dial up to
+the maximum, and resets once a peer comes up.
+
+For latency-sensitive workloads, redial sooner and cap the backoff:
 
 ```rust
 use std::time::Duration;
@@ -786,6 +797,6 @@ let opts = SocketOptions::default()
 - Large frames use vectored writes automatically (>= 16 KiB body);
   tune `vectored_write_threshold` for your hardware
 - Size the read buffer to match your 99th-percentile message size
-- Use IPC instead of TCP loopback for co-located sockets (~2.4x throughput gain)
+- Use IPC instead of TCP loopback for co-located sockets (about 4x the throughput)
 - Run `dhat` or `heaptrack` to catch `Bytes::copy_from_slice` in hot paths
 - Verify io_uring is active: `/proc/$(pidof yourapp)/fdinfo` (look for `uring`)

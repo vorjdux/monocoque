@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 1.0.0 - 2026-11-02
+## 1.0.0 - unreleased
 
 The first stable release, and one deliberate break: every socket is rebuilt
 on a single per-socket multiplexer with one message type. `docs/MIGRATION.md`
@@ -32,8 +32,35 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
   first polled: a future dropped without being polled has still sent.
 - `monocoque_core::io::READ_SLAB_SIZE` is `MAX_READ_SIZE`, and
   `io::take_read_buffer` is removed.
+- The public enums that will grow are `#[non_exhaustive]`, so a `match` on
+  one needs a wildcard arm: `SocketEvent`, `SocketType`, `Endpoint`,
+  `EndpointError`, `SubscriptionEvent`, `ProxyCommand`, `ZapMechanism`,
+  `ZapStatus`, `ZmtpError`, `CurveError` and `CloseReason`.
+- `SocketOptions` is `#[non_exhaustive]`: build it from
+  `SocketOptions::default()` and the `with_*` methods, not a struct literal.
+  Options that were stored and never read are gone: `immediate`,
+  `probe_router`, `router_raw`, `xpub_nodrop`, `ipv6`, `bind_to_device`,
+  `rate`, `recovery_ivl`, `multicast_hops`, `multicast_maxtpdu` and
+  `with_unsubscribe`. `tos` is now a `u8`.
+- A CURVE server asks the ZAP handler about every client whenever a handler
+  is running, whether or not it set a ZAP domain. It used to skip ZAP without
+  a domain, so an allowlist handler beside such a server was never asked.
+  With no handler and no domain it still admits any client key.
+- `with_curve_keypair` refuses a public key that does not belong to the
+  secret key; the handshake fails instead of ignoring the public key.
 
 ### Added
+
+- `monocoque::zmq::security` exports the PLAIN and CURVE key and credential
+  types and the ZAP handler, so an application needs only `monocoque-rs`.
+- `connect_timeout` and `tos` take effect: a dial that takes longer than
+  `connect_timeout` counts as a failed attempt, and `tos` sets the IPv4 TOS
+  byte or IPv6 traffic class of each TCP connection.
+- `tcp://*:5555` (every interface), `tcp://host:*` (a port the OS picks) and
+  host names such as `tcp://localhost:5555` are accepted. A name is looked up
+  once, when the endpoint is parsed.
+- `CurveSecretKey::to_bytes`, so a key pair from `CurveKeyPair::generate()`
+  can be stored and given to `with_curve_keypair`.
 
 - `zmq_poll` (`monocoque::zmq::poll`) and per-message connection metadata
   (`gets`), including custom handshake properties, over NULL, PLAIN and CURVE.
@@ -50,6 +77,31 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
 
 ### Fixed
 
+- ZAP authentication over `ipc://` refused every client: a Unix socket peer
+  has no address, and the ZAP server dropped a request with an empty one.
+- `handshake_timeout` of zero means no limit, as documented; it failed every
+  handshake.
+- A peer could crash a socket whose `max_msg_size` was near `usize::MAX` by
+  announcing a frame length that overflowed. A frame above 256 MiB is now
+  refused at its header whatever the option says.
+- The documentation of `linger`, `max_msg_size`, `recv_timeout` and
+  `send_timeout` now says what they do: `linger: None` waits until everything
+  is written, `max_msg_size: None` is 64 MiB per frame, and a zero timeout
+  fails with `Again`.
+- The crates no longer enable `tracing`'s `release_max_level_info`, which
+  capped the log level of the whole application in release builds, and
+  `monocoque-rs` no longer depends on `tracing-subscriber`.
+- Sending a message with no frames, or a ROUTER message that was only its
+  identity, left the socket waiting on bytes that were never written: later
+  sends waited out the stall window and `close()` its whole linger.
+- `disconnect` while the connection's handshake was running left a peer that
+  nothing could remove.
+- With heartbeats on, an idle ZMTP 1.0 or 2.0 peer, which has no PING to
+  answer, was dropped for not answering.
+- On smol, a ZMTP 1.0 frame too long for the read buffer and split across two
+  reads corrupted the stream.
+- A message could be attributed to a peer that had gone, once its slot was
+  reused by a new one.
 - Coalesced large messages could be lost on `close()` and bypass the HWM.
 - Lost wakeups between sockets on different threads; a cross-thread inproc
   `flush()` could wait forever.
@@ -105,6 +157,10 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
 
 ### Security
 
+- A peer could announce `User-Id` or `Peer-Address` in its handshake and have
+  them reach the application as message metadata, where they stand for the
+  ZAP handler's answer and the connection's real address. Those names, and
+  `Socket-Type` and `Identity`, are now set only by this side.
 - tokio is at 1.54.1, past RUSTSEC-2026-0386 (unsound `AsyncFd`
   constructors). monocoque never called them; the lockfile pinned the
   affected version through its dev dependencies.

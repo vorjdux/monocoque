@@ -2,7 +2,7 @@
 
 Monocoque implements ZMTP 3.x and is wire-compatible with all ZeroMQ 4.x releases (minimum 4.1). It sends ZMTP 3.0 greetings for backward compatibility and accepts any 3.x peer, so it interoperates with libzmq 4.1 through 4.4 without configuration. Legacy ZMTP 1.0 and 2.0 peers are detected from the greeting and handled through the same downgrade path as libzmq; see [rfc-compliance.md](rfc-compliance.md).
 
-When both peers advertise ZMTP 3.1, Monocoque enables heartbeating via PING/PONG (RFC 37). With a 3.0 peer, heartbeating is disabled automatically.
+Heartbeating via PING/PONG (RFC 37) is off by default. Setting `heartbeat_ivl` turns it on: the socket then sends a PING on a connection that has been idle for that long, to ZMTP 3.0 and 3.1 peers alike. ZMTP 1.0 and 2.0 have no heartbeat commands, so legacy peers are never sent one.
 
 ## Supported socket types
 
@@ -17,10 +17,10 @@ All standard socket types are implemented: DEALER, ROUTER, PUB, SUB, REQ, REP, P
 - ZMTP framing - 1-byte and 8-byte length frames
 - Multipart messages (MORE flag)
 - Command frames - READY, PING, PONG
-- Heartbeating - ZMTP 3.1 PING/PONG (RFC 37)
+- Heartbeating - ZMTP 3.1 PING/PONG (RFC 37), opt-in with `heartbeat_ivl`
 - ROUTER fair-queuing and routing IDs
 - PUB/SUB topic filtering
-- Automatic reconnection with exponential backoff
+- Automatic reconnection, at a constant interval by default and with exponential backoff when `reconnect_ivl_max` is set
 - Full socket options API equivalent to `zmq_setsockopt`
 
 ## Behavioral differences from libzmq

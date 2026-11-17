@@ -37,4 +37,4 @@
 ## Blueprints
 
 Internal design documents covering the architecture in depth:
-`blueprints/00-overview.md` through `blueprints/06-safety-model-and-unsafe-audit.md`
+`blueprints/00-overview.md` through `blueprints/07-benchmark-gap-remediation-plan.md`

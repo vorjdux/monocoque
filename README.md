@@ -29,9 +29,11 @@ The name comes from Formula 1 engineering, where the monocoque chassis achieves 
 - TCP, IPC (Unix domain socket) and inproc transports (`tcp://`, `ipc://`, `inproc://`);
   inproc is HWM-bounded and works across threads
 - `zmq_poll` equivalent in `monocoque::zmq::poll`
-- Automatic reconnection with exponential backoff on all socket types
-- ZMTP 3.1 heartbeating (PING/PONG with TTL) on every connection, answered and
-  timed out by the socket itself
+- Automatic reconnection on all socket types: a jittered 100 ms interval by
+  default, exponential backoff when `reconnect_ivl_max` is set
+- Optional ZMTP heartbeating (PING/PONG with TTL), off by default and turned on
+  with `heartbeat_ivl`; the socket sends, answers and times out the heartbeats
+  itself
 - Socket monitoring via channel-based lifecycle events
 - Borrowed receive: `recv()` lends a `MsgRef` into the socket's reused message
   slot, so a hot recv loop allocates nothing; `recv_owned()` keeps the message
@@ -51,8 +53,9 @@ and peak RSS alongside throughput and latency. Keeping the comparison in its own
 harness means these figures are reproducible from published data rather than
 asserted here.
 
-Figures below are the run of **2026-08-21**, Intel Core i5-13400 (16 cores), Linux
-6.8.0-58, performance governor, turbo off. Every implementation, transport and
+Figures below are the run of **2026-08-21**, which measured monocoque 0.4, not
+1.0, on an Intel Core i5-13400 (16 cores), Linux 6.8.0-58, performance governor,
+turbo off. Every implementation, transport and
 payload size, plus the raw per-run JSON, is at
 **<https://vorjdux.github.io/zmq-arena/>**.
 
@@ -73,8 +76,9 @@ runner-up, at 0.016 syscalls per message and about 1.0 MB peak RSS.
 
 Where it does not lead: from 4 KiB upward the advantage inverts, and by 16 KiB
 monocoque is out of the top places on both throughput and CPU per message. The
-send path copies large bodies that a vectored write could hand to the kernel
-directly, which is the tuning knob discussed below.
+size at which a body stops being copied into the send buffer and goes to the
+kernel in a vectored write is tunable (`vectored_write_threshold`, discussed
+below).
 
 On single-flow loopback the epoll backends (tokio, smol) often edge out compio: a
 one-connection ping-pong does not exercise io_uring's strengths (batched
@@ -90,8 +94,9 @@ into the send buffer; the threshold (`vectored_write_threshold`, default 16 KiB)
 is tunable per workload. This applies in both modes: with coalescing enabled, a
 body at or above the threshold flushes whatever is buffered and then goes
 straight to the kernel, so batching small frames does not cost you a copy on the
-large ones. IPC (Unix domain sockets) is ~3x faster than TCP loopback
-on every backend for same-host throughput.
+large ones. For same-host throughput, IPC (Unix domain sockets) is about 4x TCP
+loopback on every backend in the in-repo suite (3.6x to 4.5x; see the IPC vs
+TCP table in [docs/performance.md](docs/performance.md)).
 
 For the full picture across every implementation, transport, payload size and
 peer count, including the runs where monocoque does not win, see
@@ -105,27 +110,42 @@ allocation and instruction-count budgets CI holds each commit to.
 ```toml
 [dependencies]
 monocoque-rs = { version = "1.0", features = ["zmq"] }
-# Drives the default io_uring backend and provides the #[compio::main] macro.
-# To run on tokio or smol instead, see "Runtime backends" below.
-compio = { version = "0.19", features = ["runtime", "macros"] }
 ```
+
+That one dependency is enough on the default io_uring backend. To run on tokio
+or smol instead, see "Runtime backends" below.
 
 ```rust
-use monocoque::zmq::{DealerSocket, Msg, RouterSocket};
+use monocoque::rt::LocalRuntime;
+use monocoque::zmq::{DealerSocket, Msg, Result, RouterSocket};
 
-// Bind a ROUTER
-let mut router = RouterSocket::new();
-router.bind("tcp://127.0.0.1:5555").await?;
+fn main() -> Result<()> {
+    LocalRuntime::new()?.block_on(async_main())
+}
 
-// Connect a DEALER
-let mut dealer = DealerSocket::new();
-dealer.connect("tcp://127.0.0.1:5555").await?;
-dealer.send("Hello").await?;
+async fn async_main() -> Result<()> {
+    // Bind a ROUTER
+    let mut router = RouterSocket::new();
+    router.bind("tcp://127.0.0.1:5555").await?;
 
-let msg = router.recv_owned().await?;  // frame 0 is the routing identity
-router.send(Msg::from([msg.frame_bytes(0).unwrap(), "World".into()])).await?;
-let reply = dealer.recv().await?;      // a MsgRef borrowed from the socket
+    // Connect a DEALER
+    let mut dealer = DealerSocket::new();
+    dealer.connect("tcp://127.0.0.1:5555").await?;
+    dealer.send("Hello").await?;
+
+    let msg = router.recv_owned().await?;  // frame 0 is the routing identity
+    router.send(Msg::from([msg.frame_bytes(0).unwrap(), "World".into()])).await?;
+    let reply = dealer.recv().await?;      // a MsgRef borrowed from the socket
+    println!("{:?}", reply.first());
+    Ok(())
+}
 ```
+
+`LocalRuntime` builds the single-threaded runtime of whichever backend is
+enabled, and on compio it also polls for completions briefly before it sleeps,
+which the latency figures above depend on. `#[compio::main]` works too (with
+`compio` as a dependency), but a program started that way does not spin before
+sleeping.
 
 ```rust
 // PUB/SUB
@@ -144,7 +164,8 @@ For high throughput, enable write coalescing.
 
 By default each `send()` issues one kernel write per message. Write coalescing batches
 those writes into a 64 KB buffer and flushes them in a single syscall, which is where
-the large throughput gains in the table above come from. Because messages may sit in
+the small-message throughput in the Performance section and in the coalesced rows
+of [docs/performance.md](docs/performance.md) comes from. Because messages may sit in
 userspace until `flush()` is called, coalescing is opt-in: you decide exactly when the
 data goes out. See [docs/performance.md](docs/performance.md) for the full explanation
 and tuning guide.
@@ -196,7 +217,7 @@ local.block_on(&rt, async {
 
 If you would rather not name a runtime in your own code, `monocoque::rt::LocalRuntime`
 is a backend-agnostic entry point: it builds the right single-threaded runtime for
-whichever feature is enabled, so the same source runs on either.
+whichever feature is enabled, so the same source runs on all three.
 
 ```rust
 let rt = monocoque::rt::LocalRuntime::new()?;
@@ -224,12 +245,12 @@ cargo run --example runtime_backends --no-default-features --features runtime-sm
 
 ## Safety
 
-This section is the single inventory of `unsafe` in the workspace; `CONTRIBUTING.md` and the crate docs point here rather than restating it. Every block carries a `SAFETY:` comment stating its contract. There are two kinds:
+This section is the inventory of `unsafe` in the library code (the `src/` trees of the three published crates; tests and examples are not covered). `CONTRIBUTING.md` and the crate docs point here rather than restating it. It lives in two files of `monocoque-core`:
 
-- **Owned-buffer reads.** `monocoque-core/src/io.rs`: `fill_read` owns the workspace's single `set_len` call, declaring how many bytes a read initialized in the buffer it was handed. Miri checks it in CI.
-- **Raw-fd socket tuning.** `monocoque-core/src/tcp.rs` borrows the stream's raw fd as a `socket2::Socket` to set options (nodelay, keepalive, buffer sizes) and never closes it.
+- **Owned-buffer reads.** `monocoque-core/src/io.rs`: `fill_read` holds the one `set_len` call, declaring how many bytes a read initialized in the buffer it was handed. Miri checks it in CI.
+- **Raw-fd socket calls.** `monocoque-core/src/tcp.rs` does two things with a stream's raw fd (or raw socket on Windows). The option setters (`enable_tcp_nodelay`, `configure_tos`, `configure_socket_buffers`, `configure_tcp_keepalive`) borrow it as a `socket2::Socket` to set the option and then forget the wrapper, so the fd is never closed. On Linux three functions call `libc` directly: `unacked_bytes` (`ioctl(TIOCOUTQ)`), `segment_size` (`getsockopt(TCP_MAXSEG)`) and `send_now` (a non-blocking `send`).
 
-Everything else is safe Rust. `monocoque-core` denies `unsafe_code` at the crate root and opts back in per module, so a new `unsafe` block outside `io.rs` and `tcp.rs` fails to compile there.
+The rest of `monocoque-core/src`, and all of `monocoque-zmtp/src` and `monocoque/src`, is safe Rust. `monocoque-core` denies `unsafe_code` at the crate root and opts back in per module, so a new `unsafe` block outside `io.rs` and `tcp.rs` fails to compile there.
 
 Memory invariants:
 - Buffers are never reused while referenced (tracked via `Bytes` refcounts)

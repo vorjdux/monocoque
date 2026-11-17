@@ -5,11 +5,12 @@ A five-minute guide to sending your first message with Monocoque.
 **Performance Highlights:**
 
 - **About 2.7x lower latency** than libzmq on a TCP REQ/REP round trip
-  (13.83 µs against 37.70 µs at 64 B, zmq-arena run of 2026-08-21; see the
-  README's Performance section for the full table)
+  (13.83 µs against 37.70 µs at 64 B, zmq-arena run of 2026-08-21, which
+  measured monocoque 0.4; see the README's Performance section for the full
+  table)
 - **Three runtimes** - io_uring via compio (default), or epoll via tokio, or async-io via smol, same API
 - **Pure Rust** - no C dependencies, full async/await
-- **Memory safe** - unsafe is confined to one owned-buffer read helper (`core::io::fill_read`) and the raw-socket tuning facade (`core::tcp`)
+- **Memory safe** - unsafe is confined to one owned-buffer read helper (`core::io::fill_read`) and the raw-socket calls in `core::tcp`
 
 ---
 
@@ -19,12 +20,16 @@ A five-minute guide to sending your first message with Monocoque.
 [dependencies]
 monocoque-rs = { version = "1.0", features = ["zmq"] }
 bytes    = "1"
-compio   = { version = "0.19", features = ["runtime", "macros"] }
 ```
 
-The examples below use the default backend (io_uring via compio) and its
-`#[compio::main]` entry point. See the next section if you want to run on tokio
-or smol.
+The examples below start from `monocoque::rt::LocalRuntime`, which builds the
+single-threaded runtime of whichever backend is enabled, so they need no
+runtime crate of their own and run unchanged on all three backends. On the
+default backend (io_uring via compio) `LocalRuntime` also polls for completions
+briefly before it sleeps, which lowers round-trip latency; see
+[Spinning before sleeping](performance.md#spinning-before-sleeping).
+`#[compio::main]` works as an entry point too, with `compio` added as a
+dependency, but a program started that way does not spin before sleeping.
 
 ---
 
@@ -51,7 +56,6 @@ runtime primitives differ.
 [dependencies]
 monocoque-rs = { version = "1.0", default-features = false, features = ["runtime-tokio", "zmq"] }
 bytes = "1"
-tokio = { version = "1", features = ["rt", "macros"] }
 ```
 
 ```toml
@@ -61,8 +65,10 @@ monocoque-rs = { version = "1.0", default-features = false, features = ["runtime
 bytes = "1"
 ```
 
-The tokio backend follows the same thread-per-core model as compio, so run it on
-a current-thread runtime inside a `LocalSet`:
+With `LocalRuntime` as the entry point nothing else changes. If you build the
+tokio runtime yourself (add `tokio = { version = "1", features = ["rt"] }`),
+note that the tokio backend follows the same thread-per-core model as compio,
+so run it on a current-thread runtime inside a `LocalSet`:
 
 ```rust,no_run
 # use monocoque::zmq::ReqSocket;
@@ -79,9 +85,8 @@ fn main() -> monocoque::zmq::Result<()> {
 }
 ```
 
-To keep your own code free of any runtime name, use `monocoque::rt::LocalRuntime`,
-which builds the right single-threaded runtime for whichever feature is enabled.
-The `runtime_backends` example is one program that runs unchanged on all three:
+The `runtime_backends` example is one program, written against `LocalRuntime`,
+that runs unchanged on all three:
 
 ```bash
 cargo run --example runtime_backends --features zmq                                      # compio
@@ -98,10 +103,14 @@ The simplest pattern: one client sends a request, one server sends a reply.
 **Server** (`src/bin/rep_server.rs`):
 
 ```rust,no_run
+use monocoque::rt::LocalRuntime;
 use monocoque::zmq::{RepSocket, Result};
 
-#[compio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
     let mut socket = RepSocket::new();
     socket.bind("tcp://127.0.0.1:5555").await?;
     println!("Server listening on :5555");
@@ -116,10 +125,14 @@ async fn main() -> Result<()> {
 **Client** (`src/bin/req_client.rs`):
 
 ```rust,no_run
+use monocoque::rt::LocalRuntime;
 use monocoque::zmq::{ReqSocket, Result};
 
-#[compio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
     let mut socket = ReqSocket::new();
     socket.connect("tcp://127.0.0.1:5555").await?;
 
@@ -147,12 +160,16 @@ A publisher broadcasts events; subscribers filter by topic prefix.
 **Publisher** (`src/bin/publisher.rs`):
 
 ```rust,no_run
+use monocoque::rt::LocalRuntime;
 use monocoque::zmq::{Msg, PubSocket, Result};
 use bytes::Bytes;
 use std::time::Duration;
 
-#[compio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
     let mut socket = PubSocket::new();
     socket.bind("tcp://127.0.0.1:5556").await?;
     println!("Publisher bound to :5556");
@@ -164,7 +181,7 @@ async fn main() -> Result<()> {
             Bytes::from("weather.london"),
             Bytes::from(format!("temp={}", 15 + i % 10)),
         ])).await?;
-        compio::time::sleep(Duration::from_millis(500)).await;
+        monocoque::rt::sleep(Duration::from_millis(500)).await;
     }
     Ok(())
 }
@@ -173,10 +190,14 @@ async fn main() -> Result<()> {
 **Subscriber** (`src/bin/subscriber.rs`):
 
 ```rust,no_run
+use monocoque::rt::LocalRuntime;
 use monocoque::zmq::{Result, SubSocket};
 
-#[compio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
     let mut socket = SubSocket::new();
     socket.connect("tcp://127.0.0.1:5556").await?;
     socket.subscribe(b"weather.london").await?;
@@ -219,10 +240,10 @@ live in `monocoque::zmq::draft` behind the `draft` feature.
 
 ```bash
 # Core protocol tests
-cargo test -p monocoque-zmtp
+cargo test -p monocoque-rs-zmtp
 
 # Full workspace
-cargo test --workspace
+cargo test --workspace --features zmq
 ```
 
 ---
@@ -233,8 +254,8 @@ cargo test --workspace
 - [Performance Guide](performance.md)  -  backends, coalescing, buffer sizes, HWMs, TCP options
 - [Security Guide](SECURITY_GUIDE.md)  -  PLAIN and CURVE authentication
 - [Migration Guide](MIGRATION.md)  -  coming from `zmq` (rust-zmq) or libzmq
-- API docs: `cargo doc --no-deps --open -p monocoque`
+- API docs: `cargo doc --no-deps --open -p monocoque-rs --features zmq`
 
 ---
 
-*License: MIT OR Apache-2.0*
+*License: MIT*

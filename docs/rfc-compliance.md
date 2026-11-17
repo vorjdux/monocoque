@@ -112,7 +112,7 @@ envelope and returns it with the reply.
 ## RFC 29: PUB/SUB
 
 **Implemented**: prefix matching, subscription forwarding upstream, XPUB/XSUB,
-`xpub_verbose`, `xpub_nodrop`, `invert_matching`.
+`xpub_verbose`, `invert_matching`. `ZMQ_XPUB_NODROP` is not implemented.
 
 - A PUB drops messages for a subscriber at its HWM, as the RFC and libzmq do.
 

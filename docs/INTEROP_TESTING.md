@@ -114,4 +114,11 @@ libsodium; the pyzmq suite covers CURVE either way.
 nothing else holds them.
 
 **Debugging a handshake.** Set `RUST_LOG=monocoque_zmtp=debug` on the Monocoque
-side to log each handshake step.
+side to log each handshake step. The library installs no tracing subscriber, so
+the program has to install one that reads `RUST_LOG`:
+
+```rust
+tracing_subscriber::fmt()
+    .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+    .init();
+```

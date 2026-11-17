@@ -4,18 +4,39 @@ Add monocoque to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-monocoque-rs = "1.0"
+monocoque-rs = { version = "1.0", features = ["zmq"] }
 bytes = "1.0"
-compio = { version = "0.19", features = ["runtime", "macros"] }
 ```
 
-All socket operations are async. On the default backend you run them on a compio
-runtime; annotate your entry point with `#[compio::main]`. Two portable backends
-are available instead: build with `default-features = false, features =
-["runtime-tokio", "zmq"]` to drive the sockets from a current-thread tokio runtime
-inside a `LocalSet`, or with `default-features = false, features = ["runtime-smol",
-"zmq"]` to drive them on a single-threaded smol executor. See
-[Getting Started](GETTING_STARTED.md#choosing-a-runtime) for each setup.
+The `zmq` feature is required: the sockets live in `monocoque::zmq`, which does
+not exist without it.
+
+All socket operations are async and run on a single-threaded runtime. Start it
+with `monocoque::rt::LocalRuntime`, which builds the right one for the enabled
+backend:
+
+```rust
+use monocoque::rt::LocalRuntime;
+use monocoque::zmq::Result;
+
+fn main() -> Result<()> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
+    // the snippets in this guide run here
+    Ok(())
+}
+```
+
+The default backend is compio (io_uring). On it `LocalRuntime` also polls for
+completions briefly before sleeping, which lowers round-trip latency.
+`#[compio::main]` works as an entry point too, with `compio` as a dependency,
+but it does not spin before sleeping. Two portable backends are available
+instead: build with `default-features = false, features = ["runtime-tokio",
+"zmq"]` for tokio, or with `default-features = false, features =
+["runtime-smol", "zmq"]` for smol. The same `LocalRuntime` code runs on both.
+See [Getting Started](GETTING_STARTED.md#choosing-a-runtime) for each setup.
 
 ---
 
@@ -165,7 +186,7 @@ let reply = Msg::from([identity.clone(), Bytes::new(), Bytes::from("ok")]);
 
 ## Socket Options
 
-Pass a `SocketOptions` to `with_options` when creating the socket, or change them later with `set_options`:
+Pass a `SocketOptions` to `with_options` when creating the socket. Change them later with `update_options(|o| o.with_send_hwm(5000))`, which keeps the rest, or replace the whole set with `set_options`. `SocketOptions` is `#[non_exhaustive]`, so build it from `SocketOptions::new()` or `default()` and the `with_*` methods, not a struct literal.
 
 ```rust
 let options = SocketOptions::new()
@@ -180,9 +201,13 @@ socket.connect("tcp://127.0.0.1:5555").await?;
 
 Key options:
 
-- `recv_timeout` / `send_timeout` - how long to wait before failing with `MonocoqueError::TimedOut`. Defaults to no timeout (wait forever).
+- `recv_timeout` / `send_timeout` - how long to wait before failing with `MonocoqueError::TimedOut`. Defaults to no timeout (wait forever). A timeout of zero does not wait at all and fails with `MonocoqueError::Again` when the operation cannot complete at once.
 - `recv_hwm` / `send_hwm` - high water marks, applied to every socket type and transport, inproc included. When the queue reaches this many messages, new messages are dropped or the sender blocks depending on socket type. Default 1000; 0 means unbounded.
-- `linger` - how long to wait for queued messages to drain when a socket closes. Default 30 seconds.
+- `linger` - how long `close()` waits for queued messages to be written. Default 30 seconds. `Some(Duration::ZERO)` drops what is still queued; `None` waits until everything is written, however long that takes.
+- `handshake_timeout` - how long a new connection may take to finish the ZMTP handshake. Default 30 seconds; zero means no limit.
+- `connect_timeout` - how long one dial may take before it counts as failed and is retried. Default zero, which leaves the limit to the OS.
+- `max_msg_size` - the largest frame a peer may send. The default `None` is 64 MiB per frame.
+- `heartbeat_ivl` - send a ZMTP PING on a connection idle for this long. Off by default.
 - `conflate` - keep only the most recent message in the receive queue. Useful for telemetry or status updates where stale data is useless.
 - `tcp_keepalive` - detect dead connections. Use `with_tcp_keepalive(1)`, `with_tcp_keepalive_idle(60)`, `with_tcp_keepalive_intvl(10)`, `with_tcp_keepalive_cnt(3)` to enable.
 
@@ -224,7 +249,7 @@ let mut client = ReqSocket::with_options(options);
 client.connect("tcp://127.0.0.1:5555").await?;
 ```
 
-CURVE provides public-key encryption with forward secrecy. It implements RFC 26 and interoperates with libzmq peers. Generate keypairs with `monocoque_zmtp::security::curve::CurveKeyPair::generate()`. Store secret keys outside of source code. See [SECURITY_GUIDE.md](SECURITY_GUIDE.md) for a complete setup example.
+CURVE provides public-key encryption with forward secrecy. It implements RFC 26 and interoperates with libzmq peers. Generate keypairs with `monocoque::zmq::security::curve::CurveKeyPair::generate()`. Store secret keys outside of source code. See [SECURITY_GUIDE.md](SECURITY_GUIDE.md) for a complete setup example.
 
 ---
 
@@ -255,11 +280,21 @@ For a steerable proxy, call `proxy::proxy_steerable` with a control socket (for 
 
 ## Debugging
 
-Enable debug logging with `RUST_LOG=monocoque_zmtp=debug`. Socket introspection at runtime:
+Monocoque logs through `tracing` and installs no subscriber of its own, so `RUST_LOG` does nothing until the application installs one that reads it. With `tracing-subscriber` (feature `env-filter`), at the start of `main`:
+
+```rust
+tracing_subscriber::fmt()
+    .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+    .init();
+```
+
+Then run with `RUST_LOG=monocoque_zmtp=debug`. Debug output is available in release builds too.
+
+Socket introspection at runtime:
 
 ```rust
 socket.socket_type();     // which socket type
-socket.last_endpoint();   // last bound/connected address
+socket.last_endpoint();   // most recently bound endpoint
 socket.peer_count();      // connected peers
 socket.options();         // current option values
 ```

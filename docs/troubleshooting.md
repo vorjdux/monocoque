@@ -34,8 +34,8 @@
 **Causes**:
 
 1. **PUB drops at HWM**: PUB sockets drop messages silently when the subscriber
-   queue is full. Use `with_xpub_nodrop(true)` on XPUB to get an error instead,
-   or increase `send_hwm`.
+   queue is full. Increase `send_hwm`, or turn on write coalescing so each
+   subscriber's queue drains in larger writes.
 
 2. **ROUTER drops unknown peer**: ROUTER silently drops messages to unknown peers
    by default. Set `with_router_mandatory(true)` to get an error.
@@ -116,11 +116,12 @@ mode) and no message is queued. Either:
 1. **Buffer too small**: Read buffer smaller than your message causes fragmented
    reads. Increase with `.with_read_buffer_size(n)`.
 
-2. **io_uring not active** (default compio backend): On kernels < 5.11, compio
-   falls back to thread-pool I/O. Check `uname -r` and update the kernel if
-   possible, or build with a portable backend on platforms without io_uring:
-   the tokio backend (`runtime-tokio`) or the smol backend (`runtime-smol`) are
-   equally valid choices.
+2. **io_uring not available** (default compio backend): The default backend
+   is built for io_uring on Linux. On an old kernel (check `uname -r`), or in a
+   container or sandbox that blocks io_uring, update the kernel or lift the
+   restriction if possible, or build with a portable backend: the tokio backend
+   (`runtime-tokio`) and the smol backend (`runtime-smol`) are equally valid
+   choices.
 
 3. **HWM too low**: If HWM is small, sends block frequently. Increase or set to 0.
 

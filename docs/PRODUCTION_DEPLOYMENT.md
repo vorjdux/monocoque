@@ -96,8 +96,10 @@ let options = SocketOptions::default()
 ```
 
 For connections over WAN (multi-region), allow slow handshakes and keep idle
-links alive through middleboxes. The handshake timeout defaults to 30 s and
-the connect timeout to the OS default:
+links alive through middleboxes. The handshake timeout defaults to 30 s (zero
+means no limit). The connect timeout defaults to zero, which leaves it to the
+OS; when set, a dial that takes longer counts as a failed attempt and is
+retried after the reconnect interval:
 
 ```rust
 let options = SocketOptions::default()
@@ -111,13 +113,16 @@ let options = SocketOptions::default()
 
 ### Retry with Backoff
 
-Connected endpoints redial on their own, with exponential backoff and jitter, so
-there is no retry loop to write. Tune it with options:
+Connected endpoints redial on their own, so there is no retry loop to write.
+By default the interval is a constant, jittered 100 ms (`reconnect_ivl`), with
+no backoff: `reconnect_ivl_max` defaults to zero. For a production fleet, set
+`reconnect_ivl_max` above `reconnect_ivl` so the interval doubles after each
+failed dial up to that maximum:
 
 ```rust
 let options = SocketOptions::default()
     .with_reconnect_ivl(Duration::from_millis(100))
-    .with_reconnect_ivl_max(Duration::from_secs(10))
+    .with_reconnect_ivl_max(Duration::from_secs(10)) // turns on exponential backoff
     .with_max_reconnect_attempts(None); // None retries indefinitely
 
 let mut socket = ReqSocket::with_options(options);
@@ -129,7 +134,8 @@ See [RELIABILITY_AND_RESILIENCE.md](RELIABILITY_AND_RESILIENCE.md) for details.
 ### Send/Receive Timeouts
 
 Set timeouts on the socket rather than wrapping each call. An elapsed timeout
-returns `MonocoqueError::TimedOut` and leaves the socket usable:
+returns `MonocoqueError::TimedOut` and leaves the socket usable (a timeout of
+zero does not wait and returns `MonocoqueError::Again` instead):
 
 ```rust
 let options = SocketOptions::default()
@@ -170,6 +176,15 @@ SEND_LATENCY.observe(start.elapsed().as_secs_f64());
 ```
 
 Set `RUST_LOG=info,monocoque_zmtp=debug` during rollout. Drop to `info` once stable.
+Monocoque installs no tracing subscriber, so the variable has an effect only if
+the application installs one that reads it, for example with `tracing-subscriber`
+(feature `env-filter`):
+
+```rust
+tracing_subscriber::fmt()
+    .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+    .init();
+```
 
 ## Troubleshooting
 
