@@ -68,7 +68,8 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends gdb > /dev/null
           bin=$(cargo test -p monocoque-rs ${{ matrix.backend.flags }} --test interop_pair --no-run --message-format=json |
             jq -r 'select(.executable != null and .target.name == "interop_pair") | .executable')
-          gdb -batch -ex run -ex 'thread apply all bt' "$bin"
+          gdb -batch -ex run -ex 'x/4i $pc' -ex 'info registers' -ex 'p *this' -ex 'thread apply all bt 12' "$bin"
+          gcc -v 2>&1 | tail -3
 
   clippy:
     name: Clippy (${{ matrix.backend.name }})
