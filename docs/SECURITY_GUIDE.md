@@ -100,7 +100,11 @@ server.bind("tcp://0.0.0.0:5555").await?;
 // of client keys, in which case the client's key has to be stored too.
 let client = CurveKeyPair::generate();
 
-let server_pubkey: [u8; 32] = hex::decode(std::env::var("SERVER_PUBLIC_KEY")?)?.try_into()?;
+// The key as 64 hex characters. A `Vec<u8>` of the wrong length comes back
+// as the error of `try_into`, which is not an `Error`, hence the `map_err`.
+let server_pubkey: [u8; 32] = hex::decode(std::env::var("SERVER_PUBLIC_KEY")?)?
+    .try_into()
+    .map_err(|_| "the server key must be 32 bytes")?;
 
 let client_opts = SocketOptions::default()
     .with_curve_keypair(*client.public.as_bytes(), client.secret.to_bytes())
@@ -198,7 +202,7 @@ Suggested setups:
 
 **Authentication always fails with PLAIN** - credentials are case-sensitive. Check that the handler is configured before the server socket starts accepting.
 
-**CURVE key format errors** - monocoque uses raw 32-byte arrays, not Z85 encoding. `hex::decode(...).try_into().unwrap()` is the usual conversion from a hex string.
+**CURVE key format errors** - monocoque uses raw 32-byte arrays, not Z85 encoding. The usual conversion from a hex string is `hex::decode(text)?.try_into().map_err(|_| "the key must be 32 bytes")?`, in a function that returns `Box<dyn Error>`.
 
 **CURVE handshake fails at once on both sides** - `with_curve_keypair` was given a public key that does not belong to the secret key. Derive it with `CurveSecretKey::from_bytes(secret).public_key()`.
 

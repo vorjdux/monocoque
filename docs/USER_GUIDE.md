@@ -227,7 +227,7 @@ match socket.recv().await {
 }
 ```
 
-`send()` returns `Result<()>`. Errors indicate connection or buffer problems; a send that cannot proceed fails with `Again` or `TimedOut` depending on the options.
+`send()` returns `Result<()>`, except on PUB, XPUB and RADIO, where it returns `Result<usize>`: the number of subscribers that took the message. Errors indicate connection or buffer problems; a send that cannot proceed fails with `Again` or `TimedOut` depending on the options.
 
 Set a recv timeout if you need to detect hangs rather than waiting forever.
 

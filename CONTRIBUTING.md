@@ -23,8 +23,11 @@ The workspace has three crates plus a separate fuzzing crate.
 - `monocoque-zmtp` is internal. It is the ZMTP implementation and the socket types built on the multiplexer. Do not depend on it directly, the public API goes through `monocoque`.
 - `monocoque-fuzz` holds the fuzz targets and is excluded from the workspace.
 
-The [documentation index](docs/README.md) links the guides for each area, and
-`docs/blueprints/00-overview.md` walks the architecture in depth.
+The [documentation index](docs/README.md) links the guides for each area. The
+current architecture is described in the crate documentation and in
+[docs/USER_GUIDE.md](docs/USER_GUIDE.md). The files under `docs/blueprints/`
+are historical design notes from before 1.0 and name things that no longer
+exist.
 
 ## Getting set up
 
@@ -76,7 +79,7 @@ scripts/bench_pair.py --against main --pin 0,2      # working tree against a rev
 
 `bench_pair.py` runs the two revisions in alternating rounds, which is the way to check a performance change: a saved baseline is measured at another time, so it also counts whatever changed on the machine since. Pin to two separate physical cores (`lscpu -e` shows which CPUs share one).
 
-Fuzzing needs a nightly toolchain and cargo-fuzz. The targets cover the decoder, the frame codec, the greeting parser, command parsing, the CURVE handshake, PLAIN security, the subscription trie, and ZAP request decoding:
+Fuzzing needs a nightly toolchain and cargo-fuzz. The nine targets cover the decoder, the frame codec, the greeting parser, command parsing, the CURVE handshake, CURVE message decoding, PLAIN security, the subscription trie, and ZAP request decoding ([docs/FUZZING.md](docs/FUZZING.md) describes each):
 
 ```
 cargo install cargo-fuzz

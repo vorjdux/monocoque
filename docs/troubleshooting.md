@@ -47,17 +47,25 @@
    subscription:  "sensor.temp"         ← does NOT match (prefix must be exact)
    ```
 
-4. **`req_relaxed` with rapid reconnects**: Correlation ID mismatch can cause
-   replies to be silently discarded. Enable `with_req_correlate(true)` to get
-   explicit errors.
+4. **`req_relaxed` without `req_correlate`**: After a relaxed REQ abandons a
+   request, a late reply to it can be returned as the reply to the next one.
+   Set `with_req_correlate(true)` as well: each request then carries an id,
+   and a reply whose id does not match the outstanding request is skipped.
+   The skip is silent. No error is returned, and `recv()` goes on waiting for
+   the matching reply, or until `recv_timeout`.
 
 ---
 
 ## Handshake fails / authentication rejected
 
-**Symptom**: Sends or receives on the client time out, and the socket monitor
-reports a handshake failure. A rejected peer never becomes a connection, so
-`connect()` itself still returns `Ok`.
+**Symptom**: Sends or receives on the client time out. A rejected peer never
+becomes a connection, so `connect()` itself still returns `Ok`. On the
+connecting side the socket monitor reports each failed handshake as
+`SocketEvent::ConnectFailed`, with the reason as text, and the endpoint is
+redialed after the reconnect interval. There is no separate handshake event.
+The accepting side gets no monitor event for a handshake that fails; it only
+logs the failure at debug level (`RUST_LOG=monocoque_core=debug`, with a
+tracing subscriber installed).
 
 1. **CURVE key mismatch**: The client's `curve_serverkey` must exactly match the
    public key the server passes to `with_curve_keypair` (32 raw bytes, not
@@ -66,9 +74,10 @@ reports a handshake failure. A rejected peer never becomes a connection, so
 2. **PLAIN credentials wrong**: Verify the username/password on both sides match
    exactly (case-sensitive).
 
-3. **No ZAP handler**: If a ZAP domain is set but no handler is running on
-   `inproc://zeromq.zap.01`, all PLAIN/CURVE connections are rejected. Start the
-   handler before binding the server socket.
+3. **No ZAP handler**: A PLAIN server refuses every client when no handler is
+   running on `inproc://zeromq.zap.01`, whether or not a ZAP domain is set. A
+   CURVE server with a ZAP domain does the same; without a domain it admits
+   any client key. Start the handler before binding the server socket.
 
 4. **Mechanism mismatch**: Both sides must agree on a mechanism. A CURVE client
    cannot connect to a PLAIN server.

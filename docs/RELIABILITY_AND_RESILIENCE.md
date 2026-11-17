@@ -1,6 +1,6 @@
 # Reliability and Resilience
 
-Monocoque includes three mechanisms to keep sockets well-behaved under load and across network failures: high water marks (HWM) to cap buffering, receive and send paths that a timeout or cancellation cannot corrupt, and automatic reconnection with a jittered interval and optional exponential backoff.
+Monocoque includes four mechanisms to keep sockets well-behaved under load and across network failures: high water marks (HWM) to cap buffering, receive and send paths that a timeout or cancellation cannot corrupt, automatic reconnection with a jittered interval and optional exponential backoff, and optional heartbeats that find a peer that vanished without closing.
 
 ---
 
@@ -78,12 +78,55 @@ let options = SocketOptions::default()
 `with_max_reconnect_attempts(Some(n))` stops redialing an endpoint after `n`
 failed dials in a row; the default `None` retries indefinitely.
 `connect_timeout` bounds one dial: a dial that takes longer counts as a failed
-attempt. Its default of zero leaves the limit to the OS.
+attempt. Its default of zero leaves the limit to the OS. A failed handshake
+counts as a failed attempt too, and so does a connection whose options (`tos`,
+the buffer sizes, keepalive) cannot be applied: the monitor reports
+`ConnectFailed` and the endpoint is redialed after the backoff. An accepted
+connection whose options cannot be applied is dropped with a warning in the
+log.
+
+`disconnect(endpoint)` stops the redialing and drops the connection, including
+one whose handshake is still running. It matches the text given to `connect`
+first, so an endpoint connected by host name disconnects by the same name even
+if the name now resolves to another address.
 
 Bound endpoints accept new connections for as long as the socket lives, so the
 model applies to connected endpoints only. A stream handed to a socket with
 `attach` is not redialed. A SUB socket replays its stored subscription list to the
 new peer after reconnecting, so filters survive the drop.
+
+---
+
+## Heartbeats
+
+A connection whose peer vanished without closing (a pulled cable, a frozen
+host) looks idle, not closed. ZMTP heartbeats find it. They are off by default
+and turned on with `heartbeat_ivl`:
+
+```rust
+let options = SocketOptions::default()
+    .with_heartbeat_ivl(Duration::from_secs(5))
+    .with_heartbeat_timeout(Duration::from_secs(10));
+```
+
+When nothing has been received from a peer for `heartbeat_ivl`, the socket
+sends it a PING. If the peer then stays silent for `heartbeat_timeout` (the
+interval again when no timeout is set), the connection is closed, and a
+connected endpoint is redialed. Any traffic from the peer counts, not only the
+PONG. The socket answers a peer's PINGs itself. Peers that speak ZMTP 1.0 or
+2.0 have no heartbeat commands and are neither pinged nor timed out.
+
+A PING carries no TTL by default, as in libzmq, so the peer applies only its
+own timeouts. `with_heartbeat_ttl` adds one: the peer then closes the
+connection when it hears nothing from this socket for that long, which frees
+it from a socket that vanished. With a TTL set, a PING is sent every
+`heartbeat_ivl` whether or not the connection is idle, because the peer counts
+from the last PING. Set the TTL comfortably above the interval, two or three
+times it; at or below the interval the peer's timer can run out between two
+PINGs. The TTL is sent in steps of 100 ms.
+
+Heartbeats are written at once on a socket with write coalescing, so a batch
+that is slow to fill cannot time a connection out.
 
 ---
 
@@ -95,4 +138,4 @@ Every socket exposes a few methods for observing its state:
 - `last_endpoint()` - the endpoint most recently bound (`ZMQ_LAST_ENDPOINT`)
 - `has_message()` - whether a receive would complete without waiting
 - `can_send()` - whether a send would complete without waiting
-- `monitor()` - a stream of connection events (connected, disconnected, handshake failures, and so on)
+- `monitor()` - a stream of connection events: bound, connected, accepted, disconnected, a failed connect attempt, a stalled peer. A handshake that fails on the connecting side is reported as `ConnectFailed`; the accepting side reports nothing for it and logs it at debug level.

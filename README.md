@@ -15,7 +15,7 @@
 
 ---
 
-Monocoque is a ZeroMQ-compatible messaging library written in Rust. It implements ZMTP 3.1 from scratch over a small runtime facade: io_uring by default (via `compio`), with optional tokio and smol backends for portability. Whichever you pick, it interoperates with any existing libzmq peer while staying entirely within Rust's memory model.
+Monocoque is a ZeroMQ-compatible messaging library written in Rust. It implements ZMTP 3 from scratch (it announces version 3.0 in its greeting and supports the 3.1 heartbeat commands and draft socket types, with ZMTP 1.0 and 2.0 framing for legacy peers) over a small runtime facade: io_uring by default (via `compio`), with optional tokio and smol backends for portability. Whichever you pick, it interoperates with any existing libzmq peer while staying entirely within Rust's memory model.
 
 The name comes from Formula 1 engineering, where the monocoque chassis achieves structural strength through form rather than bolt-on reinforcement. Same idea here: performance through correct architecture, not unsafe shortcuts.
 
@@ -54,7 +54,7 @@ harness means these figures are reproducible from published data rather than
 asserted here.
 
 Figures below are the run of **2026-08-21**, which measured monocoque 0.4, not
-1.0, on an Intel Core i5-13400 (16 cores), Linux 6.8.0-58, performance governor,
+1.0, on an Intel Core i5-13400 (16 threads), Linux 6.8.0-58, performance governor,
 turbo off. Every implementation, transport and
 payload size, plus the raw per-run JSON, is at
 **<https://vorjdux.github.io/zmq-arena/>**.
@@ -143,7 +143,8 @@ async fn async_main() -> Result<()> {
 
 `LocalRuntime` builds the single-threaded runtime of whichever backend is
 enabled, and on compio it also polls for completions briefly before it sleeps,
-which the latency figures above depend on. `#[compio::main]` works too (with
+which the 1.0 latency figures in [docs/performance.md](docs/performance.md)
+were measured with. `#[compio::main]` works too (with
 `compio` as a dependency), but a program started that way does not spin before
 sleeping.
 

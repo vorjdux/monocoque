@@ -25,7 +25,8 @@
 
 - [Performance](performance.md) - Benchmark results and tuning guide
 - [Production Deployment](PRODUCTION_DEPLOYMENT.md) - OS tuning, monitoring, deployment checklist
-- [Reliability](RELIABILITY_AND_RESILIENCE.md) - Reconnection, heartbeating, HWM
+- [Reliability](RELIABILITY_AND_RESILIENCE.md) - HWM, cancellation safety, reconnection, heartbeats
+- [Troubleshooting](troubleshooting.md) - Symptoms, their usual causes and fixes
 
 ## Reference
 
@@ -36,5 +37,8 @@
 
 ## Blueprints
 
-Internal design documents covering the architecture in depth:
 `blueprints/00-overview.md` through `blueprints/07-benchmark-gap-remediation-plan.md`
+are historical design notes written before 1.0. They record how the design was
+arrived at and name types and functions that no longer exist. The current
+architecture is described in the crate documentation (`cargo doc`, or docs.rs)
+and in the [User Guide](USER_GUIDE.md).

@@ -33,7 +33,7 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
 - `monocoque_core::io::READ_SLAB_SIZE` is `MAX_READ_SIZE`, and
   `io::take_read_buffer` is removed.
 - The public enums that will grow are `#[non_exhaustive]`, so a `match` on
-  one needs a wildcard arm: `SocketEvent`, `SocketType`, `Endpoint`,
+  one needs a wildcard arm: `MonocoqueError`, `ReconnectError`, `SocketEvent`, `SocketType`, `Endpoint`,
   `EndpointError`, `SubscriptionEvent`, `ProxyCommand`, `ZapMechanism`,
   `ZapStatus`, `ZmtpError`, `CurveError` and `CloseReason`.
 - `SocketOptions` is `#[non_exhaustive]`: build it from
@@ -61,7 +61,6 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
   once, when the endpoint is parsed.
 - `CurveSecretKey::to_bytes`, so a key pair from `CurveKeyPair::generate()`
   can be stored and given to `with_curve_keypair`.
-
 - `zmq_poll` (`monocoque::zmq::poll`) and per-message connection metadata
   (`gets`), including custom handshake properties, over NULL, PLAIN and CURVE.
 - ZMTP 1.0 and 2.0 legacy peers; secured sockets refuse to downgrade.
@@ -99,15 +98,40 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
   identity, left the socket waiting on bytes that were never written: later
   sends waited out the stall window and `close()` its whole linger.
 - `disconnect` while the connection's handshake was running left a peer that
-  nothing could remove.
+  nothing could remove. It now cancels the handshake as well, instead of
+  leaving the connection open until it finished or timed out.
+- `disconnect` matches the endpoint text given to `connect` before it parses
+  and compares addresses, so an endpoint connected by host name still
+  disconnects when the name has come to resolve elsewhere.
 - With heartbeats on, an idle ZMTP 1.0 or 2.0 peer, which has no PING to
   answer, was dropped for not answering.
+- Heartbeat PINGs carried `heartbeat_ivl` as their TTL when no
+  `heartbeat_ttl` was set, and an idle peer was pinged only every second
+  interval, so an idle libzmq peer dropped the connection over and over. With
+  no `heartbeat_ttl` a PING now carries no TTL, as in libzmq. With one, a PING
+  is sent every `heartbeat_ivl` whether or not the connection is idle; set
+  the TTL comfortably above the interval.
+- Write coalescing held back protocol traffic along with messages: a PING or
+  PONG waiting for a batch to fill could time the connection out, a
+  subscription sent nothing until a `flush()`, and a STREAM close could drop
+  what was queued before it. Heartbeats, subscriptions and other control
+  messages, the messages a new peer is greeted with and a STREAM close are
+  now written at once, and take any held messages with them.
+- The last message of a peer that had already gone was delivered without its
+  connection metadata. It keeps it, `User-Id` included, in `peer_property`,
+  `last_metadata` and `gets`.
+- A connection whose options could not be applied (`tos`, the buffer sizes,
+  keepalive) was used anyway. On a connecting socket it is now a failed
+  attempt: `ConnectFailed` is reported, it counts toward
+  `max_reconnect_attempts`, and the endpoint is redialed after the backoff.
+  An accepted connection in that state is dropped with a warning in the log.
 - On smol, a ZMTP 1.0 frame too long for the read buffer and split across two
   reads corrupted the stream.
 - A message could be attributed to a peer that had gone, once its slot was
   reused by a new one.
 - A REQ socket kept the slot and unread messages of every peer that had gone,
-  for as long as the socket lived.
+  for as long as the socket lived, and kept each one's entry in its fair
+  queue after the slot was freed.
 - `StreamSocket::flush` honours `send_timeout`.
 - Coalesced large messages could be lost on `close()` and bypass the HWM.
 - Lost wakeups between sockets on different threads; a cross-thread inproc
@@ -145,10 +169,11 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
 - With a `send_timeout` of two `write_stall` windows or less, a peer that
   stopped reading was never marked stalled, so every send to it waited out
   the whole timeout until its HWM filled (100 s for 20 000 sends at 100 ms).
-  The peer's progress is now watched across sends, as below.
+  The peer's progress is now watched across sends rather than within each
+  one.
 - An XPUB past its receive HWM scanned every queued report for each new one,
   so a subscriber holding many unread prefixes and toggling a topic cost
-  quadratic CPU (21.6 us a report at 9 000 prefixes). Reports past the HWM
+  quadratic CPU (21.6 µs a report at 9 000 prefixes). Reports past the HWM
   are now indexed by prefix. A data frame from an XSUB arriving while reports
   wait waits behind them, up to the receive HWM of them, instead of being
   dropped while the inbox has room.
@@ -167,7 +192,8 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
 - A peer could announce `User-Id` or `Peer-Address` in its handshake and have
   them reach the application as message metadata, where they stand for the
   ZAP handler's answer and the connection's real address. Those names, and
-  `Socket-Type` and `Identity`, are now set only by this side.
+  `Socket-Type`, `Identity` and `Routing-Id` (which is read as an alias of
+  `Identity`), are now set only by this side.
 - tokio is at 1.54.1, past RUSTSEC-2026-0386 (unsound `AsyncFd`
   constructors). monocoque never called them; the lockfile pinned the
   affected version through its dev dependencies.
@@ -180,7 +206,7 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
   topic filtering with coalescing pass 0.4, whose PUB batched on worker
   threads; an eager PUB pays one send per subscriber per message.
 - A receive about to sleep keeps looking first (`MONOCOQUE_SPIN_US`), for up
-  to 20 us on compio and tokio and 100 us on smol, where a wakeup costs more:
+  to 20 µs on compio and tokio and 100 µs on smol, where a wakeup costs more:
   compio's `LocalRuntime` polls for completions, and on tokio and smol the
   receive yields to the runtime. It costs some CPU while traffic flows.
 - A ROUTER routes a small message without allocating or copying it: the body

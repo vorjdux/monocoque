@@ -250,10 +250,10 @@ cargo test --workspace --features zmq
 
 ## Next Steps
 
-- [Architecture Decision Records](ADR.md)  -  the design decisions behind the library and how they changed
-- [Performance Guide](performance.md)  -  backends, coalescing, buffer sizes, HWMs, TCP options
-- [Security Guide](SECURITY_GUIDE.md)  -  PLAIN and CURVE authentication
-- [Migration Guide](MIGRATION.md)  -  coming from `zmq` (rust-zmq) or libzmq
+- [Architecture Decision Records](ADR.md): the design decisions behind the library and how they changed
+- [Performance Guide](performance.md): backends, coalescing, buffer sizes, HWMs, TCP options
+- [Security Guide](SECURITY_GUIDE.md): PLAIN and CURVE authentication
+- [Migration Guide](MIGRATION.md): coming from `zmq` (rust-zmq) or libzmq
 - API docs: `cargo doc --no-deps --open -p monocoque-rs --features zmq`
 
 ---

@@ -1,8 +1,8 @@
 # Protocol Compatibility
 
-Monocoque implements ZMTP 3.x and is wire-compatible with all ZeroMQ 4.x releases (minimum 4.1). It sends ZMTP 3.0 greetings for backward compatibility and accepts any 3.x peer, so it interoperates with libzmq 4.1 through 4.4 without configuration. Legacy ZMTP 1.0 and 2.0 peers are detected from the greeting and handled through the same downgrade path as libzmq; see [rfc-compliance.md](rfc-compliance.md).
+Monocoque implements ZMTP 3. It announces version 3.0 in its greeting and accepts any 3.x peer, and it supports the ZMTP 3.1 additions: PING/PONG heartbeats, SUBSCRIBE and CANCEL commands on receive, and the draft socket types. That makes it wire-compatible with libzmq 4.1 and later without configuration. The interop tests run against libzmq 4.3.4 (built from source by the `zmq` crate) and 4.3.5 (bundled with pyzmq); other versions are expected to work but are not tested. Legacy ZMTP 1.0 and 2.0 peers are detected from the greeting and handled through the same downgrade path as libzmq; see [rfc-compliance.md](rfc-compliance.md).
 
-Heartbeating via PING/PONG (RFC 37) is off by default. Setting `heartbeat_ivl` turns it on: the socket then sends a PING on a connection that has been idle for that long, to ZMTP 3.0 and 3.1 peers alike. ZMTP 1.0 and 2.0 have no heartbeat commands, so legacy peers are never sent one.
+Heartbeating via PING/PONG (RFC 37) is off by default. Setting `heartbeat_ivl` turns it on: the socket then sends a PING on a connection it has heard nothing from for that long, to ZMTP 3.0 and 3.1 peers alike, and closes the connection when the peer stays silent past `heartbeat_timeout`. A PING carries no TTL unless `heartbeat_ttl` is set, as in libzmq. With a TTL the peer closes the connection when it hears nothing for that long, so a PING is then sent every `heartbeat_ivl` whether or not the connection is idle; set the TTL comfortably above the interval. ZMTP 1.0 and 2.0 have no heartbeat commands, so legacy peers are never sent one.
 
 ## Supported socket types
 
@@ -21,7 +21,7 @@ All standard socket types are implemented: DEALER, ROUTER, PUB, SUB, REQ, REP, P
 - ROUTER fair-queuing and routing IDs
 - PUB/SUB topic filtering
 - Automatic reconnection, at a constant interval by default and with exponential backoff when `reconnect_ivl_max` is set
-- Full socket options API equivalent to `zmq_setsockopt`
+- Socket options through `SocketOptions`, covering most of what `zmq_setsockopt` offers. Some libzmq options are not implemented; [MIGRATION.md](MIGRATION.md) lists them
 
 ## Behavioral differences from libzmq
 
@@ -33,19 +33,16 @@ The wire protocol is byte-for-byte compatible. Framing, handshake, and READY com
 
 ## Running interoperability tests
 
-The test suite includes interop tests against a live libzmq installation:
+The test suite includes interop tests against real libzmq, one file per area in `monocoque/tests/interop_*.rs`:
 
 ```bash
-# Install libzmq
-sudo apt install libzmq3-dev   # Ubuntu/Debian
-brew install zeromq            # macOS
-
-# Run interop tests
-cargo test --package monocoque-rs --features zmq --test interop_pair
-cargo test --package monocoque-rs --features zmq --test interop_router
-cargo test --package monocoque-rs --features zmq --test interop_pubsub
-cargo test --package monocoque-rs --features zmq --test interop_push_pull
+cargo test -p monocoque-rs --features zmq \
+    --test interop_pair --test interop_pubsub --test interop_push_pull \
+    --test interop_req_rep --test interop_router --test interop_stream \
+    --test interop_plain --test interop_curve --test interop_heartbeat
 ```
+
+[INTEROP_TESTING.md](INTEROP_TESTING.md) describes them, the pyzmq suite beside them, and what each needs installed.
 
 ## References
 

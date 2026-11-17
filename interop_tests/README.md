@@ -2,8 +2,9 @@
 
 These tests run Monocoque against the libzmq that ships inside pyzmq's wheels,
 which is built with CURVE. They complement the Rust tests in
-`monocoque/tests/interop_*.rs`, which link the system libzmq; those skip their
-CURVE cases when the system library lacks it, so CURVE interop is covered here.
+`monocoque/tests/interop_*.rs`, which run against the libzmq 4.3.4 that the
+`zmq` crate builds from source. That build has no CURVE, so those tests skip
+their CURVE cases and CURVE interop is covered here.
 
 ## What is covered
 

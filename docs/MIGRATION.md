@@ -73,8 +73,10 @@ socket.send(Msg::from([Bytes::from("part1"), Bytes::from("part2")])).await?;
 `recv()` returns a `MsgRef<'_>` that borrows a slot inside the socket, so a
 receive allocates nothing. Use `recv_owned()` when the message must outlive the
 next call. Errors are `MonocoqueError`: `Again` when a non-blocking operation
-would block, `TimedOut` when `recv_timeout` or `send_timeout` elapses,
-`HostUnreachable` for ROUTER/SERVER/STREAM sends to an unknown peer.
+would block, `TimedOut` when `recv_timeout` or `send_timeout` elapses, and
+`HostUnreachable` for a send to an unknown peer on SERVER and STREAM. A ROUTER
+drops a message for an unknown peer, as in libzmq, and fails with
+`HostUnreachable` only when `router_mandatory` is set.
 
 ### Options
 
@@ -182,8 +184,12 @@ stream added with `attach` is not redialed when it drops.
   `Msg::from([a, b])`, `Msg::from("text")`, or collect an iterator of `Bytes`.
 - `message_builder::Message` and the `message` module are removed.
 - `recv()` returns `Result<MsgRef<'_>>` instead of `Result<Option<Vec<Bytes>>>`.
-  A closed connection or a timeout is an error (`TimedOut`), not `Ok(None)`.
-  Code that keeps the message calls `recv_owned()`.
+  Nothing returns `Ok(None)` any more. A timeout is the error `TimedOut` (or
+  `Again` for a zero timeout). A closed connection is not reported by `recv`
+  at all on most sockets: the endpoint is redialed and `recv` goes on waiting
+  for a message from any peer. The exception is REQ, where a peer that goes
+  away before replying fails the `recv` with `PeerDisconnected`. Code that
+  keeps the message calls `recv_owned()`.
 - `recv_into` and `try_recv_into` are removed; the borrowed `recv` supersedes
   them. `send_one` is removed; `send(Msg::from(frame))` no longer allocates.
 - `recv_one` is removed. Take the first frame of a received message with
@@ -277,6 +283,26 @@ let reply = socket.recv().await?;
 - Every public method returns `Result<_, MonocoqueError>`; nothing returns
   `io::Result`. I/O errors arrive as `MonocoqueError::Io`.
 - `zmq::common::channel_to_io_error` is removed with the `io::Result` signatures.
+- The public enums that will grow are `#[non_exhaustive]`, so a `match` on one
+  needs a wildcard arm: `MonocoqueError`, `ReconnectError`, `SocketEvent`,
+  `SocketType`, `Endpoint`, `EndpointError`, `SubscriptionEvent`,
+  `ProxyCommand`, `ZapMechanism`, `ZapStatus`, `ZmtpError`, `CurveError` and
+  `CloseReason`. None of them was in 0.4.
+
+  ```rust
+  // 0.4
+  match event {
+      SubscriptionEvent::Subscribe(prefix) => added(prefix),
+      SubscriptionEvent::Unsubscribe(prefix) => removed(prefix),
+  }
+
+  // 1.0
+  match event {
+      SubscriptionEvent::Subscribe(prefix) => added(prefix),
+      SubscriptionEvent::Unsubscribe(prefix) => removed(prefix),
+      _ => {}
+  }
+  ```
 
 ### Sockets
 
@@ -294,6 +320,16 @@ let reply = socket.recv().await?;
   questions, and `monocoque::zmq::poll::poll` waits on several sockets.
 - The crate-root re-export `monocoque::SocketType` is removed; the type is
   `monocoque::zmq::SocketType`.
+- `monocoque::zmq::prelude` exports a different set. It no longer has
+  `StreamSocket`, `Subscription`, `SubscriptionEvent` and `SubscriptionTrie`
+  (import them from `monocoque::zmq`), `proxy`, `proxy_steerable`,
+  `ProxyCommand` and `ProxySocket` (import them from `monocoque::zmq::proxy`),
+  or the removed `BufferConfig`, `PushFanOut` and `PullFanIn`. It now has
+  `Msg`, `MsgRef`, `MonocoqueError` and `Result`. That `Result` is
+  `monocoque::zmq::Result<T>`, with one type parameter, and a glob import of
+  the prelude puts it in place of the standard one: write
+  `std::result::Result<T, E>` where a function in that module returns another
+  error type.
 
 ### PUB
 
@@ -338,6 +374,112 @@ let delivered = publisher.send(Msg::from([topic, body])).await?;
   `identities()` lists the identities of the connected peers and
   `identity_of(peer)` returns one peer's.
 
+### XPUB
+
+- `set_verbose` and `set_manual` are removed. Set `with_xpub_verbose` and
+  `with_xpub_manual` on the options the socket is created with; both are read
+  once, at construction.
+- `accept()` is removed. Subscribers are accepted in the background from the
+  moment `bind` returns.
+- `subscriber_count()` is `peer_count()`.
+- `local_addr()` is removed. `bind` returns the bound endpoint as a string,
+  and `last_endpoint()` returns it later.
+- `recv_subscription()` returns `Result<SubscriptionEvent>` instead of
+  `io::Result<Option<SubscriptionEvent>>`. It waits for the next subscription
+  change; a `recv_timeout` that elapses is the error `TimedOut`, not
+  `Ok(None)`. `recv()` returns the same changes undecoded, as `\x01prefix` and
+  `\x00prefix` messages.
+- `connect_upstream` and `send_subscription` are removed; an XPUB no longer
+  holds an upstream connection of its own. Create an `XSubSocket`, connect it
+  to the upstream publisher, and pass each message the XPUB receives to
+  `xsub.send(msg)`, or run the pair under `monocoque::zmq::proxy::proxy`. In
+  manual mode, `subscribe(prefix)` and `unsubscribe(prefix)` on the XPUB
+  decide what the peer that sent the last subscription message receives.
+
+```rust
+// 0.4
+let mut xpub = XPubSocket::bind("127.0.0.1:5556").await?;
+xpub.set_manual(true);
+xpub.connect_upstream("127.0.0.1:5555").await?;
+if let Some(event) = xpub.recv_subscription().await? {
+    xpub.send_subscription(event).await?;
+}
+
+// 1.0
+let mut xpub = XPubSocket::new();
+xpub.bind("tcp://127.0.0.1:5556").await?;
+let mut xsub = XSubSocket::new();
+xsub.connect("tcp://127.0.0.1:5555").await?;
+let change = xpub.recv_owned().await?;
+xsub.send(change).await?;
+```
+
+### XSUB
+
+- `send_subscription_event(event)` is removed. Call `subscribe(prefix)` or
+  `unsubscribe(prefix)`, or `send` a subscription message as received from an
+  XPUB (`\x01prefix` or `\x00prefix`); `send` remembers it and replays it to
+  publishers that connect later.
+- `is_subscribed`, `subscription_count` and `subscriptions` are removed from
+  XSUB and have no replacement there; keep the list in the application if it
+  is needed. `SubSocket` has `subscriptions()`, which returns the prefixes as
+  `Vec<Bytes>`.
+
+### PAIR
+
+- `bind_inproc`, `connect_inproc` and their `_with_options` forms are removed.
+  inproc is an endpoint like any other, and `bind` and `connect` are `async`:
+
+```rust
+// 0.4
+let a = PairSocket::bind_inproc("inproc://pipe")?;
+let b = PairSocket::connect_inproc_with_options("inproc://pipe", opts)?;
+
+// 1.0
+let mut a = PairSocket::new();
+a.bind("inproc://pipe").await?;
+let mut b = PairSocket::with_options(opts);
+b.connect("inproc://pipe").await?;
+```
+
+### STREAM
+
+- A message is two frames, `[identity, data]`, as in libzmq. 0.4 put an empty
+  frame between them, on `recv` and on `send`. Identities are 5 bytes, not 8.
+- `recv()` returns `Result<MsgRef<'_>>` instead of
+  `io::Result<Option<Vec<Bytes>>>`, like every other socket.
+- `accept_raw()` is removed. Connections are accepted in the background, and
+  each one is announced by an `[identity, ""]` message from `recv` (unless
+  `with_stream_notify(false)`), which is where the identity now comes from.
+- `close_peer(routing_id)` and `disconnect(routing_id)` are removed. Close a
+  connection by sending `[identity, ""]`; what is queued for it is written
+  first. `disconnect` now takes an endpoint, as on every socket, and stops
+  dialing it.
+- `local_addr()` is removed. `bind` returns the bound endpoint as a string,
+  and `last_endpoint()` returns it later.
+- A send to an unknown identity fails with `HostUnreachable` instead of being
+  dropped.
+- `StreamSocket` has the methods the other sockets have: `connect`,
+  `disconnect`, `unbind`, `attach`, `monitor`, `options`, `set_options`,
+  `update_options`, `peer_ids`, `last_endpoint`, `peer_property`,
+  `last_metadata`, `last_peer`, `has_message`, `can_send`, `recv_owned`,
+  `flush` and `close`.
+
+```rust
+// 0.4
+let mut stream = StreamSocket::bind("127.0.0.1:8080").await?;
+let id = stream.accept_raw().await?;
+stream.send(vec![id.clone(), Bytes::new(), reply]).await?;
+stream.close_peer(&id);
+
+// 1.0
+let mut stream = StreamSocket::new();
+stream.bind("tcp://127.0.0.1:8080").await?;
+let id = stream.recv().await?.frame_bytes(0).unwrap();   // the connect notification
+stream.send(Msg::from([id.clone(), reply])).await?;
+stream.send(Msg::from([id, Bytes::new()])).await?;       // close it
+```
+
 ### Options
 
 - `SocketOptions` is `#[non_exhaustive]`. A struct literal, with or without
@@ -368,7 +510,9 @@ let delivered = publisher.send(Msg::from([topic, body])).await?;
   never read, so removing a call that set one changes nothing at run time:
   `immediate`, `probe_router`, `router_raw`, `xpub_nodrop`, `ipv6`,
   `bind_to_device`, `rate`, `recovery_ivl`, `multicast_hops`,
-  `multicast_maxtpdu`, and the builder `with_unsubscribe`.
+  `multicast_maxtpdu`, and the `unsubscriptions` field with its builder
+  `with_unsubscribe`. None has a replacement. To drop a subscription on a live
+  socket, call `unsubscribe(prefix)` on it.
 - `BufferConfig` and the `small()` and `large()` presets are removed. Set the
   read side with `with_read_buffer_size`.
 - `monocoque_core::io::READ_SLAB_SIZE` is `MAX_READ_SIZE` (still 64 KiB, the

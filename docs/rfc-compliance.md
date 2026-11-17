@@ -4,13 +4,16 @@ What monocoque implements of each ZeroMQ RFC, where libzmq departs from the
 text, and which side monocoque follows. Where the two disagree monocoque
 follows libzmq, since interoperating with it is the point; each case is named.
 
-Interop is tested against real libzmq: the Rust `interop_*` tests link the
-system libzmq, and `interop_tests/` runs pyzmq (bundled libzmq 4.3.5, which has
-CURVE) in CI.
+Interop is tested against real libzmq: the Rust `interop_*` tests run against
+libzmq 4.3.4, which the `zmq` crate builds from source, and `interop_tests/`
+runs pyzmq (bundled libzmq 4.3.5, which has CURVE) in CI.
 
 ---
 
 ## RFC 23 / 37: ZMTP 3.0 and 3.1
+
+monocoque announces version 3.0 in its greeting and accepts any 3.x peer. The
+3.1 additions it implements are named below.
 
 **Implemented:** the greeting, NULL/PLAIN/CURVE mechanisms, READY and ERROR,
 short and long frames, MORE and COMMAND flags, PING/PONG (3.1), SUBSCRIBE and
@@ -28,8 +31,12 @@ CANCEL as commands (3.1), JOIN/LEAVE for RADIO/DISH.
   still sends subscriptions as data frames with a leading `0x01`/`0x00` byte,
   and so does monocoque. Both forms are accepted on receive.
 - **PING TTL and context.** A PING carries a 16-bit TTL in tenths of a second
-  and up to 16 bytes of context, echoed in the PONG. A nonzero TTL tightens the
-  local heartbeat timeout for that peer. Legacy (1.0/2.0) peers get no PINGs.
+  and up to 16 bytes of context, echoed in the PONG. A nonzero TTL from a peer
+  tightens the local heartbeat timeout for that peer. monocoque's own PINGs
+  carry a TTL of zero unless `heartbeat_ttl` is set, as in libzmq; with one
+  set, a PING goes out every `heartbeat_ivl` whether or not the connection is
+  idle, since the peer counts from the last PING. Legacy (1.0/2.0) peers get
+  no PINGs.
 - **READY size.** The RFC sets no limit. monocoque refuses a READY larger than
   512 bytes during the handshake. Socket-Type, Identity and a few custom
   properties fit; a peer advertising many large properties is refused.
@@ -40,7 +47,9 @@ CANCEL as commands (3.1), JOIN/LEAVE for RADIO/DISH.
   `0x00`, as in libzmq. An id from the peer that starts with `0x00` is
   replaced by a generated one, since that range is reserved for generated ids.
   A second peer claiming a live id is refused unless `router_handover` is set,
-  as in libzmq.
+  as in libzmq. With it set the new peer takes the id. libzmq then closes the
+  old connection; monocoque leaves it open, still receiving from it under that
+  id but no longer able to send to it.
 
 ## RFC 15 / 13: ZMTP 2.0 and 1.0 (legacy)
 

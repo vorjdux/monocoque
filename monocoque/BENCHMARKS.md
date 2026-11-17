@@ -293,8 +293,11 @@ On 0.4 the crossover was ~32 KB, which set that release's 32 KiB
 `vectored_write_threshold`; below it the contiguous copy plus one `write` beat a
 two-segment `writev`. The default is now 16 KiB.
 
-**PUB→SUB delivered broadcast, 1 subscriber** (coalescing on): 64 B ~174 K
-msg/s, 1 KB ~161 K msg/s.
+**PUB→SUB delivered broadcast, 1 subscriber** (coalescing on), measured on 0.4
+with the same one-off harness: 64 B ~174 K msg/s, 1 KB ~161 K msg/s. This is
+not a 1.0 figure and does not compare with the 1.0 PUB/SUB tables in
+[docs/performance.md](../docs/performance.md), which come from the criterion
+suite.
 
 ---
 
@@ -330,8 +333,16 @@ steady-state round-trip time.
 
 ### Cross-implementation bench peer
 
-`scripts/monocoque_bench_peer/` is a standalone Rust binary (separate Cargo
-workspace, not part of the monocoque workspace) that implements the same two-process
+**The bench peer is written against the 0.4 API and does not build against
+1.0.** It is its own Cargo workspace, not part of the 1.0 workspace, and its
+source still uses calls that 1.0 removed (the `connect` and `from_tcp`
+constructors, `recv_into` and `try_recv_into`, `PushFanOut` and `PullFanIn`,
+`Vec<Bytes>` messages). Everything in this section describes it as it runs on
+0.4: build it from a 0.4 checkout (`git checkout v0.4.2`), not from this tree.
+For 1.0, cross-implementation runs go through
+[zmq-arena](https://vorjdux.github.io/zmq-arena/).
+
+`scripts/monocoque_bench_peer/` is a standalone Rust binary that implements the same two-process
 wire protocol as the other bench peers in the cross-implementation comparison suite
 (libzmq, zmqrs\_bench\_peer, rzmq\_bench\_peer). It can participate directly in
 the external comparison harness that drives those peers side by side.
@@ -341,9 +352,9 @@ Key design choices in the bench peer:
 - `push` uses write coalescing (flushed every 64 messages) to show monocoque's
   maximum throughput. `push-eager` uses the default mode for latency-tuned
   scenarios.
-- `pull` drains the receive buffer with `try_recv()` after each `recv()`,
-  reducing io_uring submissions when the kernel delivers multiple messages in one
-  read.
+- `pull` receives into one reused buffer and, after each receive that waited,
+  takes whatever else is already queued without waiting, so several messages
+  that the kernel delivered in one read cost one io_uring submission.
 - No warmup sleep on the pull/req side. (A sleep fills the kernel send buffer
   and deadlocks monocoque's single-threaded runtime on a blocked write.)
 - IPC subcommands (`push-ipc`, `pull-ipc`, `rep-ipc`, `req-ipc`) use Unix
@@ -354,7 +365,7 @@ Key design choices in the bench peer:
   as a fan-in worker. Fan-out workers reuse the plain `pull` subcommand.
 
 ```bash
-# Build the bench peer
+# In a 0.4 checkout: build the bench peer
 cd scripts/monocoque_bench_peer
 cargo build --release
 
@@ -381,12 +392,14 @@ cargo build --release
 
 ### What is not (yet) benchmarked
 
-- Published numbers for PUB fan-out to **many** subscribers (single-subscriber
-  delivered throughput is measured above; the `fanout_slow_subscriber` bench
-  drives 100 SUB peers but its results are not collected here yet)
+- Published numbers for PUB fan-out to **many** subscribers (the only
+  single-subscriber delivered figure above is the 0.4 one from the one-off
+  harness; 1.0 fan-out to one and four subscribers is in
+  [docs/performance.md](../docs/performance.md); the `fanout_slow_subscriber`
+  bench drives 100 SUB peers but its results are not collected here yet)
 - Fan-out / fan-in worker pools **against other implementations**: the
   in-process `fanout_fanin` criterion bench covers monocoque, and the
-  `push-fanout` / `pull-fanin` bench-peer subcommands exist, but a measured
+  `push-fanout` / `pull-fanin` bench-peer subcommands exist on 0.4, but a measured
   cross-implementation comparison has not been collected yet
 - IPC coalesced throughput against competing IPC implementations
 
@@ -432,10 +445,11 @@ cargo bench -p monocoque-rs --bench throughput --features zmq -- "throughput/mon
 
 # Quick smoke-test (no timing, just checks nothing panics)
 cargo bench -p monocoque-rs --bench throughput --features zmq -- --test
-
-# Cross-implementation comparison bench peer
-cd scripts/monocoque_bench_peer && cargo build --release
 ```
+
+The cross-implementation bench peer in `scripts/monocoque_bench_peer` is not
+in this list: it targets the 0.4 API and does not build against 1.0 (see
+[Cross-implementation bench peer](#cross-implementation-bench-peer)).
 
 `BENCH_SECS=2` shortens the `throughput` bench's measurement from 15 seconds
 per size while iterating; publish numbers from the default.

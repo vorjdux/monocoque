@@ -1,3 +1,8 @@
+> This blueprint and the others in this directory are historical design notes
+> from before 1.0. They name types and functions that no longer exist. The
+> current architecture is described in the crate documentation and in
+> [the User Guide](../USER_GUIDE.md).
+
 # 📄 File 1 - `00-overview.md`
 
 # Monocoque Roadmap

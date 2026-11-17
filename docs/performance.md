@@ -256,7 +256,7 @@ counts deliveries, so four subscribers each receiving a message count four.
 | monocoque (smol) | 4.06 M msg/s | 28.3 M msg/s |
 
 An eager publisher is the low-latency choice and a coalescing one the
-high-throughput choice, by a factor of 30 or more on fan-out. Topic filtering is
+high-throughput choice, by a factor of about 30 on fan-out. Topic filtering is
 a tight microbenchmark where a few hundred nanoseconds of filter cost dominates,
 so its numbers move run to run; read them as an order of magnitude rather than a
 ranking. Cross-implementation PUB/SUB results, including runs at 4 and 32
@@ -319,26 +319,42 @@ The last row is why a larger threshold is worth trying for a bulk sender: each
 write carries two segments for the same number of syscalls per byte, at the
 price of up to 128 KB waiting in user space.
 
-### Coalescing on the connected sockets (0.4)
+### What is never held
 
-Before 0.4 only PUSH honored `with_write_coalescing`; DEALER, ROUTER, REQ, REP,
-and PAIR ignored the flag and issued one kernel write per send regardless. 0.4
-routes all of them through the same coalesce/vector/write path, so a batching
-DEALER caller finally gets the syscall amortization PUSH already had. For a
-1,000,000-message 64 B DEALER-to-ROUTER flow over TCP loopback (receiver-timed,
-one-off probe harness):
+Coalescing holds the application's messages only. What the protocol itself
+sends is written at once, and takes any held messages with it:
 
-| DEALER send path | throughput |
+- heartbeat PINGs and PONGs, so a batch that is slow to fill cannot time a
+  connection out;
+- subscriptions, unsubscriptions and other control messages, so a SUB that
+  subscribes on a coalescing socket starts receiving without a `flush()`;
+- the messages a new peer is greeted with (a SUB's stored subscriptions, an
+  XPUB's welcome message);
+- a STREAM close (`[identity, ""]`), which writes what was queued for that
+  connection before it closes it.
+
+### Coalescing on every socket type
+
+`with_write_coalescing` applies to every socket type that sends. PUSH, DEALER,
+ROUTER, REQ, REP, PAIR and the publishers all queue through the same
+coalesce/vector/write path, so a DEALER that sends in batches gets the same
+syscall amortization as a PUSH.
+
+The figures below are a 0.4 measurement from a one-off probe harness on the
+compio backend, not part of the 1.0 suite at the top of this document; they
+are kept because they show the mechanism. A 1,000,000-message 64 B
+DEALER-to-ROUTER flow over TCP loopback, receiver-timed:
+
+| DEALER send path (0.4, probe harness) | throughput |
 |---|---|
-| coalescing off (the 0.3 behavior, one write per send) | 0.47 M msg/s |
-| coalescing on (0.4 wires it in) | 18.0 M msg/s |
+| coalescing off (one write per send) | 0.47 M msg/s |
+| coalescing on | 18.0 M msg/s |
 
-That is a ~38x improvement for batched DEALER workloads, and it is not
-measurement-sensitive: the win is a deterministic drop in write submissions. The
-same 20,000-message run under `strace` falls from 32,260 to 80 `io_uring_enter`
-calls once coalescing is honored. The eager
-(one-write-per-send) DEALER path is unchanged; this is purely what a caller gains
-by opting into coalescing, which 0.3 did not deliver for these socket types.
+That is about 38x for a batched DEALER workload, and it does not depend on the
+machine: the gain is a drop in write submissions. A 20,000-message run of the
+same probe under `strace` made 32,260 `io_uring_enter` calls with coalescing
+off and 80 with it on. For 1.0 figures on all three backends see the PUSH/PULL
+and DEALER/ROUTER tables in the [local benchmark suite](#local-benchmark-suite).
 
 ---
 
@@ -350,9 +366,10 @@ and that IO thread drains the queue and calls `writev()` at its own pace. The
 batching is a side effect of the thread scheduling, and libzmq users never think
 about it.
 
-monocoque works differently. There is no background IO thread. Everything runs on
-a single `compio` runtime, and io_uring operations are submitted from the same
-thread that called `send()`. This is one of the reasons monocoque has lower
+monocoque works differently. There is no background IO thread. A socket does its
+I/O on the single-threaded runtime that owns it, whichever backend that is, and
+the write is issued from the same thread that called `send()`: an io_uring
+submission on compio, a `write` on tokio and smol. This is one of the reasons monocoque has lower
 latency for request-reply patterns: there is no cross-thread handoff between your
 code and the IO work, and the async runtime can do something else while the write
 completes.
@@ -600,7 +617,10 @@ let opts = SocketOptions::default().with_read_buffer_size(65_536);
 Reach for a read buffer below the 32 KB default only to cut latency, never to
 "tune" throughput.
 
-**Rule of thumb:** set read buffer >= your 99th-percentile message size.
+**Rule of thumb:** when your 99th-percentile message is under 64 KB, set the
+read buffer at or above its size so that such a message arrives in one read. A
+larger message takes several reads whatever the setting, since 64 KB is the
+most one read returns; use the maximum for those.
 
 ---
 
@@ -772,11 +792,30 @@ let opts = SocketOptions::default()
     .with_heartbeat_timeout(Duration::from_secs(5));
 ```
 
+A PING goes out when nothing has been received from a peer for
+`heartbeat_ivl`, and the connection is closed when the peer then stays silent
+for `heartbeat_timeout` more (the interval again when no timeout is set).
+Heartbeats are written at once on a coalescing socket too.
+
+By default a PING carries no TTL, as in libzmq, so the peer applies only its
+own timeouts. `with_heartbeat_ttl` adds one: the peer then closes the
+connection when it hears nothing from this socket for that long. With a TTL
+set, a PING is sent every `heartbeat_ivl` whether or not the connection is
+idle, because the peer counts from the last PING. Set the TTL comfortably
+above the interval (two or three times it); at or below the interval the
+peer's timer can run out between two PINGs.
+
+```rust
+let opts = SocketOptions::default()
+    .with_heartbeat_ivl(Duration::from_secs(5))
+    .with_heartbeat_ttl(Duration::from_secs(15));
+```
+
 ---
 
 ## TCP keepalive
 
-TCP_NODELAY is on by default. For long-lived connections crossing NAT or
+TCP_NODELAY is always on; there is no option to turn it off. For long-lived connections crossing NAT or
 firewalls, enable OS-level keepalive:
 
 ```rust
@@ -796,7 +835,8 @@ let opts = SocketOptions::default()
 - Use `with_write_coalescing(true)` + `flush()` for small-message throughput
 - Large frames use vectored writes automatically (>= 16 KiB body);
   tune `vectored_write_threshold` for your hardware
-- Size the read buffer to match your 99th-percentile message size
+- Size the read buffer to your 99th-percentile message size, up to the 64 KB
+  maximum
 - Use IPC instead of TCP loopback for co-located sockets (about 4x the throughput)
 - Run `dhat` or `heaptrack` to catch `Bytes::copy_from_slice` in hot paths
 - Verify io_uring is active: `/proc/$(pidof yourapp)/fdinfo` (look for `uring`)

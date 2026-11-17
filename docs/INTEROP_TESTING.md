@@ -5,15 +5,17 @@ you watch an exchange by hand.
 
 ## Automated suites
 
-**Rust, against the system libzmq** (`monocoque/tests/interop_*.rs`, through the
-`zmq` crate): PAIR, PUB/SUB, PUSH/PULL, REQ/REP, ROUTER, STREAM, PLAIN and
-CURVE. The CURVE cases skip when the system libzmq was built without CURVE.
+**Rust, against libzmq 4.3.4** (`monocoque/tests/interop_*.rs`, through the
+`zmq` crate, which builds that libzmq from source): PAIR, PUB/SUB, PUSH/PULL,
+REQ/REP, ROUTER, STREAM, PLAIN, CURVE and heartbeats. The CURVE cases skip
+when the libzmq they run against has no CURVE, which is the case for the one
+the `zmq` crate builds; the Python suite below covers CURVE.
 
 ```bash
 cargo test -p monocoque-rs --features zmq \
     --test interop_pair --test interop_pubsub --test interop_push_pull \
     --test interop_req_rep --test interop_router --test interop_stream \
-    --test interop_plain --test interop_curve
+    --test interop_plain --test interop_curve --test interop_heartbeat
 ```
 
 **Python, against the libzmq bundled with pyzmq** (`interop_tests/`, which has
@@ -30,21 +32,10 @@ CI runs both in `.github/workflows/interop.yml`.
 
 ## Prerequisites
 
-The Rust suite and the examples link the system libzmq:
-
-```bash
-# Ubuntu/Debian
-sudo apt install libzmq3-dev
-
-# macOS
-brew install zeromq
-
-# Arch Linux
-sudo pacman -S zeromq
-
-# Fedora/RHEL
-sudo dnf install zeromq-devel
-```
+The Rust suite and the examples use the `zmq` crate, which compiles libzmq
+4.3.4 from source and links it statically. That needs a C++ compiler; a libzmq
+installed on the system is not used. The Python suite needs `pyzmq`, which
+brings its own libzmq.
 
 ## Running the Examples
 
@@ -61,8 +52,7 @@ cargo run --example interop_router_libzmq --features zmq
 cargo run --example interop_pubsub_libzmq --features zmq
 ```
 
-Successful output ends with `interop test completed successfully!` (logged at
-INFO level). If the build fails with `error: failed to run custom build command for 'zmq-sys'`, libzmq is not installed or not on the linker path.
+A successful run prints `Interop run completed.` as its last line. If the build fails with `error: failed to run custom build command for 'zmq-sys'`, the libzmq sources did not compile; check that a C++ compiler is installed.
 
 ## PLAIN Authentication Interop
 
@@ -99,19 +89,24 @@ print(binascii.hexlify(z85.decode(public)))   # hex for Monocoque
 `curve_demo` shows the Monocoque API on its own:
 
 ```bash
-cargo run --example curve_demo --features zmq -- keygen            # print a key pair
-cargo run --example curve_demo --features zmq -- server <secret_hex>
-cargo run --example curve_demo --features zmq -- client <public_hex>
-cargo run --example curve_demo --features zmq -- demo              # both in one process
+cargo run --example curve_demo --features zmq -- demo     # both ends in one process
+cargo run --example curve_demo --features zmq -- keygen   # print a key pair; run it once for each side
+cargo run --example curve_demo --features zmq -- server <server_secret_hex> <client_public_hex>
+cargo run --example curve_demo --features zmq -- client <server_public_hex> <client_secret_hex>
 ```
+
+The server takes the client's public key because it runs a ZAP handler that
+admits that key only.
 
 ## Troubleshooting
 
-**A CURVE test skips.** The Rust CURVE tests need a system libzmq built with
-libsodium; the pyzmq suite covers CURVE either way.
+**A CURVE test skips.** The Rust CURVE tests need a libzmq built with
+libsodium, and the one the `zmq` crate builds has none. The pyzmq suite covers
+CURVE in both roles.
 
-**Connection refused.** The examples use fixed loopback ports; check that
-nothing else holds them.
+**Connection refused, or address in use.** The `server` and `client` modes of
+`curve_demo` use the fixed port 5556 on loopback; check that nothing else
+holds it.
 
 **Debugging a handshake.** Set `RUST_LOG=monocoque_zmtp=debug` on the Monocoque
 side to log each handshake step. The library installs no tracing subscriber, so
