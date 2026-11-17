@@ -218,6 +218,9 @@ impl<H: ZapHandler> ZapServer<H> {
     ///
     /// # Example
     ///
+    /// An application imports these from `monocoque::zmq::security`; the
+    /// `monocoque_zmtp` paths below are the ones this crate's own tests use.
+    ///
     /// ```rust,no_run
     /// use monocoque_zmtp::security::zap_handler::{ZapServer, DefaultZapHandler};
     /// use monocoque_zmtp::security::plain::StaticPlainHandler;
@@ -286,6 +289,9 @@ impl<H: ZapHandler> ZapServer<H> {
 ///
 /// # Example
 ///
+/// An application imports these from `monocoque::zmq::security`; the
+/// `monocoque_zmtp` paths below are the ones this crate's own tests use.
+///
 /// ```rust,no_run
 /// use monocoque_zmtp::security::zap_handler::{spawn_zap_server, DefaultZapHandler};
 /// use monocoque_zmtp::security::plain::StaticPlainHandler;
@@ -316,6 +322,9 @@ pub fn spawn_zap_server<H: ZapHandler + 'static>(handler: Arc<H>) -> io::Result<
 /// * `accept_curve` - Whether to accept CURVE connections
 ///
 /// # Example
+///
+/// An application imports these from `monocoque::zmq::security`; the
+/// `monocoque_zmtp` paths below are the ones this crate's own tests use.
 ///
 /// ```rust,no_run
 /// use monocoque_zmtp::security::zap_handler::start_default_zap_server;

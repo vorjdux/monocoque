@@ -93,7 +93,7 @@ pub mod security {
         };
     }
 
-    /// PLAIN credentials and the handler that checks them (RFC 23).
+    /// PLAIN credentials and the handler that checks them (RFC 24).
     pub mod plain {
         pub use monocoque_zmtp::security::plain::{
             PlainAuthHandler, PlainCredentials, StaticPlainHandler,

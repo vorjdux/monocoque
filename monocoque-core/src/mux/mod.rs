@@ -412,6 +412,12 @@ struct PeerEntry<C> {
 
 struct Connector {
     endpoint: Endpoint,
+    /// The endpoint as it was written in `connect`. A host name resolves to
+    /// an address when parsed, and may resolve to another one later, so
+    /// `disconnect` matches the text before it matches the address.
+    given: String,
+    /// The handshake in progress on a connection this connector made.
+    handshake: Option<ChildId>,
     child: ChildId,
     down: Rc<Signal>,
     peer: Option<PeerId>,
@@ -469,6 +475,10 @@ pub struct SocketCore<P: Protocol, H: Hooks> {
     peers: Vec<Option<PeerEntry<P::Codec>>>,
     generations: Vec<u32>,
     free_peers: Vec<u32>,
+    /// The metadata of the peer freed last. A departed peer is freed as its
+    /// last message is handed over, and that message still has to carry the
+    /// connection it came from.
+    departed: Option<(PeerId, Arc<crate::msg::Metadata>)>,
     live_peers: usize,
     fair: VecDeque<PeerId>,
     inbox: VecDeque<(PeerId, Msg)>,
@@ -509,6 +519,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             peers: Vec::new(),
             generations: Vec::new(),
             free_peers: Vec::new(),
+            departed: None,
             live_peers: 0,
             fair: VecDeque::new(),
             inbox: VecDeque::new(),
@@ -609,6 +620,19 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
     /// What `id` announced in its handshake, while it is known.
     pub fn peer_info(&self, id: PeerId) -> Option<&PeerInfo> {
         self.entry(id).map(|e| &e.info)
+    }
+
+    /// The connection metadata of `id`: of a known peer, or of the one freed
+    /// last, whose final message may only now be reaching the application.
+    pub fn peer_metadata(&self, id: PeerId) -> Option<Arc<crate::msg::Metadata>> {
+        match self.entry(id) {
+            Some(entry) => Some(Arc::clone(&entry.info.metadata)),
+            None => self
+                .departed
+                .as_ref()
+                .filter(|(gone, _)| *gone == id)
+                .map(|(_, metadata)| Arc::clone(metadata)),
+        }
     }
 
     /// `true` while `id` is connected.
@@ -725,7 +749,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         };
         let stream = Rc::new(stream);
         let done = Rc::clone(&self.handshaken);
-        self.children.spawn(async move {
+        let child = self.children.spawn(async move {
             if !delay.is_zero() {
                 crate::rt::sleep(delay).await;
             }
@@ -736,9 +760,19 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
                 result,
             });
         });
+        if let Origin::Connector(i) = origin
+            && let Some(Some(c)) = self.connectors.get_mut(i)
+        {
+            c.handshake = Some(child);
+        }
     }
 
     fn on_handshaken(&mut self, h: Handshaken<P>) {
+        if let Origin::Connector(i) = h.origin
+            && let Some(Some(c)) = self.connectors.get_mut(i)
+        {
+            c.handshake = None;
+        }
         let endpoint = match h.origin {
             Origin::Connector(i) => self
                 .connectors
@@ -891,6 +925,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             for msg in self.greeting.iter().chain(&self.hooks.greeting()) {
                 let _ = st.enqueue(msg);
             }
+            st.flush();
         }
         self.peers[id.index as usize] = Some(PeerEntry {
             state,
@@ -1050,7 +1085,14 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
 
     fn free_peer(&mut self, id: PeerId) {
         let i = id.index as usize;
-        if self.peers[i].take().is_some() {
+        if let Some(entry) = self.peers[i].take() {
+            // Its turn in the fair queue goes with it. The general receive
+            // has taken the turn already; a socket that reads one chosen
+            // peer at a time (REQ) never takes it.
+            if entry.in_fair {
+                self.fair.retain(|p| *p != id);
+            }
+            self.departed = Some((id, Arc::clone(&entry.info.metadata)));
             self.free_peers.push(id.index);
             self.hooks.on_peer_freed(id);
         }
@@ -1084,7 +1126,11 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             return;
         };
         let timeout = self.options.heartbeat_timeout.unwrap_or(ivl);
-        let ttl = self.options.heartbeat_ttl.unwrap_or(ivl);
+        // No TTL unless one was asked for, as in libzmq. A peer that is given
+        // one closes the connection when it then hears nothing for that long,
+        // so advertising the interval itself, as this did, made an idle
+        // libzmq peer drop the connection again and again.
+        let ttl = self.options.heartbeat_ttl.unwrap_or(Duration::ZERO);
         let now = Instant::now();
         let mut dead = Vec::new();
         for entry in self.peers.iter().flatten() {
@@ -1112,6 +1158,14 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             };
             if st.ping_outstanding && idle >= ivl + limit {
                 dead.push(st.id);
+            } else if !ttl.is_zero() {
+                // The peer holds us to the TTL from our last PING, and its
+                // PONG is no word from us. So with a TTL every tick sends
+                // one, whether or not the peer has been heard from.
+                if idle >= ivl {
+                    st.ping_outstanding = true;
+                }
+                st.enqueue_command(|codec, out| codec.encode_ping(ttl, out));
             } else if idle >= ivl && !st.ping_outstanding {
                 st.ping_outstanding = true;
                 st.enqueue_command(|codec, out| codec.encode_ping(ttl, out));
@@ -1194,6 +1248,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
     /// Returns once dialing has started; the connection completes in the
     /// background. For inproc the binder must already exist.
     pub fn connect(this: &Shared<P, H>, endpoint: &str) -> Result<()> {
+        let given = endpoint;
         let endpoint = Endpoint::parse(endpoint)?;
         Self::ensure_driver(this);
         let mut core = this.borrow_mut();
@@ -1232,6 +1287,8 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         let routing_id = core.connect_routing_id.take();
         core.connectors.push(Some(Connector {
             endpoint,
+            given: given.to_string(),
+            handshake: None,
             child,
             down,
             peer: None,
@@ -1245,18 +1302,31 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
 
     /// Stop dialing `endpoint` and drop its connection.
     pub fn disconnect(&mut self, endpoint: &str) -> Result<()> {
-        let endpoint = Endpoint::parse(endpoint)?;
-        let Some(i) = self
+        // By the text given to `connect` first, which needs no lookup and
+        // cannot be thrown off by a name that now resolves elsewhere.
+        let mut found = self
             .connectors
             .iter()
-            .position(|c| c.as_ref().is_some_and(|c| c.endpoint == endpoint))
-        else {
+            .position(|c| c.as_ref().is_some_and(|c| c.given == endpoint));
+        if found.is_none() {
+            let parsed = Endpoint::parse(endpoint)?;
+            found = self
+                .connectors
+                .iter()
+                .position(|c| c.as_ref().is_some_and(|c| c.endpoint == parsed));
+        }
+        let Some(i) = found else {
             return Err(MonocoqueError::InvalidEndpoint(format!(
                 "{endpoint} is not connected"
             )));
         };
         let conn = self.connectors[i].take().expect("position found it");
         self.children.cancel(conn.child);
+        // A handshake still running would hold the connection open until it
+        // finished or timed out.
+        if let Some(handshake) = conn.handshake {
+            self.children.cancel(handshake);
+        }
         if let Some(id) = conn.peer {
             self.on_closed(id, &CloseReason::Local);
         }
@@ -1913,7 +1983,11 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             if let Some(entry) = self.entry(id)
                 && !entry.closed
             {
-                let _ = entry.state.borrow_mut().enqueue(msg);
+                let mut st = entry.state.borrow_mut();
+                let _ = st.enqueue(msg);
+                // A subscription or another control message: the peer acts
+                // on it, so it goes out now, coalescing or not.
+                st.flush();
             }
         }
         self.progress();

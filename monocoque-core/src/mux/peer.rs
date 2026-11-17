@@ -207,6 +207,9 @@ impl<C: Codec> PeerState<C> {
                 if let Some(w) = writer_waker.take() {
                     w.wake();
                 }
+                // Whatever coalescing still holds is written before the
+                // close, not dropped by it.
+                self.flush();
             }
             _ => self.close(CloseReason::Local),
         }
@@ -494,21 +497,20 @@ impl<C: Codec> PeerState<C> {
 
     /// Queue a protocol command (a heartbeat PING) outside the message count.
     pub(crate) fn enqueue_command(&mut self, encode: impl FnOnce(&mut C, &mut OutQueue)) {
-        if let Outbound::Wire {
-            codec,
-            out,
-            writer_waker,
-            ..
-        } = &mut self.outbound
-        {
+        if let Outbound::Wire { codec, out, .. } = &mut self.outbound {
             encode(codec, out);
-            if let Some(w) = writer_waker.take() {
-                w.wake();
-            }
         }
+        self.flush();
     }
 
     /// Release writes held for coalescing.
+    ///
+    /// Coalescing is for the application's messages. What the protocol
+    /// itself has to say cannot wait for a batch to fill: a PING or a PONG
+    /// held back times the connection out, a subscription held back means
+    /// nothing is delivered, and a close held back drops what was queued
+    /// before it. Each of those calls this, which also sends along whatever
+    /// messages were waiting.
     pub(crate) fn flush(&mut self) {
         if let Outbound::Wire {
             out,
@@ -516,7 +518,7 @@ impl<C: Codec> PeerState<C> {
             flushing,
             ..
         } = &mut self.outbound
-            && out.pending_msgs() > 0
+            && !out.is_empty()
         {
             *flushing = true;
             if let Some(w) = writer_waker.take() {
@@ -806,13 +808,7 @@ pub async fn reader_loop<C: Codec>(
         st.recv_seen = true;
         st.ping_outstanding = false;
         let st = &mut *st;
-        let Outbound::Wire {
-            codec,
-            out,
-            writer_waker,
-            ..
-        } = &mut st.outbound
-        else {
+        let Outbound::Wire { codec, out, .. } = &mut st.outbound else {
             return;
         };
         let replies_before = out.queued_bytes();
@@ -829,10 +825,9 @@ pub async fn reader_loop<C: Codec>(
             },
             out,
         );
-        if out.queued_bytes() != replies_before
-            && let Some(w) = writer_waker.take()
-        {
-            w.wake();
+        if out.queued_bytes() != replies_before {
+            // A PONG: written now, not when a coalesced batch fills.
+            st.flush();
         }
         if delivered {
             st.signal_readable();

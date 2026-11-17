@@ -58,3 +58,62 @@ fn a_router_message_that_is_only_an_identity_does_not_hold_up_close() {
         );
     });
 }
+
+/// `disconnect` while the handshake is still running closes that connection
+/// at once. It used to stay open until the handshake finished or timed out,
+/// 30 seconds by default.
+#[test]
+fn disconnect_during_a_handshake_closes_the_connection() {
+    use std::io::Read;
+
+    // A peer that accepts and then says nothing: the handshake cannot end.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("tcp://{}", listener.local_addr().unwrap());
+    let silent_peer = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let began = Instant::now();
+        let mut sink = Vec::new();
+        // Returns when the other side closes, or fails when the read times out.
+        stream.read_to_end(&mut sink).map(|_| began.elapsed())
+    });
+
+    LocalRuntime::new().unwrap().block_on(async {
+        let mut client = DealerSocket::with_options(opts());
+        client.connect(&endpoint).await.unwrap();
+        // Long enough for the dial to land and the greeting to go out.
+        monocoque::rt::sleep(Duration::from_millis(200)).await;
+        client.disconnect(&endpoint).unwrap();
+        assert!(client.disconnect(&endpoint).is_err(), "it is gone");
+        // Keep the socket alive: only the disconnect may close the stream.
+        monocoque::rt::sleep(Duration::from_secs(1)).await;
+        drop(client);
+    });
+
+    let closed_after = silent_peer.join().unwrap().expect("the stream was closed");
+    assert!(
+        closed_after < Duration::from_millis(900),
+        "the connection stayed open for {closed_after:?} after the disconnect"
+    );
+}
+
+/// An endpoint written with a host name is disconnected by the same text.
+#[test]
+fn disconnect_takes_the_endpoint_as_it_was_given() {
+    LocalRuntime::new().unwrap().block_on(async {
+        let mut server = DealerSocket::with_options(opts());
+        let bound = server.bind("tcp://127.0.0.1:0").await.unwrap();
+        let port = bound.rsplit(':').next().unwrap();
+        let by_name = format!("tcp://localhost:{port}");
+
+        let mut client = DealerSocket::with_options(opts());
+        client.connect(&by_name).await.unwrap();
+        while client.peer_count() == 0 {
+            monocoque::rt::sleep(Duration::from_millis(5)).await;
+        }
+        client.disconnect(&by_name).unwrap();
+        assert_eq!(client.peer_count(), 0);
+    });
+}

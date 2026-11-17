@@ -28,9 +28,11 @@ fn keypair(seed: u8) -> (/* public */ [u8; 32], /* secret */ [u8; 32]) {
     (public, sec)
 }
 
-/// Some distro builds of libzmq are compiled without libsodium/CURVE. There is
-/// nothing to interop against then, so skip rather than fail. CI installs a
-/// CURVE-enabled libzmq, where these run for real.
+/// A libzmq built without libsodium has no CURVE. There is nothing to interop
+/// against then, so skip rather than fail. The libzmq these tests link is the
+/// one the `zmq` crate builds from source, which has no libsodium, so they
+/// skip here; CURVE against libzmq is exercised by the pyzmq suite in
+/// `interop_tests/`.
 fn curve_unavailable() -> bool {
     if zmq::has("curve") == Some(true) {
         return false;

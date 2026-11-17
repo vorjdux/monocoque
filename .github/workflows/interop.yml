@@ -39,6 +39,7 @@ jobs:
             --test interop_req_rep \
             --test interop_plain \
             --test interop_stream \
+            --test interop_heartbeat \
             --test interop_curve
 
   interop-python:

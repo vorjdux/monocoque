@@ -68,6 +68,7 @@ fn a_peer_cannot_announce_its_own_user_id_or_address() {
             SocketOptions::default()
                 .with_metadata("User-Id", "admin")
                 .with_metadata("peer-address", "10.9.9.9")
+                .with_metadata("Routing-Id", "forged")
                 .with_metadata("X-Kept", "yes"),
         );
         push.connect(&ep).await.unwrap();
@@ -75,9 +76,38 @@ fn a_peer_cannot_announce_its_own_user_id_or_address() {
 
         let msg = pull.recv().await.unwrap();
         assert_eq!(msg.gets("User-Id"), None, "no ZAP, so no user id");
+        assert_eq!(msg.gets("Routing-Id"), None, "it announced no identity");
         assert_eq!(msg.gets("Peer-Address"), Some("127.0.0.1"));
         assert_eq!(msg.gets("Socket-Type"), Some("PUSH"));
         assert_eq!(msg.gets("X-Kept"), Some("yes"));
+    });
+}
+
+/// A peer that connects, sends one message and leaves is freed as that
+/// message is received. The message still carries the connection's metadata;
+/// it used to arrive with none, so a server deciding by `User-Id` saw such a
+/// client as anonymous.
+#[test]
+fn the_last_message_of_a_departed_peer_keeps_its_metadata() {
+    LocalRuntime::new().unwrap().block_on(async {
+        let mut pull = PullSocket::with_options(opts());
+        let ep = pull.bind("tcp://127.0.0.1:0").await.unwrap();
+        let mut push =
+            PushSocket::with_options(SocketOptions::default().with_metadata("X-Service", "once"));
+        push.connect(&ep).await.unwrap();
+        push.send("only").await.unwrap();
+        push.close().await.unwrap();
+
+        // Let the departure be noticed before the message is taken.
+        while pull.peer_count() != 0 || !pull.has_message() {
+            monocoque::rt::sleep(Duration::from_millis(5)).await;
+        }
+        let msg = pull.recv().await.unwrap();
+        assert_eq!(msg, [b"only"]);
+        assert_eq!(msg.gets("Socket-Type"), Some("PUSH"));
+        assert_eq!(msg.gets("Peer-Address"), Some("127.0.0.1"));
+        assert_eq!(msg.gets("X-Service"), Some("once"));
+        assert!(pull.last_metadata().is_some());
     });
 }
 

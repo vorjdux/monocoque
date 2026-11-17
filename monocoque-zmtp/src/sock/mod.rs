@@ -303,11 +303,7 @@ impl<K: Kind> Socket<K> {
     #[cold]
     fn refresh_meta(&mut self, peer: PeerId) {
         self.slot_peer = Some(peer);
-        self.slot_meta = self
-            .core
-            .borrow()
-            .peer_info(peer)
-            .map(|i| Arc::clone(&i.metadata));
+        self.slot_meta = self.core.borrow().peer_metadata(peer);
     }
 
     /// The receive slot, filled by `next_into_slot`.

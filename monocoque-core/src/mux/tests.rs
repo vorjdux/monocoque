@@ -362,6 +362,31 @@ fn a_departed_peer_read_one_at_a_time_is_freed() {
         client.borrow_mut().drop_departed();
         assert_eq!(allocated(&client), 0);
         assert!(client.borrow().fair.is_empty());
+
+        // Read first, gone afterwards: the peer has nothing left when it
+        // closes, so it is freed there, and its fair turn has to go with it.
+        let (server, client, peer) = connected_pair().await;
+        send(&server, Msg::from("reply")).await;
+        let mut slot = Msg::new();
+        assert!(
+            op(&client, |core, cx| core
+                .poll_recv_from_into(cx, peer, &mut slot))
+            .await
+        );
+        server.borrow_mut().close();
+        drop(server);
+        op(&client, |core, cx| {
+            core.progress();
+            if core.peer_count() == 0 {
+                Poll::Ready(())
+            } else {
+                core.park(cx);
+                Poll::Pending
+            }
+        })
+        .await;
+        assert_eq!(allocated(&client), 0);
+        assert!(client.borrow().fair.is_empty(), "a stale turn was left");
     });
 }
 

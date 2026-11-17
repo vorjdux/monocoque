@@ -1,6 +1,11 @@
 //! Endpoint abstraction for transport-agnostic socket addressing.
 //!
 //! Provides unified addressing for TCP and IPC transports with parsing support.
+//!
+//! Applications import these types from the `monocoque` crate, as
+//! `monocoque::zmq::Endpoint` and `monocoque::zmq::EndpointError`. The
+//! examples here name `monocoque_core` only because they are tested inside
+//! this crate.
 
 use std::fmt;
 use std::net::SocketAddr;
@@ -37,6 +42,9 @@ impl Endpoint {
     /// - `inproc://name`
     ///
     /// # Examples
+    ///
+    /// An application imports the type as `monocoque::zmq::Endpoint`; the
+    /// path below is the one this crate's own tests use.
     ///
     /// ```
     /// use monocoque_core::endpoint::Endpoint;

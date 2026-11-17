@@ -2,6 +2,10 @@
 //!
 //! This module provides configuration options for `ZeroMQ` sockets, similar to
 //! libzmq's socket options (`zmq_setsockopt/zmq_getsockopt`).
+//!
+//! Applications import [`SocketOptions`] from the `monocoque` crate, as
+//! `monocoque::zmq::SocketOptions` or `monocoque::SocketOptions`. The examples
+//! here name `monocoque_core` only because they are tested inside this crate.
 
 use std::{fmt, time::Duration};
 
@@ -29,6 +33,10 @@ const fn clamp_read_buffer_size(size: usize) -> usize {
 /// in one place, following the `MongoDB` Rust driver pattern.
 ///
 /// # Examples
+///
+/// The examples on this page import the type from `monocoque_core`, the crate
+/// they are tested in. An application writes
+/// `use monocoque::zmq::SocketOptions;` instead.
 ///
 /// ```
 /// use monocoque_core::options::SocketOptions;
@@ -112,16 +120,23 @@ pub struct SocketOptions {
 
     /// Reconnect interval (`ZMQ_RECONNECT_IVL`)
     ///
-    /// Initial reconnection delay after connection loss.
+    /// The delay before a connected endpoint is dialed again after its
+    /// connection drops or a dial fails.
     /// - Default: 100ms
-    /// - Use with `reconnect_ivl_max` for exponential backoff
+    /// - Every wait is jittered: the actual delay is drawn uniformly from
+    ///   half the interval to the whole of it, so the default waits 50 to
+    ///   100 ms
+    /// - The interval is constant unless `reconnect_ivl_max` is set above it
     pub reconnect_ivl: Duration,
 
     /// Maximum reconnect interval (`ZMQ_RECONNECT_IVL_MAX`)
     ///
     /// Maximum reconnection delay for exponential backoff.
-    /// - Default: 0 (no maximum, use `reconnect_ivl` always)
-    /// - When > 0: Doubles `reconnect_ivl` up to this value
+    /// - Default: 0 (no backoff; every retry waits `reconnect_ivl`)
+    /// - Above `reconnect_ivl`: the interval doubles after each failed
+    ///   attempt until it reaches this value, and returns to `reconnect_ivl`
+    ///   once a peer comes up. Each wait is jittered as described there.
+    /// - At or below `reconnect_ivl`: no backoff, the same as 0
     pub reconnect_ivl_max: Duration,
 
     /// Connection timeout (`ZMQ_CONNECT_TIMEOUT`)
@@ -165,16 +180,24 @@ pub struct SocketOptions {
 
     /// Socket identity / routing ID (`ZMQ_ROUTING_ID` / `ZMQ_IDENTITY`)
     ///
-    /// Identity for ROUTER addressing. If None, a random UUID is generated.
-    /// - Default: None (auto-generate)
+    /// The identity this socket announces in its handshake, which a ROUTER
+    /// peer uses as the address of this connection.
+    /// - Default: None. The socket announces no identity, and a ROUTER it
+    ///   connects to gives the connection a generated one (a zero byte and a
+    ///   counter), which changes with every reconnect.
     /// - Custom: Set for stable identity across reconnections
     pub routing_id: Option<bytes::Bytes>,
 
     /// Connect routing ID (`ZMQ_CONNECT_ROUTING_ID`)
     ///
     /// The routing id a ROUTER gives the peer of its first `connect`, in place
-    /// of the identity that peer announces. It is used by that connection
-    /// only; later connects route by the announced identity as usual.
+    /// of the identity that peer announces. It is used by that endpoint
+    /// only, across its reconnects; later connects route by the announced
+    /// identity as usual.
+    ///
+    /// The value is read once, when the socket is created. Changing it
+    /// afterwards with `set_options` or `update_options` has no effect, so
+    /// only one endpoint per socket can be named this way.
     /// - Default: None
     pub connect_routing_id: Option<bytes::Bytes>,
 
@@ -195,8 +218,18 @@ pub struct SocketOptions {
 
     /// ROUTER handover mode (`ZMQ_ROUTER_HANDOVER`)
     ///
-    /// - `false` (default): Disconnect old peer when new peer with same identity connects
-    /// - `true`: Hand over pending messages to new peer with same identity
+    /// What a ROUTER does when a peer announces an identity that a connected
+    /// peer already holds.
+    /// - `false` (default): the new connection is refused and closed; the
+    ///   peer that holds the identity keeps it
+    /// - `true`: the new peer takes the identity, so sends to it reach the
+    ///   new connection. The old connection is not closed. Messages it sends
+    ///   are still received under that identity, but nothing can be sent to
+    ///   it any more, and messages already queued for it stay with it; they
+    ///   are not moved to the new peer.
+    ///
+    /// Read when the socket is created; changing it on a live socket has no
+    /// effect.
     pub router_handover: bool,
 
     /// XPUB verbose mode (`ZMQ_XPUB_VERBOSE`)
@@ -222,8 +255,14 @@ pub struct SocketOptions {
 
     /// XSUB verbose unsubscribe (`ZMQ_XSUB_VERBOSE_UNSUBSCRIBE`)
     ///
-    /// - `false` (default): Don't send explicit unsubscribe messages
-    /// - `true`: Send unsubscribe messages upstream
+    /// Despite the `xsub` in its name, this is read by an XPUB socket, where
+    /// it decides which unsubscribe messages `recv` reports. It does nothing
+    /// on an XSUB socket, and nothing under `xpub_manual`, which reports
+    /// every message.
+    /// - `false` (default): an unsubscribe is reported only when it removes
+    ///   the last subscription any peer held for that prefix
+    /// - `true`: every unsubscribe from a peer that was subscribed to the
+    ///   prefix is reported, even while other peers still hold it
     pub xsub_verbose_unsubs: bool,
 
     /// Conflate messages (`ZMQ_CONFLATE`)
@@ -384,10 +423,16 @@ pub struct SocketOptions {
     /// Note: SUB sockets MUST subscribe to at least one topic to receive messages.
     pub subscriptions: Vec<bytes::Bytes>,
 
-    /// Maximum reconnection attempts (`ZMQ_RECONNECT_STOP`)
+    /// Maximum reconnection attempts
     ///
-    /// How many dials in a row may fail before a connected endpoint stops
-    /// being dialed. A connection that succeeds resets the count.
+    /// There is no libzmq option for this. (`ZMQ_RECONNECT_STOP` is a
+    /// different thing: it stops reconnecting on chosen error conditions,
+    /// not after a number of attempts.)
+    ///
+    /// How many attempts in a row may fail before a connected endpoint stops
+    /// being dialed. A refused or timed-out dial, a connection whose options
+    /// (TOS, buffer sizes, keepalive) cannot be applied and a failed
+    /// handshake each count as one. A peer that comes up resets the count.
     /// - `None`: Retry indefinitely (default, matches libzmq behaviour)
     /// - `Some(n)`: Stop after `n` consecutive failures; each failure is
     ///   reported as `SocketEvent::ConnectFailed`
@@ -395,17 +440,24 @@ pub struct SocketOptions {
 
     /// ZMTP heartbeat interval (`ZMQ_HEARTBEAT_IVL` = 75)
     ///
-    /// How often to send PING heartbeat commands on an otherwise idle connection.
+    /// How often to send PING heartbeat commands.
     /// - `None`: Disabled (default)
-    /// - `Some(dur)`: Send PING every `dur` of inactivity
+    /// - `Some(dur)`: Send a PING when nothing has been received from the
+    ///   peer for `dur`. With [`heartbeat_ttl`](Self::heartbeat_ttl) set, a
+    ///   PING is sent every `dur` whether or not the connection is idle.
     pub heartbeat_ivl: Option<Duration>,
 
     /// ZMTP heartbeat TTL (`ZMQ_HEARTBEAT_TTL` = 76)
     ///
-    /// Time-to-live for the remote peer's heartbeat (sent in PING command).
-    /// The remote will disconnect if it doesn't receive a heartbeat within this interval.
-    /// - `None`: Use `heartbeat_ivl` (default)
-    /// - `Some(dur)`: Override TTL sent to peer
+    /// A time-to-live sent with each PING. The peer closes the connection
+    /// when it then hears nothing from this socket for that long, which
+    /// frees it from a peer that vanished without closing.
+    /// - `None`: no TTL (default, as in libzmq); the peer applies its own
+    ///   timeouts only
+    /// - `Some(dur)`: the TTL, in steps of 100 ms. A PING is then sent every
+    ///   `heartbeat_ivl` whether or not the connection is idle, so set this
+    ///   comfortably above `heartbeat_ivl`: at or below it the peer's timer
+    ///   can run out between two PINGs.
     pub heartbeat_ttl: Option<Duration>,
 
     /// ZMTP heartbeat timeout (`ZMQ_HEARTBEAT_TIMEOUT` = 77)
@@ -440,6 +492,11 @@ pub struct SocketOptions {
     ///
     /// Always call `flush()` after the last `send()` in a burst to ensure
     /// all buffered data reaches the peer.
+    ///
+    /// Only the application's messages are held. Heartbeat PINGs and PONGs,
+    /// subscriptions and other control messages, the messages a new peer is
+    /// greeted with, and a STREAM close are written at once, and take any
+    /// held messages with them.
     pub write_coalescing: bool,
 
     /// Byte threshold at which the coalesce buffer is flushed automatically.
@@ -655,7 +712,8 @@ impl SocketOptions {
         self
     }
 
-    /// Set maximum reconnection interval for exponential backoff.
+    /// Set maximum reconnection interval for exponential backoff. Backoff
+    /// applies only when this is above `reconnect_ivl`.
     pub const fn with_reconnect_ivl_max(mut self, max: Duration) -> Self {
         self.reconnect_ivl_max = max;
         self
@@ -782,8 +840,8 @@ impl SocketOptions {
     /// // Small buffers for low latency
     /// let opts = SocketOptions::new().with_read_buffer_size(4096);
     ///
-    /// // Large buffers for throughput
-    /// let opts = SocketOptions::new().with_read_buffer_size(16384);
+    /// // The largest read batch, for bulk transfers (the default is 32768)
+    /// let opts = SocketOptions::new().with_read_buffer_size(65536);
     /// ```
     pub const fn with_read_buffer_size(mut self, size: usize) -> Self {
         self.read_buffer_size = clamp_read_buffer_size(size);
@@ -818,10 +876,15 @@ impl SocketOptions {
         self
     }
 
-    /// Set connect routing ID for the next connection.
+    /// Set the routing id a ROUTER gives the peer of its first `connect`
+    /// (`ZMQ_CONNECT_ROUTING_ID`).
     ///
-    /// This option is consumed after each connect operation and must be set
-    /// again for subsequent connections.
+    /// The value is read once, when the socket is created from these options,
+    /// and the first `connect` takes it; that endpoint keeps it across
+    /// reconnects. Later connects route by the identity the peer announces.
+    /// Setting it again on a live socket with `set_options` or
+    /// `update_options` has no effect. See
+    /// [`connect_routing_id`](Self::connect_routing_id).
     ///
     /// # Examples
     ///
@@ -843,7 +906,8 @@ impl SocketOptions {
         self
     }
 
-    /// Enable ROUTER handover mode.
+    /// Let a new peer take an identity a connected peer already holds,
+    /// instead of being refused. See [`router_handover`](Self::router_handover).
     pub const fn with_router_handover(mut self, enabled: bool) -> Self {
         self.router_handover = enabled;
         self
@@ -874,7 +938,9 @@ impl SocketOptions {
         self
     }
 
-    /// Enable XSUB verbose unsubscribe.
+    /// Make an XPUB socket report every unsubscribe, not only the one that
+    /// removes a prefix's last subscriber. See
+    /// [`xsub_verbose_unsubs`](Self::xsub_verbose_unsubs).
     pub const fn with_xsub_verbose_unsubs(mut self, enabled: bool) -> Self {
         self.xsub_verbose_unsubs = enabled;
         self
@@ -933,7 +999,9 @@ impl SocketOptions {
         self
     }
 
-    /// Enable REQ relaxed mode (allow multiple outstanding requests).
+    /// Enable REQ relaxed mode: a send while a reply is pending gives up the
+    /// pending request and sends the new one. See
+    /// [`req_relaxed`](Self::req_relaxed).
     pub const fn with_req_relaxed(mut self, enabled: bool) -> Self {
         self.req_relaxed = enabled;
         self
@@ -1024,8 +1092,15 @@ impl SocketOptions {
     /// ```
     /// use monocoque_core::options::SocketOptions;
     ///
-    /// let public = [0u8; 32];  // Replace with actual key
-    /// let secret = [0u8; 32];  // Replace with actual key
+    /// // Placeholders that only show the call. These two are not a pair, so
+    /// // a handshake with them fails. A real public key is derived from the
+    /// // secret:
+    /// //     let pair = monocoque::zmq::security::CurveKeyPair::generate();
+    /// //     let (public, secret) = (*pair.public.as_bytes(), pair.secret.to_bytes());
+    /// // or, from a stored secret:
+    /// //     let public = *CurveSecretKey::from_bytes(secret).public_key().as_bytes();
+    /// let public = [0u8; 32];
+    /// let secret = [0u8; 32];
     /// let opts = SocketOptions::new().with_curve_keypair(public, secret);
     /// ```
     pub fn with_curve_keypair(mut self, publickey: [u8; 32], secretkey: [u8; 32]) -> Self {

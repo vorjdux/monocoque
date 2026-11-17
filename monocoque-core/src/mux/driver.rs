@@ -136,23 +136,25 @@ pub async fn connect_loop(
                     ))
                 })
         };
+        // A connection whose options cannot be applied (the TOS byte, the
+        // buffer sizes) is a failed attempt like a refused one: reported,
+        // counted and retried after the backoff.
+        let dialed = dialed.and_then(|stream| stream.configure(&options).map(|()| stream));
         match dialed {
             Ok(stream) => {
-                if stream.configure(&options).is_ok() {
-                    events.push(Event::Connected {
-                        connector: index,
-                        stream,
-                    });
-                    // The core fires this when the handshake fails or the
-                    // resulting peer goes away. Only a peer that came up
-                    // resets the backoff; a server that accepts and then
-                    // fails every handshake keeps backing off.
-                    if down.wait().await {
-                        backoff.reset();
-                        failures = 0;
-                    } else if gave_up(&options, &mut failures) {
-                        return;
-                    }
+                events.push(Event::Connected {
+                    connector: index,
+                    stream,
+                });
+                // The core fires this when the handshake fails or the
+                // resulting peer goes away. Only a peer that came up
+                // resets the backoff; a server that accepts and then
+                // fails every handshake keeps backing off.
+                if down.wait().await {
+                    backoff.reset();
+                    failures = 0;
+                } else if gave_up(&options, &mut failures) {
+                    return;
                 }
             }
             Err(e) => {
@@ -187,14 +189,17 @@ pub async fn accept_loop(
 ) {
     loop {
         match listener.accept().await {
-            Ok(stream) => {
-                if stream.configure(&options).is_ok() {
-                    events.push(Event::Accepted {
-                        listener: index,
-                        stream,
-                    });
+            Ok(stream) => match stream.configure(&options) {
+                Ok(()) => events.push(Event::Accepted {
+                    listener: index,
+                    stream,
+                }),
+                Err(e) => {
+                    tracing::warn!(
+                        "dropped an accepted connection: its options could not be set: {e}"
+                    );
                 }
-            }
+            },
             Err(e) => {
                 // Out of descriptors: back off instead of spinning on a
                 // listener that will keep failing until something closes.

@@ -675,11 +675,18 @@ impl Protocol for Zmtp {
         // shares it through the socket's receive slot.
         let mut metadata = Metadata::new();
         for (k, v) in result.properties {
-            // These four are set below from what this side knows: the
-            // socket's own address lookup and the ZAP handler's answer. A
+            // These are set below from what this side knows: the socket's
+            // own address lookup, the ZAP handler's answer and the identity
+            // the handshake took (`Routing-Id` is read as an alias of it). A
             // peer that announces one of them in its handshake must not be
             // able to make an application believe it.
-            const OURS: [&str; 4] = ["User-Id", "Peer-Address", "Socket-Type", "Identity"];
+            const OURS: [&str; 5] = [
+                "User-Id",
+                "Peer-Address",
+                "Socket-Type",
+                "Identity",
+                "Routing-Id",
+            ];
             if OURS.iter().any(|name| name.eq_ignore_ascii_case(&k)) {
                 continue;
             }
