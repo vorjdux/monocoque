@@ -677,6 +677,14 @@ with or ahead of tokio, and over TCP from 11.1 µs to 10.5 µs.
   cgroup quota), where it would only delay the peer it waits for.
 - After eight spins in a row that find nothing, the runtime sleeps straight
   away for the next 64 waits, so an idle socket does not keep a core busy.
+- On tokio and smol, a spin ends as soon as another socket on the same thread
+  comes to wait, and stays off for the next 1024 waits. A spin keeps its
+  thread busy, and a busy thread does not get round to its reactor, so two
+  sockets talking to each other on one thread each kept the other from being
+  told its bytes had arrived. A DEALER and a ROUTER echoing on one thread
+  took 611 µs per thousand 64 B messages on smol with the spin and 219 µs
+  with this rule (237 µs and 185 µs on tokio). Sockets on threads of their
+  own spin as before.
 - A spin that finds its message can still be the slower way. A spinning
   receiver keeps entering the kernel, and when it shares no L3 cache with its
   peer that slows the peer down. On an EPYC 7232P (four L3 groups of two

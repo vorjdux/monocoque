@@ -200,6 +200,12 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
 
 ### Performance
 
+- On tokio and smol, a receive stops spinning before it sleeps once another
+  socket on the same thread comes to wait. The spin kept the thread from its
+  reactor, so two sockets talking to each other on one thread were each kept
+  from seeing the other's bytes: a DEALER and ROUTER echoing on one thread
+  took 611 µs per thousand messages on smol and 237 µs on tokio, against
+  219 µs and 185 µs now. Sockets on threads of their own are unchanged.
 - Against 0.4.2 on the same machine, every PUSH/PULL throughput cell, eager and
   coalesced, 64 B to 16 KiB, is level or ahead on all three backends, and
   REQ/REP round trips are about 30% faster on tokio and smol. PUB fan-out and
