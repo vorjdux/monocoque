@@ -1,0 +1,11 @@
+# The interop tests build libzmq 4.3.4 from source (the `zmq` dev-dependency).
+# Its command queue stores 64-byte-aligned structs in chunks it takes from
+# `posix_memalign` only when HAVE_POSIX_MEMALIGN is defined, and its own build
+# defines a different name, so the chunks come from `malloc`, aligned to 16.
+# A compiler that targets x86-64-v3, as on Ubuntu 26.04, then writes them
+# with aligned AVX stores and the test binary dies of SIGSEGV inside
+# `zmq_connect`. The aligned allocation also needs the cache line size its
+# build would have detected. This reaches only C++ built for tests; the library has no
+# C or C++ in it.
+[env]
+CXXFLAGS = "-DHAVE_POSIX_MEMALIGN=1 -DZMQ_CACHELINE_SIZE=64"
