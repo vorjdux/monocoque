@@ -58,6 +58,16 @@ jobs:
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
       - name: Run tests (${{ matrix.backend.name }} backend)
         run: cargo test --workspace ${{ matrix.backend.flags }}
+      # A test binary that dies on a signal leaves nothing in the log but the
+      # signal's name. Run it again under gdb for the stack of every thread.
+      - name: Backtrace of the libzmq PAIR interop test
+        if: failure()
+        run: |
+          uname -a
+          sudo apt-get install -y -qq gdb > /dev/null
+          bin=$(cargo test -p monocoque-rs ${{ matrix.backend.flags }} --test interop_pair --no-run --message-format=json |
+            jq -r 'select(.executable != null and .target.name == "interop_pair") | .executable')
+          gdb -batch -ex run -ex 'thread apply all bt' "$bin"
 
   clippy:
     name: Clippy (${{ matrix.backend.name }})
