@@ -42,10 +42,11 @@ AGAINST=""
 BACKEND="all"
 ROUNDS=5
 PIN=""
+CROSS_L3=0
 ARENA_CMD=""
 BENCHES=()
 MODE_TIMEOUT_MIN=150
-HARD_CAP_MIN=240
+HARD_CAP_MIN=""
 READY_TIMEOUT_MIN=75
 DELETE_TIMEOUT_MIN=15
 DRY_RUN=false
@@ -131,6 +132,10 @@ What to measure:
   --pin CORES               cores for the two-thread benchmarks (default 2,4,
                             checked on the server and replaced if they are not
                             two separate physical cores under one L3 cache)
+  --cross-l3                in pair mode, compare a second time with the two
+                            threads on cores that share no L3 cache, into
+                            logs/mode-cross-l3.log. Skipped on a CPU with
+                            one L3 cache. Each pass has the mode timeout
   --arena-cmd CMD           command for --mode arena
 
 Where to run:
@@ -148,8 +153,12 @@ Where to run:
                             [SCW_BENCH_HOURLY_PRICE]
 
 Limits:
-  --mode-timeout MIN        the benchmark itself (default $MODE_TIMEOUT_MIN)
-  --hard-cap MIN            the whole script (default $HARD_CAP_MIN)
+  --mode-timeout MIN        one pass of the benchmark (default $MODE_TIMEOUT_MIN).
+                            Three benchmarks on three backends at 3 rounds
+                            take about 120 minutes
+  --hard-cap MIN            the whole script (default: the mode timeout plus
+                            90, or twice the mode timeout plus 90 with
+                            --cross-l3)
   --max-lifetime MIN        the server itself, counted from its creation
                             (default: the hard cap plus 15). A detached
                             watchdog deletes the server at that age whatever
@@ -191,6 +200,7 @@ while [[ $# -gt 0 ]]; do
         --bench) need_value "$@"; BENCHES+=("$2"); shift 2 ;;
         --rounds) need_value "$@"; ROUNDS="$2"; shift 2 ;;
         --pin) need_value "$@"; PIN="$2"; shift 2 ;;
+        --cross-l3) CROSS_L3=1; shift ;;
         --arena-cmd) need_value "$@"; ARENA_CMD="$2"; shift 2 ;;
         --zone) need_value "$@"; ZONE="$2"; shift 2 ;;
         --offer) need_value "$@"; OFFER="$2"; shift 2 ;;
@@ -231,6 +241,11 @@ case "$BACKEND" in
     compio | tokio | smol | all) ;;
     *) die "unknown backend: $BACKEND (compio, tokio, smol or all)" ;;
 esac
+[[ "$MODE_TIMEOUT_MIN" =~ ^[0-9]+$ ]] || die "not a whole number: $MODE_TIMEOUT_MIN"
+# Room for every pass of the benchmark, plus 90 minutes for delivery,
+# installation, the build and the copy back.
+[[ -n "$HARD_CAP_MIN" ]] || HARD_CAP_MIN=$((MODE_TIMEOUT_MIN * (1 + CROSS_L3) + 90))
+[[ "$HARD_CAP_MIN" =~ ^[0-9]+$ ]] || die "not a whole number: $HARD_CAP_MIN"
 [[ -n "$MAX_LIFETIME_MIN" ]] || MAX_LIFETIME_MIN=$((HARD_CAP_MIN + 15))
 for n in "$ROUNDS" "$MODE_TIMEOUT_MIN" "$HARD_CAP_MIN" "$READY_TIMEOUT_MIN" "$MAX_LIFETIME_MIN"; do
     [[ "$n" =~ ^[0-9]+$ ]] || die "not a whole number: $n"
@@ -697,6 +712,23 @@ case "$MODE" in
         timeout "${MODE_TIMEOUT_MIN}m" ./scripts/bench_pair.py --against "$AGAINST_TAG" \
             --backend "$BACKEND" --pin "$PIN" --rounds "$ROUNDS" \
             "${bench_flags[@]}" > ../logs/mode.log 2>&1
+        rc=$?
+        if [ "$CROSS_L3" = 1 ] && [ "$rc" -eq 0 ]; then
+            # The same first core, and the first core of another L3 group
+            # that is not core 0.
+            first=${PIN%,*}
+            other=$(echo "$topo" | awk -F';' -v l3="$(topo_of "$first" 3)" '$2 != 0 && $3 != l3 {print $1; exit}')
+            if [ -n "$other" ]; then
+                echo "$first,$other" > ../logs/pin-cross-l3.txt
+                timeout "${MODE_TIMEOUT_MIN}m" ./scripts/bench_pair.py --against "$AGAINST_TAG" \
+                    --backend "$BACKEND" --pin "$first,$other" --rounds "$ROUNDS" \
+                    "${bench_flags[@]}" > ../logs/mode-cross-l3.log 2>&1
+                rc=$?
+            else
+                echo "this CPU has one L3 cache" > ../logs/mode-cross-l3.log
+            fi
+        fi
+        (exit "$rc")
         ;;
     instr)
         # The runner has to match the gungraun library version, so it is read
@@ -1024,6 +1056,7 @@ fi
     printf 'BACKEND=%q\n' "$BACKEND"
     printf 'ROUNDS=%q\n' "$ROUNDS"
     printf 'PIN=%q\n' "${PIN:-2,4}"
+    printf 'CROSS_L3=%q\n' "$CROSS_L3"
     printf 'BENCHES=%q\n' "${BENCHES[*]:-}"
     printf 'AGAINST_TAG=%q\n' "$AGAINST_TAG"
     printf 'ARENA_CMD=%q\n' "$ARENA_CMD"
@@ -1143,7 +1176,7 @@ fi
 # Does nothing where cloud-init already did the work.
 remote 1800 'bash ~/bench/prepare.sh' || die "could not prepare the server"
 
-log "building and running $MODE (up to $MODE_TIMEOUT_MIN minutes for the benchmark)"
+log "building and running $MODE (up to $MODE_TIMEOUT_MIN minutes for each pass of the benchmark)"
 # The redirections have to sit on the one backgrounded command. On a list
 # such as `cd dir && cmd &` the shell forks a copy of itself to run the list,
 # that copy keeps the SSH session's output open for as long as the run
