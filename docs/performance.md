@@ -90,21 +90,21 @@ Eager mode (one syscall per message):
 
 | Message size | compio | tokio | smol |
 |---|---|---|---|
-| 64 B | 565 K msg/s | 568 K msg/s | **595 K msg/s** |
-| 256 B | **556 K msg/s** | 531 K msg/s | 553 K msg/s |
-| 1 KB | **494 K msg/s** | 478 K msg/s | **494 K msg/s** |
-| 4 KB | 408 K msg/s | 406 K msg/s | **440 K msg/s** |
-| 16 KB | 280 K msg/s | **335 K msg/s** | 327 K msg/s |
+| 64 B | 555 K msg/s | 566 K msg/s | **583 K msg/s** |
+| 256 B | 548 K msg/s | 548 K msg/s | **555 K msg/s** |
+| 1 KB | 451 K msg/s | 483 K msg/s | **495 K msg/s** |
+| 4 KB | 397 K msg/s | 425 K msg/s | **444 K msg/s** |
+| 16 KB | 277 K msg/s | 303 K msg/s | **330 K msg/s** |
 
 Write coalescing (batched into 64 KB writes):
 
 | Message size | compio | tokio | smol |
 |---|---|---|---|
-| 64 B | **30.8 M msg/s** | 27.0 M msg/s | 27.1 M msg/s |
-| 256 B | **15.3 M msg/s** | 14.3 M msg/s | 14.4 M msg/s |
-| 1 KB | **7.04 M msg/s** | 6.09 M msg/s | 6.10 M msg/s |
-| 4 KB | **2.06 M msg/s** | 1.89 M msg/s | 1.88 M msg/s |
-| 16 KB | **550 K msg/s** | 409 K msg/s | 381 K msg/s |
+| 64 B | **31.0 M msg/s** | 27.7 M msg/s | 27.5 M msg/s |
+| 256 B | **15.4 M msg/s** | 14.9 M msg/s | 14.9 M msg/s |
+| 1 KB | **7.22 M msg/s** | 6.35 M msg/s | 6.35 M msg/s |
+| 4 KB | **2.19 M msg/s** | 2.00 M msg/s | 1.99 M msg/s |
+| 16 KB | **582 K msg/s** | 474 K msg/s | 471 K msg/s |
 
 Eager mode is a **latency** tool, not a throughput one. Each `send()` puts that
 message on the wire immediately with its own syscall, so you control exactly when
@@ -149,11 +149,11 @@ choosing the batch boundaries:
 
 | Message size | compio | tokio | smol |
 |---|---|---|---|
-| 64 B | 3.20 M msg/s (195 MiB/s) | **3.43 M msg/s** (209 MiB/s) | 3.33 M msg/s (203 MiB/s) |
-| 256 B | 2.87 M msg/s (700 MiB/s) | **2.97 M msg/s** (726 MiB/s) | 2.88 M msg/s (704 MiB/s) |
-| 1 KB | 2.12 M msg/s (2.02 GiB/s) | **2.26 M msg/s** (2.15 GiB/s) | 2.17 M msg/s (2.07 GiB/s) |
-| 4 KB | 878 K msg/s (3.35 GiB/s) | **945 K msg/s** (3.60 GiB/s) | 930 K msg/s (3.55 GiB/s) |
-| 16 KB | 267 K msg/s (4.07 GiB/s) | **284 K msg/s** (4.33 GiB/s) | 265 K msg/s (4.04 GiB/s) |
+| 64 B | 4.02 M msg/s (245 MiB/s) | **4.34 M msg/s** (265 MiB/s) | 4.29 M msg/s (262 MiB/s) |
+| 256 B | 2.95 M msg/s (719 MiB/s) | **3.03 M msg/s** (740 MiB/s) | **3.03 M msg/s** (740 MiB/s) |
+| 1 KB | 2.18 M msg/s (2.08 GiB/s) | **2.29 M msg/s** (2.18 GiB/s) | 2.21 M msg/s (2.10 GiB/s) |
+| 4 KB | 912 K msg/s (3.48 GiB/s) | **941 K msg/s** (3.59 GiB/s) | 917 K msg/s (3.50 GiB/s) |
+| 16 KB | 280 K msg/s (4.28 GiB/s) | 252 K msg/s (3.84 GiB/s) | **283 K msg/s** (4.32 GiB/s) |
 
 ---
 
@@ -166,17 +166,17 @@ true steady-state round-trip times, not connection setup or teardown.
 
 | Message size | compio | tokio | smol |
 |---|---|---|---|
-| 64 B | 7.2 µs | **5.2 µs** | 6.8 µs |
-| 256 B | 7.4 µs | **5.4 µs** | 7.1 µs |
-| 1 KB | 7.9 µs | **6.3 µs** | 8.1 µs |
+| 64 B | 7.3 µs | **5.3 µs** | 6.8 µs |
+| 256 B | 7.4 µs | **5.5 µs** | 7.2 µs |
+| 1 KB | 7.6 µs | **6.0 µs** | 8.1 µs |
 
 The same round trip over a Unix socket:
 
 | Message size | compio | tokio | smol |
 |---|---|---|---|
-| 64 B | 4.8 µs | **3.1 µs** | 4.7 µs |
-| 256 B | 4.8 µs | **3.2 µs** | 4.6 µs |
-| 1 KB | 4.9 µs | **3.8 µs** | 5.9 µs |
+| 64 B | 4.6 µs | **3.0 µs** | 4.6 µs |
+| 256 B | 4.7 µs | **3.1 µs** | 4.5 µs |
+| 1 KB | 4.9 µs | **3.7 µs** | 6.1 µs |
 
 tokio is lowest on both transports, with compio and smol about two
 microseconds behind over TCP. The short round trip comes from doing the I/O
@@ -199,12 +199,12 @@ share kernel buffers without copying.
 
 | Transport | 64 B | 256 B | 1 KB |
 |---|---|---|---|
-| compio TCP | 55 µs | 56 µs | 70 µs |
-| compio IPC | 61 µs | 64 µs | 65 µs |
-| tokio TCP | 23 µs | 24 µs | 33 µs |
-| tokio IPC | 29 µs | 28 µs | 28 µs |
-| smol TCP | 37 µs | 33 µs | 37 µs |
-| smol IPC | 33 µs | 33 µs | 33 µs |
+| compio TCP | 57 µs | 57 µs | 57 µs |
+| compio IPC | 54 µs | 56 µs | 54 µs |
+| tokio TCP | 22 µs | 23 µs | 30 µs |
+| tokio IPC | 24 µs | 24 µs | 24 µs |
+| smol TCP | 28 µs | 28 µs | 35 µs |
+| smol IPC | 27 µs | 29 µs | 29 µs |
 
 Unlike the steady-state latency tables above, this bench still includes
 per-iteration setup and teardown (connect, FIN/close and thread join), which
@@ -217,12 +217,12 @@ and from the throughput below.
 
 | Transport | 64 B | 256 B | 1 KB |
 |---|---|---|---|
-| compio TCP | 530 K msg/s | 534 K msg/s | 444 K msg/s |
-| compio IPC | 2.31 M msg/s | 2.07 M msg/s | 1.88 M msg/s |
-| tokio TCP | 567 K msg/s | 541 K msg/s | 455 K msg/s |
-| tokio IPC | 2.23 M msg/s | 2.04 M msg/s | 2.04 M msg/s |
-| smol TCP | 564 K msg/s | 560 K msg/s | 486 K msg/s |
-| smol IPC | 2.17 M msg/s | 1.99 M msg/s | 1.86 M msg/s |
+| compio TCP | 542 K msg/s | 517 K msg/s | 439 K msg/s |
+| compio IPC | 2.40 M msg/s | 2.16 M msg/s | 1.97 M msg/s |
+| tokio TCP | 581 K msg/s | 541 K msg/s | 476 K msg/s |
+| tokio IPC | 2.24 M msg/s | 2.05 M msg/s | 2.03 M msg/s |
+| smol TCP | 587 K msg/s | 550 K msg/s | 491 K msg/s |
+| smol IPC | 2.16 M msg/s | 1.99 M msg/s | 1.84 M msg/s |
 
 IPC throughput is about 4x TCP loopback on every backend, because Unix sockets
 have lower per-syscall overhead and no TCP framing cost.
@@ -242,17 +242,17 @@ counts deliveries, so four subscribers each receiving a message count four.
 
 | | Eager, 1 sub | Eager, 4 subs | Coalesced, 1 sub | Coalesced, 4 subs |
 |---|---|---|---|---|
-| monocoque (compio) | 434 K msg/s | 282 K msg/s | 14.3 M msg/s | 20.9 M msg/s |
-| monocoque (tokio) | 448 K msg/s | 299 K msg/s | 13.9 M msg/s | 20.9 M msg/s |
-| monocoque (smol) | 495 K msg/s | 427 K msg/s | 14.2 M msg/s | 13.7 M msg/s |
+| monocoque (compio) | 442 K msg/s | 366 K msg/s | 14.5 M msg/s | 20.4 M msg/s |
+| monocoque (tokio) | 440 K msg/s | 526 K msg/s | 13.6 M msg/s | 20.9 M msg/s |
+| monocoque (smol) | 490 K msg/s | 321 K msg/s | 13.9 M msg/s | 15.5 M msg/s |
 
 **Topic filtering** (10% of messages match the subscription):
 
 | | Eager | Coalesced |
 |---|---|---|
-| monocoque (compio) | 4.00 M msg/s | 29.1 M msg/s |
-| monocoque (tokio) | 3.97 M msg/s | 30.1 M msg/s |
-| monocoque (smol) | 4.31 M msg/s | 28.3 M msg/s |
+| monocoque (compio) | 4.04 M msg/s | 28.7 M msg/s |
+| monocoque (tokio) | 3.97 M msg/s | 28.6 M msg/s |
+| monocoque (smol) | 4.06 M msg/s | 28.3 M msg/s |
 
 An eager publisher is the low-latency choice and a coalescing one the
 high-throughput choice, by a factor of 30 or more on fan-out. Topic filtering is
