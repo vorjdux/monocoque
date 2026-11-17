@@ -2,7 +2,7 @@
 //!
 //! **Internal protocol implementation crate for Monocoque.**
 //!
-//! ⚠️ **This is an internal implementation detail. Use the `monocoque` crate for the public API.**
+//! **This is an internal implementation detail. Use the `monocoque` crate for the public API.**
 //!
 //! This crate provides the ZMTP protocol (greeting, handshake, NULL/PLAIN/CURVE
 //! security, framing) and the ZeroMQ socket types built on the socket
@@ -35,10 +35,14 @@
 //! ```
 //!
 //! ```rust,ignore
-//! use monocoque::zmq::DealerSocket;
+//! use monocoque::rt::LocalRuntime;
+//! use monocoque::zmq::{DealerSocket, Result};
 //!
-//! #[compio::main]
-//! async fn main() -> monocoque::zmq::Result<()> {
+//! fn main() -> Result<()> {
+//!     LocalRuntime::new()?.block_on(async_main())
+//! }
+//!
+//! async fn async_main() -> Result<()> {
 //!     let mut socket = DealerSocket::new();
 //!     socket.connect("tcp://127.0.0.1:5555").await?;
 //!     socket.send("Hello!").await?;
@@ -46,6 +50,10 @@
 //!     Ok(())
 //! }
 //! ```
+//!
+//! `LocalRuntime` runs on all three backends and, on compio, spins briefly
+//! before sleeping, which lowers latency. `#[compio::main]` also works but
+//! does not spin.
 //!
 //! ## Features
 //!

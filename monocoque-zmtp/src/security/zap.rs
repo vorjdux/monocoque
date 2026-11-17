@@ -53,6 +53,7 @@ pub const ZAP_ENDPOINT: &str = "inproc://zeromq.zap.01";
 
 /// Authentication mechanism
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ZapMechanism {
     /// No authentication (NULL mechanism).
     Null,
@@ -85,6 +86,7 @@ impl ZapMechanism {
 
 /// ZAP status codes
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ZapStatus {
     /// Success - connection accepted
     Success = 200,
@@ -247,9 +249,6 @@ impl ZapRequest {
         let domain = String::from_utf8(frames[2].to_vec()).map_err(|_| "Invalid domain string")?;
         let address =
             String::from_utf8(frames[3].to_vec()).map_err(|_| "Invalid address string")?;
-        if address.is_empty() {
-            return Err("ZAP address cannot be empty".to_string());
-        }
         let identity = frames[4].clone();
         if identity.len() > 255 {
             return Err("ZAP identity cannot exceed 255 bytes".to_string());
@@ -541,7 +540,8 @@ mod tests {
     }
 
     #[test]
-    fn zap_request_decode_rejects_empty_address() {
+    fn zap_request_decode_accepts_empty_address() {
+        // A peer on a Unix socket has no address to report.
         let frames = vec![
             Bytes::from(ZAP_VERSION),
             Bytes::from("123"),
@@ -551,7 +551,8 @@ mod tests {
             Bytes::from("NULL"),
         ];
 
-        assert!(ZapRequest::decode(&frames).is_err());
+        let request = ZapRequest::decode(&frames).unwrap();
+        assert_eq!(request.address, "");
     }
 
     #[test]

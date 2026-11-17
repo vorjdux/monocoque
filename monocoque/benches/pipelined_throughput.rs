@@ -34,6 +34,8 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+mod support;
+
 const MESSAGE_SIZES: &[usize] = &[64, 256, 1024, 4096, 16384];
 const TOTAL_MESSAGES: usize = 10_000;
 const BATCH_SIZE: usize = 100;
@@ -49,7 +51,7 @@ fn batch_options(options: SocketOptions) -> SocketOptions {
 /// ROUTER binds in a separate OS thread. DEALER connects in the bench thread.
 /// Both use coalesced sends plus `flush` to minimize syscall overhead.
 fn monocoque_dealer_router_pipelined(c: &mut Criterion) {
-    monocoque::dev_tracing::init_tracing();
+    support::init_tracing();
     let mut group = c.benchmark_group(format!("pipelined/monocoque-{BENCH_BACKEND}/dealer_router"));
     group.measurement_time(Duration::from_secs(20));
     group.sample_size(10);

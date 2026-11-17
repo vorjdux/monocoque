@@ -38,6 +38,8 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod support;
+
 const FANOUT_SUBSCRIBERS: &[usize] = &[1, 4];
 const MESSAGE_COUNT: usize = 100; // elements counted per criterion iteration
 const MESSAGE_SIZE: usize = 256;
@@ -145,7 +147,7 @@ async fn recv_n(sub: &mut SubSocket, n: usize) {
 }
 
 fn monocoque_fanout_group(c: &mut Criterion, name: &str, coalesce: bool) {
-    monocoque::dev_tracing::init_tracing();
+    support::init_tracing();
     let mut group = c.benchmark_group(format!("patterns/monocoque-{BENCH_BACKEND}/{name}"));
     for &num_subs in FANOUT_SUBSCRIBERS {
         group.throughput(Throughput::Elements((MESSAGE_COUNT * num_subs) as u64));
@@ -330,7 +332,7 @@ fn run_monocoque_topic_filtering(iters: u64, coalesce: bool) -> Duration {
 }
 
 fn monocoque_topic_filtering_group(c: &mut Criterion, name: &str, coalesce: bool) {
-    monocoque::dev_tracing::init_tracing();
+    support::init_tracing();
     let mut group = c.benchmark_group(format!("patterns/monocoque-{BENCH_BACKEND}/{name}"));
     group.throughput(Throughput::Elements(MESSAGE_COUNT as u64));
     group.bench_function("filter_10_percent", |b| {

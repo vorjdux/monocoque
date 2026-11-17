@@ -87,6 +87,7 @@ impl ProxySocket for NoCapture {
 
 /// Control commands for [`proxy_steerable`], sent as one-frame messages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ProxyCommand {
     /// Stop forwarding; messages stay queued in the sockets.
     Pause,

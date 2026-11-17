@@ -204,6 +204,67 @@ pub fn reuseport_listener(_addr: std::net::SocketAddr) -> io::Result<std::net::T
     ))
 }
 
+/// Set the IPv4 `TOS` byte, or the IPv6 traffic class when `v6`, of a
+/// connected TCP socket. Zero leaves it as the OS has it.
+///
+/// # Errors
+///
+/// Returns an error if the socket option cannot be set.
+#[cfg(unix)]
+pub fn configure_tos<S: std::os::unix::io::AsRawFd>(
+    stream: &S,
+    tos: u8,
+    v6: bool,
+) -> io::Result<()> {
+    use std::os::unix::io::FromRawFd;
+
+    if tos == 0 {
+        return Ok(());
+    }
+    // SAFETY: the fd is open for as long as `stream` is borrowed, and the
+    // `Socket` built over it is forgotten below, so it is never closed here.
+    let sock = unsafe { socket2::Socket::from_raw_fd(stream.as_raw_fd()) };
+    let result = if v6 {
+        sock.set_tclass_v6(u32::from(tos))
+    } else {
+        sock.set_tos_v4(u32::from(tos))
+    };
+    std::mem::forget(sock);
+    result
+}
+
+/// Set the IPv4 `TOS` byte of a connected TCP socket. Zero leaves it as the
+/// OS has it.
+///
+/// # Errors
+///
+/// Returns an error if the socket option cannot be set, and for an IPv6
+/// socket, whose traffic class this platform's socket API does not expose.
+#[cfg(windows)]
+pub fn configure_tos<S: std::os::windows::io::AsRawSocket>(
+    stream: &S,
+    tos: u8,
+    v6: bool,
+) -> io::Result<()> {
+    use std::os::windows::io::FromRawSocket;
+
+    if tos == 0 {
+        return Ok(());
+    }
+    if v6 {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "tos is not supported on IPv6 sockets on this platform",
+        ));
+    }
+    // SAFETY: the socket is open for as long as `stream` is borrowed, and the
+    // `Socket` built over it is forgotten below, so it is never closed here.
+    let sock = unsafe { socket2::Socket::from_raw_socket(stream.as_raw_socket()) };
+    let result = sock.set_tos_v4(u32::from(tos));
+    std::mem::forget(sock);
+    result
+}
+
 /// Configure the OS-level socket send/receive buffer sizes (`SO_SNDBUF` /
 /// `SO_RCVBUF`) on a TCP stream.
 ///
@@ -478,6 +539,37 @@ mod tests {
             rcv >= requested as usize,
             "SO_RCVBUF not applied: got {rcv}, requested {requested}"
         );
+    }
+
+    #[test]
+    fn configure_tos_sets_the_byte_on_ipv4_and_ipv6() {
+        use socket2::Socket;
+        use std::os::unix::io::{AsRawFd, FromRawFd};
+
+        // DSCP EF (46) in the upper six bits.
+        let tos = 46 << 2;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        configure_tos(&client, tos, false).unwrap();
+        let sock = unsafe { Socket::from_raw_fd(client.as_raw_fd()) };
+        let read_back = sock.tos_v4();
+        std::mem::forget(sock);
+        assert_eq!(read_back.unwrap(), u32::from(tos));
+
+        // A host without IPv6 loopback has nothing to check the other half on.
+        if let Ok(listener) = TcpListener::bind("[::1]:0") {
+            let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            configure_tos(&client, tos, true).unwrap();
+            let sock = unsafe { Socket::from_raw_fd(client.as_raw_fd()) };
+            let read_back = sock.tclass_v6();
+            std::mem::forget(sock);
+            assert_eq!(read_back.unwrap(), u32::from(tos));
+        }
+
+        // Zero leaves the socket alone.
+        let untouched = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        configure_tos(&untouched, 0, false).unwrap();
     }
 
     #[test]

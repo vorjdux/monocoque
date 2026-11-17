@@ -331,6 +331,7 @@ pub fn topic_matches_prefixes(topic: &[u8], prefixes: &[Bytes]) -> bool {
 
 /// Subscription event for XPUB socket
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SubscriptionEvent {
     /// A peer subscribed to a topic
     Subscribe(Bytes),

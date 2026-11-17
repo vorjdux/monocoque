@@ -5,6 +5,7 @@ use thiserror::Error;
 
 /// ZMTP protocol errors
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ZmtpError {
     #[error("Incomplete frame")]
     Incomplete,

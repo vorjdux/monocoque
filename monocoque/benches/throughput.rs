@@ -31,6 +31,8 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod support;
+
 const MESSAGE_SIZES: &[usize] = &[64, 256, 1024, 4096, 16384];
 const BATCH_SIZE: usize = 10_000;
 
@@ -102,7 +104,7 @@ fn run_sample(payload: &Msg, mode: Mode, iters: u64) -> Duration {
 }
 
 fn monocoque_group(c: &mut Criterion, name: &str, mode: Mode) {
-    monocoque::dev_tracing::init_tracing();
+    support::init_tracing();
     let mut group = c.benchmark_group(format!("throughput/monocoque-{BENCH_BACKEND}/{name}"));
     // BENCH_SECS shortens a run while iterating; published numbers use the default.
     let secs = std::env::var("BENCH_SECS")

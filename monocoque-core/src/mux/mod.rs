@@ -101,6 +101,15 @@ pub trait Codec: 'static {
         false
     }
 
+    /// `true` when this connection can be probed with [`encode_ping`] and
+    /// answers a probe. A connection that cannot is never timed out for
+    /// silence: it has no way to show that it is alive.
+    ///
+    /// [`encode_ping`]: Self::encode_ping
+    fn heartbeats(&self) -> bool {
+        false
+    }
+
     /// Queue a heartbeat probe advertising `ttl`.
     fn encode_ping(&mut self, _ttl: Duration, _out: &mut OutQueue) {}
 
@@ -303,6 +312,7 @@ impl PeerInfo {
 
 /// Why a peer went away.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CloseReason {
     /// The peer closed the connection.
     Eof,
@@ -751,8 +761,12 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
                 Err(_) => {}
             }
         }
+        // `disconnect` took the connector while its handshake was running.
+        // The connection it was making is not wanted any more: installing it
+        // would leave a peer with no endpoint that nothing can disconnect.
+        let disconnected = matches!(h.origin, Origin::Connector(_)) && endpoint.is_none();
         match h.result {
-            Ok((codec, mut info)) if !self.closing => {
+            Ok((codec, mut info)) if !self.closing && !disconnected => {
                 info.endpoint.clone_from(&endpoint);
                 if let Origin::Connector(i) = h.origin
                     && let Some(Some(Connector {
@@ -1064,6 +1078,10 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             }
             let idle = now.saturating_duration_since(last);
             let limit = match &st.outbound {
+                // A ZMTP 1.0 or 2.0 peer has no heartbeat commands. Timing
+                // it out for not answering one would drop every idle legacy
+                // peer again and again.
+                Outbound::Wire { codec, .. } if !codec.heartbeats() => continue,
                 Outbound::Wire { codec, .. } => {
                     codec.peer_ttl().map_or(timeout, |t| t.min(timeout))
                 }
@@ -1288,6 +1306,13 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         }
         while let Some(&id) = self.fair.front() {
             let i = id.index as usize;
+            // The peer this id named may be gone and its slot given to a new
+            // peer. That one's messages belong to its own id, which is queued
+            // in its own turn, not to this stale one.
+            if self.generations.get(i) != Some(&id.generation) {
+                self.fair.pop_front();
+                continue;
+            }
             let Some(entry) = self.peers.get_mut(i).and_then(Option::as_mut) else {
                 self.fair.pop_front();
                 continue;
@@ -1343,7 +1368,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         }
         let id = self.fair[0];
         let msg = {
-            let entry = self.peers.get(id.index as usize)?.as_ref()?;
+            let entry = self.entry(id)?;
             let mut st = entry.state.borrow_mut();
             if st.ready.len() < 2 {
                 return None;

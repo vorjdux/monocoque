@@ -6,9 +6,9 @@
 //! only ZAP server bound in its process.
 
 use monocoque::rt::LocalRuntime;
+use monocoque::zmq::security::zap::{ZapRequest, ZapResponse};
+use monocoque::zmq::security::zap_handler::{ZapHandler, spawn_zap_server};
 use monocoque::zmq::{DealerSocket, SocketOptions};
-use monocoque_zmtp::security::zap::{ZapRequest, ZapResponse};
-use monocoque_zmtp::security::zap_handler::{ZapHandler, spawn_zap_server};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 

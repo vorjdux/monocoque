@@ -533,16 +533,22 @@ where
         })?;
         let server_secret = CurveSecretKey::from_bytes(secret_bytes);
         let server_public = server_secret.public_key();
+        check_public_key(options, &server_public)?;
         let server_keypair = CurveKeyPair::from_keys(server_public, server_secret);
 
-        if options.zap_domain.is_empty() {
-            // No zap_domain means no ZAP authorization runs at all: every client
-            // that completes the CURVE handshake is admitted (encryption only, no
-            // access control). Warn loudly so this is never a silent default. Set
-            // a zap_domain and run a ZAP handler to authorize client keys.
+        // ZAP decides whenever there is a handler to ask, as in libzmq, and
+        // also when a domain is set, so that a domain with no handler refuses
+        // rather than admits.
+        let zap_bound = monocoque_core::mux::inproc::is_bound(
+            crate::security::ZAP_ENDPOINT.trim_start_matches("inproc://"),
+        );
+        if options.zap_domain.is_empty() && !zap_bound {
+            // No handler and no domain: every client that completes the CURVE
+            // handshake is admitted (encryption only, no access control). Warn
+            // loudly so this is never a silent default.
             warn!(
-                "[HANDSHAKE] CURVE server has no zap_domain: accepting any client key \
-                 without authorization (encryption only). Configure ZAP to authenticate peers."
+                "[HANDSHAKE] CURVE server has no ZAP handler: accepting any client key \
+                 without authorization (encryption only). Start a ZAP handler to authenticate peers."
             );
             let mut curve_server = CurveServer::new(server_keypair, local_socket_type.as_str())
                 .with_metadata(options.metadata.clone());
@@ -567,6 +573,7 @@ where
         debug!("[HANDSHAKE] Running CURVE client exchange");
         let client_secret = CurveSecretKey::from_bytes(*secret_bytes);
         let client_public = client_secret.public_key();
+        check_public_key(options, &client_public)?;
         let client_keypair = CurveKeyPair::from_keys(client_public, client_secret);
         let server_public = CurvePublicKey::from_bytes(server_key_bytes);
 
@@ -588,6 +595,23 @@ where
         Err(ZmtpError::Protocol)
     } else {
         Err(ZmtpError::Protocol)
+    }
+}
+
+/// Refuse a configured public key that is not the one `derived` from the
+/// secret key. The handshake only ever uses the derived key, so a mismatch
+/// means the application paired a public key with the wrong secret and would
+/// otherwise announce a key other than the one it thinks it has.
+fn check_public_key(
+    options: &SocketOptions,
+    derived: &crate::security::curve::CurvePublicKey,
+) -> Result<(), ZmtpError> {
+    match options.curve_publickey {
+        Some(configured) if configured != *derived.as_bytes() => {
+            warn!("[HANDSHAKE] curve_publickey does not belong to curve_secretkey");
+            Err(ZmtpError::Protocol)
+        }
+        _ => Ok(()),
     }
 }
 

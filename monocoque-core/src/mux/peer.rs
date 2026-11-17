@@ -387,6 +387,13 @@ impl<C: Codec> PeerState<C> {
             tail.advance(n);
         }
         if let Outbound::Wire { out, .. } = &mut self.outbound {
+            // A message with no frames (or a ROUTER message that was only its
+            // identity) encodes to nothing. Counting it would leave the queue
+            // waiting on bytes that never come: sends would wait out the stall
+            // window and `close()` its whole linger.
+            if out.is_empty() {
+                return;
+            }
             out.note_message();
         }
         self.wake_writer_if_released();

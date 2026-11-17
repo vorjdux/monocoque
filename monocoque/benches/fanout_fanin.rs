@@ -38,6 +38,8 @@ use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod support;
+
 const MESSAGE_SIZES: &[usize] = &[64, 1024, 16384];
 const BATCH_SIZE: usize = 10_000;
 const WORKERS: usize = 4;
@@ -65,7 +67,7 @@ async fn wait_peers(peer_count: impl Fn() -> usize, peers: usize) {
 /// worker times its own receive window and reports it; the iteration cost is the
 /// slowest worker's window, i.e. when the last message of the batch arrives.
 fn monocoque_fanout(c: &mut Criterion) {
-    monocoque::dev_tracing::init_tracing();
+    support::init_tracing();
     let mut group = c.benchmark_group(format!("fanout_fanin/monocoque-{BENCH_BACKEND}/fanout"));
     group.measurement_time(Duration::from_secs(10));
     group.sample_size(10);
@@ -202,7 +204,7 @@ fn monocoque_fanin_eager(c: &mut Criterion) {
 /// after the whole batch is drained.
 /// `coalesce` selects whether the senders batch writes or send eagerly.
 fn fanin(c: &mut Criterion, group_name: &str, coalesce: bool) {
-    monocoque::dev_tracing::init_tracing();
+    support::init_tracing();
     let mut group = c.benchmark_group(group_name);
     group.measurement_time(Duration::from_secs(10));
     group.sample_size(10);

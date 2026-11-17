@@ -9,10 +9,10 @@
 //! inproc name, so this file holds the only ZAP server bound in its process.
 
 use monocoque::rt::LocalRuntime;
+use monocoque::zmq::security::curve::CurveSecretKey;
+use monocoque::zmq::security::zap::{ZapRequest, ZapResponse};
+use monocoque::zmq::security::zap_handler::{ZapHandler, spawn_zap_server};
 use monocoque::zmq::{DealerSocket, SocketOptions};
-use monocoque_zmtp::security::curve::CurveSecretKey;
-use monocoque_zmtp::security::zap::{ZapRequest, ZapResponse};
-use monocoque_zmtp::security::zap_handler::{ZapHandler, spawn_zap_server};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -38,8 +38,13 @@ fn keypair(seed: u8) -> ([u8; 32], [u8; 32]) {
 /// Accept one connection with `server_opts`, connect with `client_opts`, and
 /// return once both handshakes have completed.
 async fn handshake_pair(server_opts: SocketOptions, client_opts: SocketOptions) {
+    handshake_pair_on("tcp://127.0.0.1:0", server_opts, client_opts).await;
+}
+
+/// The same over the endpoint `bind_to`.
+async fn handshake_pair_on(bind_to: &str, server_opts: SocketOptions, client_opts: SocketOptions) {
     let mut server = DealerSocket::with_options(server_opts);
-    let ep = server.bind("tcp://127.0.0.1:0").await.unwrap();
+    let ep = server.bind(bind_to).await.unwrap();
     let mut client = DealerSocket::with_options(client_opts);
     client.connect(&ep).await.unwrap();
     // The server only learns of a peer once its handshake, ZAP included, is done.
@@ -89,5 +94,50 @@ fn zap_requests_carry_the_tcp_peer_ip() {
             vec!["127.0.0.1".to_string(), "127.0.0.1".to_string()],
             "each ZAP request (PLAIN, then CURVE) must name the TCP peer's IP"
         );
+
+        // A Unix socket peer has no address. The request carries an empty
+        // one and the handler is still asked: before, the ZAP server dropped
+        // such a request and every IPC client was refused.
+        #[cfg(unix)]
+        {
+            let dir = std::env::temp_dir();
+            let pid = std::process::id();
+            let plain = dir.join(format!("monocoque-zap-plain-{pid}.sock"));
+            let curve = dir.join(format!("monocoque-zap-curve-{pid}.sock"));
+
+            handshake_pair_on(
+                &format!("ipc://{}", plain.display()),
+                SocketOptions::default()
+                    .with_plain_server(true)
+                    .with_zap_domain("test")
+                    .with_handshake_timeout(timeout),
+                SocketOptions::default()
+                    .with_plain_credentials("alice", "secret")
+                    .with_handshake_timeout(timeout),
+            )
+            .await;
+            handshake_pair_on(
+                &format!("ipc://{}", curve.display()),
+                SocketOptions::default()
+                    .with_curve_server(true)
+                    .with_curve_keypair(server_public, server_secret)
+                    .with_zap_domain("test")
+                    .with_handshake_timeout(timeout),
+                SocketOptions::default()
+                    .with_curve_keypair(client_public, client_secret)
+                    .with_curve_serverkey(server_public)
+                    .with_handshake_timeout(timeout),
+            )
+            .await;
+            let _ = std::fs::remove_file(plain);
+            let _ = std::fs::remove_file(curve);
+
+            let seen = handler.addresses.lock().unwrap().clone();
+            assert_eq!(
+                seen[2..],
+                [String::new(), String::new()],
+                "the IPC requests (PLAIN, then CURVE) carry an empty address"
+            );
+        }
     });
 }

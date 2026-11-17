@@ -2,6 +2,7 @@
 
 /// Supported ZMQ socket types (no heap allocation)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SocketType {
     /// PAIR socket type.
     Pair,

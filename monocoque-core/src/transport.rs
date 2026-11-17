@@ -54,6 +54,9 @@ impl Stream {
             Self::Tcp(s) => {
                 crate::tcp::enable_tcp_nodelay(s)?;
                 crate::tcp::configure_socket_buffers(s, options.sndbuf, options.rcvbuf)?;
+                if options.tos != 0 {
+                    crate::tcp::configure_tos(s, options.tos, s.peer_addr()?.is_ipv6())?;
+                }
                 crate::tcp::configure_tcp_keepalive(
                     s,
                     options.tcp_keepalive,

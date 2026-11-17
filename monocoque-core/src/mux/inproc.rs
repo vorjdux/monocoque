@@ -307,6 +307,14 @@ fn refused(name: &str) -> io::Error {
     )
 }
 
+/// Whether `name` is bound by a socket anywhere in this process.
+pub fn is_bound(name: &str) -> bool {
+    global()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .contains_key(name)
+}
+
 /// Names currently bound in this process.
 pub fn bound_names() -> Vec<String> {
     global()

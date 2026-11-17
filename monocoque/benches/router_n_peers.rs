@@ -30,6 +30,8 @@ use std::sync::{Arc, Barrier, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod support;
+
 // Identifies which runtime backend this build benchmarks, so compio, tokio, and
 // smol results land under distinct criterion ids instead of overwriting.
 const BENCH_BACKEND: &str = if cfg!(feature = "runtime-tokio") {
@@ -138,7 +140,7 @@ fn run_router(num_peers: usize, iters: u64) -> Duration {
 }
 
 fn router_n_peers(c: &mut Criterion) {
-    monocoque::dev_tracing::init_tracing();
+    support::init_tracing();
     let mut group = c.benchmark_group(format!("router_n_peers/monocoque-{BENCH_BACKEND}"));
     group.measurement_time(Duration::from_secs(10));
     group.sample_size(10);

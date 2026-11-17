@@ -128,6 +128,7 @@ impl ReconnectState {
 
 /// Error type for reconnection operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ReconnectError {
     /// Maximum reconnection attempts reached
     MaxAttemptsReached { attempts: u32 },

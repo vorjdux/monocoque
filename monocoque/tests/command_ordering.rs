@@ -183,8 +183,8 @@ fn a_ping_flood_does_not_interleave_pongs_with_messages() {
 /// data the whole time; the connection must last.
 #[test]
 fn curve_with_heartbeats_keeps_its_frames_in_order() {
+    use monocoque::zmq::security::curve::CurveSecretKey;
     use monocoque::zmq::{PullSocket, SocketOptions};
-    use monocoque_zmtp::security::curve::CurveSecretKey;
 
     let key = |seed: u8| {
         let secret = [seed; 32];

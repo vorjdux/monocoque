@@ -1,29 +1,54 @@
 //! # Monocoque
 //!
-//! A high-performance, multi-protocol messaging runtime. It runs on `io_uring`
-//! (via `compio`) by default, with optional tokio and smol backends for
-//! portability.
+//! A `ZeroMQ`-compatible messaging library in Rust. It implements ZMTP and the
+//! `ZeroMQ` socket types, and interoperates with libzmq peers.
 //!
 //! ## Architecture
 //!
-//! Monocoque is structured as a **messaging kernel** with clean layering:
+//! Every socket owns one multiplexer that serves all of its peers, on the
+//! runtime thread that created the socket. A socket binds and connects any
+//! number of `tcp://`, `ipc://` and `inproc://` endpoints, and sockets are
+//! `!Send`: for more cores, run one runtime per thread.
 //!
-//! - **`monocoque-core`**: runtime facade, owned-buffer I/O helpers, zero-copy buffers
-//! - **Protocol crates**: Pure state machines (sans-IO)
-//! - **`monocoque`**: Public API surface (this crate)
+//! - **`monocoque-core`**: the socket multiplexer, the `Msg` type, transports,
+//!   backpressure, and the runtime facade ([`rt`])
+//! - **`monocoque-zmtp`**: the ZMTP protocol (handshake, NULL/PLAIN/CURVE,
+//!   framing) and the socket types built on the multiplexer
+//! - **`monocoque`**: the public API (this crate)
 //!
-//! ## Protocols (opt-in via features)
+//! ## Features
 //!
-//! Each protocol is gated behind a feature flag to avoid loading unused code:
-//!
-//! - **`zmq`** - `ZeroMQ` (ZMTP 3.x) implementation
+//! The socket types live in `monocoque::zmq`, behind the `zmq` feature, which
+//! is not on by default:
 //!
 //! ```toml
 //! [dependencies]
 //! monocoque-rs = { version = "1.0", features = ["zmq"] }
 //! ```
 //!
+//! One of three runtime backends is selected at compile time: `runtime-compio`
+//! (`io_uring`, the default), `runtime-tokio` or `runtime-smol`. They are
+//! mutually exclusive, so the last two need `default-features = false`. The
+//! `draft` feature adds the draft socket types under `zmq::draft`.
+//!
 //! ## Quick Start
+//!
+//! Start the runtime with [`rt::LocalRuntime`], which builds the right
+//! single-threaded runtime for the enabled backend:
+//!
+//! ```rust,no_run
+//! # #[cfg(feature = "zmq")]
+//! # fn main() -> monocoque::zmq::Result<()> {
+//! monocoque::rt::LocalRuntime::new()?.block_on(async {
+//!     let mut socket = monocoque::zmq::DealerSocket::new();
+//!     socket.connect("tcp://127.0.0.1:5555").await?;
+//!     socket.send("hello").await?;
+//!     Ok(())
+//! })
+//! # }
+//! # #[cfg(not(feature = "zmq"))]
+//! # fn main() {}
+//! ```
 //!
 //! ### `ZeroMQ` DEALER Socket (Client)
 //!
@@ -72,16 +97,21 @@
 //!
 //! ## Performance
 //!
-//! - **Zero-copy**: Uses `bytes::Bytes` for refcounted message buffers
-//! - **Runtime backends**: native `io_uring` via `compio` (default), or tokio or smol
-//! - **Lock-free**: SPSC queues, no shared mutable state in hot paths
-//! - **Sans-IO**: Protocol logic is pure, testable, and runtime-agnostic
+//! - **Refcounted frames**: frames are `bytes::Bytes`, so passing a message on
+//!   copies no payload
+//! - **Borrowed receive**: `recv()` lends a `MsgRef` into a slot the socket
+//!   reuses, so a receive loop allocates nothing; `recv_owned()` keeps the message
+//! - **One thread per socket**: a socket and all of its peers run on the
+//!   thread that owns it, and the I/O is done inline on that thread
+//! - **Write coalescing**: opt-in batching of small messages into one write
+//!   (`SocketOptions::with_write_coalescing`)
 //!
 //! ## Safety
 //!
-//! This crate contains no `unsafe`. The few `unsafe` blocks in the workspace
-//! (owned-buffer reads, raw-fd socket tuning, the in-process stream adapter) are
-//! inventoried in the README's Safety section, each with a `SAFETY:` contract.
+//! This crate and `monocoque-zmtp` contain no `unsafe`. The `unsafe` in
+//! `monocoque-core` is confined to two modules, an owned-buffer read helper
+//! (`io`) and raw-fd socket calls (`tcp`), and is inventoried in the README's
+//! Safety section.
 
 #![warn(missing_docs)]
 
@@ -101,7 +131,3 @@ pub use monocoque_core::rt;
 // Protocol modules (opt-in via features)
 #[cfg(feature = "zmq")]
 pub mod zmq;
-
-/// Development helpers (benches/tests)
-#[doc(hidden)]
-pub mod dev_tracing;

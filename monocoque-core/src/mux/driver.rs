@@ -123,7 +123,20 @@ pub async fn connect_loop(
     let mut backoff = ReconnectState::new(&options);
     let mut failures = 0u32;
     loop {
-        match Stream::connect(&endpoint).await {
+        let dial = Stream::connect(&endpoint);
+        let dialed = if options.connect_timeout.is_zero() {
+            dial.await
+        } else {
+            crate::rt::timeout(options.connect_timeout, dial)
+                .await
+                .unwrap_or_else(|_| {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "connect timed out",
+                    ))
+                })
+        };
+        match dialed {
             Ok(stream) => {
                 if stream.configure(&options).is_ok() {
                     events.push(Event::Connected {

@@ -8,6 +8,7 @@ use std::fmt;
 
 /// Socket lifecycle events.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum SocketEvent {
     /// Socket successfully connected to a peer.
     Connected(Endpoint),

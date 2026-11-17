@@ -100,9 +100,11 @@ smallvec = "1.13"
 socket2 = { version = "0.6", features = ["all"] }
 
 # Logging
-# release_max_level_info compiles out trace!/debug! callsites in release builds
-# so the hot send/recv path pays no runtime level check for them.
-tracing = { version = "0.1", features = ["release_max_level_info"] }
+# No `max_level_*` or `release_max_level_*` feature here: Cargo unifies features,
+# so one set by a library caps the log level of every crate in the application
+# that depends on it. The send and receive paths have no log calls to strip;
+# debug! is used on the handshake, on a peer closing and on proxy errors.
+tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Cryptography

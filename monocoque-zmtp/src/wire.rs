@@ -138,7 +138,14 @@ impl ZmtpCodec {
             cipher,
             partial: Msg::new(),
             partial_bytes: 0,
-            max_frame: options.max_msg_size.unwrap_or(DEFAULT_MAX_FRAME),
+            // A frame above the message limit would be refused once read, so
+            // refuse it at its header. That also keeps `header + len` and the
+            // buffer reserved for it far from overflow whatever the option
+            // says.
+            max_frame: options
+                .max_msg_size
+                .unwrap_or(DEFAULT_MAX_FRAME)
+                .min(MAX_MESSAGE_BYTES),
             vectored_threshold: options.vectored_write_threshold,
             peer_ttl: None,
             framing: Framing::V3,
@@ -435,9 +442,9 @@ impl Codec for ZmtpCodec {
         deliver: &mut D,
         replies: &mut OutQueue,
     ) -> Result<()> {
-        if self.framing == Framing::V1 {
-            return self.decode_v1(buf, deliver);
-        }
+        // A staged frame is finished first, whatever the framing: the legacy
+        // decoder stages long frames through `await_frame` too, and returning
+        // to it before this would parse the rest of that frame as a header.
         #[cfg(feature = "runtime-smol")]
         if let Some((mut frame, total)) = self.staged.take() {
             let take = (total - frame.len()).min(buf.len());
@@ -449,6 +456,9 @@ impl Codec for ZmtpCodec {
             }
             // Exactly one whole frame: decode it as a buffer of its own.
             self.decode(&mut frame, deliver, replies)?;
+        }
+        if self.framing == Framing::V1 {
+            return self.decode_v1(buf, deliver);
         }
         loop {
             if buf.len() < 2 {
@@ -613,6 +623,10 @@ impl Codec for ZmtpCodec {
         std::mem::take(&mut self.subscribe_all).then(|| Msg::from(Bytes::from_static(b"\x01")))
     }
 
+    fn heartbeats(&self) -> bool {
+        self.framing == Framing::V3
+    }
+
     fn encode_ping(&mut self, ttl: Duration, out: &mut OutQueue) {
         // ZMTP 1.0 and 2.0 have no heartbeat commands.
         if self.framing != Framing::V3 {
@@ -647,7 +661,7 @@ impl Protocol for Zmtp {
             &mut s,
             cfg.socket_type,
             options.routing_id.as_deref(),
-            Some(options.handshake_timeout),
+            (!options.handshake_timeout.is_zero()).then_some(options.handshake_timeout),
             &options,
         )
         .await
@@ -661,6 +675,14 @@ impl Protocol for Zmtp {
         // shares it through the socket's receive slot.
         let mut metadata = Metadata::new();
         for (k, v) in result.properties {
+            // These four are set below from what this side knows: the
+            // socket's own address lookup and the ZAP handler's answer. A
+            // peer that announces one of them in its handshake must not be
+            // able to make an application believe it.
+            const OURS: [&str; 4] = ["User-Id", "Peer-Address", "Socket-Type", "Identity"];
+            if OURS.iter().any(|name| name.eq_ignore_ascii_case(&k)) {
+                continue;
+            }
             metadata.insert(k, v);
         }
         metadata.insert("Socket-Type", Bytes::from_static(peer_type.as_bytes()));
@@ -718,6 +740,48 @@ mod tests {
 
     fn codec() -> ZmtpCodec {
         ZmtpCodec::new(None, &SocketOptions::default())
+    }
+
+    /// A ZMTP 1.0 frame too long for the read buffer arrives over two reads,
+    /// the second bringing the next frame with it. On smol such a frame is
+    /// staged, and the legacy decoder used to be re-entered before the staged
+    /// frame was finished, which parsed the frame's remainder as a header.
+    #[test]
+    fn a_long_legacy_frame_split_across_reads_decodes_whole() {
+        let mut c = codec().with_framing(Framing::V1, false);
+        let body: Vec<u8> = (0..12_000u32)
+            .map(|i| u8::try_from(i % 251).unwrap())
+            .collect();
+        let mut wire = vec![0xFF];
+        wire.extend_from_slice(&(body.len() as u64 + 1).to_be_bytes());
+        wire.push(0);
+        wire.extend_from_slice(&body);
+        wire.extend_from_slice(&[4, 0, b'e', b'n', b'd']);
+
+        let mut out = Vec::new();
+        let mut replies = OutQueue::default();
+        let mut buf = BytesMut::with_capacity(8192);
+        let (first, rest) = wire.split_at(8192);
+        buf.extend_from_slice(first);
+        c.decode(&mut buf, &mut |m| out.push(m), &mut replies)
+            .unwrap();
+        assert!(out.is_empty(), "the frame is not complete yet");
+        buf.extend_from_slice(rest);
+        c.decode(&mut buf, &mut |m| out.push(m), &mut replies)
+            .unwrap();
+
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].first(), Some(&body[..]));
+        assert_eq!(out[1].first(), Some(&b"end"[..]));
+    }
+
+    #[test]
+    fn only_zmtp_3_connections_are_heartbeated() {
+        // ZMTP 1.0 and 2.0 have no PING, so the multiplexer must not expect
+        // an answer to one from such a peer.
+        assert!(codec().heartbeats());
+        assert!(!codec().with_framing(Framing::V1, false).heartbeats());
+        assert!(!codec().with_framing(Framing::V2, false).heartbeats());
     }
 
     #[test]
@@ -838,6 +902,28 @@ mod tests {
             decode_all(&mut c, &wire),
             Err(MonocoqueError::MessageTooLarge { .. })
         ));
+    }
+
+    #[test]
+    fn an_unlimited_max_msg_size_still_refuses_a_huge_frame() {
+        // `usize::MAX` is the natural way to ask for no limit. A peer that
+        // then announces the largest length must be refused at the header:
+        // adding the header size to it would overflow.
+        let mut c = ZmtpCodec::new(
+            None,
+            &SocketOptions::default().with_max_msg_size(Some(usize::MAX)),
+        );
+        for announced in [u64::MAX, u64::MAX >> 1, MAX_MESSAGE_BYTES as u64 + 1] {
+            let mut wire = vec![FLAG_LONG];
+            wire.extend_from_slice(&announced.to_be_bytes());
+            assert!(
+                matches!(
+                    decode_all(&mut c, &wire),
+                    Err(MonocoqueError::MessageTooLarge { .. })
+                ),
+                "length {announced} was not refused"
+            );
+        }
     }
 
     #[test]

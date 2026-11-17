@@ -151,8 +151,11 @@ impl CurveSecretKey {
         Ok(shared)
     }
 
-    /// Return raw scalar bytes for use with crypto_box primitives
-    fn to_raw_bytes(&self) -> [u8; CURVE_KEY_SIZE] {
+    /// The secret key's 32 bytes, for storing it or for
+    /// `SocketOptions::with_curve_keypair`. The copy is not wiped when
+    /// dropped; treat it as the secret it is.
+    #[must_use]
+    pub fn to_bytes(&self) -> [u8; CURVE_KEY_SIZE] {
         self.0.to_bytes()
     }
 }
@@ -559,9 +562,9 @@ impl CurveMessageCipher {
         let client = CurveSecretKey::from_bytes([1; CURVE_KEY_SIZE]);
         let server = CurveSecretKey::from_bytes([2; CURVE_KEY_SIZE]);
         let to_server =
-            CurveBox::from_transient_keys(server.public_key().as_bytes(), &client.to_raw_bytes());
+            CurveBox::from_transient_keys(server.public_key().as_bytes(), &client.to_bytes());
         let to_client =
-            CurveBox::from_transient_keys(client.public_key().as_bytes(), &server.to_raw_bytes());
+            CurveBox::from_transient_keys(client.public_key().as_bytes(), &server.to_bytes());
         // HELLO and INITIATE used the client's nonces 1 and 2, READY the
         // server's 1, as in a real handshake.
         (
@@ -723,6 +726,7 @@ impl std::fmt::Debug for CurveMessageCipher {
 
 /// CURVE-specific errors
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum CurveError {
     /// Symmetric encryption failed.
     #[error("Encryption failed")]
@@ -882,7 +886,7 @@ impl CurveClient {
 
         let hello_box = salsa_encrypt(
             self.server_public.as_bytes(),
-            &self.client_short_keypair.secret.to_raw_bytes(),
+            &self.client_short_keypair.secret.to_bytes(),
             &nonce_24,
             &[0u8; 64],
         )
@@ -931,7 +935,7 @@ impl CurveClient {
 
         let plaintext = salsa_decrypt(
             self.server_public.as_bytes(),
-            &self.client_short_keypair.secret.to_raw_bytes(),
+            &self.client_short_keypair.secret.to_bytes(),
             &nonce_24,
             welcome_box,
         )
@@ -992,7 +996,7 @@ impl CurveClient {
 
         let vouch_ct = salsa_encrypt(
             server_short_public.as_bytes(),
-            &self.client_keypair.secret.to_raw_bytes(),
+            &self.client_keypair.secret.to_bytes(),
             &vouch_nonce_24,
             &vouch_pt,
         )
@@ -1019,7 +1023,7 @@ impl CurveClient {
 
         let initiate_box = salsa_encrypt(
             server_short_public.as_bytes(),
-            &self.client_short_keypair.secret.to_raw_bytes(),
+            &self.client_short_keypair.secret.to_bytes(),
             &initiate_nonce_24,
             &initiate_pt,
         )
@@ -1065,7 +1069,7 @@ impl CurveClient {
 
         let metadata_bytes = salsa_decrypt(
             s_prime.as_bytes(),
-            &self.client_short_keypair.secret.to_raw_bytes(),
+            &self.client_short_keypair.secret.to_bytes(),
             &ready_nonce_24,
             ready_box,
         )
@@ -1087,7 +1091,7 @@ impl CurveClient {
         // shared key equals crypto_box_beforenm(c', s'), matching libzmq.
         self.message_box = Some(CurveBox::from_transient_keys(
             s_prime.as_bytes(),
-            &self.client_short_keypair.secret.to_raw_bytes(),
+            &self.client_short_keypair.secret.to_bytes(),
         ));
 
         debug!("[CURVE CLIENT] Handshake complete");
@@ -1258,7 +1262,7 @@ impl CurveServer {
 
         let plaintext = salsa_decrypt(
             &c_prime_pk_bytes,
-            &self.server_keypair.secret.to_raw_bytes(),
+            &self.server_keypair.secret.to_bytes(),
             &nonce_24,
             hello_box,
         )
@@ -1303,7 +1307,7 @@ impl CurveServer {
 
         let mut cookie_pt = [0u8; 64];
         cookie_pt[..32].copy_from_slice(c_prime_pk.as_bytes());
-        cookie_pt[32..].copy_from_slice(&self.server_short_keypair.secret.to_raw_bytes());
+        cookie_pt[32..].copy_from_slice(&self.server_short_keypair.secret.to_bytes());
 
         let cookie_cipher = XChaCha20Poly1305::new(self.cookie_key.as_ref().into());
         let cookie_ct = cookie_cipher
@@ -1330,7 +1334,7 @@ impl CurveServer {
 
         let welcome_box = salsa_encrypt(
             c_prime_pk.as_bytes(),
-            &self.server_keypair.secret.to_raw_bytes(),
+            &self.server_keypair.secret.to_bytes(),
             &welcome_nonce_24,
             &welcome_pt,
         )
@@ -1497,7 +1501,7 @@ impl CurveServer {
         // a real libzmq peer.
         self.message_box = Some(CurveBox::from_transient_keys(
             c_prime.as_bytes(),
-            &self.server_short_keypair.secret.to_raw_bytes(),
+            &self.server_short_keypair.secret.to_bytes(),
         ));
 
         // Encrypt server metadata in READY box (s'→c')
@@ -1509,7 +1513,7 @@ impl CurveServer {
         let server_meta = encode_zmtp_props(&self.local_socket_type, None, &self.local_metadata);
         let ready_box = salsa_encrypt(
             c_prime.as_bytes(),
-            &self.server_short_keypair.secret.to_raw_bytes(),
+            &self.server_short_keypair.secret.to_bytes(),
             &ready_nonce_24,
             &server_meta,
         )
@@ -1806,14 +1810,10 @@ mod tests {
     fn transient_box_pair() -> (CurveBox, CurveBox) {
         let client_t = CurveKeyPair::generate();
         let server_t = CurveKeyPair::generate();
-        let client = CurveBox::from_transient_keys(
-            server_t.public.as_bytes(),
-            &client_t.secret.to_raw_bytes(),
-        );
-        let server = CurveBox::from_transient_keys(
-            client_t.public.as_bytes(),
-            &server_t.secret.to_raw_bytes(),
-        );
+        let client =
+            CurveBox::from_transient_keys(server_t.public.as_bytes(), &client_t.secret.to_bytes());
+        let server =
+            CurveBox::from_transient_keys(client_t.public.as_bytes(), &server_t.secret.to_bytes());
         (client, server)
     }
 
@@ -1916,20 +1916,10 @@ mod tests {
         let nonce = [7u8; 24];
         let pt = b"test message";
 
-        let ct = salsa_encrypt(
-            bob.public.as_bytes(),
-            &alice.secret.to_raw_bytes(),
-            &nonce,
-            pt,
-        )
-        .unwrap();
-        let recovered = salsa_decrypt(
-            alice.public.as_bytes(),
-            &bob.secret.to_raw_bytes(),
-            &nonce,
-            &ct,
-        )
-        .unwrap();
+        let ct =
+            salsa_encrypt(bob.public.as_bytes(), &alice.secret.to_bytes(), &nonce, pt).unwrap();
+        let recovered =
+            salsa_decrypt(alice.public.as_bytes(), &bob.secret.to_bytes(), &nonce, &ct).unwrap();
 
         assert_eq!(recovered, pt);
     }

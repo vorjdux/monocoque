@@ -10,8 +10,8 @@
 //! REQ/REP empty-delimiter envelope nor ROUTER routing-id framing, so a failure
 //! here is a CURVE failure and nothing else.
 
+use monocoque::zmq::security::curve::CurveSecretKey;
 use monocoque::zmq::{DealerSocket, SocketOptions};
-use monocoque_zmtp::security::curve::CurveSecretKey;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;

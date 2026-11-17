@@ -43,7 +43,12 @@ const fn clamp_read_buffer_size(size: usize) -> usize {
 ///     .with_send_timeout(Duration::from_secs(5))
 ///     .with_read_buffer_size(65536); // widen the read batch for bulk transfers
 /// ```
+///
+/// New options are added as fields, so the struct cannot be built with a
+/// struct literal outside this crate: start from [`SocketOptions::default`]
+/// and use the `with_*` methods.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct SocketOptions {
     /// Read buffer size (bytes)
     ///
@@ -62,32 +67,37 @@ pub struct SocketOptions {
     /// Receive timeout (`ZMQ_RCVTIMEO`)
     ///
     /// Maximum time to wait for a receive operation.
-    /// - `None`: Block indefinitely (default)
-    /// - `Some(Duration::ZERO)`: Non-blocking (return immediately with EAGAIN)
-    /// - `Some(duration)`: Wait up to duration before returning EAGAIN
+    /// - `None`: Wait indefinitely (default)
+    /// - `Some(Duration::ZERO)`: Do not wait; fail with `Again` when no
+    ///   message is queued
+    /// - `Some(duration)`: Wait up to duration, then fail with `TimedOut`
     pub recv_timeout: Option<Duration>,
 
     /// Send timeout (`ZMQ_SNDTIMEO`)
     ///
     /// Maximum time to wait for a send operation.
-    /// - `None`: Block indefinitely (default)
-    /// - `Some(Duration::ZERO)`: Non-blocking (return immediately with EAGAIN)
-    /// - `Some(duration)`: Wait up to duration before returning EAGAIN
+    /// - `None`: Wait indefinitely (default)
+    /// - `Some(Duration::ZERO)`: Do not wait; fail with `Again` when the
+    ///   message cannot be taken at once
+    /// - `Some(duration)`: Wait up to duration, then fail with `TimedOut`
     pub send_timeout: Option<Duration>,
 
     /// Handshake timeout (`ZMQ_HANDSHAKE_IVL`)
     ///
     /// Maximum time to complete ZMTP handshake after connection.
     /// - Default: 30 seconds
-    /// - Set to `Duration::ZERO` to disable timeout
+    /// - `Duration::ZERO`: no limit, as in libzmq. A peer that connects and
+    ///   says nothing then holds its connection open until it closes it.
     pub handshake_timeout: Duration,
 
     /// Linger timeout (`ZMQ_LINGER`)
     ///
-    /// Time to wait for pending messages to be sent before closing socket.
-    /// - `None`: Close immediately, discard pending messages
-    /// - `Some(Duration::ZERO)`: Same as None
-    /// - `Some(duration)`: Wait up to duration for messages to be sent
+    /// How long `close()` waits for queued messages to be written.
+    /// - `Some(duration)`: wait up to duration (default: 30 seconds)
+    /// - `Some(Duration::ZERO)`: do not wait; what is still queued is dropped
+    /// - `None`: wait until everything is written, however long that takes
+    ///   (libzmq's `-1`). `close()` then never returns while a peer does not
+    ///   read.
     pub linger: Option<Duration>,
 
     /// How long an eager send waits on a peer taking under 16 KiB of bytes
@@ -116,8 +126,10 @@ pub struct SocketOptions {
 
     /// Connection timeout (`ZMQ_CONNECT_TIMEOUT`)
     ///
-    /// Maximum time to wait for TCP connection to complete.
-    /// - Default: 0 (use OS default)
+    /// Maximum time one dial may take, from the start of the connect to an
+    /// established TCP or Unix stream. A dial that runs out counts as a failed
+    /// attempt and is retried after the reconnect interval.
+    /// - Default: 0 (no limit of ours; the OS gives up in its own time)
     pub connect_timeout: Duration,
 
     /// High water mark for receiving (`ZMQ_RCVHWM`)
@@ -142,17 +154,13 @@ pub struct SocketOptions {
     /// - `0`: unbounded, as in libzmq.
     pub send_hwm: usize,
 
-    /// Enable immediate connect mode (`ZMQ_IMMEDIATE`)
+    /// Largest frame a peer may send (`ZMQ_MAXMSGSIZE`)
     ///
-    /// - `false` (default): Queue messages while connecting
-    /// - `true`: Report error if no connection established
-    pub immediate: bool,
-
-    /// Maximum message size (`ZMQ_MAXMSGSIZE`)
-    ///
-    /// Maximum size of a single message in bytes.
-    /// - `None`: No limit (default)
-    /// - `Some(size)`: Reject messages larger than size
+    /// The limit is on each frame's body, in bytes. A peer that announces a
+    /// larger frame is disconnected before the frame is read. A multipart
+    /// message may be larger in total, up to 256 MiB.
+    /// - `None`: 64 MiB (default)
+    /// - `Some(size)`: `size` bytes, lowered to 256 MiB when larger
     pub max_msg_size: Option<usize>,
 
     /// Socket identity / routing ID (`ZMQ_ROUTING_ID` / `ZMQ_IDENTITY`)
@@ -190,12 +198,6 @@ pub struct SocketOptions {
     /// - `false` (default): Disconnect old peer when new peer with same identity connects
     /// - `true`: Hand over pending messages to new peer with same identity
     pub router_handover: bool,
-
-    /// Probe ROUTER on connect (`ZMQ_PROBE_ROUTER`)
-    ///
-    /// - `false` (default): Normal operation
-    /// - `true`: Send empty message on connect to probe ROUTER identity
-    pub probe_router: bool,
 
     /// XPUB verbose mode (`ZMQ_XPUB_VERBOSE`)
     ///
@@ -271,22 +273,15 @@ pub struct SocketOptions {
 
     /// REQ relaxed mode (`ZMQ_REQ_RELAXED`)
     ///
-    /// Allow multiple outstanding requests without strict alternation.
-    /// - `false` (default): Strict send-recv-send-recv pattern
-    /// - `true`: Allow send-send-recv-recv pattern
+    /// Let a new request abandon the one still waiting for its reply.
+    /// - `false` (default): a send while a reply is pending fails with
+    ///   `InvalidState`
+    /// - `true`: the pending request is given up and the new one is sent
+    ///
+    /// Set [`req_correlate`](Self::req_correlate) with it. Without it, as in
+    /// libzmq, a late reply to the abandoned request can be returned as the
+    /// reply to the new one.
     pub req_relaxed: bool,
-
-    /// Multicast rate in kilobits per second (`ZMQ_RATE`)
-    ///
-    /// Maximum send or receive data rate for multicast transports (PGM/EPGM).
-    /// - Default: 100 kbps
-    pub rate: i32,
-
-    /// Multicast recovery interval (`ZMQ_RECOVERY_IVL`)
-    ///
-    /// Maximum time to recover lost messages on multicast transports.
-    /// - Default: 10 seconds
-    pub recovery_ivl: Duration,
 
     /// OS-level send buffer size (`ZMQ_SNDBUF`)
     ///
@@ -308,36 +303,14 @@ pub struct SocketOptions {
     /// - `false` (default): a single listener per address.
     pub reuse_port: bool,
 
-    /// Multicast TTL (`ZMQ_MULTICAST_HOPS`)
+    /// IP type of service (`ZMQ_TOS`)
     ///
-    /// Time-to-live for multicast packets.
-    /// - Default: 1 (local network only)
-    pub multicast_hops: i32,
-
-    /// IP Type of Service (`ZMQ_TOS`)
-    ///
-    /// Sets the `ToS` field in IP headers for `QoS`.
-    /// - Default: 0 (normal service)
-    pub tos: i32,
-
-    /// Maximum multicast transmission unit (`ZMQ_MULTICAST_MAXTPDU`)
-    ///
-    /// Maximum transport data unit for multicast.
-    /// - Default: 1500 bytes
-    pub multicast_maxtpdu: i32,
-
-    /// IPv6 support (`ZMQ_IPV6`)
-    ///
-    /// Enable IPv6 on socket.
-    /// - `false` (default): IPv4 only
-    /// - `true`: IPv6 support enabled
-    pub ipv6: bool,
-
-    /// Bind to device (`ZMQ_BINDTODEVICE`)
-    ///
-    /// Bind socket to specific network interface (Linux only).
-    /// - Default: None (bind to all interfaces)
-    pub bind_to_device: Option<String>,
+    /// The value of the IPv4 `TOS` byte, or the IPv6 traffic class, on every
+    /// TCP connection of the socket, for networks that queue by DSCP. It is
+    /// set once a connection is established, so the packets of the TCP
+    /// handshake itself go out unmarked.
+    /// - Default: 0 (left as the OS has it)
+    pub tos: u8,
 
     // --- Security Options ---
     /// PLAIN server mode (`ZMQ_PLAIN_SERVER`)
@@ -373,6 +346,10 @@ pub struct SocketOptions {
     ///
     /// Local public key for CURVE (32 bytes).
     /// - Default: None (no encryption)
+    ///
+    /// The handshake derives the public key from the secret key and refuses
+    /// to start when this one is set and does not match it, which catches a
+    /// public key paired with the wrong secret.
     pub curve_publickey: Option<[u8; 32]>,
 
     /// CURVE secret key (`ZMQ_CURVE_SECRETKEY`)
@@ -407,12 +384,6 @@ pub struct SocketOptions {
     /// Note: SUB sockets MUST subscribe to at least one topic to receive messages.
     pub subscriptions: Vec<bytes::Bytes>,
 
-    /// Unsubscriptions (`ZMQ_UNSUBSCRIBE`)
-    ///
-    /// Subscription filters to remove for SUB/XSUB sockets.
-    /// Applied after subscriptions during socket configuration.
-    pub unsubscriptions: Vec<bytes::Bytes>,
-
     /// Maximum reconnection attempts (`ZMQ_RECONNECT_STOP`)
     ///
     /// How many dials in a row may fail before a connected endpoint stops
@@ -444,25 +415,12 @@ pub struct SocketOptions {
     /// - `Some(dur)`: Custom timeout (recommended: 2-5x `heartbeat_ivl`)
     pub heartbeat_timeout: Option<Duration>,
 
-    /// ROUTER raw mode (`ZMQ_ROUTER_RAW` = 41)
-    ///
-    /// Put ROUTER socket into raw mode (no ZMTP handshake, acts like STREAM).
-    /// - `false` (default): Normal ZMTP routing
-    /// - `true`: Raw TCP bridging mode
-    pub router_raw: bool,
-
     /// STREAM connect/disconnect notifications (`ZMQ_STREAM_NOTIFY` = 73)
     ///
     /// Send empty notification frames on connect and disconnect.
     /// - `true` (default): Send notification frames
     /// - `false`: Suppress notification frames
     pub stream_notify: bool,
-
-    /// XPUB no-drop mode (`ZMQ_XPUB_NODROP` = 69)
-    ///
-    /// - `false` (default): Drop messages silently when HWM is reached
-    /// - `true`: Return error (`EAGAIN`) instead of dropping
-    pub xpub_nodrop: bool,
 
     /// Invert topic matching (`ZMQ_INVERT_MATCHING` = 74)
     ///
@@ -536,13 +494,11 @@ impl fmt::Debug for SocketOptions {
             .field("connect_timeout", &self.connect_timeout)
             .field("recv_hwm", &self.recv_hwm)
             .field("send_hwm", &self.send_hwm)
-            .field("immediate", &self.immediate)
             .field("max_msg_size", &self.max_msg_size)
             .field("routing_id", &self.routing_id)
             .field("connect_routing_id", &self.connect_routing_id)
             .field("router_mandatory", &self.router_mandatory)
             .field("router_handover", &self.router_handover)
-            .field("probe_router", &self.probe_router)
             .field("xpub_verbose", &self.xpub_verbose)
             .field("xpub_manual", &self.xpub_manual)
             .field("xpub_welcome_msg", &self.xpub_welcome_msg)
@@ -554,16 +510,10 @@ impl fmt::Debug for SocketOptions {
             .field("tcp_keepalive_intvl", &self.tcp_keepalive_intvl)
             .field("req_correlate", &self.req_correlate)
             .field("req_relaxed", &self.req_relaxed)
-            .field("rate", &self.rate)
-            .field("recovery_ivl", &self.recovery_ivl)
             .field("sndbuf", &self.sndbuf)
             .field("rcvbuf", &self.rcvbuf)
             .field("reuse_port", &self.reuse_port)
-            .field("multicast_hops", &self.multicast_hops)
             .field("tos", &self.tos)
-            .field("multicast_maxtpdu", &self.multicast_maxtpdu)
-            .field("ipv6", &self.ipv6)
-            .field("bind_to_device", &self.bind_to_device)
             .field("plain_server", &self.plain_server)
             .field("plain_username", &self.plain_username)
             .field(
@@ -579,14 +529,11 @@ impl fmt::Debug for SocketOptions {
             .field("curve_serverkey", &self.curve_serverkey)
             .field("zap_domain", &self.zap_domain)
             .field("subscriptions", &self.subscriptions)
-            .field("unsubscriptions", &self.unsubscriptions)
             .field("max_reconnect_attempts", &self.max_reconnect_attempts)
             .field("heartbeat_ivl", &self.heartbeat_ivl)
             .field("heartbeat_ttl", &self.heartbeat_ttl)
             .field("heartbeat_timeout", &self.heartbeat_timeout)
-            .field("router_raw", &self.router_raw)
             .field("stream_notify", &self.stream_notify)
-            .field("xpub_nodrop", &self.xpub_nodrop)
             .field("invert_matching", &self.invert_matching)
             .field("write_coalescing", &self.write_coalescing)
             .field("write_coalesce_threshold", &self.write_coalesce_threshold)
@@ -608,8 +555,7 @@ impl Default for SocketOptions {
             connect_timeout: Duration::ZERO,   // Use OS default
             recv_hwm: 1000,
             send_hwm: 1000,
-            immediate: false,
-            max_msg_size: None, // No limit
+            max_msg_size: None, // 64 MiB per frame
             // 32 KiB read batch. Larger batches cut recv syscalls on bulk
             // transfers roughly in proportion to their size (measured over a
             // 64 MiB PUSH/PULL flow: 8 KiB -> 8379 recvfrom, 16 KiB -> 4178,
@@ -621,7 +567,6 @@ impl Default for SocketOptions {
             metadata: Vec::new(),
             router_mandatory: false,
             router_handover: false,
-            probe_router: false,
             xpub_verbose: false,
             xpub_manual: false,
             xpub_welcome_msg: None,
@@ -633,16 +578,10 @@ impl Default for SocketOptions {
             tcp_keepalive_intvl: -1, // OS default
             req_correlate: false,
             req_relaxed: false,
-            rate: 100, // 100 kbps
-            recovery_ivl: Duration::from_secs(10),
             sndbuf: 0, // OS default
             rcvbuf: 0, // OS default
             reuse_port: false,
-            multicast_hops: 1,       // Local network only
-            tos: 0,                  // Normal service
-            multicast_maxtpdu: 1500, // Standard MTU
-            ipv6: false,             // IPv4 only
-            bind_to_device: None,    // All interfaces
+            tos: 0, // OS default
             // Security
             plain_server: false,
             plain_username: None,
@@ -653,14 +592,11 @@ impl Default for SocketOptions {
             curve_serverkey: None,
             zap_domain: String::new(),    // Global domain
             subscriptions: Vec::new(),    // No subscriptions
-            unsubscriptions: Vec::new(),  // No unsubscriptions
             max_reconnect_attempts: None, // Retry indefinitely
             heartbeat_ivl: None,
             heartbeat_ttl: None,
             heartbeat_timeout: None,
-            router_raw: false,
             stream_notify: true,
-            xpub_nodrop: false,
             invert_matching: false,
             write_coalescing: false,
             write_coalesce_threshold: 65536,
@@ -670,7 +606,7 @@ impl Default for SocketOptions {
 }
 
 impl SocketOptions {
-    /// Create new socket options with default values (8KB buffers).
+    /// Create new socket options with default values.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -733,7 +669,8 @@ impl SocketOptions {
         self
     }
 
-    /// Set connection timeout.
+    /// Set the longest one dial may take (`ZMQ_CONNECT_TIMEOUT`). Zero leaves
+    /// it to the OS.
     pub const fn with_connect_timeout(mut self, timeout: Duration) -> Self {
         self.connect_timeout = timeout;
         self
@@ -757,21 +694,9 @@ impl SocketOptions {
         self
     }
 
-    /// Enable or disable ROUTER raw mode (`ZMQ_ROUTER_RAW`).
-    pub const fn with_router_raw(mut self, raw: bool) -> Self {
-        self.router_raw = raw;
-        self
-    }
-
     /// Enable or disable STREAM connect/disconnect notifications (`ZMQ_STREAM_NOTIFY`).
     pub const fn with_stream_notify(mut self, notify: bool) -> Self {
         self.stream_notify = notify;
-        self
-    }
-
-    /// Enable XPUB no-drop mode (`ZMQ_XPUB_NODROP`).
-    pub const fn with_xpub_nodrop(mut self, nodrop: bool) -> Self {
-        self.xpub_nodrop = nodrop;
         self
     }
 
@@ -837,13 +762,7 @@ impl SocketOptions {
         self
     }
 
-    /// Enable or disable immediate mode.
-    pub const fn with_immediate(mut self, immediate: bool) -> Self {
-        self.immediate = immediate;
-        self
-    }
-
-    /// Set maximum message size.
+    /// Set the largest frame a peer may send. `None` is 64 MiB.
     pub const fn with_max_msg_size(mut self, size: Option<usize>) -> Self {
         self.max_msg_size = size;
         self
@@ -927,12 +846,6 @@ impl SocketOptions {
     /// Enable ROUTER handover mode.
     pub const fn with_router_handover(mut self, enabled: bool) -> Self {
         self.router_handover = enabled;
-        self
-    }
-
-    /// Enable ROUTER probe on connect.
-    pub const fn with_probe_router(mut self, enabled: bool) -> Self {
-        self.probe_router = enabled;
         self
     }
 
@@ -1026,18 +939,6 @@ impl SocketOptions {
         self
     }
 
-    /// Set multicast rate (`ZMQ_RATE`).
-    pub const fn with_rate(mut self, rate: i32) -> Self {
-        self.rate = rate;
-        self
-    }
-
-    /// Set multicast recovery interval (`ZMQ_RECOVERY_IVL`).
-    pub const fn with_recovery_ivl(mut self, interval: Duration) -> Self {
-        self.recovery_ivl = interval;
-        self
-    }
-
     /// Set OS send buffer size (`ZMQ_SNDBUF`).
     pub const fn with_sndbuf(mut self, size: i32) -> Self {
         self.sndbuf = size;
@@ -1057,33 +958,10 @@ impl SocketOptions {
         self
     }
 
-    /// Set multicast TTL/hops (`ZMQ_MULTICAST_HOPS`).
-    pub const fn with_multicast_hops(mut self, hops: i32) -> Self {
-        self.multicast_hops = hops;
-        self
-    }
-
-    /// Set IP Type of Service (`ZMQ_TOS`).
-    pub const fn with_tos(mut self, tos: i32) -> Self {
+    /// Set the IPv4 `TOS` byte or IPv6 traffic class of the socket's TCP
+    /// connections (`ZMQ_TOS`). See [`SocketOptions::tos`].
+    pub const fn with_tos(mut self, tos: u8) -> Self {
         self.tos = tos;
-        self
-    }
-
-    /// Set multicast maximum TPU (`ZMQ_MULTICAST_MAXTPDU`).
-    pub const fn with_multicast_maxtpdu(mut self, mtu: i32) -> Self {
-        self.multicast_maxtpdu = mtu;
-        self
-    }
-
-    /// Enable IPv6 support (`ZMQ_IPV6`).
-    pub const fn with_ipv6(mut self, enabled: bool) -> Self {
-        self.ipv6 = enabled;
-        self
-    }
-
-    /// Bind to specific device (`ZMQ_BINDTODEVICE`) - Linux only.
-    pub fn with_bind_to_device(mut self, device: impl Into<String>) -> Self {
-        self.bind_to_device = Some(device.into());
         self
     }
 
@@ -1137,7 +1015,9 @@ impl SocketOptions {
         self
     }
 
-    /// Set CURVE client keys (public + secret).
+    /// Set this socket's CURVE key pair (public + secret), for a client or a
+    /// server. The public key must be the one that belongs to the secret key;
+    /// the handshake refuses a pair that does not match.
     ///
     /// # Examples
     ///
@@ -1225,25 +1105,6 @@ impl SocketOptions {
     /// ```
     pub fn with_subscriptions(mut self, filters: Vec<bytes::Bytes>) -> Self {
         self.subscriptions.extend(filters);
-        self
-    }
-
-    /// Add an unsubscription filter for SUB/XSUB sockets (`ZMQ_UNSUBSCRIBE`).
-    ///
-    /// Removes a previously added subscription filter.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use monocoque_core::options::SocketOptions;
-    /// use bytes::Bytes;
-    ///
-    /// let opts = SocketOptions::new()
-    ///     .with_subscribe(Bytes::new())  // Subscribe to all
-    ///     .with_unsubscribe(Bytes::from("admin.")); // Except admin topics
-    /// ```
-    pub fn with_unsubscribe(mut self, filter: bytes::Bytes) -> Self {
-        self.unsubscriptions.push(filter);
         self
     }
 
@@ -1523,10 +1384,5 @@ mod tests {
         ]);
 
         assert_eq!(opts2.subscriptions.len(), 2);
-
-        // Test with_unsubscribe
-        let opts3 = opts.with_unsubscribe(bytes::Bytes::from("admin."));
-        assert_eq!(opts3.unsubscriptions.len(), 1);
-        assert_eq!(opts3.unsubscriptions[0], bytes::Bytes::from("admin."));
     }
 }

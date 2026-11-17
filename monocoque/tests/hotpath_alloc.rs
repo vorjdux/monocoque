@@ -22,11 +22,11 @@
 
 use bytes::Bytes;
 use monocoque::rt::LocalRuntime;
+use monocoque::zmq::security::curve::CurveSecretKey;
 use monocoque::zmq::{
     DealerSocket, Msg, PairSocket, PubSocket, PullSocket, PushSocket, RepSocket, ReqSocket,
     RouterSocket, SocketOptions, StreamSocket, SubSocket,
 };
-use monocoque_zmtp::security::curve::CurveSecretKey;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};

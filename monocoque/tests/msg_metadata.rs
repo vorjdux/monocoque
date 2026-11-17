@@ -6,9 +6,9 @@
 
 use bytes::Bytes;
 use monocoque::rt::LocalRuntime;
+use monocoque::zmq::security::zap::{ZapRequest, ZapResponse};
+use monocoque::zmq::security::zap_handler::{ZapHandler, spawn_zap_server};
 use monocoque::zmq::{DealerSocket, PullSocket, PushSocket, RouterSocket, SocketOptions};
-use monocoque_zmtp::security::zap::{ZapRequest, ZapResponse};
-use monocoque_zmtp::security::zap_handler::{ZapHandler, spawn_zap_server};
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
@@ -56,6 +56,31 @@ fn tcp_messages_carry_socket_type_peer_address_identity_and_custom_properties() 
     });
 }
 
+/// `User-Id` and `Peer-Address` are what this side established: the ZAP
+/// handler's answer and the address the connection came from. A peer that
+/// announces them in its own handshake must not be believed.
+#[test]
+fn a_peer_cannot_announce_its_own_user_id_or_address() {
+    LocalRuntime::new().unwrap().block_on(async {
+        let mut pull = PullSocket::with_options(opts());
+        let ep = pull.bind("tcp://127.0.0.1:0").await.unwrap();
+        let mut push = PushSocket::with_options(
+            SocketOptions::default()
+                .with_metadata("User-Id", "admin")
+                .with_metadata("peer-address", "10.9.9.9")
+                .with_metadata("X-Kept", "yes"),
+        );
+        push.connect(&ep).await.unwrap();
+        push.send("one").await.unwrap();
+
+        let msg = pull.recv().await.unwrap();
+        assert_eq!(msg.gets("User-Id"), None, "no ZAP, so no user id");
+        assert_eq!(msg.gets("Peer-Address"), Some("127.0.0.1"));
+        assert_eq!(msg.gets("Socket-Type"), Some("PUSH"));
+        assert_eq!(msg.gets("X-Kept"), Some("yes"));
+    });
+}
+
 #[test]
 fn inproc_messages_carry_socket_type_and_custom_properties() {
     LocalRuntime::new().unwrap().block_on(async {
@@ -81,7 +106,7 @@ fn curve_carries_custom_properties_both_ways() {
     let key = |seed: u8| {
         let secret = [seed; 32];
         (
-            *monocoque_zmtp::security::curve::CurveSecretKey::from_bytes(secret)
+            *monocoque::zmq::security::curve::CurveSecretKey::from_bytes(secret)
                 .public_key()
                 .as_bytes(),
             secret,

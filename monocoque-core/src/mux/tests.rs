@@ -288,6 +288,60 @@ fn stops_dialing_after_max_reconnect_attempts() {
     });
 }
 
+/// A listener whose accept queue is full drops further SYNs on Linux, so a
+/// dial to it neither completes nor fails: only `connect_timeout` ends it.
+#[cfg(target_os = "linux")]
+#[test]
+fn connect_timeout_ends_a_dial_that_hangs() {
+    use socket2::{Domain, Socket, Type};
+
+    LocalRuntime::new().unwrap().block_on(async {
+        let listener = Socket::new(Domain::IPV4, Type::STREAM, None).unwrap();
+        listener
+            .bind(
+                &"127.0.0.1:0"
+                    .parse::<std::net::SocketAddr>()
+                    .unwrap()
+                    .into(),
+            )
+            .unwrap();
+        listener.listen(0).unwrap();
+        let addr = listener.local_addr().unwrap().as_socket().unwrap();
+        // Never accepted. The first fills the queue; the others confirm that
+        // a further dial hangs here, or the test would prove nothing.
+        let fillers: Vec<_> = (0..3)
+            .filter_map(|_| {
+                std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(200)).ok()
+            })
+            .collect();
+        assert!(
+            fillers.len() < 3,
+            "a dial to the full listener was expected to hang"
+        );
+
+        let c = core(
+            SocketOptions::default()
+                .with_connect_timeout(Duration::from_millis(100))
+                .with_reconnect_ivl(Duration::from_millis(10)),
+        );
+        let (tx, events) = crate::monitor::create_monitor();
+        c.borrow_mut().set_monitor(tx);
+        SocketCore::connect(&c, &format!("tcp://{addr}")).unwrap();
+
+        let reason = crate::rt::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Ok(SocketEvent::ConnectFailed { reason, .. }) = events.recv_async().await {
+                    return reason;
+                }
+            }
+        })
+        .await
+        .expect("the dial should have been given up within the connect timeout");
+        assert!(reason.contains("timed out"), "unexpected reason: {reason}");
+        drop(fillers);
+    });
+}
+
 #[test]
 fn inproc_same_thread_moves_messages_without_a_codec() {
     LocalRuntime::new().unwrap().block_on(async {
