@@ -10,22 +10,23 @@
 
 use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::PubSocket;
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-const ENDPOINT: &str = "tcp://127.0.0.1:5564";
 const EVENTS: usize = 3;
 
 fn main() -> Result<()> {
     println!("=== Monocoque PUB <-> libzmq SUB ===\n");
 
-    // libzmq keeps dialing until the publisher is bound, so the subscriber
-    // can start first.
-    let subscriber = thread::spawn(libzmq_sub);
+    // The publisher binds a port the OS picks and tells the subscriber's
+    // thread where to connect.
+    let (bound_tx, bound_rx) = mpsc::channel();
+    let subscriber = thread::spawn(move || libzmq_sub(&bound_rx));
 
-    LocalRuntime::new()?.block_on(monocoque_pub())?;
+    LocalRuntime::new()?.block_on(monocoque_pub(bound_tx))?;
 
     subscriber
         .join()
@@ -34,10 +35,15 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn libzmq_sub() -> zmq::Result<()> {
+fn libzmq_sub(bound: &mpsc::Receiver<String>) -> zmq::Result<()> {
+    // If the publisher failed to bind, its end of the channel is gone and
+    // there is nothing to subscribe to; `main` reports the bind error.
+    let Ok(endpoint) = bound.recv() else {
+        return Ok(());
+    };
     let ctx = zmq::Context::new();
     let sub = ctx.socket(zmq::SUB)?;
-    sub.connect(ENDPOINT)?;
+    sub.connect(&endpoint)?;
     sub.set_subscribe(b"topic.event")?;
     println!("[libzmq SUB] Subscribed to 'topic.event'");
 
@@ -48,10 +54,14 @@ fn libzmq_sub() -> zmq::Result<()> {
     Ok(())
 }
 
-async fn monocoque_pub() -> monocoque::zmq::Result<()> {
+async fn monocoque_pub(bound: mpsc::Sender<String>) -> monocoque::zmq::Result<()> {
     let mut publisher = PubSocket::new();
-    publisher.bind(ENDPOINT).await?;
-    println!("[Monocoque PUB] Listening on {ENDPOINT}");
+    // Port 0: the OS picks a free port and `bind` reports it.
+    let endpoint = publisher.bind("tcp://127.0.0.1:0").await?;
+    println!("[Monocoque PUB] Listening on {endpoint}");
+    // The subscriber's thread waits on this; it only fails if that thread
+    // is gone.
+    let _ = bound.send(endpoint);
 
     // A PUB drops messages nobody is subscribed to, and `send` returns how
     // many subscribers a message went to. Publish a probe on a topic the

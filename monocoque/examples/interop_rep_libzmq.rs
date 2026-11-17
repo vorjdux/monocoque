@@ -15,7 +15,6 @@ use std::thread;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-const ENDPOINT: &str = "tcp://127.0.0.1:5563";
 const ROUNDS: usize = 2;
 
 fn main() -> Result<()> {
@@ -26,10 +25,10 @@ fn main() -> Result<()> {
         LocalRuntime::new()?.block_on(monocoque_rep(ready_tx))
     });
 
-    // Wait until the server is bound. If it failed to bind, the sender is
-    // dropped and the join below reports why.
-    if ready_rx.recv().is_ok() {
-        libzmq_req()?;
+    // Wait until the server is bound and has reported where. If it failed to
+    // bind, the sender is dropped and the join below reports why.
+    if let Ok(endpoint) = ready_rx.recv() {
+        libzmq_req(&endpoint)?;
     }
 
     server.join().map_err(|_| "the server thread panicked")??;
@@ -37,12 +36,13 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-async fn monocoque_rep(ready: mpsc::Sender<()>) -> monocoque::zmq::Result<()> {
+async fn monocoque_rep(ready: mpsc::Sender<String>) -> monocoque::zmq::Result<()> {
     let mut socket = RepSocket::new();
-    socket.bind(ENDPOINT).await?;
-    println!("[Monocoque REP] Listening on {ENDPOINT}");
+    // Port 0: the OS picks a free port and `bind` reports it.
+    let endpoint = socket.bind("tcp://127.0.0.1:0").await?;
+    println!("[Monocoque REP] Listening on {endpoint}");
     // The main thread waits on this; it only fails if that thread is gone.
-    let _ = ready.send(());
+    let _ = ready.send(endpoint);
 
     for round in 1..=ROUNDS {
         {
@@ -63,11 +63,11 @@ async fn monocoque_rep(ready: mpsc::Sender<()>) -> monocoque::zmq::Result<()> {
     socket.close().await
 }
 
-fn libzmq_req() -> zmq::Result<()> {
+fn libzmq_req(endpoint: &str) -> zmq::Result<()> {
     let ctx = zmq::Context::new();
     let req = ctx.socket(zmq::REQ)?;
-    req.connect(ENDPOINT)?;
-    println!("[libzmq REQ] Connecting to {ENDPOINT}");
+    req.connect(endpoint)?;
+    println!("[libzmq REQ] Connecting to {endpoint}");
 
     for round in 1..=ROUNDS {
         req.send(&format!("Request {round} from libzmq REQ"), 0)?;

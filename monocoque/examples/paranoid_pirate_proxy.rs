@@ -127,8 +127,11 @@ async fn client(frontend: String) -> Result<()> {
 
             // REQ pairs a reply with its request, but nothing promises that a
             // reply comes: a request that died with its worker is never
-            // answered. A REQ socket that is still owed a reply cannot send
-            // again, so on a timeout it is replaced and the request resent.
+            // answered. By default a REQ socket that is still owed a reply
+            // cannot send again, so on a timeout it is replaced and the
+            // request resent. The other way is a REQ made with
+            // `with_req_relaxed(true).with_req_correlate(true)`, which may
+            // send again on the same socket; proxy_steerable.rs uses it.
             match socket.recv().await {
                 Ok(reply) => {
                     println!(

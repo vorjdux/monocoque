@@ -48,12 +48,9 @@ impl ZapHandler for CustomZapHandler {
             return ZapResponse::failure(id, "Invalid domain");
         }
 
-        // Mechanism-specific authentication
+        // Mechanism-specific authentication. Only PLAIN and CURVE peers get
+        // here: a NULL socket never asks the handler.
         match &request.mechanism {
-            ZapMechanism::Null => {
-                println!("  ALLOW: NULL mechanism - auto-accept");
-                ZapResponse::success(id, "anonymous")
-            }
             ZapMechanism::Plain => {
                 let [username, password] = request.credentials.as_slice() else {
                     println!("  DENY: PLAIN: Invalid credentials format");
@@ -86,8 +83,10 @@ impl ZapHandler for CustomZapHandler {
                     return ZapResponse::failure(id, "Invalid CURVE key");
                 }
 
-                // In production, check public key against allowed keys database
-                println!("  ALLOW: CURVE: Public key accepted");
+                // This admits any client key: all it checks is the length. A
+                // real handler compares the key with a list of allowed ones,
+                // as curve_demo.rs does with `with_curve_whitelist`.
+                println!("  ALLOW: CURVE: any well-formed public key is admitted");
                 ZapResponse::success(id, "curve-client")
             }
             // The enum can grow: refuse a mechanism this handler does not know.
@@ -112,20 +111,17 @@ async fn async_main() -> Result<()> {
     plain_handler.add_user("user1", "password1");
     plain_handler.add_user("user2", "password2");
 
-    // Create custom ZAP handler with IP whitelist
+    // Create custom ZAP handler with IP whitelist. The request carries the
+    // peer's address as an IP, never as a host name.
     let custom_handler = CustomZapHandler {
-        allowed_ips: vec![
-            "127.0.0.1".to_string(),
-            "::1".to_string(),
-            "localhost".to_string(),
-        ],
+        allowed_ips: vec!["127.0.0.1".to_string(), "::1".to_string()],
         plain_handler: Arc::new(plain_handler),
     };
 
     println!("Configuration:");
     println!("  Allowed IPs: {:?}", custom_handler.allowed_ips);
     println!("  Users: admin, user1, user2");
-    println!("  Mechanisms: NULL, PLAIN, CURVE");
+    println!("  Mechanisms: PLAIN (checked against the users), CURVE (any key)");
     println!();
 
     // Spawn ZAP server on inproc://zeromq.zap.01
@@ -150,11 +146,15 @@ async fn async_main() -> Result<()> {
     });
 
     // A client with an unknown password is rejected, so its send times out.
+    // It redials until then, and after two failures in a row the server
+    // delays each new connection from that address (100 ms, doubling). The
+    // timeout is short so the valid client below, on the same address, waits
+    // only briefly.
     println!("Client with a wrong password:");
     let mut bad = ReqSocket::with_options(
         SocketOptions::default()
             .with_plain_credentials("user1", "nope")
-            .with_send_timeout(Duration::from_secs(1)),
+            .with_send_timeout(Duration::from_millis(500)),
     );
     bad.connect(&endpoint).await?;
     match bad.send("hello").await {

@@ -38,6 +38,10 @@ use std::time::Duration;
 
 const SERVER_ADDR: &str = "tcp://127.0.0.1:5555";
 const REQUESTS: usize = 3;
+/// How long a client waits for the server before giving up.
+const TIMEOUT: Duration = Duration::from_secs(10);
+/// The same for the client that is expected to be refused.
+const REFUSED_TIMEOUT: Duration = Duration::from_millis(500);
 
 fn main() -> Result<()> {
     LocalRuntime::new()?.block_on(async_main())
@@ -55,7 +59,7 @@ async fn async_main() -> Result<()> {
                 eprintln!("Usage: {} client <username> <password>", args[0]);
                 std::process::exit(1);
             }
-            run_client(SERVER_ADDR, &args[2], &args[3]).await
+            run_client(SERVER_ADDR, &args[2], &args[3], TIMEOUT).await
         }
         Some(_) => {
             eprintln!("Usage:");
@@ -75,7 +79,6 @@ fn start_zap() -> Result<()> {
     Ok(())
 }
 
-#[allow(clippy::future_not_send)]
 async fn run_both() -> Result<()> {
     start_zap()?;
     let mut socket = RepSocket::with_options(
@@ -87,18 +90,23 @@ async fn run_both() -> Result<()> {
     println!("Server listening on {endpoint}");
     let server = rt::spawn(async move { serve(socket).await });
 
-    // A rejected client never gets a connection, so its send times out.
-    match run_client(&endpoint, "admin", "wrong-password").await {
+    // A rejected client never gets a connection, so its send times out. Until
+    // then it redials every reconnect interval and is refused each time.
+    match run_client(&endpoint, "admin", "wrong-password", REFUSED_TIMEOUT).await {
         Ok(()) => println!("Unexpected: bad credentials were accepted"),
         Err(e) => println!("Bad credentials rejected as expected ({e})"),
     }
     println!();
 
-    run_client(&endpoint, "admin", "secret123").await?;
+    // The server slows down an address that keeps failing authentication:
+    // after two failures in a row from one IP, each new connection from it
+    // waits before its handshake starts, 100 ms doubling up to 10 s. Both
+    // clients here come from 127.0.0.1, so the valid one pauses for the delay
+    // the refused one ran up. Its first successful login clears the address.
+    run_client(&endpoint, "admin", "secret123", TIMEOUT).await?;
     rt::join(server).await
 }
 
-#[allow(clippy::future_not_send)]
 async fn run_server(endpoint: &str) -> Result<()> {
     println!("Starting PLAIN authentication server on {endpoint}");
     start_zap()?;
@@ -113,7 +121,6 @@ async fn run_server(endpoint: &str) -> Result<()> {
     serve(socket).await
 }
 
-#[allow(clippy::future_not_send)]
 async fn serve(mut socket: RepSocket) -> Result<()> {
     for i in 1..=REQUESTS {
         let msg = socket.recv().await?;
@@ -128,14 +135,18 @@ async fn serve(mut socket: RepSocket) -> Result<()> {
     Ok(())
 }
 
-#[allow(clippy::future_not_send)]
-async fn run_client(endpoint: &str, username: &str, password: &str) -> Result<()> {
+async fn run_client(
+    endpoint: &str,
+    username: &str,
+    password: &str,
+    timeout: Duration,
+) -> Result<()> {
     println!("Connecting as user: {username}");
 
     let options = SocketOptions::default()
         .with_plain_credentials(username, password)
-        .with_recv_timeout(Duration::from_secs(2))
-        .with_send_timeout(Duration::from_secs(2));
+        .with_recv_timeout(timeout)
+        .with_send_timeout(timeout);
 
     let mut socket = ReqSocket::with_options(options);
     socket.connect(endpoint).await?;
@@ -150,8 +161,6 @@ async fn run_client(endpoint: &str, username: &str, password: &str) -> Result<()
             "Response: {}",
             String::from_utf8_lossy(msg.first().unwrap_or_default())
         );
-
-        rt::sleep(Duration::from_millis(100)).await;
     }
 
     println!("Client finished");

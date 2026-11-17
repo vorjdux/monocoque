@@ -1,5 +1,6 @@
 //! A CURVE-encrypted DEALER that echoes every message it receives, used by the
-//! pyzmq interop tests in `interop_tests/test_curve_interop.py`.
+//! pyzmq interop tests in `interop_tests/test_curve_interop.py`. This is
+//! tooling for the test harness, not a usage example; see curve_demo.rs.
 //!
 //! ```text
 //! curve_echo server <endpoint> <server_public> <server_secret> <count> [heartbeat_ms]

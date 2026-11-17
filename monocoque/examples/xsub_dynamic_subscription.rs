@@ -12,7 +12,6 @@
 //! cargo run --example xsub_dynamic_subscription --features zmq
 //! ```
 
-use bytes::Bytes;
 use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::prelude::*;
 use std::time::{Duration, Instant};
@@ -25,6 +24,22 @@ fn main() -> Result<()> {
     LocalRuntime::new()?.block_on(async_main())
 }
 
+/// Publish one message on each of three topics every 100 ms.
+async fn publish_forever(mut publisher: PubSocket) -> Result<()> {
+    loop {
+        for (topic, data) in [
+            ("events.login", "User logged in"),
+            ("events.logout", "User logged out"),
+            ("alerts.error", "System error"),
+        ] {
+            publisher
+                .send(Msg::from([Bytes::from(topic), Bytes::from(data)]))
+                .await?;
+        }
+        rt::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 async fn async_main() -> Result<()> {
     // Initialize logging
     tracing_subscriber::fmt().with_max_level(Level::INFO).init();
@@ -34,22 +49,12 @@ async fn async_main() -> Result<()> {
     // Publisher
     let mut publisher = PubSocket::new();
     let endpoint = publisher.bind("tcp://127.0.0.1:0").await?;
+    // The publisher runs until the program ends, so nothing joins it. If it
+    // fails, the receive loop below would only see silence: say why and stop.
     rt::spawn_detached(async move {
-        loop {
-            for (topic, data) in [
-                ("events.login", "User logged in"),
-                ("events.logout", "User logged out"),
-                ("alerts.error", "System error"),
-            ] {
-                if publisher
-                    .send(Msg::from([Bytes::from(topic), Bytes::from(data)]))
-                    .await
-                    .is_err()
-                {
-                    return;
-                }
-            }
-            rt::sleep(Duration::from_millis(100)).await;
+        if let Err(e) = publish_forever(publisher).await {
+            eprintln!("publisher failed: {e}");
+            std::process::exit(1);
         }
     });
 

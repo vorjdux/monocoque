@@ -5,7 +5,7 @@
 //!
 //! Usage: `simple_rep_server --port <PORT>`
 
-use bytes::Bytes;
+use monocoque::Bytes;
 use monocoque::rt::LocalRuntime;
 use monocoque::zmq::{Msg, RepSocket};
 use std::env;

@@ -6,7 +6,11 @@
 //! - Running a ZAP server for authentication
 //! - Creating a REP server with PLAIN authentication enabled
 //! - Creating REQ clients with valid credentials
-//! - Secure request-reply messaging
+//! - Authenticated request-reply messaging
+//!
+//! PLAIN only authenticates. The credentials and every message travel in
+//! cleartext, so use it over loopback or an encrypted transport (TLS, VPN,
+//! SSH tunnel). Over an untrusted network use CURVE; see curve_demo.rs.
 
 use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::security::plain::StaticPlainHandler;

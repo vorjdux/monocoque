@@ -8,15 +8,13 @@
 //! cargo run --example interop_router_libzmq --features zmq
 //! ```
 
-use bytes::Bytes;
+use monocoque::Bytes;
 use monocoque::rt::LocalRuntime;
 use monocoque::zmq::{Msg, RouterSocket};
 use std::sync::mpsc;
 use std::thread;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
-
-const ENDPOINT: &str = "tcp://127.0.0.1:5561";
 
 fn main() -> Result<()> {
     println!("=== Monocoque ROUTER <-> libzmq DEALER ===\n");
@@ -26,10 +24,10 @@ fn main() -> Result<()> {
         LocalRuntime::new()?.block_on(monocoque_router(ready_tx))
     });
 
-    // Wait until the server is bound. If it failed to bind, the sender is
-    // dropped and the join below reports why.
-    if ready_rx.recv().is_ok() {
-        libzmq_dealer()?;
+    // Wait until the server is bound and has reported where. If it failed to
+    // bind, the sender is dropped and the join below reports why.
+    if let Ok(endpoint) = ready_rx.recv() {
+        libzmq_dealer(&endpoint)?;
     }
 
     server.join().map_err(|_| "the server thread panicked")??;
@@ -37,12 +35,13 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-async fn monocoque_router(ready: mpsc::Sender<()>) -> monocoque::zmq::Result<()> {
+async fn monocoque_router(ready: mpsc::Sender<String>) -> monocoque::zmq::Result<()> {
     let mut router = RouterSocket::new();
-    router.bind(ENDPOINT).await?;
-    println!("[Monocoque ROUTER] Listening on {ENDPOINT}");
+    // Port 0: the OS picks a free port and `bind` reports it.
+    let endpoint = router.bind("tcp://127.0.0.1:0").await?;
+    println!("[Monocoque ROUTER] Listening on {endpoint}");
     // The main thread waits on this; it only fails if that thread is gone.
-    let _ = ready.send(());
+    let _ = ready.send(endpoint);
 
     // A ROUTER receives the sender's identity as the first frame. The message
     // is only read, so it stays borrowed and just the identity is kept.
@@ -68,12 +67,12 @@ async fn monocoque_router(ready: mpsc::Sender<()>) -> monocoque::zmq::Result<()>
     router.close().await
 }
 
-fn libzmq_dealer() -> zmq::Result<()> {
+fn libzmq_dealer(endpoint: &str) -> zmq::Result<()> {
     let ctx = zmq::Context::new();
     let dealer = ctx.socket(zmq::DEALER)?;
     dealer.set_identity(b"CLIENT_123")?;
-    dealer.connect(ENDPOINT)?;
-    println!("[libzmq DEALER] Connecting to {ENDPOINT} with identity 'CLIENT_123'");
+    dealer.connect(endpoint)?;
+    println!("[libzmq DEALER] Connecting to {endpoint} with identity 'CLIENT_123'");
 
     dealer.send("Request from libzmq", 0)?;
     println!("[libzmq DEALER] Sent request");

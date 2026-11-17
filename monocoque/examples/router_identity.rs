@@ -5,7 +5,7 @@
 //! - Route messages to specific workers by identity
 //! - Use `router_mandatory` mode for error handling
 
-use bytes::Bytes;
+use monocoque::Bytes;
 use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::{DealerSocket, MonocoqueError, Msg, Result, RouterSocket, SocketOptions};
 
@@ -70,7 +70,6 @@ async fn async_main() -> Result<()> {
     Ok(())
 }
 
-#[allow(clippy::future_not_send)]
 async fn run_server(mut router: RouterSocket) -> Result<()> {
     // Receive both registrations. A DEALER->ROUTER message is
     // [identity, ...payload] with no empty delimiter (that is a REQ/REP thing).

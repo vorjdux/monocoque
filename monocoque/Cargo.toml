@@ -297,6 +297,38 @@ required-features = ["zmq"]
 name = "zap_server_demo"
 required-features = ["zmq"]
 
+[[example]]
+name = "conflate"
+required-features = ["zmq"]
+
+[[example]]
+name = "xpub_manual"
+required-features = ["zmq"]
+
+[[example]]
+name = "connect_disconnect"
+required-features = ["zmq"]
+
+[[example]]
+name = "attach_stream"
+required-features = ["zmq"]
+
+[[example]]
+name = "poll_send_and_recv"
+required-features = ["zmq"]
+
+[[example]]
+name = "stalled_peer"
+required-features = ["zmq"]
+
+[[example]]
+name = "draft_scatter_gather"
+required-features = ["zmq", "draft"]
+
+[[example]]
+name = "draft_channel"
+required-features = ["zmq", "draft"]
+
 # Integration tests with libzmq
 [[test]]
 name = "zap_integration"
@@ -316,6 +348,14 @@ required-features = ["zmq"]
 
 [[test]]
 name = "send_edge_cases"
+required-features = ["zmq"]
+
+[[test]]
+name = "interop_heartbeat"
+required-features = ["zmq"]
+
+[[test]]
+name = "coalescing_protocol"
 required-features = ["zmq"]
 
 [[test]]

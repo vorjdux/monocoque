@@ -18,7 +18,6 @@ use tracing::info;
 
 /// Bind a REP server on `endpoint` that answers `count` requests and then
 /// closes. Returns the bound endpoint and the server task.
-#[allow(clippy::future_not_send)]
 async fn start_server(
     endpoint: &str,
     count: usize,
@@ -44,7 +43,6 @@ async fn start_server(
     Ok((bound, task))
 }
 
-#[allow(clippy::future_not_send)]
 async fn request(req: &mut ReqSocket, n: usize) -> Result<()> {
     let message = format!("Request #{n}");
     info!("[Client] Sending: {}", message);

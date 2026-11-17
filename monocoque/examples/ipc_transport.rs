@@ -1,8 +1,8 @@
 //! Demonstrates IPC transport using Unix domain sockets.
 //!
-//! This example shows how to use IPC for inter-process communication
-//! with low latency and zero network overhead. Any socket binds or connects
-//! to an `ipc://` endpoint exactly as it would to a `tcp://` one.
+//! This example shows how to use IPC for communication between processes on
+//! one host, with no port to allocate. Any socket binds or connects to an
+//! `ipc://` endpoint exactly as it would to a `tcp://` one.
 //!
 //! Note: This example only works on Unix-like systems (Linux, macOS, BSD).
 
@@ -23,15 +23,15 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     use monocoque::rt;
     use monocoque::zmq::{RepSocket, ReqSocket};
 
-    let socket_path = "/tmp/monocoque_ipc_example.sock";
-    let endpoint = format!("ipc://{socket_path}");
+    let socket_path = std::env::temp_dir().join("monocoque_ipc_example.sock");
+    let endpoint = format!("ipc://{}", socket_path.display());
 
     println!("IPC Transport Example");
     println!("=====================\n");
     println!("Endpoint: {endpoint}");
 
     // Clean up any existing socket
-    let _ = std::fs::remove_file(socket_path);
+    let _ = std::fs::remove_file(&socket_path);
 
     // Bind the server
     println!("\n1. Binding REP socket...");
@@ -39,24 +39,18 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     server.bind(&endpoint).await?;
     println!("   Listening on {endpoint}");
 
-    // Spawn server task
+    // Spawn server task. It returns its result, so a failure on this side
+    // reaches `main` through the join below.
     let server_task = rt::spawn(async move {
         println!("   [Server] Waiting for a request...");
-        match server.recv().await {
-            Ok(request) => {
-                let message = String::from_utf8_lossy(request.first().unwrap_or_default());
-                println!("   [Server] Received: {message}");
-            }
-            Err(e) => {
-                eprintln!("   [Server] Receive error: {e}");
-                return;
-            }
+        {
+            let request = server.recv().await?;
+            let message = String::from_utf8_lossy(request.first().unwrap_or_default());
+            println!("   [Server] Received: {message}");
         }
-        match server.send("Hello from server!").await {
-            Ok(()) => println!("   [Server] Sent response"),
-            Err(e) => eprintln!("   [Server] Send error: {e}"),
-        }
-        let _ = server.close().await;
+        server.send("Hello from server!").await?;
+        println!("   [Server] Sent response");
+        server.close().await
     });
 
     // Connect client
@@ -81,16 +75,12 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Wait for server to finish
-    rt::join(server_task).await;
+    rt::join(server_task).await?;
 
     // Cleanup
-    let _ = std::fs::remove_file(socket_path);
+    let _ = std::fs::remove_file(&socket_path);
 
     println!("\nIPC transport example completed successfully");
-    println!("\nPerformance characteristics:");
-    println!("  - Zero network overhead (in-kernel communication)");
-    println!("  - Lower latency than TCP loopback");
-    println!("  - No port allocation required");
 
     Ok(())
 }

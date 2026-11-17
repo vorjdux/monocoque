@@ -76,17 +76,14 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         if after.is_ok() { "ok" } else { "refused" }
     );
 
+    let passed = sent < 50 && after.is_ok();
     println!("\nResults:");
     println!("  Messages queued before refusal: {sent}");
     println!("  HWM limit: {HWM}");
-    println!(
-        "  Status: {}",
-        if sent < 50 && after.is_ok() {
-            "PASS"
-        } else {
-            "FAIL"
-        }
-    );
+    println!("  Status: {}", if passed { "PASS" } else { "FAIL" });
+    if !passed {
+        return Err("the HWM was not enforced as expected".into());
+    }
 
     println!("\nDemo complete!");
     println!("   HWM enforcement prevents unbounded memory growth");

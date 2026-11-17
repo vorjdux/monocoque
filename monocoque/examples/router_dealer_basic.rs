@@ -9,7 +9,7 @@
 //! Start here for the identity frame: a ROUTER receives it ahead of every
 //! message and routes its replies by it.
 
-use bytes::Bytes;
+use monocoque::Bytes;
 use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::{DealerSocket, Msg, Result, RouterSocket};
 use tracing::info;
@@ -35,54 +35,53 @@ async fn async_main() -> Result<()> {
     let router_task = rt::spawn(async move { router_server(router).await });
     let dealer_task = rt::spawn(async move { dealer_client(&endpoint).await });
 
-    // Wait for both to complete concurrently
-    let (router_result, dealer_result) =
-        futures::join!(rt::join(router_task), rt::join(dealer_task));
-
-    router_result?;
-    dealer_result?;
+    // Both tasks are already running; wait for each in turn.
+    rt::join(router_task).await?;
+    rt::join(dealer_task).await?;
 
     info!("\nExample completed successfully!");
     Ok(())
 }
 
-#[allow(clippy::future_not_send)]
 async fn router_server(mut socket: RouterSocket) -> Result<()> {
-    // Receive request
+    // Receive request. It is only read, so it stays borrowed from the socket
+    // and just the identity frame is kept for the reply.
     info!("[ROUTER] Waiting for request...");
-    let request = socket.recv_owned().await?;
+    let identity = {
+        let request = socket.recv().await?;
 
-    info!("[ROUTER] Received {} frames:", request.len());
-    for (i, frame) in request.frames().enumerate() {
+        info!("[ROUTER] Received {} frames:", request.len());
+        for (i, frame) in request.frames().enumerate() {
+            info!(
+                "[ROUTER]   Frame {}: {:?}",
+                i,
+                String::from_utf8_lossy(frame)
+            );
+        }
+
+        // ROUTER messages from DEALER: [identity, ...payload]. This DEALER
+        // set no routing id, so the ROUTER made up a binary one for it.
+        let identity = request.frame_bytes(0).unwrap_or_default();
+        info!("[ROUTER] Identity (hex): {}", hex::encode(&identity));
         info!(
-            "[ROUTER]   Frame {}: {:?}",
-            i,
-            String::from_utf8_lossy(frame)
+            "[ROUTER] Message: {:?}",
+            String::from_utf8_lossy(request.get(1).unwrap_or_default())
         );
-    }
+        identity
+    };
 
-    // ROUTER messages from DEALER: [identity, ...payload]
-    if let (Some(identity), Some(payload)) = (request.frame_bytes(0), request.get(1)) {
-        info!(
-            "[ROUTER] Identity: {:?}",
-            String::from_utf8_lossy(&identity)
-        );
-        info!("[ROUTER] Message: {:?}", String::from_utf8_lossy(payload));
+    // Send reply back to same identity
+    let reply = Msg::from([identity, Bytes::from("Hello from ROUTER!")]);
 
-        // Send reply back to same identity
-        let reply = Msg::from([identity, Bytes::from("Hello from ROUTER!")]);
-
-        info!("[ROUTER] Sending reply with {} frames...", reply.len());
-        socket.send(reply).await?;
-        info!("[ROUTER] Reply sent");
-    }
+    info!("[ROUTER] Sending reply with {} frames...", reply.len());
+    socket.send(reply).await?;
+    info!("[ROUTER] Reply sent");
 
     socket.close().await?;
     info!("[ROUTER] Complete");
     Ok(())
 }
 
-#[allow(clippy::future_not_send)]
 async fn dealer_client(endpoint: &str) -> Result<()> {
     info!("[DEALER] Connecting to {endpoint}");
     let mut socket = DealerSocket::new();

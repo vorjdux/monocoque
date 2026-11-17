@@ -180,7 +180,9 @@ async fn run_client(endpoint: &str, server_public: Key, client_secret: Key) -> R
         .with_send_timeout(Duration::from_secs(5));
 
     // The handshake runs as soon as the connection is up. A client whose key
-    // is not on the server's list never gets a reply: its receive times out.
+    // is not on the server's list never gets a connection, so its first send
+    // times out. While it keeps redialing, the server makes each new
+    // connection from its address wait longer before the handshake starts.
     let mut socket = ReqSocket::with_options(options);
     socket.connect(endpoint).await?;
 

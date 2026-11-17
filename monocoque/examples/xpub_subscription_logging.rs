@@ -1,4 +1,4 @@
-//! XPUB/XSUB Subscription Logging Example
+//! XPUB Subscription Logging Example
 //!
 //! This example demonstrates the XPUB socket's ability to receive subscription
 //! events from subscribers, which is useful for:
@@ -22,7 +22,6 @@
 //! sub.subscribe(b'events.')
 //! ```
 
-use bytes::Bytes;
 use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::SubscriptionEvent;
 use monocoque::zmq::prelude::*;
@@ -89,7 +88,6 @@ async fn async_main() -> Result<()> {
     Ok(())
 }
 
-#[allow(clippy::future_not_send)]
 async fn publish(xpub: &mut XPubSocket) -> Result<()> {
     for topic in TOPICS {
         let msg = Msg::from([
@@ -102,7 +100,6 @@ async fn publish(xpub: &mut XPubSocket) -> Result<()> {
     Ok(())
 }
 
-#[allow(clippy::future_not_send)]
 async fn run_subscriber(endpoint: &str) -> Result<()> {
     let mut sub = SubSocket::new();
     sub.connect(endpoint).await?;

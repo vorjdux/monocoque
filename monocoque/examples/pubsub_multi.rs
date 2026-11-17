@@ -15,16 +15,14 @@
 //! - SUB2 receives only finance news
 //! - SUB3 receives all news (tech + finance)
 
-use bytes::Bytes;
 use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::prelude::*;
 use std::time::Duration;
-use tracing::{error, info};
+use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 const ROUNDS: usize = 5;
 
-#[allow(clippy::future_not_send)]
 async fn publisher_task(mut pub_socket: PubSocket, subscribers: usize) -> Result<()> {
     // Wait until every subscriber has connected and its subscription has
     // arrived; anything published before that would be dropped.
@@ -75,7 +73,6 @@ async fn publisher_task(mut pub_socket: PubSocket, subscribers: usize) -> Result
     Ok(())
 }
 
-#[allow(clippy::future_not_send)]
 async fn subscriber_task(
     name: &str,
     endpoint: &str,
@@ -142,20 +139,14 @@ async fn async_main() -> Result<()> {
         })
         .collect();
 
-    // Wait for publisher to complete
-    let pub_result = rt::join(pub_handle).await;
-
-    // Report results
+    // Wait for the publisher, then for each subscriber. The first error ends
+    // the program with a failure.
+    rt::join(pub_handle).await?;
     info!("=== Results ===");
-    match pub_result {
-        Ok(()) => info!("Publisher: success"),
-        Err(e) => error!("Publisher: error: {:?}", e),
-    }
+    info!("Publisher: success");
     for (name, handle) in handles {
-        match rt::join(handle).await {
-            Ok(()) => info!("{name}: success"),
-            Err(e) => error!("{name}: error: {:?}", e),
-        }
+        rt::join(handle).await?;
+        info!("{name}: success");
     }
 
     Ok(())

@@ -10,31 +10,39 @@
 
 use monocoque::rt::LocalRuntime;
 use monocoque::zmq::DealerSocket;
+use std::sync::mpsc;
 use std::thread;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-const ENDPOINT: &str = "tcp://127.0.0.1:5560";
-
 fn main() -> Result<()> {
     println!("=== Monocoque DEALER <-> libzmq ROUTER ===\n");
 
-    let server = thread::spawn(libzmq_router);
+    let (bound_tx, bound_rx) = mpsc::channel();
+    let server = thread::spawn(move || libzmq_router(&bound_tx));
 
-    // Connecting does not wait for the server: the socket dials in the
-    // background and the send waits for the peer.
-    LocalRuntime::new()?.block_on(monocoque_dealer())?;
+    // The server reports the endpoint it bound. If it failed before that,
+    // its end of the channel is gone and the join below reports why.
+    if let Ok(endpoint) = bound_rx.recv() {
+        LocalRuntime::new()?.block_on(monocoque_dealer(&endpoint))?;
+    }
 
     server.join().map_err(|_| "the libzmq thread panicked")??;
     println!("\nInterop run completed.");
     Ok(())
 }
 
-fn libzmq_router() -> zmq::Result<()> {
+fn libzmq_router(bound: &mpsc::Sender<String>) -> zmq::Result<()> {
     let ctx = zmq::Context::new();
     let router = ctx.socket(zmq::ROUTER)?;
-    router.bind(ENDPOINT)?;
-    println!("[libzmq ROUTER] Listening on {ENDPOINT}");
+    // A `*` port lets the OS pick a free one; the last endpoint says which.
+    router.bind("tcp://127.0.0.1:*")?;
+    let endpoint = router
+        .get_last_endpoint()?
+        .map_err(|_| zmq::Error::EINVAL)?;
+    println!("[libzmq ROUTER] Listening on {endpoint}");
+    // The main thread waits on this; it only fails if that thread is gone.
+    let _ = bound.send(endpoint);
 
     // A ROUTER receives the sender's identity ahead of the body.
     let identity = router.recv_bytes(0)?;
@@ -52,10 +60,10 @@ fn libzmq_router() -> zmq::Result<()> {
     Ok(())
 }
 
-async fn monocoque_dealer() -> monocoque::zmq::Result<()> {
+async fn monocoque_dealer(endpoint: &str) -> monocoque::zmq::Result<()> {
     let mut dealer = DealerSocket::new();
-    dealer.connect(ENDPOINT).await?;
-    println!("[Monocoque DEALER] Connecting to {ENDPOINT}");
+    dealer.connect(endpoint).await?;
+    println!("[Monocoque DEALER] Connecting to {endpoint}");
 
     // The ROUTER adds the identity frame on its side.
     dealer.send("Ping from Monocoque").await?;

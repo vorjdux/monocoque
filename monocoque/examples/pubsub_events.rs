@@ -9,11 +9,11 @@
 //! - SUB socket subscribes to specific topics
 //! - Topics are prefix-matched (e.g., "trade." matches "trade.BTC", "trade.ETH")
 
-use bytes::Bytes;
+use monocoque::Bytes;
 use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::{Msg, PubSocket, Result, SubSocket};
 use std::time::Duration;
-use tracing::{error, info};
+use tracing::info;
 
 fn main() -> Result<()> {
     LocalRuntime::new()?.block_on(async_main())
@@ -32,11 +32,7 @@ async fn async_main() -> Result<()> {
     info!("[Publisher] Bound to {}", endpoint);
 
     // Start subscriber in background
-    let subscriber_handle = rt::spawn(async move {
-        if let Err(e) = run_subscriber(&endpoint).await {
-            error!("[Subscriber] Error: {e}");
-        }
-    });
+    let subscriber_handle = rt::spawn(async move { run_subscriber(&endpoint).await });
 
     // A PUB drops messages nobody has subscribed to yet, so wait until the
     // subscriber's prefix has reached the publisher.
@@ -68,13 +64,11 @@ async fn async_main() -> Result<()> {
 
     info!("[Publisher] Done publishing");
 
-    // Wait for subscriber to finish receiving
-    rt::join(subscriber_handle).await;
-
-    Ok(())
+    // Wait for subscriber to finish receiving. Its error, if any, ends the
+    // program with a failure.
+    rt::join(subscriber_handle).await
 }
 
-#[allow(clippy::future_not_send)]
 async fn run_subscriber(endpoint: &str) -> Result<()> {
     info!("[Subscriber] Connecting to {}...", endpoint);
     let mut socket = SubSocket::new();

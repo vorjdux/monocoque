@@ -6,11 +6,11 @@
 //! per message. To keep a message past the next receive, call
 //! `MsgRef::take()` or use `recv_owned()`, which moves it out as a `Msg`.
 //!
-//! Run with: `cargo run --example borrowed_recv --features zmq`
+//! Run with: `cargo run --release --example borrowed_recv --features zmq`
 
 use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::{Msg, PullSocket, PushSocket, SocketOptions};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 const MESSAGES: usize = 200_000;
 
@@ -23,13 +23,19 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     let mut pull = PullSocket::new();
     let endpoint = pull.bind("tcp://127.0.0.1:0").await?;
 
+    let mut push = PushSocket::with_options(SocketOptions::default().with_write_coalescing(true));
+    push.connect(&endpoint).await?;
+    // `connect` dials in the background. Start the clock on a live connection
+    // so the rate below is the transfer and not the dial.
+    while push.peer_count() == 0 {
+        rt::sleep(Duration::from_millis(1)).await;
+    }
+    let start = Instant::now();
+
     // Sender: push MESSAGES plus two keepers. It coalesces its writes, so the
     // rate printed below is not capped by one write per message on this
     // side. `close` flushes what is buffered and waits for it to be written.
     let sender = rt::spawn(async move {
-        let mut push =
-            PushSocket::with_options(SocketOptions::default().with_write_coalescing(true));
-        push.connect(&endpoint).await?;
         for _ in 0..MESSAGES {
             push.send("task").await?;
         }
@@ -41,15 +47,18 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     // Receiver: each `MsgRef` is read in place and dropped at the end of the
     // iteration, which hands the slot back for the next message.
     let mut bytes = 0usize;
-    let start = Instant::now();
     for _ in 0..MESSAGES {
         let msg = pull.recv().await?;
         bytes += msg.first().map_or(0, <[u8]>::len);
     }
     let elapsed = start.elapsed();
 
+    // The sender and the receiver are two tasks on one thread here, so this
+    // is the rate of both sides sharing a core. coalesced_push_pull.rs gives
+    // each side its own thread.
     println!(
-        "received {MESSAGES} messages ({bytes} bytes) by reference in {:.1} ms ({:.2} M msg/s)",
+        "received {MESSAGES} messages ({bytes} bytes) by reference in {:.1} ms \
+         ({:.2} M msg/s, sender and receiver on one thread)",
         elapsed.as_secs_f64() * 1000.0,
         MESSAGES as f64 / elapsed.as_secs_f64() / 1e6,
     );

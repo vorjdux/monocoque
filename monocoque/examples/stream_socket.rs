@@ -18,7 +18,7 @@
 //!
 //! Run with: `cargo run --example stream_socket --features zmq`
 
-use bytes::Bytes;
+use monocoque::Bytes;
 use monocoque::rt::LocalRuntime;
 use monocoque::zmq::{Msg, StreamSocket};
 use std::io::{Read, Write};

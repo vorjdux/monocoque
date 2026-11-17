@@ -1,13 +1,13 @@
 //! Inproc transport demonstration
 //!
-//! This example shows how to use the inproc transport for zero-copy
-//! in-process messaging between sockets.
+//! This example shows how to use the inproc transport for messaging between
+//! sockets in one process.
 //!
 //! # Features Demonstrated
 //!
 //! - Binding to inproc endpoints
 //! - Connecting multiple clients to the same endpoint
-//! - Zero-copy message passing (frames are shared `Bytes`, never copied)
+//! - Single-frame, multipart and large (100 KB) messages
 //! - Cleanup and unbinding
 //!
 //! # Run
@@ -16,7 +16,7 @@
 //! cargo run --example inproc_demo --features zmq
 //! ```
 
-use bytes::Bytes;
+use monocoque::Bytes;
 use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::{Msg, PullSocket, PushSocket};
 
@@ -78,15 +78,15 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             Bytes::from_static(b"from client 2"),
         ]))
         .await?;
-    client3.send("Zero-copy message from client 3").await?;
+    client3.send("Hello from client 3").await?;
 
-    // 5. Send one more message to show zero-copy efficiency
-    println!("\n5. Demonstrating zero-copy messaging...");
+    // 5. Send one more message with a large frame
+    println!("\n5. Sending a large message...");
     let large_data = Bytes::from(vec![b'X'; 1024 * 100]); // 100 KB
     client1
         .send(Msg::from([Bytes::from_static(b"Large"), large_data]))
         .await?;
-    println!("   Sent 100 KB message (the frame is shared, not copied)");
+    println!("   Sent a two-frame message with a 100 KB frame");
 
     // 6. Wait for the server to receive everything and unbind
     rt::join(server_task).await?;

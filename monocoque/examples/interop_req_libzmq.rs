@@ -10,32 +10,39 @@
 
 use monocoque::rt::LocalRuntime;
 use monocoque::zmq::ReqSocket;
+use std::sync::mpsc;
 use std::thread;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-const ENDPOINT: &str = "tcp://127.0.0.1:5562";
 const ROUNDS: usize = 2;
 
 fn main() -> Result<()> {
     println!("=== Monocoque REQ <-> libzmq REP ===\n");
 
-    let server = thread::spawn(libzmq_rep);
+    let (bound_tx, bound_rx) = mpsc::channel();
+    let server = thread::spawn(move || libzmq_rep(&bound_tx));
 
-    // The REQ socket dials in the background until the server is up, so
-    // there is no need to wait for the bind.
-    LocalRuntime::new()?.block_on(monocoque_req())?;
+    // The server reports the endpoint it bound. If it failed before that,
+    // its end of the channel is gone and the join below reports why.
+    if let Ok(endpoint) = bound_rx.recv() {
+        LocalRuntime::new()?.block_on(monocoque_req(&endpoint))?;
+    }
 
     server.join().map_err(|_| "the libzmq thread panicked")??;
     println!("\nInterop run completed.");
     Ok(())
 }
 
-fn libzmq_rep() -> zmq::Result<()> {
+fn libzmq_rep(bound: &mpsc::Sender<String>) -> zmq::Result<()> {
     let ctx = zmq::Context::new();
     let rep = ctx.socket(zmq::REP)?;
-    rep.bind(ENDPOINT)?;
-    println!("[libzmq REP] Listening on {ENDPOINT}");
+    // A `*` port lets the OS pick a free one; the last endpoint says which.
+    rep.bind("tcp://127.0.0.1:*")?;
+    let endpoint = rep.get_last_endpoint()?.map_err(|_| zmq::Error::EINVAL)?;
+    println!("[libzmq REP] Listening on {endpoint}");
+    // The main thread waits on this; it only fails if that thread is gone.
+    let _ = bound.send(endpoint);
 
     for round in 1..=ROUNDS {
         let request = rep.recv_bytes(0)?;
@@ -49,10 +56,10 @@ fn libzmq_rep() -> zmq::Result<()> {
     Ok(())
 }
 
-async fn monocoque_req() -> monocoque::zmq::Result<()> {
+async fn monocoque_req(endpoint: &str) -> monocoque::zmq::Result<()> {
     let mut socket = ReqSocket::new();
-    socket.connect(ENDPOINT).await?;
-    println!("[Monocoque REQ] Connecting to {ENDPOINT}");
+    socket.connect(endpoint).await?;
+    println!("[Monocoque REQ] Connecting to {endpoint}");
 
     for round in 1..=ROUNDS {
         socket

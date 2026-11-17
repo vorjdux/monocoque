@@ -1,5 +1,6 @@
 //! Probe for counting atomic instructions per message under callgrind; see
-//! `scripts/count_atomics.sh`, which builds and runs it.
+//! `scripts/count_atomics.sh`, which builds and runs it. This is tooling for
+//! that measurement, not a usage example.
 //!
 //! ```text
 //! atomics_probe roundtrip <n>        PUSH -> PULL over TCP, one message at a time

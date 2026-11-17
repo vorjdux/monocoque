@@ -21,7 +21,6 @@
 //! cargo run --example xpub_xsub_broker --features zmq
 //! ```
 
-use bytes::Bytes;
 use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::prelude::*;
 use monocoque::zmq::proxy::{NoCapture, proxy};
