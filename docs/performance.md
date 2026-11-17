@@ -661,14 +661,10 @@ with or ahead of tokio, and over TCP from 11.1 µs to 10.5 µs.
   peer that slows the peer down. On an EPYC 7232P (four L3 groups of two
   cores) a tokio REQ/REP round trip of 64 B took 13.5 µs spinning and 20.9 µs
   sleeping with both threads under one L3, and 29.8 µs spinning and 21.8 µs
-  sleeping under two. So a socket times some of its waits, divides each by
-  the messages it brought, and keeps separate figures for waits that spun and
-  waits that slept. Most waits go the way that has been faster, and sleeping
-  has to be a fifth better to be chosen; a few waits in each cycle try the
-  other way, so the choice follows a change of load or placement. Waits longer
-  than the budget are left out. If you can choose where threads run, put two
-  that talk to each other on cores that share an L3 cache
-  (`lscpu -e`, the L3 column).
+  sleeping under two. The library does not detect this. If you can choose
+  where threads run, put two that talk to each other on cores that share an
+  L3 cache (`lscpu -e`, the L3 column); if you cannot, measure with
+  `MONOCOQUE_SPIN_US=0`.
 - `MONOCOQUE_SPIN_US` sets the budget in microseconds; `0` turns it off.
 - Code that runs on `#[compio::main]` or its own compio runtime instead of
   `LocalRuntime` does not spin.

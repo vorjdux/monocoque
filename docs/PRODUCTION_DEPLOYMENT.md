@@ -44,7 +44,8 @@ Apply without reboot: `sysctl -p`
 Two threads on one host that talk to each other run fastest on two physical
 cores that share an L3 cache. Some CPUs have several small L3 groups (an EPYC
 7232P has four, of two cores each), and a local round trip across two of them
-took about 60% longer than one inside a group (21.8 µs against 13.5 µs). `lscpu -e` lists the
+took more than twice as long as one inside a group (29.8 µs against 13.5 µs,
+or 21.8 µs with `MONOCOQUE_SPIN_US=0`). `lscpu -e` lists the
 core and the L3 group of every CPU; `taskset` or your service manager's CPU
 affinity setting places the threads. A thread that may run on one CPU only does
 not spin before sleeping; see
