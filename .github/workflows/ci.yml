@@ -64,7 +64,8 @@ jobs:
         if: failure()
         run: |
           uname -a
-          sudo apt-get install -y -qq gdb > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends gdb > /dev/null
           bin=$(cargo test -p monocoque-rs ${{ matrix.backend.flags }} --test interop_pair --no-run --message-format=json |
             jq -r 'select(.executable != null and .target.name == "interop_pair") | .executable')
           gdb -batch -ex run -ex 'thread apply all bt' "$bin"
