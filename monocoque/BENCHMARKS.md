@@ -78,16 +78,11 @@ connection (one warmup message before the clock), the same as the monocoque path
 an earlier version started the zmq timer before the sender connected, which
 understated libzmq at small sizes.
 
-`recv()` now returns a borrowed `MsgRef` and does not allocate; `recv_owned()`
+`recv()` returns a borrowed `MsgRef` and does not allocate; `recv_owned()`
 returns an owned `Msg`. The `push_pull_coalesced_owned` case measures the cost
-of taking ownership against `push_pull_coalesced`.
-
-Measured on 0.4 with the removed `recv_into` API: there the PULL side allocated
-a `Vec<Bytes>` per message, and the `push_pull_coalesced_recv_into` case
-(receiving into a reused buffer) showed ~1.10x at 64 B (14.1 M to 15.6 M on
-compio, 18.0 M to 19.1 M on tokio) and ~9% at 256 B over `recv()` (the gain
-tapered as messages grew and the path became bandwidth-bound). That case no
-longer exists. See `docs/performance.md` for details.
+of taking ownership against `push_pull_coalesced`. See
+[Borrowed receive](../docs/performance.md#borrowed-receive) for when each
+fits.
 
 ---
 

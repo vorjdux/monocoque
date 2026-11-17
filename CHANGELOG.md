@@ -70,6 +70,10 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
 - `xpub_manual`, `xpub_welcome_msg`, `connect_routing_id` and
   `max_reconnect_attempts` take effect.
 - STREAM messages and notifications carry `Peer-Address`.
+- `StreamSocket` has the methods the other sockets have for managing and
+  looking at themselves: `disconnect`, `unbind`, `attach`, `monitor`,
+  `options`, `set_options`, `update_options`, `peer_ids`, `last_endpoint`,
+  `peer_property`, `last_metadata`, `last_peer`, `has_message` and `can_send`.
 - Failed authentications slow the offending address down (per-IP backoff).
 - `send_ref(&Msg)` on PUB, XPUB and RADIO publishes a message the caller
   keeps, without cloning it. Publishing only reads the message; for a
@@ -102,6 +106,9 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
   reads corrupted the stream.
 - A message could be attributed to a peer that had gone, once its slot was
   reused by a new one.
+- A REQ socket kept the slot and unread messages of every peer that had gone,
+  for as long as the socket lived.
+- `StreamSocket::flush` honours `send_timeout`.
 - Coalesced large messages could be lost on `close()` and bypass the HWM.
 - Lost wakeups between sockets on different threads; a cross-thread inproc
   `flush()` could wait forever.

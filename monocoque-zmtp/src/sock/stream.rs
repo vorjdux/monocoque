@@ -10,6 +10,7 @@
 
 use bytes::{Bytes, BytesMut};
 use monocoque_core::error::{MonocoqueError, Result};
+use monocoque_core::monitor::{SocketMonitor, create_monitor};
 use monocoque_core::msg::{FrameRef, Metadata, Msg, MsgRef};
 use monocoque_core::mux::{
     Codec, Hooks, OutQueue, PeerId, PeerInfo, Protocol, SendTo, Shared, SocketCore, op,
@@ -304,10 +305,104 @@ impl StreamSocket {
         SocketCore::connect(&self.core, endpoint)
     }
 
+    /// Stop dialing `endpoint` and drop its connection.
+    pub fn disconnect(&mut self, endpoint: &str) -> Result<()> {
+        self.core.borrow_mut().disconnect(endpoint)
+    }
+
+    /// Stop accepting on `endpoint`; connections it already accepted stay.
+    pub fn unbind(&mut self, endpoint: &str) -> Result<()> {
+        self.core.borrow_mut().unbind(endpoint)
+    }
+
+    /// Add an already-connected stream as a peer.
+    pub async fn attach(&mut self, stream: impl Into<Stream>) -> Result<PeerId> {
+        SocketCore::attach(&self.core, stream.into()).await
+    }
+
+    /// The socket's options.
+    #[must_use]
+    pub fn options(&self) -> SocketOptions {
+        self.core.borrow().options().clone()
+    }
+
+    /// Replace the socket's options. HWMs apply to existing connections at
+    /// once; connection settings apply to connections made afterwards.
+    pub fn set_options(&mut self, options: SocketOptions) {
+        let mut core = self.core.borrow_mut();
+        core.hooks_mut().notify = options.stream_notify;
+        core.set_options(options);
+    }
+
+    /// Change one option.
+    pub fn update_options(&mut self, f: impl FnOnce(SocketOptions) -> SocketOptions) {
+        let next = f(self.options());
+        self.set_options(next);
+    }
+
+    /// Receive lifecycle events (connected, accepted, disconnected, ...).
+    pub fn monitor(&mut self) -> SocketMonitor {
+        let (tx, rx) = create_monitor();
+        self.core.borrow_mut().set_monitor(tx);
+        rx
+    }
+
     /// Number of connected peers.
     #[must_use]
     pub fn peer_count(&self) -> usize {
         self.core.borrow().peer_count()
+    }
+
+    /// Ids of the connected peers, in connection order.
+    #[must_use]
+    pub fn peer_ids(&self) -> Vec<PeerId> {
+        self.core.borrow().peer_ids().to_vec()
+    }
+
+    /// The most recently bound endpoint (`ZMQ_LAST_ENDPOINT`).
+    #[must_use]
+    pub fn last_endpoint(&self) -> Option<String> {
+        self.core
+            .borrow()
+            .bound_endpoints()
+            .last()
+            .map(ToString::to_string)
+    }
+
+    /// A metadata property of the connection the last received message came
+    /// from, such as `Peer-Address`.
+    #[must_use]
+    pub fn peer_property(&self, name: &str) -> Option<Bytes> {
+        self.slot_meta.as_ref()?.get(name).cloned()
+    }
+
+    /// The connection metadata of the last received message, kept even after
+    /// that connection has gone.
+    #[must_use]
+    pub fn last_metadata(&self) -> Option<Arc<Metadata>> {
+        self.slot_meta.clone()
+    }
+
+    /// Everything known about the connection the last received message came
+    /// from, while it is still open.
+    #[must_use]
+    pub fn last_peer(&self) -> Option<PeerInfo> {
+        let id = self.slot_peer?;
+        self.core.borrow().peer_info(id).cloned()
+    }
+
+    /// `true` if a receive would return a message or a notification without
+    /// waiting.
+    #[must_use]
+    pub fn has_message(&self) -> bool {
+        let mut core = self.core.borrow_mut();
+        has_notification(&core) || core.has_ready()
+    }
+
+    /// `true` if a send would be accepted without waiting.
+    #[must_use]
+    pub fn can_send(&self) -> bool {
+        self.core.borrow_mut().any_writable()
     }
 
     /// Receive `[identity, data]`, or `[identity, ""]` for a connect or
@@ -398,24 +493,23 @@ impl StreamSocket {
         }
     }
 
-    /// Wait until everything queued has been written.
+    /// Wait until everything queued has been written, for up to
+    /// `send_timeout`.
     pub async fn flush(&mut self) -> Result<()> {
-        op(&self.core, SocketCore::poll_flushed).await;
-        Ok(())
+        let timeout = self.core.borrow().options().send_timeout;
+        super::with_timeout(op(&self.core, SocketCore::poll_flushed), timeout).await
     }
 
     /// Close, waiting up to `linger` for queued bytes to be written.
-    pub async fn close(mut self) -> Result<()> {
+    pub async fn close(self) -> Result<()> {
         let linger = self.core.borrow().options().linger;
-        let drained = self.flush();
+        let drained = op(&self.core, SocketCore::poll_flushed);
         match linger {
             Some(d) if d.is_zero() => {}
             Some(d) => {
                 let _ = super::with_timeout(drained, Some(d)).await;
             }
-            None => {
-                drained.await?;
-            }
+            None => drained.await,
         }
         Ok(())
     }

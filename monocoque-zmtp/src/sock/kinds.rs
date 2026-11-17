@@ -426,6 +426,9 @@ impl Socket<Req> {
                 "REQ must receive a reply before sending again",
             ));
         }
+        // A new request starts here, so nothing a departed peer left unread
+        // is a reply anyone is waiting for.
+        self.core.borrow_mut().drop_departed();
         let mut slot = Some(msg.into());
         let peer = if correlate {
             self.ext.request_id = self.ext.request_id.wrapping_add(1);

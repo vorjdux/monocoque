@@ -1056,6 +1056,29 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         }
     }
 
+    /// Free every peer that has gone, with whatever it left unread.
+    ///
+    /// A departed peer is normally kept until the application has received
+    /// its last messages. A socket that reads from one chosen peer at a time
+    /// (REQ) never takes what the others left, so it calls this at a point
+    /// where nothing queued by a departed peer can still be wanted. Without
+    /// it each such peer's slot and queue would be held for good.
+    pub fn drop_departed(&mut self) {
+        if self.live_peers == self.peers.len() - self.free_peers.len() {
+            return;
+        }
+        for index in 0..self.peers.len() {
+            if self.peers[index].as_ref().is_some_and(|e| e.closed) {
+                let id = PeerId {
+                    index: u32::try_from(index).expect("fewer than 2^32 peers"),
+                    generation: self.generations[index],
+                };
+                self.fair.retain(|p| *p != id);
+                self.free_peer(id);
+            }
+        }
+    }
+
     fn on_tick(&mut self) {
         let Some(ivl) = self.options.heartbeat_ivl else {
             return;
@@ -1449,7 +1472,6 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
     ) -> Poll<bool> {
         loop {
             self.progress();
-            let i = id.index as usize;
             let Some(entry) = self.entry(id) else {
                 return Poll::Ready(false);
             };
@@ -1467,11 +1489,10 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
                 continue;
             }
             if closed && empty {
-                if let Some(e) = self.peers[i].as_ref()
-                    && !e.in_fair
-                {
-                    self.free_peer(id);
-                }
+                // Its turn in the fair queue is dropped with it: a socket
+                // that only reads this way never takes that turn.
+                self.fair.retain(|p| *p != id);
+                self.free_peer(id);
                 return Poll::Ready(false);
             }
             if self.spin.instead_of_park(cx) {

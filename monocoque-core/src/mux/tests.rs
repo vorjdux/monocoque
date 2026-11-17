@@ -288,6 +288,83 @@ fn stops_dialing_after_max_reconnect_attempts() {
     });
 }
 
+/// A socket that reads from one chosen peer at a time (REQ) must not keep a
+/// departed peer's slot for good. Such a peer used to stay allocated once it
+/// had been queued for a fair turn that this way of reading never takes, and
+/// one that left messages nobody read stayed whatever happened.
+#[test]
+fn a_departed_peer_read_one_at_a_time_is_freed() {
+    fn allocated(c: &Core) -> usize {
+        c.borrow().peers.iter().flatten().count()
+    }
+    async fn connected_pair() -> (Core, Core, PeerId) {
+        let opts = SocketOptions::default().with_reconnect_ivl(Duration::from_secs(60));
+        let server = core(opts.clone());
+        let ep = SocketCore::bind(&server, "tcp://127.0.0.1:0")
+            .await
+            .unwrap();
+        let client = core(opts);
+        SocketCore::connect(&client, &ep.to_string()).unwrap();
+        wait_peers(&client, 1).await;
+        wait_peers(&server, 1).await;
+        let peer = client.borrow().peer_ids()[0];
+        (server, client, peer)
+    }
+    async fn leave_a_message_and_go(server: Core, client: &Core, peer: PeerId) {
+        send(&server, Msg::from("left behind")).await;
+        op(client, move |core, cx| {
+            if core.has_ready_from(peer) {
+                Poll::Ready(())
+            } else {
+                core.park(cx);
+                Poll::Pending
+            }
+        })
+        .await;
+        server.borrow_mut().close();
+        drop(server);
+        op(client, |core, cx| {
+            core.progress();
+            if core.peer_count() == 0 {
+                Poll::Ready(())
+            } else {
+                core.park(cx);
+                Poll::Pending
+            }
+        })
+        .await;
+    }
+
+    LocalRuntime::new().unwrap().block_on(async {
+        // Read to the end: the last read finds the peer gone and frees it.
+        let (server, client, peer) = connected_pair().await;
+        leave_a_message_and_go(server, &client, peer).await;
+        assert_eq!(allocated(&client), 1, "kept while it has an unread message");
+        let mut slot = Msg::new();
+        assert!(
+            op(&client, |core, cx| core
+                .poll_recv_from_into(cx, peer, &mut slot))
+            .await
+        );
+        assert_eq!(slot, [b"left behind"]);
+        assert!(
+            !op(&client, |core, cx| core
+                .poll_recv_from_into(cx, peer, &mut slot))
+            .await
+        );
+        assert_eq!(allocated(&client), 0);
+        assert!(client.borrow().fair.is_empty());
+
+        // Never read: the socket says nothing left behind is wanted.
+        let (server, client, peer) = connected_pair().await;
+        leave_a_message_and_go(server, &client, peer).await;
+        assert_eq!(allocated(&client), 1);
+        client.borrow_mut().drop_departed();
+        assert_eq!(allocated(&client), 0);
+        assert!(client.borrow().fair.is_empty());
+    });
+}
+
 /// A listener whose accept queue is full drops further SYNs on Linux, so a
 /// dial to it neither completes nor fails: only `connect_timeout` ends it.
 #[cfg(target_os = "linux")]

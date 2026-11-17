@@ -70,3 +70,52 @@ fn interop_stream_raw_tcp_roundtrip() {
     assert_eq!(reply, b"world", "all data frames in order, then close");
     server.join().unwrap();
 }
+
+/// A STREAM socket offers what the ZMTP sockets do for looking at itself:
+/// the monitor, its options, its endpoints and the connection a message came
+/// from.
+#[test]
+fn stream_socket_can_be_inspected_like_the_other_sockets() {
+    use monocoque::zmq::SocketEvent;
+
+    monocoque::rt::LocalRuntime::new().unwrap().block_on(async {
+        let mut server = StreamSocket::with_options(
+            SocketOptions::default().with_recv_timeout(Duration::from_secs(5)),
+        );
+        let events = server.monitor();
+        let endpoint = server.bind("tcp://127.0.0.1:0").await.unwrap();
+        assert_eq!(server.last_endpoint().as_deref(), Some(endpoint.as_str()));
+        assert!(!server.has_message());
+        assert!(server.peer_ids().is_empty());
+
+        let mut client =
+            std::net::TcpStream::connect(endpoint.trim_start_matches("tcp://")).unwrap();
+        client.write_all(b"hi").unwrap();
+
+        let hello = server.recv_owned().await.unwrap();
+        assert!(hello.get(1).unwrap().is_empty(), "the connect notification");
+        assert_eq!(server.peer_ids().len(), 1);
+        assert_eq!(
+            server.peer_property("Peer-Address").as_deref(),
+            Some(&b"127.0.0.1"[..])
+        );
+        assert!(server.last_metadata().is_some());
+        assert!(server.last_peer().is_some());
+        assert_eq!(server.recv_owned().await.unwrap().get(1), Some(&b"hi"[..]));
+        assert!(server.can_send());
+
+        server.update_options(|o| o.with_send_timeout(Duration::from_secs(1)));
+        assert_eq!(server.options().send_timeout, Some(Duration::from_secs(1)));
+        server.flush().await.unwrap();
+
+        assert!(
+            events
+                .try_iter()
+                .any(|e| matches!(e, SocketEvent::Accepted(_))),
+            "the monitor reports the accepted connection"
+        );
+        server.unbind(&endpoint).unwrap();
+        assert!(server.unbind(&endpoint).is_err(), "it is no longer bound");
+        assert_eq!(server.peer_count(), 1, "an accepted connection stays");
+    });
+}
