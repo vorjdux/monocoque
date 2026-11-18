@@ -48,7 +48,7 @@ BENCHES=()
 MODE_TIMEOUT_MIN=150
 HARD_CAP_MIN=""
 READY_TIMEOUT_MIN=75
-DELETE_TIMEOUT_MIN=15
+DELETE_TIMEOUT_MIN=30
 DRY_RUN=false
 KEEP=false
 FORCE=false
@@ -166,7 +166,8 @@ Limits:
                             90, or twice the mode timeout plus 90 with
                             --cross-l3)
   --max-lifetime MIN        the server itself, counted from its creation
-                            (default: the hard cap plus 15). A detached
+                            (default: the hard cap plus 40, which is room to
+                            copy the results back after the cap). A detached
                             watchdog deletes the server at that age whatever
                             state this script is in, and sooner if this
                             script dies without deleting it. Also applies to
@@ -267,7 +268,10 @@ MODE_TIMEOUT_MIN=$(whole_number "$MODE_TIMEOUT_MIN")
 # installation, the build and the copy back.
 [[ -n "$HARD_CAP_MIN" ]] || HARD_CAP_MIN=$((MODE_TIMEOUT_MIN * (1 + CROSS_L3) + 90))
 HARD_CAP_MIN=$(whole_number "$HARD_CAP_MIN")
-[[ -n "$MAX_LIFETIME_MIN" ]] || MAX_LIFETIME_MIN=$((HARD_CAP_MIN + 15))
+# A run stopped at the hard cap still copies its results back, which may take
+# 20 minutes, and the watchdog and the reaper must not delete the server
+# under it: so the server is given that long again past the cap.
+[[ -n "$MAX_LIFETIME_MIN" ]] || MAX_LIFETIME_MIN=$((HARD_CAP_MIN + 40))
 MAX_LIFETIME_MIN=$(whole_number "$MAX_LIFETIME_MIN")
 ROUNDS=$(whole_number "$ROUNDS")
 READY_TIMEOUT_MIN=$(whole_number "$READY_TIMEOUT_MIN")
@@ -441,9 +445,10 @@ reap() {
         # goes at the backstop age, and at --max-age 0, which means "now".
         # One without a deadline goes at --max-age.
         #
-        # An age that cannot be read counts as old enough: a server that is
-        # deleted too early costs a run, one that is never deleted costs
-        # money. It is reported as a failure all the same, so it gets looked at.
+        # An age that cannot be read is reported as a failure, so it gets
+        # looked at. The server's own deadline still decides when it has one.
+        # Without one the server counts as old enough: deleted too early
+        # costs a run, never deleted costs money.
         victims=$(jq -r --arg tag "$TAG" --arg only "$REAP_SERVER_ID" \
             --arg name "$REAP_SERVER_NAME" --argjson now "$now" \
             --argjson max "$max_age" --argjson backstop "$REAP_BACKSTOP_SECONDS" '
@@ -455,14 +460,15 @@ reap() {
             | (try ($created | fromdateiso8601) catch null) as $born
             | ([(.tags // [])[] | select(startswith($tag + "-expires-"))
                 | ltrimstr($tag + "-expires-") | select(test("^[0-9]+$")) | tonumber][0]) as $expires
-            | (if $born == null then "its age cannot be read"
-               elif $max == 0 then "asked for"
+            | (if $max == 0 then "asked for"
                elif $expires != null and $now >= $expires then "past its own deadline"
-               elif $expires != null and $now - $born >= $backstop then "older than the backstop"
+               elif $expires != null and $born != null and $now - $born >= $backstop then "older than the backstop"
+               elif $expires == null and $born == null then "its age cannot be read and it has no deadline"
                elif $expires == null and $now - $born >= $max then "older than the limit"
+               elif $born == null then "kept"
                else empty end) as $why
-            | [.id, .zone, .name, (if $born == null then "-1" else ($now - $born | tostring) end), $why]
-            | @tsv' <<< "$listing")
+            | [.id, .zone, (.name // ""), (if $born == null then "-1" else ($now - $born | tostring) end), $why]
+            | join("\u001f")' <<< "$listing")
         [[ -z "$victims" ]] || break
         ((try < tries)) || break
         log "no server named $REAP_SERVER_NAME is listed yet, looking again in 30s ($try of $tries)"
@@ -474,17 +480,22 @@ reap() {
         return 0
     fi
 
-    while IFS=$'\t' read -r id zone name age why; do
+    # The fields are split on a unit separator, not a tab: tabs are
+    # whitespace to `read`, which would close up an empty name and shift
+    # the fields after it.
+    while IFS=$'\x1f' read -r id zone name age why; do
         if ((age < 0)); then
-            warn "reaping $name ($id) in $zone: $why"
             unreadable=$((unreadable + 1))
+            if [[ "$why" == kept ]]; then
+                warn "$name ($id) in $zone has a creation time that cannot be read; it is inside its own deadline and stays"
+                continue
+            fi
+            warn "reaping $name ($id) in $zone: $why"
         else
             warn "reaping $name ($id) in $zone, $((age / 60)) minutes old: $why"
         fi
         if delete_until_gone "$id" "$zone"; then
-            if [[ -f "$STATE_FILE" ]] && grep -qF -e "$id" -e "$name" "$STATE_FILE"; then
-                rm -f "$STATE_FILE"
-            fi
+            forget_server "$id" "$name"
         else
             print_still_exists "$id" "$zone"
             remaining=$((remaining + 1))
@@ -496,10 +507,23 @@ reap() {
         return 1
     fi
     if ((unreadable > 0)); then
-        red "$unreadable server(s) had a creation time this script could not read; they were deleted"
+        red "$unreadable server(s) had a creation time this script could not read"
         return 1
     fi
     printf '%sall leftover servers are gone%s\n' "$GREEN" "$NC" >&3
+}
+
+# Remove the state file if it points at this server: by its ID, or by its
+# name while the file still says "pending" where the ID would be. Whole
+# fields are compared, so an empty name or part of an ID matches nothing.
+forget_server() {
+    local id="$1" name="$2" known_id="" known_name=""
+    [[ -f "$STATE_FILE" ]] || return 0
+    read -r known_id _ known_name < "$STATE_FILE" || true
+    if [[ "$known_id" == "$id" ]] \
+        || [[ "$known_id" == pending && -n "$name" && "$known_name" == "$name" ]]; then
+        rm -f "$STATE_FILE"
+    fi
 }
 
 # The watchdog is this script again, started detached just before the server
@@ -783,7 +807,11 @@ stage "$MODE"
 sleep 90
 uptime > ../logs/uptime-before.txt
 bench_flags=()
+# The list is split on its spaces on purpose; -f keeps a name from being
+# expanded as a file pattern while it is.
+set -f
 for b in $BENCHES; do bench_flags+=(--bench "$b"); done
+set +f
 case "$MODE" in
     suite)
         timeout "${MODE_TIMEOUT_MIN}m" ./scripts/bench_all.sh --backend "$BACKEND" --pin "$PIN" \
@@ -1230,7 +1258,8 @@ else
     CREATE_UNCERTAIN=true
     # The status code comes back on a last line of its own. A 4xx is the API
     # saying no, so no server exists. Anything else that is not a success (a
-    # timeout, a dropped connection, a 5xx) leaves that open.
+    # timeout, a dropped connection, a 5xx) leaves that open, and so do 408
+    # and 499: those say a proxy gave up on the request, not what became of it.
     create_rc=0
     response=$(printf 'header = "X-Auth-Token: %s"\n' "$SCW_SECRET_KEY" \
         | curl --silent --show-error --max-time 120 --config - -X POST \
@@ -1238,7 +1267,7 @@ else
             -H "Content-Type: application/json" --data "$body" "$create_url") || create_rc=$?
     create_status="${response##*$'\n'}"
     response="${response%$'\n'*}"
-    if [[ "$create_status" =~ ^4[0-9][0-9]$ ]]; then
+    if [[ "$create_status" =~ ^4[0-9][0-9]$ && "$create_status" != 408 && "$create_status" != 499 ]]; then
         CREATE_UNCERTAIN=false
         die "the server was not created (HTTP $create_status): $response"
     fi

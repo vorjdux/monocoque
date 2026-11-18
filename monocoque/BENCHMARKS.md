@@ -542,7 +542,7 @@ microcode, SMT, governor, boost), the load averages before and after, and a
 ### How long a server can live
 
 A server never outlives its maximum lifetime, which is the script's hard cap
-plus 15 minutes (4 h 15 min by default; `--max-lifetime MIN` changes it). Four
+plus 40 minutes (4 h 40 min by default; `--max-lifetime MIN` changes it). Four
 things enforce that, each independent of the one before:
 
 1. The script deletes the server on every exit and confirms that it is gone.

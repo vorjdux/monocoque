@@ -59,8 +59,8 @@ jobs:
       (github.event.schedule == '17 2 * * 0' && github.repository == 'vorjdux/monocoque')
     runs-on: ubuntu-latest
     # Longer than the script's own worst case: its hard cap of 240 minutes,
-    # then up to 20 to copy the results and 15 to confirm the deletion.
-    timeout-minutes: 300
+    # then up to 20 to copy the results and 30 to confirm the deletion.
+    timeout-minutes: 320
     permissions:
       contents: read
     # On the job, not the workflow: a queued run in a group replaces the one
@@ -69,11 +69,8 @@ jobs:
     concurrency:
       group: scaleway-bench
       cancel-in-progress: false
-    env:
-      SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}
-      SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
-      SCW_DEFAULT_PROJECT_ID: ${{ secrets.SCW_DEFAULT_PROJECT_ID }}
-      SCW_DEFAULT_ORGANIZATION_ID: ${{ secrets.SCW_DEFAULT_ORGANIZATION_ID }}
+    # The Scaleway credentials are given to the two steps that run the
+    # script and to no other, so no action in this job ever sees them.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -104,6 +101,10 @@ jobs:
         # Inputs arrive through the environment, never spliced into the
         # script text.
         env:
+          SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}
+          SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
+          SCW_DEFAULT_PROJECT_ID: ${{ secrets.SCW_DEFAULT_PROJECT_ID }}
+          SCW_DEFAULT_ORGANIZATION_ID: ${{ secrets.SCW_DEFAULT_ORGANIZATION_ID }}
           IN_MODE: ${{ inputs.mode || 'suite' }}
           IN_REF: ${{ inputs.ref || 'main' }}
           IN_AGAINST: ${{ inputs.against }}
@@ -135,6 +136,11 @@ jobs:
       # wrong with an artifact may delay a deletion.
       - name: Delete this run's server if it is still there
         if: always()
+        env:
+          SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}
+          SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
+          SCW_DEFAULT_PROJECT_ID: ${{ secrets.SCW_DEFAULT_PROJECT_ID }}
+          SCW_DEFAULT_ORGANIZATION_ID: ${{ secrets.SCW_DEFAULT_ORGANIZATION_ID }}
         run: |
           set -euo pipefail
           if [[ -s .scaleway-bench-server ]]; then
@@ -165,15 +171,10 @@ jobs:
     name: Delete leftover servers
     if: github.event.schedule == '41 * * * *' && github.repository == 'vorjdux/monocoque'
     runs-on: ubuntu-latest
-    # Room for two servers that each take the full 15 minutes to go.
-    timeout-minutes: 45
+    # Room for two servers that each take the full 30 minutes to go.
+    timeout-minutes: 75
     permissions:
       contents: read
-    env:
-      SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}
-      SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
-      SCW_DEFAULT_PROJECT_ID: ${{ secrets.SCW_DEFAULT_PROJECT_ID }}
-      SCW_DEFAULT_ORGANIZATION_ID: ${{ secrets.SCW_DEFAULT_ORGANIZATION_ID }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -192,4 +193,9 @@ jobs:
       # Fails, and so sends the usual failure notification, if a server that
       # is due could not be deleted.
       - name: Reap servers past their deadline
+        env:
+          SCW_ACCESS_KEY: ${{ secrets.SCW_ACCESS_KEY }}
+          SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
+          SCW_DEFAULT_PROJECT_ID: ${{ secrets.SCW_DEFAULT_PROJECT_ID }}
+          SCW_DEFAULT_ORGANIZATION_ID: ${{ secrets.SCW_DEFAULT_ORGANIZATION_ID }}
         run: scripts/scaleway_bench.sh --reap --max-age 4h
