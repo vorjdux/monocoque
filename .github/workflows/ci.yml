@@ -102,6 +102,21 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+  scripts:
+    name: Benchmark scripts
+    # The scripts that rent a server and compare two revisions, run against
+    # stand-ins for scw, curl and the benchmark binaries: nothing is rented
+    # and nothing is built.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: bench_pair.py reports an incomplete run
+        run: python3 scripts/tests/test_bench_pair.py
+      - name: scaleway_bench.sh deletes what it should
+        run: scripts/tests/test_scaleway_bench.sh
+
   msrv:
     name: MSRV (${{ matrix.leg.name }})
     env:

@@ -534,7 +534,7 @@ uncommitted changes), `--backend` and `--bench` narrow the run, and `--help`
 lists the rest. The source goes to the server as a `git archive` tarball, so
 the server never holds a GitHub credential.
 
-Results land in `bench-results/<UTC date>-<short sha>-<mode>/`, which git
+Results land in `bench-results/<UTC date>-<UTC time>-<short sha>-<mode>/`, which git
 ignores: the criterion data, every log, the host description (`lscpu`, kernel,
 microcode, SMT, governor, boost), the load averages before and after, and a
 `run.json` with the zone, offer, server ID, revisions, times and exit codes.
@@ -551,8 +551,16 @@ things enforce that, each independent of the one before:
    terminal), and at the maximum lifetime even if the run is still alive and
    stuck. It applies to `--keep` too.
 3. In CI, a final step deletes the run's server even when the job is
-   cancelled, and an hourly job deletes any tagged server older than 4 hours.
+   cancelled, and an hourly job deletes any tagged server past its deadline.
+   Each server carries that deadline, its own maximum lifetime, as a second
+   tag, so a run given more than the usual time is not deleted while it
+   works. A tagged server with no deadline is deleted at 4 hours old, and one
+   with a deadline at 24 hours old whatever the deadline says.
 4. The billing alert.
+
+Pair mode exits non-zero, after an `INCOMPLETE` list in its log, when a
+benchmark did not build, a run failed or a case has fewer rounds than were
+asked for. The results are still copied back.
 
 The watchdog runs on the machine that started the run, so it stops if that
 machine is shut down or loses its network. The hourly CI job covers that case
@@ -564,13 +572,15 @@ credential there, and powering the server off does not stop the charge.
 
 ### Leftover servers
 
-Every server the script creates is tagged `monocoque-bench`, and its ID is
-written to `.scaleway-bench-server` as soon as it exists. To delete whatever
-is left:
+Every server the script creates is tagged `monocoque-bench`. Its zone and name
+are written to `.scaleway-bench-server` before the create call, and its ID as
+soon as that call answers, so a run cut off in between still leaves a pointer.
+To delete whatever is left:
 
 ```bash
 scripts/scaleway_bench.sh --reap --max-age 0     # every tagged server, now
-scripts/scaleway_bench.sh --reap                 # only those older than 4 hours
+scripts/scaleway_bench.sh --reap                 # only those past their deadline
+scripts/scaleway_bench.sh --reap --max-age 0 --server-name NAME   # one, by name
 scw baremetal server list zone=all tags.0=monocoque-bench   # check by hand
 ```
 

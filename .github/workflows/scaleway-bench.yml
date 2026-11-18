@@ -4,7 +4,13 @@ name: Scaleway Benchmarks
 # The server is billed by the hour until it is DELETED, so this workflow has
 # three separate ways of deleting it: the script's own exit trap, a final
 # step that runs even when the job is cancelled, and an hourly job that
-# deletes any tagged server older than four hours.
+# deletes any tagged server past its deadline.
+#
+# GitHub switches a scheduled workflow off after 60 days without activity in
+# the repository, and the hourly reaper goes with it. It says so by email and
+# the Actions tab shows a button to switch it back on. Do not start a run
+# from a laptop while it is off: the watchdog on that laptop would then be
+# the only thing left to delete the server.
 #
 # Every `uses:` is pinned to a commit SHA, like the other workflows here.
 
@@ -52,7 +58,9 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event.schedule == '17 2 * * 0' && github.repository == 'vorjdux/monocoque')
     runs-on: ubuntu-latest
-    timeout-minutes: 270
+    # Longer than the script's own worst case: its hard cap of 240 minutes,
+    # then up to 20 to copy the results and 15 to confirm the deletion.
+    timeout-minutes: 300
     permissions:
       contents: read
     # On the job, not the workflow: a queued run in a group replaces the one
@@ -118,6 +126,28 @@ jobs:
           fi
           scripts/scaleway_bench.sh "${args[@]}"
 
+      # A cancelled job gets only a few seconds before it is killed, which is
+      # not enough for the script's own trap to confirm a deletion. This step
+      # still runs, and deletes this run's server if its state file is left.
+      # The file is written before the create call, so a run cut off during
+      # that call leaves "pending" where the ID would be, and the server is
+      # then looked for by its name. Before the upload: nothing that can go
+      # wrong with an artifact may delay a deletion.
+      - name: Delete this run's server if it is still there
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ -s .scaleway-bench-server ]]; then
+            read -r server_id _ server_name < .scaleway-bench-server
+            if [[ "$server_id" == pending ]]; then
+              scripts/scaleway_bench.sh --reap --max-age 0 --server-name "$server_name"
+            else
+              scripts/scaleway_bench.sh --reap --max-age 0 --server-id "$server_id"
+            fi
+          else
+            echo "no server left by this run"
+          fi
+
       - name: Upload the results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -127,20 +157,6 @@ jobs:
           retention-days: 90
           if-no-files-found: warn
 
-      # A cancelled job gets only a few seconds before it is killed, which is
-      # not enough for the script's own trap to confirm a deletion. This step
-      # still runs, and deletes this run's server if its ID file is left.
-      - name: Delete this run's server if it is still there
-        if: always()
-        run: |
-          set -euo pipefail
-          if [[ -s .scaleway-bench-server ]]; then
-            read -r server_id _ < .scaleway-bench-server
-            scripts/scaleway_bench.sh --reap --max-age 0 --server-id "$server_id"
-          else
-            echo "no server left by this run"
-          fi
-
       - name: Remove the SSH key
         if: always()
         run: rm -f "$RUNNER_TEMP/scw_bench_key"
@@ -149,7 +165,8 @@ jobs:
     name: Delete leftover servers
     if: github.event.schedule == '41 * * * *' && github.repository == 'vorjdux/monocoque'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Room for two servers that each take the full 15 minutes to go.
+    timeout-minutes: 45
     permissions:
       contents: read
     env:
@@ -170,7 +187,9 @@ jobs:
           echo "${SCW_SHA256}  $RUNNER_TEMP/scw" | sha256sum -c -
           sudo install -m 0755 "$RUNNER_TEMP/scw" /usr/local/bin/scw
 
-      # Fails, and so sends the usual failure notification, if a server older
-      # than four hours could not be deleted.
-      - name: Reap servers older than four hours
+      # A server created by the script carries its own deadline and is deleted
+      # once past it; four hours is the limit for one that carries none.
+      # Fails, and so sends the usual failure notification, if a server that
+      # is due could not be deleted.
+      - name: Reap servers past their deadline
         run: scripts/scaleway_bench.sh --reap --max-age 4h

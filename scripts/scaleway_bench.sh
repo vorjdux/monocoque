@@ -10,7 +10,7 @@
 #
 # Usage:
 #   scripts/scaleway_bench.sh [--mode suite|pair|instr|arena] [options]
-#   scripts/scaleway_bench.sh --reap [--max-age 4h] [--server-id ID]
+#   scripts/scaleway_bench.sh --reap [--max-age 4h] [--server-id ID | --server-name NAME]
 #   scripts/scaleway_bench.sh --help
 #
 # Credentials come from the environment only: SCW_ACCESS_KEY, SCW_SECRET_KEY,
@@ -55,6 +55,9 @@ FORCE=false
 REAP=false
 REAP_MAX_AGE="4h"
 REAP_SERVER_ID=""
+REAP_SERVER_NAME=""
+# A server that carries its own deadline is still deleted at this age.
+REAP_BACKSTOP_SECONDS=$((24 * 3600))
 MAX_LIFETIME_MIN="${SCW_BENCH_MAX_LIFETIME_MIN:-}"
 WATCHDOG=false
 WATCHDOG_DEADLINE=""
@@ -72,7 +75,10 @@ SERVER_ID=""
 SERVER_NAME=""
 SERVER_IP=""
 CREATE_REQUESTED=false
+# The create call was sent and no answer says whether a server now exists.
+CREATE_UNCERTAIN=false
 CREATE_EPOCH=0
+EXPIRES_EPOCH=0
 READY_EPOCH=0
 START_EPOCH=$(date -u +%s)
 WORKDIR=""
@@ -172,16 +178,24 @@ Safety:
                             credentials
   --keep                    do not delete the server at the end
   --force                   start even if a server tagged $TAG exists
-  --reap                    delete every server tagged $TAG older than
-                            --max-age, in every zone; non-zero if one remains
-  --max-age AGE             for --reap: 4h, 30m, 0 (default $REAP_MAX_AGE)
+  --reap                    delete leftover servers tagged $TAG, in every
+                            zone; non-zero if one remains. A server created
+                            by this script carries its own deadline (its
+                            --max-lifetime) and is deleted once past it, or
+                            at 24 hours old whatever it says. One without a
+                            deadline is deleted when older than --max-age
+  --max-age AGE             for --reap: 4h, 30m, 0 (default $REAP_MAX_AGE).
+                            0 deletes every tagged server now, deadline or not
   --server-id ID            for --reap: only this server (still must be tagged)
+  --server-name NAME        for --reap: only the server with this name, for a
+                            run that never learned its server's ID. The
+                            listing is retried for a few minutes
   --help, -h                this text
 
 Environment: SCW_ACCESS_KEY, SCW_SECRET_KEY, SCW_DEFAULT_PROJECT_ID,
 SCW_DEFAULT_ORGANIZATION_ID.
 
-Results land in $RESULTS_ROOT/<UTC date>-<short sha>-<mode>/.
+Results land in $RESULTS_ROOT/<UTC date>-<UTC time>-<short sha>-<mode>/.
 EOF
 }
 
@@ -216,6 +230,7 @@ while [[ $# -gt 0 ]]; do
         --ready-timeout) need_value "$@"; READY_TIMEOUT_MIN="$2"; shift 2 ;;
         --max-age) need_value "$@"; REAP_MAX_AGE="$2"; shift 2 ;;
         --server-id) need_value "$@"; REAP_SERVER_ID="$2"; shift 2 ;;
+        --server-name) need_value "$@"; REAP_SERVER_NAME="$2"; shift 2 ;;
         --dry-run) DRY_RUN=true; shift ;;
         --keep) KEEP=true; shift ;;
         --force) FORCE=true; shift ;;
@@ -241,15 +256,21 @@ case "$BACKEND" in
     compio | tokio | smol | all) ;;
     *) die "unknown backend: $BACKEND (compio, tokio, smol or all)" ;;
 esac
-[[ "$MODE_TIMEOUT_MIN" =~ ^[0-9]+$ ]] || die "not a whole number: $MODE_TIMEOUT_MIN"
+# A whole number in base ten. Arithmetic reads a leading zero as octal, so
+# "010" would be 8 and "08" an error; the 10# says what was meant.
+whole_number() {
+    [[ "$1" =~ ^[0-9]+$ ]] || die "not a whole number: $1"
+    echo $((10#$1))
+}
+MODE_TIMEOUT_MIN=$(whole_number "$MODE_TIMEOUT_MIN")
 # Room for every pass of the benchmark, plus 90 minutes for delivery,
 # installation, the build and the copy back.
 [[ -n "$HARD_CAP_MIN" ]] || HARD_CAP_MIN=$((MODE_TIMEOUT_MIN * (1 + CROSS_L3) + 90))
-[[ "$HARD_CAP_MIN" =~ ^[0-9]+$ ]] || die "not a whole number: $HARD_CAP_MIN"
+HARD_CAP_MIN=$(whole_number "$HARD_CAP_MIN")
 [[ -n "$MAX_LIFETIME_MIN" ]] || MAX_LIFETIME_MIN=$((HARD_CAP_MIN + 15))
-for n in "$ROUNDS" "$MODE_TIMEOUT_MIN" "$HARD_CAP_MIN" "$READY_TIMEOUT_MIN" "$MAX_LIFETIME_MIN"; do
-    [[ "$n" =~ ^[0-9]+$ ]] || die "not a whole number: $n"
-done
+MAX_LIFETIME_MIN=$(whole_number "$MAX_LIFETIME_MIN")
+ROUNDS=$(whole_number "$ROUNDS")
+READY_TIMEOUT_MIN=$(whole_number "$READY_TIMEOUT_MIN")
 if [[ -n "$PIN" ]] && ! [[ "$PIN" =~ ^[0-9]+,[0-9]+$ ]]; then
     die "--pin takes two CPU numbers, for example 2,4"
 fi
@@ -333,7 +354,7 @@ require_credentials() {
 # Is the server still listed? 0 yes, 1 no, 2 could not tell.
 server_listed() {
     local id="$1" zone="$2" listing
-    listing=$(scw baremetal server list "zone=$zone" -o json 2> /dev/null) || return 2
+    listing=$(scw baremetal server list "zone=$zone" -o json 2> /dev/null < /dev/null) || return 2
     jq -e --arg id "$id" 'any(.[]; .id == $id)' <<< "$listing" > /dev/null 2>&1 && return 0
     jq -e 'type == "array"' <<< "$listing" > /dev/null 2>&1 || return 2
     return 1
@@ -352,7 +373,9 @@ delete_until_gone() {
     fi
     while true; do
         show scw baremetal server delete "$id" "zone=$zone"
-        scw baremetal server delete "$id" "zone=$zone" > /dev/null 2>&1 || true
+        # Stdin is closed to it: the reaper calls this from a loop that reads
+        # its list of servers from stdin, which nothing else may consume.
+        scw baremetal server delete "$id" "zone=$zone" > /dev/null 2>&1 < /dev/null || true
         listed=0
         server_listed "$id" "$zone" || listed=$?
         if ((listed == 1)); then
@@ -381,46 +404,85 @@ print_still_exists() {
 # "4h", "30m", "90s" or a bare number of seconds.
 age_seconds() {
     case "$1" in
-        *h) echo $((${1%h} * 3600)) ;;
-        *m) echo $((${1%m} * 60)) ;;
-        *s) echo "${1%s}" ;;
-        *) echo "$1" ;;
+        *h) echo $((10#${1%h} * 3600)) ;;
+        *m) echo $((10#${1%m} * 60)) ;;
+        *s) echo $((10#${1%s})) ;;
+        *) echo $((10#$1)) ;;
     esac
+}
+
+# The tag that carries a server's own deadline, as seconds since the epoch.
+# Only letters, digits and hyphens, like the tag it extends.
+expires_tag() {
+    printf '%s-expires-%s\n' "$TAG" "$1"
 }
 
 reap() {
     require_tools scw jq
     require_credentials
     [[ "$REAP_MAX_AGE" =~ ^[0-9]+[hms]?$ ]] || die "--max-age takes 4h, 30m, 90s or 0"
-    local max_age listing now victims remaining=0 id zone name age
+    local max_age listing now victims remaining=0 unreadable=0 id zone name age why tries=1 try
     max_age=$(age_seconds "$REAP_MAX_AGE")
-    now=$(date -u +%s)
+    # A server asked for by name may not be in the listing yet: this is how
+    # a run that lost the answer to its create call is cleaned up.
+    [[ -z "$REAP_SERVER_NAME" ]] || tries=10
 
-    show scw baremetal server list zone=all "tags.0=$TAG" -o json
-    listing=$(scw baremetal server list zone=all "tags.0=$TAG" -o json) \
-        || die "could not list servers; nothing was checked"
+    for ((try = 1; try <= tries; try++)); do
+        now=$(date -u +%s)
+        show scw baremetal server list zone=all "tags.0=$TAG" -o json
+        listing=$(scw baremetal server list zone=all "tags.0=$TAG" -o json < /dev/null) \
+            || die "could not list servers; nothing was checked"
 
-    # The tag is checked again here: nothing without it is ever deleted,
-    # whatever the listing returned and whatever --server-id names.
-    victims=$(jq -r --arg tag "$TAG" --arg only "$REAP_SERVER_ID" --argjson now "$now" \
-        --argjson max "$max_age" '
-        .[]
-        | select((.tags // []) | index($tag))
-        | select($only == "" or .id == $only)
-        | (.created_at // "" | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z")) as $created
-        | (try ($created | fromdateiso8601) catch 0) as $born
-        | select($now - $born >= $max)
-        | [.id, .zone, .name, ($now - $born | tostring)] | @tsv' <<< "$listing")
+        # The tag is checked again here: nothing without it is ever deleted,
+        # whatever the listing returned and whatever --server-id names.
+        #
+        # A server with a deadline tag goes once past it, so a run that was
+        # given longer than --max-age is not deleted while it works. It also
+        # goes at the backstop age, and at --max-age 0, which means "now".
+        # One without a deadline goes at --max-age.
+        #
+        # An age that cannot be read counts as old enough: a server that is
+        # deleted too early costs a run, one that is never deleted costs
+        # money. It is reported as a failure all the same, so it gets looked at.
+        victims=$(jq -r --arg tag "$TAG" --arg only "$REAP_SERVER_ID" \
+            --arg name "$REAP_SERVER_NAME" --argjson now "$now" \
+            --argjson max "$max_age" --argjson backstop "$REAP_BACKSTOP_SECONDS" '
+            .[]
+            | select((.tags // []) | index($tag))
+            | select($only == "" or .id == $only)
+            | select($name == "" or .name == $name)
+            | (.created_at // "" | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z")) as $created
+            | (try ($created | fromdateiso8601) catch null) as $born
+            | ([(.tags // [])[] | select(startswith($tag + "-expires-"))
+                | ltrimstr($tag + "-expires-") | select(test("^[0-9]+$")) | tonumber][0]) as $expires
+            | (if $born == null then "its age cannot be read"
+               elif $max == 0 then "asked for"
+               elif $expires != null and $now >= $expires then "past its own deadline"
+               elif $expires != null and $now - $born >= $backstop then "older than the backstop"
+               elif $expires == null and $now - $born >= $max then "older than the limit"
+               else empty end) as $why
+            | [.id, .zone, .name, (if $born == null then "-1" else ($now - $born | tostring) end), $why]
+            | @tsv' <<< "$listing")
+        [[ -z "$victims" ]] || break
+        ((try < tries)) || break
+        log "no server named $REAP_SERVER_NAME is listed yet, looking again in 30s ($try of $tries)"
+        sleep 30
+    done
 
     if [[ -z "$victims" ]]; then
-        log "no server tagged $TAG older than $REAP_MAX_AGE"
+        log "no server tagged $TAG to delete (limit $REAP_MAX_AGE, or its own deadline)"
         return 0
     fi
 
-    while IFS=$'\t' read -r id zone name age; do
-        warn "reaping $name ($id) in $zone, $((age / 60)) minutes old"
+    while IFS=$'\t' read -r id zone name age why; do
+        if ((age < 0)); then
+            warn "reaping $name ($id) in $zone: $why"
+            unreadable=$((unreadable + 1))
+        else
+            warn "reaping $name ($id) in $zone, $((age / 60)) minutes old: $why"
+        fi
         if delete_until_gone "$id" "$zone"; then
-            if [[ -f "$STATE_FILE" ]] && grep -q "$id" "$STATE_FILE"; then
+            if [[ -f "$STATE_FILE" ]] && grep -qF -e "$id" -e "$name" "$STATE_FILE"; then
                 rm -f "$STATE_FILE"
             fi
         else
@@ -431,6 +493,10 @@ reap() {
 
     if ((remaining > 0)); then
         red "$remaining server(s) could not be deleted"
+        return 1
+    fi
+    if ((unreadable > 0)); then
+        red "$unreadable server(s) had a creation time this script could not read; they were deleted"
         return 1
     fi
     printf '%sall leftover servers are gone%s\n' "$GREEN" "$NC" >&3
@@ -465,17 +531,25 @@ watchdog() {
     done
     # Keep at it for six hours: a server that will not go away is exactly
     # the case this exists for.
-    local give_up=$(($(date -u +%s) + 6 * 3600))
+    local give_up=$(($(date -u +%s) + 6 * 3600)) absent=0
     while (($(date -u +%s) < give_up)); do
-        if listing=$(scw baremetal server list "zone=$ZONE" "name=$WATCHDOG_NAME" -o json 2> /dev/null) \
+        if listing=$(scw baremetal server list "zone=$ZONE" "name=$WATCHDOG_NAME" -o json 2> /dev/null < /dev/null) \
             && jq -e 'type == "array"' <<< "$listing" > /dev/null 2>&1; then
             id=$(jq -r --arg name "$WATCHDOG_NAME" --arg tag "$TAG" \
                 '[.[] | select(.name == $name) | select((.tags // []) | index($tag))][0].id // empty' <<< "$listing")
             if [[ -z "$id" ]]; then
-                log "no server named $WATCHDOG_NAME is listed; nothing left to do"
-                rm -f "$keep_marker"
-                return 0
+                # One empty listing is not proof: a server whose create call
+                # only just went through may not be listed yet.
+                absent=$((absent + 1))
+                if ((absent >= 6)); then
+                    log "no server named $WATCHDOG_NAME was listed in $absent looks; nothing left to do"
+                    rm -f "$keep_marker"
+                    return 0
+                fi
+                sleep 30
+                continue
             fi
+            absent=0
             warn "deleting $id: $why"
             if delete_until_gone "$id" "$ZONE"; then
                 rm -f "$keep_marker"
@@ -503,8 +577,12 @@ fi
 
 # ── SSH ────────────────────────────────────────────────────────────────────
 
+# The user's own SSH configuration is left out (-F /dev/null): a `Host *`
+# there that forwards the agent or a port would hand it to a rented server
+# that this script logs into as root.
 ssh_options() {
-    printf '%s\n' -i "$SSH_KEY" \
+    printf '%s\n' -F /dev/null -i "$SSH_KEY" \
+        -o ForwardAgent=no -o ClearAllForwardings=yes \
         -o IdentitiesOnly=yes -o BatchMode=yes \
         -o StrictHostKeyChecking=accept-new \
         -o "UserKnownHostsFile=$WORKDIR/known_hosts" \
@@ -623,6 +701,9 @@ $SUDO prlimit --pid $$ --memlock=unlimited:unlimited 2>/dev/null \
     || ulimit -l unlimited 2>/dev/null || true
 mkdir -p logs
 exec > logs/run.log 2>&1
+# The script that started this one watches for it: a run that is gone without
+# having left an exit code will never leave one.
+echo $$ > logs/run.pid
 
 stage() { echo "$1" > "$HOME/bench/logs/stage"; echo "== $(date -u +%H:%M:%S) $1"; }
 
@@ -713,7 +794,10 @@ case "$MODE" in
             --backend "$BACKEND" --pin "$PIN" --rounds "$ROUNDS" \
             "${bench_flags[@]}" > ../logs/mode.log 2>&1
         rc=$?
-        if [ "$CROSS_L3" = 1 ] && [ "$rc" -eq 0 ]; then
+        # The second pass also runs after a first one that came out
+        # incomplete (exit 1): what it lost is listed in its log, and the
+        # other placement is still worth having. Not after a timeout.
+        if [ "$CROSS_L3" = 1 ] && [ "$rc" -le 1 ]; then
             # The same first core, and the first core of another L3 group
             # that is not core 0.
             first=${PIN%,*}
@@ -723,7 +807,8 @@ case "$MODE" in
                 timeout "${MODE_TIMEOUT_MIN}m" ./scripts/bench_pair.py --against "$AGAINST_TAG" \
                     --backend "$BACKEND" --pin "$first,$other" --rounds "$ROUNDS" \
                     "${bench_flags[@]}" > ../logs/mode-cross-l3.log 2>&1
-                rc=$?
+                cross_rc=$?
+                [ "$rc" -ne 0 ] || rc=$cross_rc
             else
                 echo "this CPU has one L3 cache" > ../logs/mode-cross-l3.log
             fi
@@ -859,6 +944,8 @@ print_cost() {
 
 cleanup() {
     local rc=$?
+    # Nothing that fails in here may stop it before the server is deleted.
+    set +e
     trap - EXIT
     # From here on the server must be dealt with: a second Ctrl-C must not
     # stop that halfway.
@@ -879,10 +966,25 @@ cleanup() {
         # The create call may have gone through without this script learning
         # the ID (killed mid-request, unreadable answer). The name is unique
         # to this run, so look the server up by it.
+        # A server that has only just been created may not be listed yet, so
+        # when nothing says the create call failed, keep looking for a while.
         if [[ -z "$SERVER_ID" ]]; then
-            SERVER_ID=$(scw baremetal server list "zone=$ZONE" "name=$SERVER_NAME" -o json 2> /dev/null \
-                | jq -r --arg name "$SERVER_NAME" '[.[] | select(.name == $name)][0].id // empty' 2> /dev/null) || true
-            [[ -n "$SERVER_ID" ]] && echo "$SERVER_ID $ZONE $SERVER_NAME" > "$STATE_FILE"
+            local looks=1 look
+            $CREATE_UNCERTAIN && looks=10
+            for ((look = 1; look <= looks; look++)); do
+                SERVER_ID=$(scw baremetal server list "zone=$ZONE" "name=$SERVER_NAME" -o json 2> /dev/null < /dev/null \
+                    | jq -r --arg name "$SERVER_NAME" '[.[] | select(.name == $name)][0].id // empty' 2> /dev/null)
+                [[ -z "$SERVER_ID" ]] || break
+                ((look < looks)) || break
+                warn "the create call got no answer and $SERVER_NAME is not listed; looking again in 20s ($look of $looks)"
+                sleep 20
+            done
+            if [[ -n "$SERVER_ID" ]]; then
+                echo "$SERVER_ID $ZONE $SERVER_NAME" > "$STATE_FILE"
+            elif ! $CREATE_UNCERTAIN; then
+                # The API said no: there is no server and nothing to point at.
+                rm -f "$STATE_FILE"
+            fi
         fi
     fi
 
@@ -899,7 +1001,7 @@ cleanup() {
             if [[ -n "$WATCHDOG_PID" ]] && kill -0 "$WATCHDOG_PID" 2> /dev/null; then
                 # Tells the watchdog that this run ending is not a crash.
                 touch "$WATCHDOG_DIR/$SERVER_NAME.keep"
-                red "The watchdog (pid $WATCHDOG_PID) deletes it at $(date -d "@$((CREATE_EPOCH + MAX_LIFETIME_MIN * 60))" '+%H:%M %Z'),"
+                red "The watchdog (pid $WATCHDOG_PID) deletes it at $(date -d "@$EXPIRES_EPOCH" '+%H:%M %Z'),"
                 red "as long as this machine stays on. Log: $WATCHDOG_DIR/$SERVER_NAME.log"
             fi
             red "════════════════════════════════════════════════════════════════════"
@@ -923,6 +1025,11 @@ cleanup() {
             rc=1
         fi
         print_cost
+    elif $CREATE_UNCERTAIN; then
+        red "The create call got no answer and no server named $SERVER_NAME is listed."
+        red "If one appears it is deleted by the watchdog, or by:"
+        red "  $0 --reap --max-age 0 --server-name $SERVER_NAME"
+        rc=1
     elif $CREATE_REQUESTED; then
         warn "no server named $SERVER_NAME is listed; check with: scw baremetal server list zone=$ZONE"
     fi
@@ -947,7 +1054,8 @@ on_signal() {
 
 require_tools git jq tar base64 timeout
 if ! $DRY_RUN; then
-    require_tools scw curl ssh scp ssh-keygen
+    # setsid is what detaches the watchdog; without it there would be none.
+    require_tools scw curl ssh scp ssh-keygen setsid
     require_credentials
     [[ -r "$SSH_KEY" ]] || die "SSH key $SSH_KEY not found (set SSH_KEY or --ssh-key)"
 fi
@@ -966,7 +1074,9 @@ if [[ "$REF" == HEAD ]] && [[ -n "$(git status --porcelain --untracked-files=no)
 fi
 
 SERVER_NAME="monocoque-bench-$(date -u +%Y%m%d-%H%M%S)-$SHORT_SHA"
-RESULTS_DIR="$RESULTS_ROOT/$(date -u +%Y-%m-%d)-$SHORT_SHA-$MODE"
+# With the time of day, so a second run of the same revision and mode on one
+# day does not write into the first one's results.
+RESULTS_DIR="$RESULTS_ROOT/$(date -u +%Y-%m-%d-%H%M%S)-$SHORT_SHA-$MODE"
 WORKDIR=$(mktemp -d)
 
 trap cleanup EXIT
@@ -1075,23 +1185,27 @@ cloud_config "$SSH_USER" > "$WORKDIR/user-data.yaml"
 # first offer with that name without looking at the subscription period. Here
 # the offer is the hourly one resolved above, by ID. The secret key reaches
 # curl through a config on stdin, so it is never in a process listing.
+# The server carries its own deadline as a second tag, so the reaper deletes
+# it when this run's time is up and not at a fixed age that a long run passes.
+EXPIRES_EPOCH=$(($(date -u +%s) + MAX_LIFETIME_MIN * 60))
 body=$(jq -n \
     --arg offer "$OFFER_ID" --arg project "${SCW_DEFAULT_PROJECT_ID:-<project-id>}" \
     --arg name "$SERVER_NAME" --arg tag "$TAG" --arg os "$OS_ID" --arg key "$SSH_KEY_ID" \
+    --arg expires "$(expires_tag "$EXPIRES_EPOCH")" \
     --arg description "monocoque benchmark run, $MODE, $SHORT_SHA. Safe to delete." \
     --arg user_data "$(base64 -w0 < "$WORKDIR/user-data.yaml")" \
     '{offer_id: $offer, project_id: $project, name: $name, description: $description,
-      tags: [$tag], user_data: $user_data,
+      tags: [$tag, $expires], user_data: $user_data,
       install: {os_id: $os, hostname: $name, ssh_key_ids: [$key]}}')
 create_url="$API_URL/baremetal/v1/zones/$ZONE/servers"
 
 if $DRY_RUN; then
     log "dry run: the cloud-init user data would be:"
     sed 's/^/    /' "$WORKDIR/user-data.yaml" >&2
-    show curl --silent --show-error --fail-with-body -X POST \
+    show curl --silent --show-error --max-time 120 -X POST \
         -H "X-Auth-Token: <SCW_SECRET_KEY>" -H "Content-Type: application/json" \
         --data "$(jq -c '.user_data = "<base64 of the user data above>"' <<< "$body")" "$create_url"
-    show setsid nohup "$0" --watchdog "<now + ${MAX_LIFETIME_MIN} min>" "$SERVER_NAME" "$ZONE" "$$"
+    show setsid nohup "$0" --watchdog "$EXPIRES_EPOCH" "$SERVER_NAME" "$ZONE" "$$"
     SERVER_ID="<server-id>"
     SERVER_IP="<server-ip>"
 else
@@ -1099,19 +1213,41 @@ else
     # Started before the create call, so there is no moment at which a server
     # exists and nothing outside this process knows it has to go.
     mkdir -p "$WATCHDOG_DIR"
-    SCW_BENCH_TAG="$TAG" setsid nohup "$0" --watchdog "$((CREATE_EPOCH + MAX_LIFETIME_MIN * 60))" \
+    SCW_BENCH_TAG="$TAG" setsid nohup "$0" --watchdog "$EXPIRES_EPOCH" \
         "$SERVER_NAME" "$ZONE" "$$" > "$WATCHDOG_DIR/$SERVER_NAME.log" 2>&1 < /dev/null &
     WATCHDOG_PID=$!
+    sleep 1
+    kill -0 "$WATCHDOG_PID" 2> /dev/null \
+        || die "the watchdog did not start (see $WATCHDOG_DIR/$SERVER_NAME.log); no server was created"
     log "watchdog $WATCHDOG_PID deletes the server after $MAX_LIFETIME_MIN minutes at the latest"
+
+    # Written before the call, with no ID yet: if this process is killed
+    # while the call is on its way, the name is what finds the server.
+    echo "pending $ZONE $SERVER_NAME" > "$STATE_FILE"
 
     log "creating $SERVER_NAME"
     CREATE_REQUESTED=true
+    CREATE_UNCERTAIN=true
+    # The status code comes back on a last line of its own. A 4xx is the API
+    # saying no, so no server exists. Anything else that is not a success (a
+    # timeout, a dropped connection, a 5xx) leaves that open.
+    create_rc=0
     response=$(printf 'header = "X-Auth-Token: %s"\n' "$SCW_SECRET_KEY" \
-        | curl --silent --show-error --fail-with-body --config - -X POST \
-            -H "Content-Type: application/json" --data "$body" "$create_url") \
-        || die "the server was not created: $response"
+        | curl --silent --show-error --max-time 120 --config - -X POST \
+            --write-out '\n%{http_code}' \
+            -H "Content-Type: application/json" --data "$body" "$create_url") || create_rc=$?
+    create_status="${response##*$'\n'}"
+    response="${response%$'\n'*}"
+    if [[ "$create_status" =~ ^4[0-9][0-9]$ ]]; then
+        CREATE_UNCERTAIN=false
+        die "the server was not created (HTTP $create_status): $response"
+    fi
+    if ((create_rc != 0)) || ! [[ "$create_status" =~ ^2[0-9][0-9]$ ]]; then
+        die "the create call did not complete (curl exit $create_rc, HTTP ${create_status:-none}): $response"
+    fi
     SERVER_ID=$(jq -r '.id // empty' <<< "$response")
     [[ -n "$SERVER_ID" ]] || die "the create call returned no server ID"
+    CREATE_UNCERTAIN=false
     # Written before anything else can fail, so a crash leaves a pointer.
     echo "$SERVER_ID $ZONE $SERVER_NAME" > "$STATE_FILE"
     log "server $SERVER_ID created; its ID is in $STATE_FILE"
@@ -1186,15 +1322,30 @@ remote 60 'setsid nohup bash "$HOME/bench/run.sh" > /dev/null 2>&1 < /dev/null &
 
 if ! $DRY_RUN; then
     last_stage=""
+    unreachable=0
+    gone=0
     while true; do
         check_hard_cap
         pause 30
+        # The last field says whether run.sh is still there: "alive", "gone"
+        # (its PID file names a process that no longer exists) or "unknown"
+        # (no PID file yet).
         # shellcheck disable=SC2016
-        state=$(remote 30 'cd ~/bench/logs 2>/dev/null && echo "$(cat stage 2>/dev/null)|$(cat build.exit 2>/dev/null)|$(cat mode.exit 2>/dev/null)"' 2> /dev/null) || continue
+        state=$(remote 30 'cd ~/bench/logs 2>/dev/null && echo "$(cat stage 2>/dev/null)|$(cat build.exit 2>/dev/null)|$(cat mode.exit 2>/dev/null)|$(if [ -s run.pid ]; then kill -0 "$(cat run.pid)" 2>/dev/null && echo alive || echo gone; else echo unknown; fi)"' 2> /dev/null) || {
+            # Twenty in a row is ten minutes without a word from the server:
+            # it is down or cut off, and waiting for the hard cap only adds
+            # to the bill.
+            unreachable=$((unreachable + 1))
+            ((unreachable < 20)) || die "the server did not answer over SSH $unreachable times in a row"
+            continue
+        }
+        unreachable=0
         stage="${state%%|*}"
         rest="${state#*|}"
         BUILD_EXIT="${rest%%|*}"
-        MODE_EXIT="${rest#*|}"
+        rest="${rest#*|}"
+        MODE_EXIT="${rest%%|*}"
+        run_state="${rest#*|}"
         if [[ "$stage" != "$last_stage" ]]; then
             log "stage: $stage"
             last_stage="$stage"
@@ -1204,6 +1355,14 @@ if ! $DRY_RUN; then
         fi
         if [[ -n "$MODE_EXIT" ]]; then
             break
+        fi
+        # Seen gone twice, so that a run which wrote its exit code and ended
+        # between two of the reads above is not taken for a dead one.
+        if [[ "$run_state" == gone ]]; then
+            gone=$((gone + 1))
+            ((gone < 2)) || die "the run on the server ended at stage '$stage' without an exit code (see logs/run.log)"
+        else
+            gone=0
         fi
     done
     if [[ "$MODE_EXIT" == 124 ]]; then
