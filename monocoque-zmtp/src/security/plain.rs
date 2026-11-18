@@ -49,9 +49,10 @@ const PLAIN_HELLO: &[u8] = b"\x05HELLO";
 const PLAIN_WELCOME: &[u8] = b"\x07WELCOME";
 const PLAIN_ERROR: &[u8] = b"\x05ERROR";
 const TRAILING_BYTE_CHECK_TIMEOUT: Duration = Duration::from_millis(10);
-/// Upper bound on a PLAIN command body (HELLO/WELCOME/ERROR are tiny; two
-/// length-prefixed credentials are at most ~512 bytes).
-const MAX_PLAIN_CMD_BODY: usize = 512;
+/// Upper bound on a PLAIN command body. HELLO is the largest: its name with
+/// the length byte, then a username and a password of up to 255 bytes, each
+/// behind a length byte.
+const MAX_PLAIN_CMD_BODY: usize = PLAIN_HELLO.len() + 2 * (1 + 255);
 
 /// Parse a PLAIN HELLO command body: `\x05HELLO <ulen><username> <plen><password>`.
 fn parse_plain_hello(body: &[u8]) -> Result<(String, String), ZmtpError> {
@@ -519,6 +520,51 @@ mod tests {
         assert_eq!(request.credentials.len(), 2);
         assert_eq!(&request.credentials[0][..], b"testuser");
         assert_eq!(&request.credentials[1][..], b"testpass");
+    }
+
+    /// RFC 27 allows 255 bytes for each of the two, which makes a HELLO of
+    /// 518 bytes. A cap of 512 turned such a client away.
+    #[cfg(feature = "runtime-compio")]
+    #[test]
+    fn plain_accepts_the_longest_username_and_password() {
+        use monocoque_core::rt::{LocalRuntime, TcpListener, TcpStream};
+        use std::time::Duration;
+
+        let username = "u".repeat(255);
+        let password = "p".repeat(255);
+        assert_eq!(
+            plain_hello(username.as_bytes(), password.as_bytes()).len(),
+            MAX_PLAIN_CMD_BODY
+        );
+
+        LocalRuntime::new().unwrap().block_on(async {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let (server_user, server_password) = (username.clone(), password.clone());
+            let server_task = monocoque_core::rt::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut handler = StaticPlainHandler::new();
+                handler.add_user(server_user, server_password);
+                plain_server_handshake(
+                    &mut stream,
+                    &handler,
+                    "global",
+                    "127.0.0.1:1",
+                    Some(Duration::from_secs(1)),
+                )
+                .await
+            });
+
+            let mut stream = TcpStream::connect(addr).await.unwrap();
+            let credentials = PlainCredentials::new(username.clone(), password);
+            plain_client_handshake(&mut stream, &credentials, Some(Duration::from_secs(1)))
+                .await
+                .expect("the client is welcomed");
+            let user = monocoque_core::rt::join(server_task)
+                .await
+                .expect("the server accepts the HELLO");
+            assert_eq!(user, username);
+        });
     }
 
     #[cfg(feature = "runtime-compio")]
