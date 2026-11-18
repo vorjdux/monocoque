@@ -20,7 +20,7 @@ use bytes::Bytes;
 use monocoque_core::error::{MonocoqueError, Result};
 use monocoque_core::monitor::{SocketMonitor, create_monitor};
 use monocoque_core::msg::{Metadata, Msg, MsgRef};
-use monocoque_core::mux::{Hooks, PeerId, PeerInfo, SendNow, SendTo, Shared, SocketCore, op};
+use monocoque_core::mux::{Hooks, PeerId, PeerInfo, SendNow, Shared, SocketCore, op};
 use monocoque_core::options::SocketOptions;
 use monocoque_core::transport::Stream;
 use std::future::{Future, poll_fn};
@@ -450,7 +450,8 @@ impl<K: Kind> Socket<K> {
     }
 
     /// Queue to `peer` without waiting.
-    pub(crate) fn send_to_now(&mut self, peer: PeerId, msg: Msg) -> SendTo {
+    #[cfg(feature = "draft")]
+    pub(crate) fn send_to_now(&mut self, peer: PeerId, msg: Msg) -> monocoque_core::mux::SendTo {
         self.core.borrow_mut().send_to(peer, msg)
     }
 }
