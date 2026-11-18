@@ -131,6 +131,35 @@ fn inproc_messages_carry_socket_type_and_custom_properties() {
     });
 }
 
+/// The inproc half of `a_peer_cannot_announce_its_own_user_id_or_address`:
+/// there is no handshake to filter, so the connector's own description is.
+#[test]
+fn an_inproc_peer_cannot_announce_what_the_socket_establishes() {
+    LocalRuntime::new().unwrap().block_on(async {
+        let mut pull = PullSocket::with_options(opts());
+        pull.bind("inproc://msg-metadata-reserved").await.unwrap();
+        let mut push = PushSocket::with_options(
+            SocketOptions::default()
+                .with_routing_id(Bytes::from_static(b"real"))
+                .with_metadata("User-Id", "x")
+                .with_metadata("socket-type", "ROUTER")
+                .with_metadata("Identity", "forged")
+                .with_metadata("Peer-Address", "10.0.0.1")
+                .with_metadata("X-Kept", "yes"),
+        );
+        push.connect("inproc://msg-metadata-reserved")
+            .await
+            .unwrap();
+        push.send("hi").await.unwrap();
+        let msg = pull.recv().await.unwrap();
+        assert_eq!(msg.gets("User-Id"), None);
+        assert_eq!(msg.gets("Socket-Type"), Some("PUSH"));
+        assert_eq!(msg.gets("Identity"), Some("real"));
+        assert_eq!(msg.gets("Peer-Address"), None);
+        assert_eq!(msg.gets("X-Kept"), Some("yes"));
+    });
+}
+
 #[test]
 fn curve_carries_custom_properties_both_ways() {
     let key = |seed: u8| {

@@ -144,6 +144,12 @@ fn resolve_tcp(addr: &str) -> Option<SocketAddr> {
     if host.is_empty() {
         return None;
     }
+    // `[::1]:*`: an IPv6 literal that the parse above turned away only for
+    // its `*` port. The brackets are URL syntax, not part of the address.
+    if let Some(literal) = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+        let ip: std::net::Ipv6Addr = literal.parse().ok()?;
+        return Some(SocketAddr::from((ip, port)));
+    }
     // A name can have several addresses. IPv4 first: a server bound to
     // `127.0.0.1` is not reachable through the `::1` that `localhost` may
     // list ahead of it.
@@ -208,6 +214,25 @@ mod tests {
             Endpoint::parse("tcp://*:*").unwrap().to_string(),
             "tcp://0.0.0.0:0"
         );
+    }
+
+    #[test]
+    fn test_parse_tcp_ipv6_port_wildcard() {
+        assert_eq!(
+            Endpoint::parse("tcp://[::1]:*").unwrap().to_string(),
+            "tcp://[::1]:0"
+        );
+        assert_eq!(
+            Endpoint::parse("tcp://[::]:*").unwrap().to_string(),
+            "tcp://[::]:0"
+        );
+        assert_eq!(
+            Endpoint::parse("tcp://[::1]:5555").unwrap().to_string(),
+            "tcp://[::1]:5555"
+        );
+        for bad in ["tcp://[::1:*", "tcp://[localhost]:*", "tcp://[]:*"] {
+            assert!(Endpoint::parse(bad).is_err(), "{bad} parsed");
+        }
     }
 
     #[test]

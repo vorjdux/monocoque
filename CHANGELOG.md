@@ -80,6 +80,17 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
 
 ### Fixed
 
+- A PLAIN client with a 255-byte username and a 255-byte password, the
+  longest RFC 27 allows, was refused: the HELLO is 518 bytes and the limit
+  was 512.
+- `tcp://[::1]:*` did not parse. `connect` now refuses a wildcard host or
+  port (`tcp://*:5555`, `tcp://127.0.0.1:*`), as libzmq does.
+- A peer that names a TTL in its PING is held to it on a socket with no
+  heartbeat interval too, as in libzmq: it is closed after sending nothing
+  for that long.
+- An inproc peer's custom metadata can no longer replace `Socket-Type`,
+  `Identity`, `User-Id` or `Peer-Address`, the same rule as for a peer on the
+  wire.
 - ZAP authentication over `ipc://` refused every client: a Unix socket peer
   has no address, and the ZAP server dropped a request with an empty one.
 - `handshake_timeout` of zero means no limit, as documented; it failed every
@@ -289,6 +300,14 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
   throughput bench while iterating.
 - A test checks that a closed socket's peer sees end of stream on every
   backend.
+- `scripts/bench_pair.py` exits non-zero, after an `INCOMPLETE` list, when a
+  benchmark did not build, a run failed or a case has fewer rounds than were
+  asked for.
+- `scripts/scaleway_bench.sh`: each server carries its own deadline as a tag,
+  so the hourly reaper no longer deletes a run that was given more than four
+  hours; a create call whose answer is lost is followed up by name; a remote
+  run that dies without an exit code, or a server that stops answering, ends
+  the run. Both scripts are tested in CI against stand-ins.
 
 ## 0.4.2 - 2026-09-22
 

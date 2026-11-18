@@ -137,8 +137,8 @@ pub struct PeerState<C> {
     pub(crate) closed: Option<CloseReason>,
     pub(crate) events: Rc<EventQueue>,
     /// Last heartbeat tick that found bytes had arrived; tracked only when
-    /// heartbeating. Reads only raise `recv_seen`, so the hot path never
-    /// reads the clock.
+    /// heartbeating, or once the peer has named a TTL. Reads only raise
+    /// `recv_seen`, so the hot path never reads the clock.
     pub(crate) last_recv: Option<Instant>,
     pub(crate) recv_seen: bool,
     pub(crate) ping_outstanding: bool,
@@ -826,6 +826,14 @@ pub async fn reader_loop<C: Codec>(
             out,
         );
         if out.queued_bytes() != replies_before {
+            // A PING that named a TTL, on a socket that does not heartbeat
+            // and so keeps no time of the last read: start keeping it, and
+            // have the socket hold the peer to its TTL. Looked at here, where
+            // a command was just answered, to keep it off the path of data.
+            if st.last_recv.is_none() && codec.peer_ttl().is_some() {
+                st.last_recv = Some(Instant::now());
+                st.events.push(super::Event::PeerTtl);
+            }
             // A PONG: written now, not when a coalesced batch fills.
             st.flush();
         }

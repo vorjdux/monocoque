@@ -32,7 +32,10 @@ CANCEL as commands (3.1), JOIN/LEAVE for RADIO/DISH.
   and so does monocoque. Both forms are accepted on receive.
 - **PING TTL and context.** A PING carries a 16-bit TTL in tenths of a second
   and up to 16 bytes of context, echoed in the PONG. A nonzero TTL from a peer
-  tightens the local heartbeat timeout for that peer. monocoque's own PINGs
+  tightens the local heartbeat timeout for that peer. On a socket with no
+  `heartbeat_ivl` it is still honoured, as in libzmq: a peer that named a TTL
+  and then sends nothing for that long is closed, somewhere between one TTL
+  and one and a half, without this side sending PINGs. monocoque's own PINGs
   carry a TTL of zero unless `heartbeat_ttl` is set, as in libzmq; with one
   set, a PING goes out every `heartbeat_ivl` whether or not the connection is
   idle, since the peer counts from the last PING. Legacy (1.0/2.0) peers get

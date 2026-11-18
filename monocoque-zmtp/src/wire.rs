@@ -18,7 +18,7 @@ use crate::session::SocketType;
 use bytes::{Buf, Bytes, BytesMut};
 use monocoque_core::error::{MonocoqueError, Result};
 use monocoque_core::msg::{FrameRef, INLINE_CAP, Metadata, Msg};
-use monocoque_core::mux::{Codec, OutQueue, PeerInfo, Protocol};
+use monocoque_core::mux::{Codec, OutQueue, PeerInfo, Protocol, RESERVED_PROPERTIES};
 use monocoque_core::options::SocketOptions;
 use monocoque_core::rt::PeerAddress;
 use monocoque_core::transport::Stream;
@@ -675,19 +675,11 @@ impl Protocol for Zmtp {
         // shares it through the socket's receive slot.
         let mut metadata = Metadata::new();
         for (k, v) in result.properties {
-            // These are set below from what this side knows: the socket's
-            // own address lookup, the ZAP handler's answer and the identity
-            // the handshake took (`Routing-Id` is read as an alias of it). A
-            // peer that announces one of them in its handshake must not be
-            // able to make an application believe it.
-            const OURS: [&str; 5] = [
-                "User-Id",
-                "Peer-Address",
-                "Socket-Type",
-                "Identity",
-                "Routing-Id",
-            ];
-            if OURS.iter().any(|name| name.eq_ignore_ascii_case(&k)) {
+            // These are set below from what this side knows.
+            if RESERVED_PROPERTIES
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(&k))
+            {
                 continue;
             }
             metadata.insert(k, v);

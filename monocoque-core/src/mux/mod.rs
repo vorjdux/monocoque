@@ -265,6 +265,20 @@ impl PeerId {
     }
 }
 
+/// Metadata properties a socket sets itself.
+///
+/// They come from its own address lookup, the ZAP handler's answer and the
+/// identity the handshake took (`Routing-Id` is read as an alias of
+/// `Identity`). A peer that announces one of them must not be able to make
+/// an application believe it.
+pub const RESERVED_PROPERTIES: [&str; 5] = [
+    "User-Id",
+    "Peer-Address",
+    "Socket-Type",
+    "Identity",
+    "Routing-Id",
+];
+
 /// What a peer told us about itself in its handshake.
 #[derive(Clone, Debug, Default)]
 pub struct PeerInfo {
@@ -294,12 +308,20 @@ impl PeerInfo {
     pub fn local(socket_type: &'static str, options: &SocketOptions) -> Self {
         let identity = options.routing_id.clone();
         let mut meta = Metadata::new();
+        for (k, v) in &options.metadata {
+            // The same names a wire peer may not announce for itself: they
+            // are what the socket established, not what the peer says.
+            if RESERVED_PROPERTIES
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(k))
+            {
+                continue;
+            }
+            meta.insert(k.clone(), v.clone());
+        }
         meta.insert("Socket-Type", Bytes::from_static(socket_type.as_bytes()));
         if let Some(id) = identity.as_ref().filter(|id| !id.is_empty()) {
             meta.insert("Identity", id.clone());
-        }
-        for (k, v) in &options.metadata {
-            meta.insert(k.clone(), v.clone());
         }
         Self {
             socket_type,
@@ -374,6 +396,8 @@ pub enum Event {
     Rest,
     /// Heartbeat interval elapsed.
     Tick,
+    /// A peer named a TTL in a PING, on a socket that does not heartbeat.
+    PeerTtl,
     /// The close linger period ended.
     LingerExpired,
 }
@@ -514,6 +538,9 @@ pub struct SocketCore<P: Protocol, H: Hooks> {
     connect_routing_id: Option<Bytes>,
     monitor: Option<SocketEventSender>,
     heartbeat: Option<ChildId>,
+    /// The period `heartbeat` ticks at when it was started for a peer's
+    /// TTL, on a socket with no heartbeat interval of its own.
+    ttl_tick: Option<Duration>,
     shared_wire: BytesMut,
     driver_running: bool,
     /// Some peer holds the rest of a whole-segment write, and the driver has
@@ -554,6 +581,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             connect_routing_id,
             monitor: None,
             heartbeat: None,
+            ttl_tick: None,
             shared_wire: BytesMut::new(),
             driver_running: false,
             rests_held: false,
@@ -752,6 +780,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
                 Event::Writable(_) => self.wakeups.wake_user(),
                 Event::Closed(id, reason) => self.on_closed(id, &reason),
                 Event::Tick => self.on_tick(),
+                Event::PeerTtl => self.on_peer_ttl(),
                 Event::Rest => {
                     // One wake covers every rest held until the driver runs,
                     // which it cannot while the sending task keeps going.
@@ -1151,8 +1180,76 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         }
     }
 
+    /// A peer named a TTL and this socket has no heartbeat interval of its
+    /// own to tick by. Tick at half the shortest TTL any peer has named, so
+    /// a silent peer is closed between one TTL and one and a half.
+    fn on_peer_ttl(&mut self) {
+        if self.options.heartbeat_ivl.is_some() {
+            return;
+        }
+        let shortest = self
+            .peers
+            .iter()
+            .flatten()
+            .filter(|entry| !entry.closed)
+            .filter_map(|entry| match &entry.state.borrow().outbound {
+                Outbound::Wire { codec, .. } => codec.peer_ttl(),
+                _ => None,
+            })
+            .min();
+        let Some(ttl) = shortest else {
+            return;
+        };
+        let tick = (ttl / 2).max(Duration::from_millis(50));
+        if self.ttl_tick.is_some_and(|current| current <= tick) {
+            return;
+        }
+        if let Some(old) = self.heartbeat.take() {
+            self.children.cancel(old);
+        }
+        self.ttl_tick = Some(tick);
+        self.heartbeat = Some(
+            self.children
+                .spawn(driver::heartbeat_loop(tick, Rc::clone(&self.events))),
+        );
+    }
+
+    /// The tick of a socket that does not heartbeat: close each peer that
+    /// named a TTL and has sent nothing for that long, as libzmq does. No
+    /// PING is sent; this side asked for no heartbeats.
+    fn enforce_peer_ttls(&mut self) {
+        let now = Instant::now();
+        let mut dead = Vec::new();
+        for entry in self.peers.iter().flatten() {
+            if entry.closed {
+                continue;
+            }
+            let mut st = entry.state.borrow_mut();
+            let Some(mut last) = st.last_recv else {
+                continue;
+            };
+            if std::mem::take(&mut st.recv_seen) {
+                last = now;
+                st.last_recv = Some(now);
+            }
+            let Outbound::Wire { codec, .. } = &st.outbound else {
+                continue;
+            };
+            if codec
+                .peer_ttl()
+                .is_some_and(|ttl| now.saturating_duration_since(last) >= ttl)
+            {
+                dead.push(st.id);
+            }
+        }
+        for id in dead {
+            self.on_closed(id, &CloseReason::HeartbeatTimeout);
+        }
+    }
+
     fn on_tick(&mut self) {
         let Some(ivl) = self.options.heartbeat_ivl else {
+            self.enforce_peer_ttls();
             return;
         };
         let timeout = self.options.heartbeat_timeout.unwrap_or(ivl);
@@ -1280,6 +1377,15 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
     pub fn connect(this: &Shared<P, H>, endpoint: &str) -> Result<()> {
         let given = endpoint;
         let endpoint = Endpoint::parse(endpoint)?;
+        // `*` names every interface or a port the OS picks: somewhere to
+        // listen, not somewhere to dial. libzmq turns it away too.
+        if let (Endpoint::Tcp(addr), Some(text)) = (&endpoint, given.strip_prefix("tcp://"))
+            && (addr.port() == 0 || text.starts_with("*:"))
+        {
+            return Err(MonocoqueError::InvalidEndpoint(format!(
+                "cannot connect to the wildcard address {given}"
+            )));
+        }
         Self::ensure_driver(this);
         let mut core = this.borrow_mut();
         if let Endpoint::Inproc(name) = &endpoint {
