@@ -360,10 +360,15 @@ impl<K: Kind> Socket<K> {
         type Wait<'a> = std::pin::Pin<Box<dyn Future<Output = Result<()>> + 'a>>;
         // By reference first: a wire peer with room encodes the message where
         // it is, and it is only moved if it has to wait or change hands.
-        let now = self.core.borrow_mut().try_send_lb_ref(&msg);
+        let mut failure = None;
+        let now = self.core.borrow_mut().try_send_lb_ref(&msg, &mut failure);
         let wait: Wait<'_> = match now {
-            SendNow::Done(result) => {
-                return futures::future::Either::Left(std::future::ready(result));
+            SendNow::Done => {
+                return futures::future::Either::Left(std::future::ready(Ok(())));
+            }
+            SendNow::Failed => {
+                let error = failure.unwrap_or(MonocoqueError::Closed);
+                return futures::future::Either::Left(std::future::ready(Err(error)));
             }
             SendNow::Pending(peer) => Box::pin(async move {
                 self.wait_written(peer).await;

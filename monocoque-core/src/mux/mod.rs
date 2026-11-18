@@ -452,12 +452,34 @@ pub enum SendTo {
 }
 
 /// What [`SocketCore::try_send_lb_ref`] did with a message.
-#[derive(Debug)]
+///
+/// Small enough to come back in registers. With the error inside it, the
+/// usual answer was written as one word and then copied as four, a load the
+/// processor cannot serve from the store before it: a third of the time
+/// `send` spent outside the encoder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SendNow {
-    /// Sent with nothing left to wait for, or failed.
-    Done(Result<()>),
+    /// Sent with nothing left to wait for.
+    Done,
+    /// Failed; the error is in the caller's `failure`.
+    Failed,
     /// Queued toward this peer, whose write has yet to reach the kernel.
     Pending(PeerId),
+    /// Not sent; send it by value.
+    Owned,
+}
+
+/// What [`SocketCore::try_send_to_ref`] did with a message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendToNow {
+    /// Queued, with nothing left to wait for.
+    Done,
+    /// Queued, and the write has yet to reach the kernel.
+    Pending,
+    /// The peer is at its send high-water mark.
+    Full,
+    /// No such live peer.
+    Gone,
     /// Not sent; send it by value.
     Owned,
 }
@@ -669,15 +691,23 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
     }
 
     /// Poll every woken child and process what they reported, until quiet.
-    #[inline]
+    #[allow(clippy::inline_always)] // on every send and receive
+    #[inline(always)]
     pub fn progress(&mut self) {
-        // Every send and receive comes through here, usually with nothing to do.
+        // Usually there is nothing to do, and the check is all that runs: as
+        // one function with the work below it was called, not inlined, twice
+        // per send.
         if !self.wakeups.has_woken()
             && self.events.q.borrow().is_empty()
             && self.handshaken.borrow().is_empty()
         {
             return;
         }
+        self.make_progress();
+    }
+
+    #[inline(never)]
+    fn make_progress(&mut self) {
         // Bounded for the same reason as `poll_woken`: a child that keeps
         // waking itself must not keep the caller from what it came for.
         for _ in 0..PROGRESS_ROUNDS {
@@ -1745,8 +1775,8 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
     ///
     /// [`SendNow::Owned`] means nothing was sent: no peer has room, or the
     /// peer is inproc and takes the message itself. The caller then sends it
-    /// by value.
-    pub fn try_send_lb_ref(&mut self, msg: &Msg) -> SendNow {
+    /// by value. An error goes to `failure`.
+    pub fn try_send_lb_ref(&mut self, msg: &Msg, failure: &mut Option<MonocoqueError>) -> SendNow {
         self.wakeups.enter();
         self.progress();
         let cursor = self.lb_cursor;
@@ -1767,7 +1797,10 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
                 self.lb_cursor = cursor;
                 SendNow::Owned
             }
-            Some(Err(e)) => SendNow::Done(Err(e)),
+            Some(Err(e)) => {
+                *failure = Some(e);
+                SendNow::Failed
+            }
             Some(Ok((id, eager))) => {
                 self.progress();
                 // A coalescing peer holds its writes for a flush, so only an
@@ -1775,12 +1808,52 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
                 if eager && self.write_pending(id) {
                     SendNow::Pending(id)
                 } else {
-                    SendNow::Done(Ok(()))
+                    SendNow::Done
                 }
             }
         };
         self.wakeups.exit();
         now
+    }
+
+    /// [`send_to`](Self::send_to) for a wire peer with room, encoding from the
+    /// reference. By value the 112-byte `Msg` was copied into `send_to`, into
+    /// the peer's queue call and back out in the result, on every send a
+    /// ROUTER made.
+    ///
+    /// [`SendToNow::Owned`] means nothing was sent because the peer is inproc
+    /// and takes the message itself. The caller then sends it by value.
+    pub fn try_send_to_ref(&mut self, id: PeerId, msg: &Msg) -> SendToNow {
+        self.wakeups.enter();
+        self.progress();
+        let now = self.send_to_ref(id, msg);
+        self.wakeups.exit();
+        now
+    }
+
+    fn send_to_ref(&mut self, id: PeerId, msg: &Msg) -> SendToNow {
+        let queued = {
+            let Some(entry) = self.entry(id).filter(|e| !e.closed) else {
+                return SendToNow::Gone;
+            };
+            let mut st = entry.state.borrow_mut();
+            if !st.writable() {
+                return SendToNow::Full;
+            }
+            st.enqueue_ref(msg)
+        };
+        match queued {
+            None => SendToNow::Owned,
+            Some(Err(_)) => SendToNow::Gone,
+            Some(Ok(eager)) => {
+                self.progress();
+                if eager && self.write_pending(id) {
+                    SendToNow::Pending
+                } else {
+                    SendToNow::Done
+                }
+            }
+        }
     }
 
     fn pick_writable(&mut self) -> Option<PeerId> {

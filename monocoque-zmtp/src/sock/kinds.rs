@@ -7,7 +7,7 @@ use crate::wire::Zmtp;
 use bytes::Bytes;
 use monocoque_core::error::{MonocoqueError, Result};
 use monocoque_core::msg::{Msg, MsgRef};
-use monocoque_core::mux::{Hooks, PeerId, PeerInfo, SendTo, SocketCore, op};
+use monocoque_core::mux::{Hooks, PeerId, PeerInfo, SendTo, SendToNow, SocketCore, op};
 use monocoque_core::options::SocketOptions;
 use monocoque_core::subscription::{
     Subscribed, SubscriptionEvent, SubscriptionIndex, SubscriptionTrie, Unsubscribed,
@@ -343,28 +343,56 @@ impl Socket<Router> {
     /// Route `msg` by its first frame. An unknown identity is dropped, or
     /// fails with `HostUnreachable` under `router_mandatory`; a peer at its
     /// HWM drops the message, or fails with `Again` under `router_mandatory`.
-    pub async fn send(&mut self, msg: impl Into<Msg>) -> Result<()> {
+    pub fn send(&mut self, msg: impl Into<Msg>) -> impl Future<Output = Result<()>> + '_ {
+        // Routed and queued here, not in the future: as an `async fn` the
+        // message was copied into the future and again on its way to the
+        // peer. Only a send with a write to wait for becomes a future that
+        // does anything, and that one is boxed (see `send_lb_now`).
         let mut msg = msg.into();
-        let mandatory = self.core.borrow().options().router_mandatory;
+        match self.route_now(&mut msg) {
+            Ok(Some(peer)) => {
+                let wait: std::pin::Pin<Box<dyn Future<Output = Result<()>> + '_>> =
+                    Box::pin(async move {
+                        self.wait_written(peer).await;
+                        Ok(())
+                    });
+                futures::future::Either::Right(wait)
+            }
+            Ok(None) => futures::future::Either::Left(std::future::ready(Ok(()))),
+            Err(e) => futures::future::Either::Left(std::future::ready(Err(e))),
+        }
+    }
+
+    /// Queue `msg` toward the peer its first frame names. `Some` is a peer
+    /// whose write has yet to reach the kernel.
+    fn route_now(&mut self, msg: &mut Msg) -> Result<Option<PeerId>> {
         let Some(identity) = msg.pop_front() else {
             return Err(MonocoqueError::InvalidRoutingId);
         };
-        let peer = self.core.borrow().hooks().route(&identity);
-        let Some(peer) = peer else {
+        let mut core = self.core.borrow_mut();
+        let mandatory = core.options().router_mandatory;
+        let Some(peer) = core.hooks().route(&identity) else {
             return if mandatory {
                 Err(MonocoqueError::HostUnreachable)
             } else {
-                Ok(())
+                Ok(None)
             };
         };
-        match self.send_to_now(peer, msg) {
-            SendTo::Sent => {
-                self.wait_written(peer).await;
-                Ok(())
-            }
-            SendTo::Full(_) if mandatory => Err(MonocoqueError::Again),
-            SendTo::Gone(_) if mandatory => Err(MonocoqueError::HostUnreachable),
-            SendTo::Full(_) | SendTo::Gone(_) => Ok(()),
+        let now = match core.try_send_to_ref(peer, msg) {
+            // An inproc peer takes the message itself.
+            SendToNow::Owned => match core.send_to(peer, std::mem::take(msg)) {
+                SendTo::Sent if core.write_pending(peer) => SendToNow::Pending,
+                SendTo::Sent => SendToNow::Done,
+                SendTo::Full(_) => SendToNow::Full,
+                SendTo::Gone(_) => SendToNow::Gone,
+            },
+            now => now,
+        };
+        match now {
+            SendToNow::Pending => Ok(Some(peer)),
+            SendToNow::Full if mandatory => Err(MonocoqueError::Again),
+            SendToNow::Gone if mandatory => Err(MonocoqueError::HostUnreachable),
+            _ => Ok(None),
         }
     }
 
