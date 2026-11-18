@@ -140,6 +140,8 @@ pub struct PeerState<C> {
     /// heartbeating, or once the peer has named a TTL. Reads only raise
     /// `recv_seen`, so the hot path never reads the clock.
     pub(crate) last_recv: Option<Instant>,
+    /// The TTL the peer named in its last PING, as the socket was last told.
+    ttl_named: Option<std::time::Duration>,
     pub(crate) recv_seen: bool,
     pub(crate) ping_outstanding: bool,
     /// Close the connection once everything queued has been written.
@@ -187,6 +189,7 @@ impl<C: Codec> PeerState<C> {
             closed: None,
             events,
             last_recv: heartbeat.then(Instant::now),
+            ttl_named: None,
             recv_seen: false,
             ping_outstanding: false,
             close_when_drained: false,
@@ -826,12 +829,17 @@ pub async fn reader_loop<C: Codec>(
             out,
         );
         if out.queued_bytes() != replies_before {
-            // A PING that named a TTL, on a socket that does not heartbeat
-            // and so keeps no time of the last read: start keeping it, and
-            // have the socket hold the peer to its TTL. Looked at here, where
-            // a command was just answered, to keep it off the path of data.
-            if st.last_recv.is_none() && codec.peer_ttl().is_some() {
-                st.last_recv = Some(Instant::now());
+            // A PING that named a TTL, a different one, or none after one:
+            // the socket holds the peer to it, and on a socket that does not
+            // heartbeat it sets how often to look. Such a socket keeps no
+            // time of the last read until now. Looked at here, where a
+            // command was just answered, to keep it off the path of data.
+            let named = codec.peer_ttl();
+            if named != st.ttl_named {
+                st.ttl_named = named;
+                if named.is_some() && st.last_recv.is_none() {
+                    st.last_recv = Some(Instant::now());
+                }
                 st.events.push(super::Event::PeerTtl);
             }
             // A PONG: written now, not when a coalesced batch fills.

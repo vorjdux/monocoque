@@ -31,6 +31,7 @@ use monocoque::zmq::{
     RouterSocket, SocketOptions, SubSocket, XPubSocket,
 };
 use std::collections::BTreeMap;
+use std::io::{Read, Write};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -133,10 +134,35 @@ fn in_fresh_runtime(case: impl std::future::Future<Output = Option<Window>>) -> 
     LocalRuntime::new().unwrap().block_on(case)
 }
 
+/// Do a ZMTP 3 NULL handshake as a PUSH socket, over a plain TCP stream.
+fn raw_push_handshake(s: &mut std::net::TcpStream) {
+    let mut greeting = [0u8; 64];
+    greeting[0] = 0xff;
+    greeting[9] = 0x7f;
+    greeting[10] = 3;
+    greeting[12..16].copy_from_slice(b"NULL");
+    s.write_all(&greeting).unwrap();
+    let mut theirs = [0u8; 64];
+    s.read_exact(&mut theirs).unwrap();
+    let mut ready = vec![5u8];
+    ready.extend_from_slice(b"READY");
+    ready.push(11);
+    ready.extend_from_slice(b"Socket-Type");
+    ready.extend_from_slice(&4u32.to_be_bytes());
+    ready.extend_from_slice(b"PUSH");
+    s.write_all(&[0x04, u8::try_from(ready.len()).unwrap()])
+        .unwrap();
+    s.write_all(&ready).unwrap();
+}
+
 fn check(case: &str, switches: Option<Window>, failures: &mut Vec<String>) {
+    check_within(case, switches, SWITCH_BUDGET, failures);
+}
+
+fn check_within(case: &str, switches: Option<Window>, budget: u64, failures: &mut Vec<String>) {
     match switches {
-        Some(w) if w.total > SWITCH_BUDGET => failures.push(format!(
-            "{case}: {} context switches in {IDLE_WINDOW:?} idle (budget {SWITCH_BUDGET}): {}",
+        Some(w) if w.total > budget => failures.push(format!(
+            "{case}: {} context switches in {IDLE_WINDOW:?} idle (budget {budget}): {}",
             w.total, w.by_thread
         )),
         Some(w) => println!(
@@ -145,6 +171,31 @@ fn check(case: &str, switches: Option<Window>, failures: &mut Vec<String>) {
         ),
         None => println!("[idle wakeups] {case}: counters unavailable, skipped"),
     }
+}
+
+/// A peer names a TTL in a PING and leaves. The socket ticks to hold a peer
+/// to its TTL, and it must stop once that peer is gone: otherwise any peer
+/// could leave an idle socket waking up for good.
+async fn idle_after_a_peer_named_a_ttl_and_left() -> Option<Window> {
+    let mut parked = Vec::new();
+    let mut pull = PullSocket::new();
+    let ep = pull.bind("tcp://127.0.0.1:0").await.unwrap();
+    let addr = ep.strip_prefix("tcp://").unwrap().to_string();
+    let peer = thread::spawn(move || {
+        let mut s = std::net::TcpStream::connect(addr).unwrap();
+        raw_push_handshake(&mut s);
+        // PING, TTL of one tenth of a second, no context.
+        s.write_all(b"\x04\x07\x04PING\x00\x01").unwrap();
+        // Long enough for the PING to be read and the tick to start.
+        thread::sleep(Duration::from_millis(150));
+    });
+    connected!(pull, 1);
+    while pull.peer_count() > 0 {
+        monocoque::rt::sleep(Duration::from_millis(1)).await;
+    }
+    peer.join().unwrap();
+    park_recv!(parked, pull);
+    idle_switches().await
 }
 
 #[test]
@@ -240,6 +291,15 @@ fn idle_connections_do_not_wake_the_process() {
         n
     });
     check("XPUB waiting for a subscription", n, &mut failures);
+
+    // Half the usual budget: the tick that was left running fired every
+    // 50 ms, ten times in a window, which the whole budget would let pass.
+    check_within(
+        "PULL after a peer named a TTL and left",
+        in_fresh_runtime(idle_after_a_peer_named_a_ttl_and_left()),
+        SWITCH_BUDGET / 2,
+        &mut failures,
+    );
 
     assert!(
         failures.is_empty(),

@@ -1139,6 +1139,10 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         if !has_ready {
             self.free_peer(id);
         }
+        if self.ttl_tick.is_some() {
+            // It may have been the peer the tick was for.
+            self.on_peer_ttl();
+        }
         self.wakeups.wake_user();
     }
 
@@ -1180,9 +1184,13 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
         }
     }
 
-    /// A peer named a TTL and this socket has no heartbeat interval of its
-    /// own to tick by. Tick at half the shortest TTL any peer has named, so
-    /// a silent peer is closed between one TTL and one and a half.
+    /// The TTL a peer named has changed, or a peer that had named one is
+    /// gone, on a socket with no heartbeat interval of its own to tick by.
+    ///
+    /// Tick at half the shortest TTL any live peer has named, so a silent
+    /// peer is closed between one TTL and one and a half. With no such peer
+    /// left there is nothing to tick for: a peer must not be able to leave
+    /// an idle socket waking up for good by naming a TTL and going away.
     fn on_peer_ttl(&mut self) {
         if self.options.heartbeat_ivl.is_some() {
             return;
@@ -1197,21 +1205,20 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
                 _ => None,
             })
             .min();
-        let Some(ttl) = shortest else {
-            return;
-        };
-        let tick = (ttl / 2).max(Duration::from_millis(50));
-        if self.ttl_tick.is_some_and(|current| current <= tick) {
+        let tick = shortest.map(|ttl| (ttl / 2).max(Duration::from_millis(50)));
+        if tick == self.ttl_tick {
             return;
         }
         if let Some(old) = self.heartbeat.take() {
             self.children.cancel(old);
         }
-        self.ttl_tick = Some(tick);
-        self.heartbeat = Some(
-            self.children
-                .spawn(driver::heartbeat_loop(tick, Rc::clone(&self.events))),
-        );
+        self.ttl_tick = tick;
+        if let Some(tick) = tick {
+            self.heartbeat = Some(
+                self.children
+                    .spawn(driver::heartbeat_loop(tick, Rc::clone(&self.events))),
+            );
+        }
     }
 
     /// The tick of a socket that does not heartbeat: close each peer that
