@@ -28,7 +28,7 @@ const BENCH_BACKEND: &str = if cfg!(feature = "runtime-tokio") {
 } else {
     "compio"
 };
-use monocoque::zmq::{DealerSocket, Msg, RouterSocket, SocketOptions};
+use monocoque::zmq::{DealerSocket, Msg, RouterSocket, SocketEvent, SocketOptions};
 use std::hint::black_box;
 use std::sync::mpsc;
 use std::thread;
@@ -75,14 +75,22 @@ fn monocoque_dealer_router_pipelined(c: &mut Criterion) {
                         rt.block_on(async move {
                             let mut router =
                                 RouterSocket::with_options(batch_options(SocketOptions::default()));
+                            let events = router.monitor();
                             ep_tx
                                 .send(router.bind("tcp://127.0.0.1:0").await.unwrap())
                                 .unwrap();
 
-                            // Start timing once the DEALER is handshaken.
-                            while router.peer_count() == 0 {
-                                monocoque::rt::sleep(Duration::from_millis(1)).await;
-                            }
+                            // Start timing once the DEALER is handshaken, and
+                            // the moment it is. Asking `peer_count()` every
+                            // millisecond left the DEALER, its first batch
+                            // already sent, asleep for a millisecond or two.
+                            // A core idle that long goes into a deep sleep,
+                            // and waking it took about 100 µs of the timed
+                            // run: a cost of the wait, not of the sockets.
+                            while !matches!(
+                                events.recv_async().await,
+                                Ok(SocketEvent::Accepted(_)) | Err(_)
+                            ) {}
 
                             let t0 = std::time::Instant::now();
                             let mut batch = Vec::with_capacity(BATCH_SIZE);
