@@ -17,6 +17,9 @@ The other revision is checked out into a git worktree under target/bench-pair/
 and built into its own target directory, so the working tree is not touched.
 A case that exists in only one revision is listed without a comparison.
 
+The exit status is 1, after an INCOMPLETE list, if a benchmark did not build,
+a run failed, nothing matched, or a case has fewer rounds than were asked for.
+
 A full benchmark takes minutes per round. Use --filter to pick cases and
 --rounds to trade time for confidence. --secs shortens the benchmarks that
 read BENCH_SECS; a revision whose benchmark does not read it runs at its own
@@ -85,7 +88,10 @@ def build(tree, target, backend, bench):
 
 
 def measure(binary, pattern, pin, scratch, env):
-    """Run one benchmark binary. Returns {case: seconds per iteration}."""
+    """Run one benchmark binary.
+
+    Returns {case: seconds per iteration} and whether the run exited cleanly.
+    """
     cmd = [str(binary), "--bench", pattern, "--noplot"]
     if pin:
         cmd = ["taskset", "-c", pin, *cmd]
@@ -110,7 +116,7 @@ def measure(binary, pattern, pin, scratch, env):
         # A long case name is printed on the line above its time.
         name = hit.group(1).strip() or lines[i - 1].strip()
         times[name] = float(hit.group(2)) * SECONDS[hit.group(3)]
-    return times
+    return times, done.returncode == 0
 
 
 def show(seconds):
@@ -172,6 +178,10 @@ def main():
           f"{' with uncommitted changes' if git('status', '--porcelain') else ''}")
     print(f"rounds: {opt.rounds}, pinned to: {opt.pin or 'not pinned'}\n")
 
+    # Everything that makes the report less than what was asked for. A run
+    # that lost a benchmark or a round must not look like one that did not.
+    problems = []
+
     for backend in backends:
         for bench in benches:
             print(f"== {bench} on {backend}", flush=True)
@@ -179,23 +189,40 @@ def main():
             new_bin = build(ROOT, None, backend, bench)
             if not old_bin or not new_bin:
                 print("  skipped\n")
+                side = opt.against if not old_bin else "the working tree"
+                problems.append(f"{bench} on {backend}: skipped, it does not build in {side}")
                 continue
             pattern = f"monocoque-{backend}/.*{opt.filter}" if opt.filter else f"monocoque-{backend}/"
             pin = opt.pin if bench in TWO_THREAD else None
             old, new = {}, {}
-            sides = [(old_bin, old, WORK / "run-old"), (new_bin, new, WORK / "run-new")]
+            sides = [(old_bin, old, WORK / "run-old", opt.against),
+                     (new_bin, new, WORK / "run-new", "new")]
             for i in range(opt.rounds):
                 # Swap who goes first each round, so neither side always runs
                 # on a machine the other has just warmed up.
-                for binary, into, scratch in sides if i % 2 == 0 else reversed(sides):
-                    for name, t in measure(binary, pattern, pin, scratch, env).items():
+                for binary, into, scratch, side in sides if i % 2 == 0 else reversed(sides):
+                    times, clean = measure(binary, pattern, pin, scratch, env)
+                    if not clean:
+                        problems.append(f"{bench} on {backend}: the {side} run failed in round {i + 1}")
+                    for name, t in times.items():
                         into.setdefault(name, []).append(t)
                 print(f"  round {i + 1} of {opt.rounds} done", flush=True)
             if not old and not new:
                 print("  no case matched\n")
+                problems.append(f"{bench} on {backend}: no case matched")
                 continue
+            for side, cases in ((opt.against, old), ("new", new)):
+                for name, samples in cases.items():
+                    if len(samples) != opt.rounds:
+                        problems.append(f"{name}: {len(samples)} of {opt.rounds} rounds on the {side} side")
             report(old, new, opt.against)
             print(flush=True)
+
+    if problems:
+        print("INCOMPLETE: the numbers above do not cover everything that was asked for")
+        for problem in problems:
+            print(f"  {problem}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
