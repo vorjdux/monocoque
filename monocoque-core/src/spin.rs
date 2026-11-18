@@ -43,8 +43,15 @@ pub fn spin_budget() -> Duration {
 
 /// `true` when this thread has one CPU to run on. On Linux the count honours
 /// the affinity mask and the cgroup CPU quota.
+///
+/// Asked once per process, by whichever thread makes the first socket.
+/// Finding the quota reads a file for each level of the cgroup tree, about
+/// thirty system calls, which every new socket paid. A thread pinned to one
+/// CPU inside a process that has several is not seen: `MONOCOQUE_SPIN_US=0`
+/// is for that.
 fn single_cpu() -> bool {
-    std::thread::available_parallelism().map_or(true, |n| n.get() <= 1)
+    static SINGLE_CPU: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SINGLE_CPU.get_or_init(|| std::thread::available_parallelism().map_or(true, |n| n.get() <= 1))
 }
 
 /// A receive about to sleep yields instead, for up to the budget.

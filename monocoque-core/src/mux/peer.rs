@@ -156,6 +156,8 @@ pub struct PeerState<C> {
     /// A coalesced job was cut to whole segments and its rest is queued
     /// below the threshold, waiting for the next batch or an idle sender.
     rest_held: bool,
+    /// What the connection last said one segment carries.
+    segment: SegmentSize,
     /// `bytes_written` when the peer was marked stalled.
     stalled_at: u64,
     /// Progress and the time it was read, since sends began finding this
@@ -166,6 +168,54 @@ pub struct PeerState<C> {
     /// The wire stream, to ask how much of what was written the peer has
     /// taken. Weak: the reader and writer alone keep the socket open.
     pub(crate) stream: Weak<Stream>,
+}
+
+/// The payload of one TCP segment on a connection, asked of the kernel only
+/// as often as it changes.
+///
+/// The kernel holds a young connection to half its window (32 KiB on
+/// loopback) and raises it over the first few writes, to 65 483 there, where
+/// it stays. Asking before every batch cost a 4 KiB pipelined round about
+/// twelve `getsockopt` calls. Each answer equal to the last doubles the
+/// number of batches that go by before the next question, up to
+/// [`Self::MAX_SKIP`], and a different answer starts over.
+#[derive(Default)]
+struct SegmentSize {
+    known: usize,
+    /// Batches left that take `known` without asking.
+    skip: u8,
+    /// How many batches the last unchanged answer was trusted for.
+    trust: u8,
+}
+
+impl SegmentSize {
+    /// A path whose segment size changes late (a route's MTU dropping) is
+    /// noticed within this many batches. Cutting to a stale size meanwhile
+    /// only costs the odd segment the cut is there to avoid.
+    const MAX_SKIP: u8 = 63;
+
+    fn get(&mut self, stream: &Stream) -> usize {
+        self.get_with(|| stream.segment_size())
+    }
+
+    fn get_with(&mut self, ask: impl FnOnce() -> usize) -> usize {
+        if self.skip > 0 {
+            self.skip -= 1;
+            return self.known;
+        }
+        let now = ask();
+        self.trust = if now == self.known {
+            self.trust
+                .saturating_mul(2)
+                .saturating_add(1)
+                .min(Self::MAX_SKIP)
+        } else {
+            0
+        };
+        self.skip = self.trust;
+        self.known = now;
+        now
+    }
 }
 
 impl<C: Codec> PeerState<C> {
@@ -196,6 +246,7 @@ impl<C: Codec> PeerState<C> {
             bytes_written: 0,
             write_stalled: false,
             rest_held: false,
+            segment: SegmentSize::default(),
             stalled_at: 0,
             stall_watch: None,
             stream: Weak::new(),
@@ -604,11 +655,9 @@ impl<C: Codec> PeerState<C> {
             return Poll::Ready(None);
         };
         let (cap, segment) = if hold.is_some() {
-            // Asked for each batch: the kernel holds a young connection to
-            // half its window (32 KiB on loopback) and raises it later.
             let whole =
                 released && !*flushing && !closing && (hwm == 0 || out.pending_msgs() < hwm);
-            let segment = if whole { stream.segment_size() } else { 0 };
+            let segment = if whole { self.segment.get(stream) } else { 0 };
             (super::out::MAX_COALESCED_VECTORED_JOB, segment)
         } else {
             (super::out::MAX_VECTORED_JOB, 0)
@@ -976,5 +1025,57 @@ pub async fn remote_reader_loop<C: Codec>(
             peer.borrow_mut().close(CloseReason::Eof);
             return;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SegmentSize;
+
+    /// The answers a connection gave, in order, and how many times it was asked.
+    fn asked(seg: &mut SegmentSize, kernel: &[usize]) -> (Vec<usize>, usize) {
+        let mut asks = 0;
+        let got = kernel
+            .iter()
+            .map(|&now| {
+                seg.get_with(|| {
+                    asks += 1;
+                    now
+                })
+            })
+            .collect();
+        (got, asks)
+    }
+
+    #[test]
+    fn a_growing_segment_size_is_asked_for_every_batch() {
+        let mut seg = SegmentSize::default();
+        let young = [32_768, 47_616, 53_248, 65_483];
+        let (got, asks) = asked(&mut seg, &young);
+        assert_eq!(got, young);
+        assert_eq!(asks, young.len());
+    }
+
+    #[test]
+    fn a_settled_segment_size_is_asked_for_less_and_less() {
+        let mut seg = SegmentSize::default();
+        let (got, asks) = asked(&mut seg, &[65_483; 1000]);
+        assert!(got.iter().all(|&s| s == 65_483));
+        // Asked at batches 1, 2, 4, 8, 16, 32 and 64, then every 64th.
+        assert_eq!(asks, 7 + (1000 - 64) / 64);
+    }
+
+    #[test]
+    fn a_change_is_seen_within_the_longest_skip_and_asked_about_again() {
+        let mut seg = SegmentSize::default();
+        asked(&mut seg, &[65_483; 500]);
+        let mut batches = 0;
+        while asked(&mut seg, &[1_448]).0 != [1_448] {
+            batches += 1;
+            assert!(batches <= usize::from(SegmentSize::MAX_SKIP));
+        }
+        // Once it has changed, the next batch asks again.
+        let (got, asks) = asked(&mut seg, &[1_400]);
+        assert_eq!((got, asks), (vec![1_400], 1));
     }
 }
