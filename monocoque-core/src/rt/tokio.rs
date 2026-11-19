@@ -264,6 +264,42 @@ macro_rules! impl_shared_io {
             }
         }
 
+        impl $ty {
+            /// Read once into the room left in `first`, then at most `limit`
+            /// bytes of `second`, setting `dry` as [`Self::read_noting`]
+            /// does. See [`crate::io::fill_read_two`].
+            pub async fn read_two_noting(
+                &self,
+                first: bytes::BytesMut,
+                second: bytes::BytesMut,
+                limit: usize,
+                dry: &std::cell::Cell<bool>,
+            ) -> (io::Result<usize>, bytes::BytesMut, bytes::BytesMut) {
+                let inner = &self.inner;
+                crate::io::fill_read_two(first, second, limit, async move |a, b| {
+                    loop {
+                        let got = inner.try_io(tokio::io::Interest::READABLE, || {
+                            let mut bufs = [
+                                socket2::MaybeUninitSlice::new(&mut *a),
+                                socket2::MaybeUninitSlice::new(&mut *b),
+                            ];
+                            socket2::SockRef::from(inner)
+                                .recv_vectored(&mut bufs)
+                                .map(|(n, _)| n)
+                        });
+                        match got {
+                            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                                dry.set(true);
+                                poll_fn(|cx| inner.poll_read_ready(cx)).await?;
+                            }
+                            other => return other,
+                        }
+                    }
+                })
+                .await
+            }
+        }
+
         impl AsyncRead for &$ty {
             async fn read<B: IoBufMut>(&mut self, buf: B) -> BufResult<usize, B> {
                 self.read_noting(buf, &std::cell::Cell::new(false)).await

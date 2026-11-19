@@ -858,6 +858,66 @@ const fn next_read_target(target: usize, floor: usize, spare: usize, n: usize) -
     }
 }
 
+/// How far a read that finishes a long frame reads into what follows it:
+/// enough for the next frame's header, and for a short message whole.
+///
+/// A long frame is read into a buffer of its own, so its body goes from the
+/// kernel to where the application gets it without a copy. That works only
+/// if its header was read without the body, and reading the header alone
+/// took a `recv` of its own: a stream of 16 KiB frames made two calls per
+/// message, one for nine bytes. The read that finishes one frame now brings
+/// the next header with it.
+///
+/// It must not bring more. Reading on for a whole buffer halved the calls
+/// again but left most of the next frame where it had to be copied out: an
+/// eager 16 KiB stream on tokio spent 48 ms of user time per ten thousand
+/// messages against 27, and ran 13% slower.
+#[cfg(any(feature = "runtime-tokio", feature = "runtime-smol"))]
+const FRAME_READ_AHEAD: usize = 64;
+
+/// One read into the room `buf` has. Returns what the read said and how much
+/// room it was given.
+///
+/// On tokio and smol, when `buf` is a buffer sized to one long frame, the
+/// same call reads [`FRAME_READ_AHEAD`] bytes on into the read buffer the
+/// codec set aside. A ring read is a submission either way, and compio gives
+/// such frames room for several instead.
+async fn read_once<C: Codec>(
+    peer: &RefCell<PeerState<C>>,
+    stream: &Stream,
+    buf: &mut BytesMut,
+    dry: &std::cell::Cell<bool>,
+) -> (std::io::Result<usize>, usize) {
+    #[cfg(any(feature = "runtime-tokio", feature = "runtime-smol"))]
+    {
+        let set_aside = match &mut peer.borrow_mut().outbound {
+            Outbound::Wire { codec, .. } => codec.take_read_ahead(),
+            _ => None,
+        };
+        if let Some(mut next) = set_aside {
+            next.reserve(FRAME_READ_AHEAD);
+            let spare = (buf.capacity() - buf.len()) + FRAME_READ_AHEAD;
+            let (res, frame, next) = stream
+                .read_two_noting(std::mem::take(buf), next, FRAME_READ_AHEAD, dry)
+                .await;
+            *buf = frame;
+            if let Outbound::Wire { codec, .. } = &mut peer.borrow_mut().outbound {
+                codec.restore_read_ahead(next);
+            }
+            return (res, spare);
+        }
+    }
+    #[cfg(not(any(feature = "runtime-tokio", feature = "runtime-smol")))]
+    let _ = peer;
+    let len = buf.len();
+    let spare = buf.capacity() - len;
+    let BufResult(res, slice) = stream
+        .read_noting(std::mem::take(buf).slice(len..), dry)
+        .await;
+    *buf = slice.into_inner();
+    (res, spare)
+}
+
 /// Read, decode and queue messages from a wire peer until it closes.
 pub async fn reader_loop<C: Codec>(
     peer: Rc<RefCell<PeerState<C>>>,
@@ -898,10 +958,7 @@ pub async fn reader_loop<C: Codec>(
         if short_read {
             stream.wait_after_short_read().await;
         }
-        let len = buf.len();
-        let spare = buf.capacity() - len;
-        let BufResult(res, slice) = stream.read_noting(buf.slice(len..), &dry).await;
-        buf = slice.into_inner();
+        let (res, spare) = read_once(&peer, &stream, &mut buf, &dry).await;
         let mut st = peer.borrow_mut();
         match res {
             Ok(0) => {

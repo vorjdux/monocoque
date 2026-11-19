@@ -201,7 +201,17 @@ impl ZmtpCodec {
     fn take_frame(&mut self, buf: &mut BytesMut, total: usize) -> BytesMut {
         match self.parked.take() {
             Some(mut read) => {
-                read.extend_from_slice(&buf[total..]);
+                // The frame's buffer may have had room past the frame, and a
+                // read that ran on into `read` filled that room first: those
+                // bytes come before what `read` holds.
+                if buf.len() > total && !read.is_empty() {
+                    let mut joined = BytesMut::with_capacity(buf.len() - total + read.capacity());
+                    joined.extend_from_slice(&buf[total..]);
+                    joined.extend_from_slice(&read);
+                    read = joined;
+                } else {
+                    read.extend_from_slice(&buf[total..]);
+                }
                 buf.truncate(total);
                 std::mem::replace(buf, read)
             }
@@ -558,6 +568,14 @@ impl Codec for ZmtpCodec {
 
     fn filling_frame(&self) -> bool {
         self.parked.is_some()
+    }
+
+    fn take_read_ahead(&mut self) -> Option<BytesMut> {
+        self.parked.take()
+    }
+
+    fn restore_read_ahead(&mut self, buf: BytesMut) {
+        self.parked = Some(buf);
     }
 
     fn encode(&mut self, msg: &Msg, out: &mut OutQueue) -> Result<()> {

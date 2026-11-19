@@ -92,6 +92,54 @@ where
     }
 }
 
+/// Read once into the room left in two buffers, `first` then at most
+/// `second_limit` bytes of `second`, and declare what each received.
+///
+/// For a reader that knows how many bytes finish the frame it is on: those go
+/// to `first`, sized to the frame, and the same system call brings the start
+/// of what follows into `second`.
+///
+/// # Contract
+///
+/// On `Ok(n)`, `read` must have initialized the first `n` bytes of its two
+/// slices taken as one: all of the first slice before any of the second, as
+/// `readv` does.
+#[cfg(any(feature = "runtime-tokio", feature = "runtime-smol"))]
+pub(crate) async fn fill_read_two<F>(
+    mut first: bytes::BytesMut,
+    mut second: bytes::BytesMut,
+    second_limit: usize,
+    read: F,
+) -> (io::Result<usize>, bytes::BytesMut, bytes::BytesMut)
+where
+    F: AsyncFnOnce(&mut [MaybeUninit<u8>], &mut [MaybeUninit<u8>]) -> io::Result<usize>,
+{
+    let (outcome, room, room_in_both) = {
+        let a = first.spare_capacity_mut();
+        let b = second.spare_capacity_mut();
+        let limit = second_limit.min(b.len());
+        let b = &mut b[..limit];
+        let (room, room_in_both) = (a.len(), a.len() + b.len());
+        (read(a, b).await, room, room_in_both)
+    };
+    if let Ok(n) = outcome {
+        assert!(
+            n <= room_in_both,
+            "read reported {n} bytes but the two slices held only {room_in_both}"
+        );
+        let in_first = n.min(room);
+        // SAFETY: per this function's contract, `read` initialized the first
+        // `n` bytes of the two spare slices in order, so the first `in_first`
+        // bytes of `first`'s spare room and the first `n - in_first` of
+        // `second`'s are written, and neither length passes its capacity.
+        unsafe {
+            first.set_len(first.len() + in_first);
+            second.set_len(second.len() + (n - in_first));
+        }
+    }
+    (outcome, first, second)
+}
+
 /// Build borrowed `IoSlice`s over the initialized bytes of each buffer in an
 /// owned vectored buffer and hand them to `f` for a single vectored write.
 ///

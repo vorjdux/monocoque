@@ -117,6 +117,25 @@ impl Stream {
         }
     }
 
+    /// Read once into the room left in `first`, then at most `limit` bytes
+    /// of `second`, setting `dry` as [`Self::read_noting`] does. One system
+    /// call fills the frame `first` is sized to and brings in the start of
+    /// what follows it.
+    #[cfg(any(feature = "runtime-tokio", feature = "runtime-smol"))]
+    pub async fn read_two_noting(
+        &self,
+        first: bytes::BytesMut,
+        second: bytes::BytesMut,
+        limit: usize,
+        dry: &std::cell::Cell<bool>,
+    ) -> (io::Result<usize>, bytes::BytesMut, bytes::BytesMut) {
+        match self {
+            Self::Tcp(s) => s.read_two_noting(first, second, limit, dry).await,
+            #[cfg(unix)]
+            Self::Ipc(s) => s.read_two_noting(first, second, limit, dry).await,
+        }
+    }
+
     /// The read that has just returned drained the socket. On tokio this
     /// forgets the cached readiness, so the next read waits for an event
     /// instead of spending a `recv` on EAGAIN.

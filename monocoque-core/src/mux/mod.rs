@@ -83,6 +83,22 @@ pub trait Codec: 'static {
         false
     }
 
+    /// While a frame is being filled (see [`filling_frame`]), hand over the
+    /// read buffer that was set aside for it, empty. A reader that can read
+    /// into two buffers at once fills the frame and reads on into this one
+    /// in the same call, then gives it back with [`restore_read_ahead`]
+    /// before it decodes.
+    ///
+    /// [`filling_frame`]: Self::filling_frame
+    /// [`restore_read_ahead`]: Self::restore_read_ahead
+    fn take_read_ahead(&mut self) -> Option<BytesMut> {
+        None
+    }
+
+    /// Give back the buffer [`take_read_ahead`](Self::take_read_ahead)
+    /// handed over, with the bytes that follow the frame.
+    fn restore_read_ahead(&mut self, _buf: BytesMut) {}
+
     /// Encode `msg` into `out`.
     fn encode(&mut self, msg: &Msg, out: &mut OutQueue) -> Result<()>;
 

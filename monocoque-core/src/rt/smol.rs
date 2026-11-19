@@ -73,6 +73,39 @@ where
     .await
 }
 
+/// Read once into the room left in `first`, then at most `limit` bytes of
+/// `second`, setting `dry` as [`read_into_noting`] does. See
+/// [`crate::io::fill_read_two`].
+async fn read_two_into_noting<T>(
+    stream: &Async<T>,
+    first: bytes::BytesMut,
+    second: bytes::BytesMut,
+    limit: usize,
+    dry: &std::cell::Cell<bool>,
+) -> (io::Result<usize>, bytes::BytesMut, bytes::BytesMut)
+where
+    for<'a> SockRef<'a>: From<&'a T>,
+{
+    crate::io::fill_read_two(first, second, limit, async move |a, b| {
+        stream
+            .read_with(|inner| {
+                let mut bufs = [
+                    socket2::MaybeUninitSlice::new(&mut *a),
+                    socket2::MaybeUninitSlice::new(&mut *b),
+                ];
+                let got = SockRef::from(inner)
+                    .recv_vectored(&mut bufs)
+                    .map(|(n, _)| n);
+                if matches!(&got, Err(e) if e.kind() == io::ErrorKind::WouldBlock) {
+                    dry.set(true);
+                }
+                got
+            })
+            .await
+    })
+    .await
+}
+
 /// Write the initialized bytes of an owned buffer to a smol sink.
 async fn write_from<T, B>(stream: &Async<T>, buf: B) -> BufResult<usize, B>
 where
@@ -412,6 +445,18 @@ macro_rules! impl_shared_io {
             ) -> BufResult<usize, B> {
                 read_into_noting(&self.inner, buf, dry).await
             }
+
+            /// Read once into the room left in `first`, then at most `limit`
+            /// bytes of `second`.
+            pub async fn read_two_noting(
+                &self,
+                first: bytes::BytesMut,
+                second: bytes::BytesMut,
+                limit: usize,
+                dry: &std::cell::Cell<bool>,
+            ) -> (io::Result<usize>, bytes::BytesMut, bytes::BytesMut) {
+                read_two_into_noting(&self.inner, first, second, limit, dry).await
+            }
         }
 
         impl AsyncRead for &$ty {
@@ -482,7 +527,7 @@ pub use unix::{UnixListener, UnixStream};
 mod unix {
     use super::{
         Arc, AsyncRead, AsyncWrite, BufResult, IoBuf, IoBufMut, IoVectoredBuf, SockRef, io,
-        read_into, read_into_noting, write_from, write_vectored_from,
+        read_into, read_into_noting, read_two_into_noting, write_from, write_vectored_from,
     };
     use smol::Async;
     use std::os::unix::io::AsRawFd;
