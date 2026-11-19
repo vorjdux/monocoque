@@ -43,11 +43,31 @@ where
     B: IoBufMut,
     for<'a> SockRef<'a>: From<&'a T>,
 {
+    read_into_noting(stream, buf, &std::cell::Cell::new(false)).await
+}
+
+/// [`read_into`], setting `dry` if the socket had nothing when first asked and
+/// the read had to wait.
+async fn read_into_noting<T, B>(
+    stream: &Async<T>,
+    buf: B,
+    dry: &std::cell::Cell<bool>,
+) -> BufResult<usize, B>
+where
+    B: IoBufMut,
+    for<'a> SockRef<'a>: From<&'a T>,
+{
     crate::io::fill_read(buf, async move |spare| {
         // Wait for readability and let the kernel `recv` straight into the
         // buffer's backing memory, reporting the count it wrote.
         stream
-            .read_with(|inner| SockRef::from(inner).recv(spare))
+            .read_with(|inner| {
+                let got = SockRef::from(inner).recv(spare);
+                if matches!(&got, Err(e) if e.kind() == io::ErrorKind::WouldBlock) {
+                    dry.set(true);
+                }
+                got
+            })
             .await
     })
     .await
@@ -382,6 +402,18 @@ impl AsyncWrite for TcpStream {
 /// in flight on one stream at once. Every helper already works on `&Async<T>`.
 macro_rules! impl_shared_io {
     ($ty:ty) => {
+        impl $ty {
+            /// Read, setting `dry` if the socket had nothing when first asked
+            /// and the read had to wait.
+            pub async fn read_noting<B: IoBufMut>(
+                &self,
+                buf: B,
+                dry: &std::cell::Cell<bool>,
+            ) -> BufResult<usize, B> {
+                read_into_noting(&self.inner, buf, dry).await
+            }
+        }
+
         impl AsyncRead for &$ty {
             async fn read<B: IoBufMut>(&mut self, buf: B) -> BufResult<usize, B> {
                 read_into(&self.inner, buf).await
@@ -450,7 +482,7 @@ pub use unix::{UnixListener, UnixStream};
 mod unix {
     use super::{
         Arc, AsyncRead, AsyncWrite, BufResult, IoBuf, IoBufMut, IoVectoredBuf, SockRef, io,
-        read_into, write_from, write_vectored_from,
+        read_into, read_into_noting, write_from, write_vectored_from,
     };
     use smol::Async;
     use std::os::unix::io::AsRawFd;

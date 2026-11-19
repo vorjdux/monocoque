@@ -212,8 +212,25 @@ macro_rules! impl_compio_io {
 /// `try_*` call, retrying on a spurious wakeup.
 macro_rules! impl_shared_io {
     ($ty:ty) => {
-        impl AsyncRead for &$ty {
-            async fn read<B: IoBufMut>(&mut self, buf: B) -> BufResult<usize, B> {
+        impl $ty {
+            /// Forget that the socket was readable, without a syscall, so the
+            /// next read waits for an event instead of spending a `recv` on
+            /// EAGAIN. For a caller that knows the socket is drained.
+            pub fn clear_read_ready(&self) {
+                // A closure that reports WouldBlock clears the cached
+                // readiness. tokio's own poll_read does the same.
+                let _ = self.inner.try_io(tokio::io::Interest::READABLE, || {
+                    Err::<(), _>(io::ErrorKind::WouldBlock.into())
+                });
+            }
+
+            /// Read, setting `dry` if the socket had nothing when first asked
+            /// and the read had to wait.
+            pub async fn read_noting<B: IoBufMut>(
+                &self,
+                buf: B,
+                dry: &std::cell::Cell<bool>,
+            ) -> BufResult<usize, B> {
                 let inner = &self.inner;
                 crate::io::fill_read(buf, async move |spare| {
                     // Try first: under a ping-pong the bytes are usually
@@ -224,24 +241,19 @@ macro_rules! impl_shared_io {
                         let mut dst: &mut [std::mem::MaybeUninit<u8>] = &mut *spare;
                         match inner.try_read_buf(&mut dst) {
                             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                                dry.set(true);
                                 // One reader at a time, so the single waker
                                 // slot will do: no lock or waiter list, unlike
                                 // `readable()`.
                                 poll_fn(|cx| inner.poll_read_ready(cx)).await?;
                             }
                             Ok(n) if n > 0 && n < len && n < 1024 => {
-                                // A small short read drained the socket: a
-                                // larger one is a stream, whose next bytes may
-                                // already be here, and sleeping on `epoll` for
-                                // them costs more than a read. Clear the
-                                // cached readiness (a closure that reports
-                                // WouldBlock does exactly that, with no
-                                // syscall) so the next read waits for an
-                                // event instead of spending a recv on EAGAIN.
-                                // tokio's own poll_read does the same.
-                                let _ = inner.try_io(tokio::io::Interest::READABLE, || {
-                                    Err::<(), _>(io::ErrorKind::WouldBlock.into())
-                                });
+                                // A small short read drained the socket. A
+                                // larger one may be a stream, whose next
+                                // bytes are already here, and sleeping on
+                                // `epoll` for them costs more than a read:
+                                // the socket's reader decides that one.
+                                self.clear_read_ready();
                                 return Ok(n);
                             }
                             other => return other,
@@ -249,6 +261,12 @@ macro_rules! impl_shared_io {
                     }
                 })
                 .await
+            }
+        }
+
+        impl AsyncRead for &$ty {
+            async fn read<B: IoBufMut>(&mut self, buf: B) -> BufResult<usize, B> {
+                self.read_noting(buf, &std::cell::Cell::new(false)).await
             }
         }
 

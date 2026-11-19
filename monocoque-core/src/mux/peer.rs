@@ -18,7 +18,7 @@ use crate::transport::Stream;
 use bytes::{Buf, Bytes, BytesMut};
 use compio_buf::IoVectoredBuf;
 use compio_buf::{BufResult, IntoInner, IoBuf};
-use compio_io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use compio_io::{AsyncWrite, AsyncWriteExt};
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::future::poll_fn;
@@ -39,6 +39,68 @@ const MAX_READ_TARGET: usize = 64 * 1024;
 
 /// Below this, a read that did not fill the buffer means the socket is drained.
 const SMALL_READ: usize = 1024;
+
+/// Decides, after each read, whether the socket is drained, so that the next
+/// read should wait for data rather than ask for it.
+///
+/// A read that fell short took all there was. If it was small, that was a
+/// request or a reply and nothing follows until this side answers. If it was
+/// large it may be a stream, whose next bytes have arrived meanwhile, and
+/// asking again is cheaper than sleeping on the reactor for them. But a batch
+/// that is answered as a whole is large too and nothing follows it: every
+/// such read was followed by a `recv` that found nothing, two per round of a
+/// pipelined DEALER/ROUTER exchange, which cost tokio 5% at 256 B. So asking
+/// again goes on only while it finds something: after [`Self::GIVE_UP`]
+/// misses in a row a large short read counts as drained too, and every
+/// [`Self::TRY_AGAIN`]th one asks again in case a stream has started.
+///
+/// A miss costs one `recv` and a hit saves a sleep and a wakeup, many times
+/// that, so it takes a long run of misses to give up: at two in a row a
+/// coalesced 16 KiB stream on tokio, which misses now and then, lost 3%.
+#[derive(Default)]
+struct ShortReads {
+    /// Reads in a row that followed a large short read and found nothing.
+    wasted: u8,
+    /// Large short reads taken as drained since the last one that asked again.
+    trusted: u8,
+    /// The read about to be made follows a large short read and asks again.
+    asking: bool,
+}
+
+impl ShortReads {
+    const GIVE_UP: u8 = 16;
+    const TRY_AGAIN: u8 = 64;
+
+    /// A read into `spare` bytes of room returned `n`; `dry` says it found
+    /// nothing at first and had to wait. `true` if the socket is drained.
+    const fn drained(&mut self, n: usize, spare: usize, dry: bool) -> bool {
+        if self.asking {
+            self.asking = false;
+            self.wasted = if !dry {
+                0
+            } else if self.wasted < Self::GIVE_UP {
+                self.wasted + 1
+            } else {
+                Self::GIVE_UP
+            };
+        }
+        if n >= spare {
+            return false;
+        }
+        if n < SMALL_READ {
+            return true;
+        }
+        if self.wasted >= Self::GIVE_UP {
+            self.trusted += 1;
+            if self.trusted < Self::TRY_AGAIN {
+                return true;
+            }
+            self.trusted = 0;
+        }
+        self.asking = true;
+        false
+    }
+}
 
 /// On tokio and smol, while reads keep filling the buffer (a stream with data
 /// waiting), each read is given a full `read_size` even if that means a fresh
@@ -289,6 +351,19 @@ impl<C: Codec> PeerState<C> {
             Poll::Pending
         } else {
             Poll::Ready(())
+        }
+    }
+
+    /// Queue the message the codec has for the application before any is
+    /// read, if it has one.
+    fn queue_initial_message(&mut self) {
+        let initial = match &mut self.outbound {
+            Outbound::Wire { codec, .. } => codec.initial_message(),
+            _ => None,
+        };
+        if let Some(msg) = initial {
+            self.push_ready(msg);
+            self.signal_readable();
         }
     }
 
@@ -791,21 +866,12 @@ pub async fn reader_loop<C: Codec>(
 ) {
     let read_size = read_size.max(MIN_READ);
     let mut buf = BytesMut::new();
-    {
-        let mut st = peer.borrow_mut();
-        let initial = match &mut st.outbound {
-            Outbound::Wire { codec, .. } => codec.initial_message(),
-            _ => None,
-        };
-        if let Some(msg) = initial {
-            st.push_ready(msg);
-            st.signal_readable();
-        }
-    }
+    peer.borrow_mut().queue_initial_message();
     let (mut reads, mut target) = (0u32, read_size);
     let mut retired = super::readbuf::Retired::default();
-    let mut short_read = false;
-    let mut filled = false;
+    let (mut short_read, mut filled) = (false, false);
+    let mut short_reads = ShortReads::default();
+    let dry = std::cell::Cell::new(false);
     loop {
         poll_fn(|cx| peer.borrow_mut().poll_reader_room(cx)).await;
         if peer.borrow().closed.is_some() {
@@ -834,8 +900,7 @@ pub async fn reader_loop<C: Codec>(
         }
         let len = buf.len();
         let spare = buf.capacity() - len;
-        let mut s = &*stream;
-        let BufResult(res, slice) = s.read(buf.slice(len..)).await;
+        let BufResult(res, slice) = stream.read_noting(buf.slice(len..), &dry).await;
         buf = slice.into_inner();
         let mut st = peer.borrow_mut();
         match res {
@@ -848,10 +913,10 @@ pub async fn reader_loop<C: Codec>(
                 return;
             }
             Ok(n) => {
-                // A small read that fell short is a request-reply exchange,
-                // with nothing more coming until this side answers. A larger
-                // one is a stream, whose next bytes may already be here.
-                short_read = n < spare && n < SMALL_READ;
+                short_read = short_reads.drained(n, spare, dry.replace(false));
+                if short_read {
+                    stream.drained_by_last_read();
+                }
                 retired.after_read(n, spare);
                 filled = n == spare && (!FILLED_NEEDS_A_WHOLE_READ || spare >= read_size);
                 target = next_read_target(target, read_size, spare, n);
@@ -1030,7 +1095,64 @@ pub async fn remote_reader_loop<C: Codec>(
 
 #[cfg(test)]
 mod tests {
-    use super::SegmentSize;
+    use super::{SMALL_READ, SegmentSize, ShortReads};
+
+    const ROOM: usize = 32 * 1024;
+    const BATCH: usize = 26_500;
+
+    #[test]
+    fn a_small_short_read_is_always_drained_and_a_full_one_never() {
+        let mut reads = ShortReads::default();
+        for _ in 0..200 {
+            assert!(reads.drained(SMALL_READ - 1, ROOM, true));
+            assert!(!reads.drained(ROOM, ROOM, false));
+        }
+    }
+
+    #[test]
+    fn a_batch_answered_as_a_whole_stops_being_asked_after() {
+        let mut reads = ShortReads::default();
+        // Each batch falls short of the buffer, and the read after it found
+        // nothing at first: it only came with the next batch.
+        assert!(!reads.drained(BATCH, ROOM, false), "the first asks again");
+        for _ in 1..ShortReads::GIVE_UP {
+            assert!(!reads.drained(BATCH, ROOM, true), "too few misses yet");
+        }
+        let mut asked_again = 0;
+        for _ in 0..640 {
+            if !reads.drained(BATCH, ROOM, true) {
+                asked_again += 1;
+            }
+        }
+        // One in every `TRY_AGAIN` asks again, in case a stream has started.
+        assert_eq!(asked_again, 640 / usize::from(ShortReads::TRY_AGAIN));
+    }
+
+    #[test]
+    fn a_stream_whose_next_bytes_are_there_keeps_being_asked() {
+        let mut reads = ShortReads::default();
+        for round in 0..500 {
+            // Every third read after a short one has to wait: never two in a row.
+            let dry = round % 3 == 0;
+            assert!(!reads.drained(BATCH, ROOM, dry));
+        }
+    }
+
+    #[test]
+    fn a_stream_starting_after_batches_is_found_by_the_next_try() {
+        let mut reads = ShortReads::default();
+        for _ in 0..=ShortReads::GIVE_UP {
+            reads.drained(BATCH, ROOM, true);
+        }
+        // Wait out the trusted ones: the read after a drained one waits for
+        // data, so it says nothing about what asking would have found.
+        while reads.drained(BATCH, ROOM, true) {}
+        // That one asked again, and this time the bytes were there.
+        assert!(!reads.drained(BATCH, ROOM, false));
+        for _ in 0..100 {
+            assert!(!reads.drained(BATCH, ROOM, false));
+        }
+    }
 
     /// The answers a connection gave, in order, and how many times it was asked.
     fn asked(seg: &mut SegmentSize, kernel: &[usize]) -> (Vec<usize>, usize) {

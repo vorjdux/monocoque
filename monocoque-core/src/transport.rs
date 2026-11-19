@@ -103,7 +103,8 @@ impl PeerAddress for Stream {
 impl Stream {
     /// A read fell short, so the socket is drained: on smol, whose read tries
     /// the syscall first, wait for data instead of spending a `recv` on EAGAIN.
-    /// tokio clears its readiness on a short read, and a ring read just waits.
+    /// tokio is told at the read itself (see [`Self::drained_by_last_read`]),
+    /// and a ring read just waits.
     pub async fn wait_after_short_read(&self) {
         #[cfg(feature = "runtime-smol")]
         {
@@ -113,6 +114,47 @@ impl Stream {
                 #[cfg(unix)]
                 Self::Ipc(s) => s.readable().await,
             };
+        }
+    }
+
+    /// The read that has just returned drained the socket. On tokio this
+    /// forgets the cached readiness, so the next read waits for an event
+    /// instead of spending a `recv` on EAGAIN.
+    ///
+    /// Call it straight after the read, before anything is awaited. The
+    /// reactor runs when this task yields, and what it then records is news
+    /// of bytes that arrived since: forgetting that would leave the read
+    /// waiting for an event the kernel has already delivered. A reader held
+    /// at its receive HWM, with more waiting in the socket, hung this way.
+    #[allow(clippy::unused_self, clippy::missing_const_for_fn)] // per backend
+    pub fn drained_by_last_read(&self) {
+        #[cfg(feature = "runtime-tokio")]
+        match self {
+            Self::Tcp(s) => s.clear_read_ready(),
+            #[cfg(unix)]
+            Self::Ipc(s) => s.clear_read_ready(),
+        }
+    }
+
+    /// Read into `buf`, setting `dry` if the socket had nothing when first
+    /// asked, so that the read cost a `recv` that found nothing before it
+    /// waited. A ring read is one submission either way and never sets it.
+    pub async fn read_noting<B: IoBufMut>(
+        &self,
+        buf: B,
+        dry: &std::cell::Cell<bool>,
+    ) -> BufResult<usize, B> {
+        #[cfg(any(feature = "runtime-tokio", feature = "runtime-smol"))]
+        match self {
+            Self::Tcp(s) => s.read_noting(buf, dry).await,
+            #[cfg(unix)]
+            Self::Ipc(s) => s.read_noting(buf, dry).await,
+        }
+        #[cfg(not(any(feature = "runtime-tokio", feature = "runtime-smol")))]
+        {
+            let _ = dry;
+            let mut this = self;
+            AsyncRead::read(&mut this, buf).await
         }
     }
 
