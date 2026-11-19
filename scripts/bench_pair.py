@@ -87,6 +87,37 @@ def build(tree, target, backend, bench):
     return binary if binary.is_absolute() else Path(tree) / binary
 
 
+def cpus_sharing_a_core(pin, sysfs=Path("/sys/devices/system/cpu")):
+    """Two CPUs of `pin` that are threads of one physical core, or None.
+
+    A sender and a receiver pinned to the two threads of one core take turns
+    on it instead of running side by side, and a thread that spins while it
+    waits slows the other one down. That measures something, but not what a
+    machine with a core for each thread does: one pipelined case read 20%
+    slower pinned that way and level on two cores. Where the topology cannot
+    be read, nothing is claimed.
+    """
+    cpus = []
+    for part in pin.split(","):
+        first, _, last = part.partition("-")
+        try:
+            cpus.extend(range(int(first), int(last or first) + 1))
+        except ValueError:
+            return None
+    seen = {}
+    for cpu in cpus:
+        topology = sysfs / f"cpu{cpu}" / "topology"
+        try:
+            core = ((topology / "physical_package_id").read_text().strip(),
+                    (topology / "core_id").read_text().strip())
+        except OSError:
+            return None
+        if core in seen:
+            return seen[core], cpu
+        seen[core] = cpu
+    return None
+
+
 def measure(binary, pattern, pin, scratch, env):
     """Run one benchmark binary.
 
@@ -166,6 +197,10 @@ def main():
         sys.exit("--rounds must be at least 1")
     if opt.pin and subprocess.run(["taskset", "-c", opt.pin, "true"], capture_output=True).returncode != 0:
         sys.exit(f"cannot pin to cores {opt.pin} (is taskset installed?)")
+    shared = cpus_sharing_a_core(opt.pin) if opt.pin else None
+    if shared:
+        sys.exit(f"CPUs {shared[0]} and {shared[1]} are two threads of one physical core: "
+                 f"pin to two separate cores (lscpu -e shows which CPU is on which core)")
 
     env = dict(os.environ)
     if opt.secs:

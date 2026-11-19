@@ -86,5 +86,37 @@ class PairExitStatus(unittest.TestCase):
         self.assertIn("no case matched", out)
 
 
+class PinTopology(unittest.TestCase):
+    """A laptop with two threads per performance core, then single-thread cores."""
+
+    CORE_OF = {0: 0, 1: 0, 2: 1, 3: 1, 4: 2, 5: 3}
+
+    def sysfs(self, tmp):
+        for cpu, core in self.CORE_OF.items():
+            topology = Path(tmp) / f"cpu{cpu}" / "topology"
+            topology.mkdir(parents=True)
+            (topology / "physical_package_id").write_text("0\n")
+            (topology / "core_id").write_text(f"{core}\n")
+        return Path(tmp)
+
+    def test_two_threads_of_one_core_are_named(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sysfs = self.sysfs(tmp)
+            self.assertEqual(bench_pair.cpus_sharing_a_core("2,3", sysfs), (2, 3))
+            self.assertEqual(bench_pair.cpus_sharing_a_core("4,0-1", sysfs), (0, 1))
+
+    def test_separate_cores_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sysfs = self.sysfs(tmp)
+            self.assertIsNone(bench_pair.cpus_sharing_a_core("0,2", sysfs))
+            self.assertIsNone(bench_pair.cpus_sharing_a_core("4-5", sysfs))
+
+    def test_an_unreadable_topology_claims_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sysfs = self.sysfs(tmp)
+            self.assertIsNone(bench_pair.cpus_sharing_a_core("0,9", sysfs))
+            self.assertIsNone(bench_pair.cpus_sharing_a_core("zero,one", sysfs))
+
+
 if __name__ == "__main__":
     unittest.main()
