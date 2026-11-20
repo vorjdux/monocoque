@@ -10,6 +10,7 @@ use std::future::{Future, poll_fn};
 use std::io;
 use std::net::SocketAddr;
 use std::pin::Pin;
+use std::time::Duration;
 // Bring tokio's write trait into scope under an alias so its poll methods are
 // callable on concrete tokio streams without colliding with the compio
 // `AsyncWrite` the adapters implement. Reads go through `read_into`, whose
@@ -81,6 +82,7 @@ pub async fn join<T>(handle: JoinHandle<T>) -> T {
 pub struct LocalRuntime {
     inner: tokio::runtime::Runtime,
     local: tokio::task::LocalSet,
+    spin: Option<Duration>,
 }
 
 impl LocalRuntime {
@@ -93,13 +95,29 @@ impl LocalRuntime {
         Ok(Self {
             inner,
             local: tokio::task::LocalSet::new(),
+            spin: None,
         })
+    }
+
+    /// Set how long a receive on this runtime keeps looking for a message
+    /// before it sleeps, for sockets whose options do not say
+    /// (`SocketOptions::with_recv_spin`).
+    ///
+    /// The default is 30 µs, or none when the thread may run on one CPU only.
+    /// `Duration::ZERO` turns the looking off, which is the faster setting
+    /// when the peer's thread shares no L3 cache with this one, or when this
+    /// thread is pinned to one CPU inside a process that has several.
+    #[must_use]
+    pub const fn with_spin(mut self, spin: Duration) -> Self {
+        self.spin = Some(spin);
+        self
     }
 
     /// Run a future to completion on this runtime, blocking the thread.
     ///
     /// Drives the future and any locally spawned tasks to completion.
     pub fn block_on<F: Future>(&self, fut: F) -> F::Output {
+        let _spin = crate::spin::RuntimeSpin::enter(self.spin);
         self.local.block_on(&self.inner, fut)
     }
 }

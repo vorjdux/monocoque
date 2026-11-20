@@ -222,10 +222,13 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
   REQ/REP round trips are about 30% faster on tokio and smol. PUB fan-out and
   topic filtering with coalescing pass 0.4, whose PUB batched on worker
   threads; an eager PUB pays one send per subscriber per message.
-- A receive about to sleep keeps looking first (`MONOCOQUE_SPIN_US`), for up
-  to 20 µs on compio and tokio and 100 µs on smol, where a wakeup costs more:
-  compio's `LocalRuntime` polls for completions, and on tokio and smol the
-  receive yields to the runtime. It costs some CPU while traffic flows.
+- A receive about to sleep keeps looking first, for up to 50 µs on compio,
+  30 µs on tokio and 100 µs on smol, where a wakeup costs more: compio's
+  `LocalRuntime` polls for completions, and on tokio and smol the receive
+  yields to the runtime. It costs some CPU while traffic flows.
+  `LocalRuntime::with_spin` sets the budget for a runtime on any backend, and
+  `SocketOptions::with_recv_spin` for one socket on tokio and smol; zero
+  turns it off.
 - A ROUTER routes a small message without allocating or copying it: the body
   stays inline when the identity is added or removed, and the routing table
   finds a received message's identity by the peer's slot and a sent one's peer

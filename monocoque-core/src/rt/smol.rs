@@ -219,6 +219,7 @@ pub async fn join<T>(handle: JoinHandle<T>) -> T {
 /// the thread exited.
 pub struct LocalRuntime {
     executor: Rc<smol::LocalExecutor<'static>>,
+    spin: Option<Duration>,
 }
 
 impl LocalRuntime {
@@ -227,7 +228,23 @@ impl LocalRuntime {
     pub fn new() -> io::Result<Self> {
         Ok(Self {
             executor: Rc::new(smol::LocalExecutor::new()),
+            spin: None,
         })
+    }
+
+    /// Set how long a receive on this runtime keeps looking for a message
+    /// before it sleeps, for sockets whose options do not say
+    /// (`SocketOptions::with_recv_spin`).
+    ///
+    /// The default is 100 µs, or none when the thread may run on one CPU
+    /// only. `Duration::ZERO` turns the looking off, which is the faster
+    /// setting when the peer's thread shares no L3 cache with this one, or
+    /// when this thread is pinned to one CPU inside a process that has
+    /// several.
+    #[must_use]
+    pub const fn with_spin(mut self, spin: Duration) -> Self {
+        self.spin = Some(spin);
+        self
     }
 
     /// Run a future to completion on this runtime's executor, blocking the
@@ -236,6 +253,7 @@ impl LocalRuntime {
         let outer = CURRENT.with(|c| c.replace(Some(Rc::clone(&self.executor))));
         // Restored on unwind too, so a panic leaves no stale executor behind.
         let _restore = Restore(outer);
+        let _spin = crate::spin::RuntimeSpin::enter(self.spin);
         smol::block_on(self.executor.run(fut))
     }
 }

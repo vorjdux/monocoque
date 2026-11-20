@@ -509,13 +509,16 @@ over TCP on one thread, every call counted:
 | | compio | tokio | smol |
 |---|---|---|---|
 | borrowed receive of a queued message | 0 | 0 | 0 |
-| a whole PUSH -> PULL message | 26.4 | 46.4 | 55.9 |
+| a whole PUSH -> PULL message | 16.3 | 29.3 | 34 to 46 |
 
 The second row covers sending, waking the reader and writer tasks, and the
-runtime's own bookkeeping. About 18 of those per message are monocoque's task
-wakeups (`ChildWaker`, `progress`); the rest are the runtime's (tokio's
-readiness and scheduler, smol's reactor and parker) and two for the probe's
-own `Bytes` payload clone on the send side.
+runtime's own bookkeeping. About 9 of those per message are monocoque's task
+wakeups (`ChildWaker`, `make_progress`, `park_user`); the rest are the
+runtime's (compio's driver, tokio's readiness and scheduler, smol's reactor
+and parker) and one for the probe's own `Bytes` payload clone on the send
+side. smol's count moves from run to run with how often its reactor thread
+parks. The probe runs with the spin before sleeping turned off, which would
+add polling that is not per-message work.
 
 ---
 
@@ -669,9 +672,13 @@ socket measured 8.3 µs per round trip when it slept for each completion and
 4.0 µs when it polled the completion queue, against 6.3 µs for tokio's epoll.
 
 So `monocoque::rt::LocalRuntime::block_on` on the compio backend polls for
-completions for up to 20 µs, yielding the CPU between polls, before it
-sleeps. A 64 B REQ/REP round trip over IPC went from 8.4 µs to 6.4 µs, level
-with or ahead of tokio, and over TCP from 11.1 µs to 10.5 µs.
+completions for up to 50 µs, yielding the CPU between polls, before it
+sleeps. The budget is sized for a peer that answers a batch: a ROUTER echoing
+100 messages of 256 B takes 22 to 30 µs to reply on an EPYC 7232P, and a
+20 µs spin gave up just before the reply came (6.63 ms per 100 batches at
+20 µs, 5.80 ms at 40 µs and above). A 64 B REQ/REP round trip over IPC went
+from 8.4 µs to 6.4 µs with the spin, level with or ahead of tokio, and over
+TCP from 11.1 µs to 10.5 µs.
 
 - Spinning is off when the thread can run on one CPU only (affinity mask or
   cgroup quota), where it would only delay the peer it waits for.
@@ -692,13 +699,17 @@ with or ahead of tokio, and over TCP from 11.1 µs to 10.5 µs.
   sleeping with both threads under one L3, and 29.8 µs spinning and 21.8 µs
   sleeping under two. The library does not detect this. If you can choose
   where threads run, put two that talk to each other on cores that share an
-  L3 cache (`lscpu -e`, the L3 column); if you cannot, measure with
-  `MONOCOQUE_SPIN_US=0`.
-- `MONOCOQUE_SPIN_US` sets the budget in microseconds; `0` turns it off.
+  L3 cache (`lscpu -e`, the L3 column); if you cannot, measure with the spin
+  turned off.
+- `LocalRuntime::new()?.with_spin(duration)` sets the budget for everything
+  that runtime runs, on every backend. On tokio and smol
+  `SocketOptions::default().with_recv_spin(duration)` sets it for one socket,
+  ahead of the runtime's, and is the way to set it under `#[tokio::main]` or
+  another runtime of your own. `Duration::ZERO` turns it off.
 - Code that runs on `#[compio::main]` or its own compio runtime instead of
   `LocalRuntime` does not spin.
 - On tokio and smol a receive about to sleep yields to the runtime instead,
-  under the same rules, for 20 µs on tokio and 100 µs on smol. smol wakes a
+  under the same rules, for 30 µs on tokio and 100 µs on smol. smol wakes a
   sleeping thread through one reactor shared by the whole process, so a sleep
   costs more there: with one sender feeding four workers, each worker slept
   between its batches at 20 µs and the pool ran at half of 0.4's rate (5.4 M
@@ -710,7 +721,7 @@ with or ahead of tokio, and over TCP from 11.1 µs to 10.5 µs.
   7 µs on smol.
 - Spinning costs CPU while traffic flows: on tokio, with 100 000 messages per
   connection, about 5% to 15% more CPU per message than with it off. With
-  `MONOCOQUE_SPIN_US=0` a receive sleeps and is woken per message again.
+  a zero budget a receive sleeps and is woken per message again.
 
 ---
 

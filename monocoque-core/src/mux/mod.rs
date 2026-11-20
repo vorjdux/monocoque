@@ -572,6 +572,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
     pub fn new(cfg: P::Config, options: SocketOptions, hooks: H) -> Shared<P, H> {
         let wakeups: Arc<Wakeups> = Arc::default();
         let connect_routing_id = options.connect_routing_id.clone();
+        let spin = crate::spin::YieldSpin::new(options.recv_spin);
         Rc::new(RefCell::new(Self {
             cfg: Rc::new(cfg),
             options: Rc::new(options),
@@ -590,7 +591,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             inbox: VecDeque::new(),
             lb: Vec::new(),
             lb_cursor: 0,
-            spin: crate::spin::YieldSpin::default(),
+            spin,
             listeners: Vec::new(),
             connectors: Vec::new(),
             greeting: Vec::new(),

@@ -85,6 +85,7 @@ pub async fn join<T>(handle: JoinHandle<T>) -> T {
 /// thread that runs a socket outside the caller's runtime.
 pub struct LocalRuntime {
     inner: compio::runtime::Runtime,
+    spin: Duration,
 }
 
 impl LocalRuntime {
@@ -96,38 +97,55 @@ impl LocalRuntime {
     /// a few operations in flight per peer, and ring size does not change the
     /// cost of an operation.
     ///
-    /// The ring is set up for one thread that both submits and waits, with
-    /// completions handed over only when that thread asks for them
-    /// (`IORING_SETUP_SINGLE_ISSUER` and `IORING_SETUP_DEFER_TASKRUN`). By
-    /// default the kernel interrupts the thread to deliver each one, which a
-    /// runtime that goes back to the ring after every turn has no use for. A
-    /// REQ/REP round trip went from 12.9 to 12.2 µs with it and the pipelined
-    /// bench was level or a few percent faster. A kernel before 6.1 refuses
-    /// the flags, and the ring is then set up without them.
+    /// The ring is set up so that the kernel hands a completion over the next
+    /// time the thread enters it, instead of interrupting the thread to do so
+    /// (`IORING_SETUP_COOP_TASKRUN`): a runtime that goes back to the ring
+    /// after every turn has no use for the interrupt. A kernel before 5.19
+    /// refuses the flag, and the ring is then set up without it.
+    ///
+    /// Handing completions over only when asked (`IORING_SETUP_DEFER_TASKRUN`)
+    /// is not used: asking takes a wait for one event, and that wait is what
+    /// [`block_on`](Self::block_on) goes out of its way not to make.
     pub fn new() -> std::io::Result<Self> {
         let out_of_memory = |r: &std::io::Result<_>| matches!(r, Err(e) if e.kind() == std::io::ErrorKind::OutOfMemory);
-        let mut deferred = true;
-        let mut result = Self::build(None, deferred);
+        let mut cooperative = true;
+        let mut result = Self::build(None, cooperative);
         if result.is_err() && !out_of_memory(&result) {
-            deferred = false;
-            result = Self::build(None, deferred);
+            cooperative = false;
+            result = Self::build(None, cooperative);
         }
         for entries in [256, 64] {
             if !out_of_memory(&result) {
                 break;
             }
-            result = Self::build(Some(entries), deferred);
+            result = Self::build(Some(entries), cooperative);
         }
-        Ok(Self { inner: result? })
+        Ok(Self {
+            inner: result?,
+            spin: spin_budget(None),
+        })
     }
 
-    fn build(entries: Option<u32>, deferred: bool) -> std::io::Result<compio::runtime::Runtime> {
+    /// Set how long [`block_on`](Self::block_on) keeps polling for
+    /// completions before it sleeps.
+    ///
+    /// The default is 50 µs, or none when the thread may run on one CPU only.
+    /// `Duration::ZERO` turns the polling off, which is the faster setting
+    /// when the peer's thread shares no L3 cache with this one, or when this
+    /// thread is pinned to one CPU inside a process that has several.
+    #[must_use]
+    pub const fn with_spin(mut self, spin: Duration) -> Self {
+        self.spin = spin;
+        self
+    }
+
+    fn build(entries: Option<u32>, cooperative: bool) -> std::io::Result<compio::runtime::Runtime> {
         let mut proactor = compio::driver::ProactorBuilder::new();
         if let Some(entries) = entries {
             proactor.capacity(entries);
         }
-        if deferred {
-            proactor.single_issuer(true).defer_taskrun(true);
+        if cooperative {
+            proactor.coop_taskrun(true);
         }
         compio::runtime::RuntimeBuilder::new()
             .with_proactor(proactor)
@@ -136,10 +154,7 @@ impl LocalRuntime {
 
     /// Run a future to completion on this runtime, blocking the thread.
     pub fn block_on<F: Future>(&self, fut: F) -> F::Output {
-        let spin = spin_budget();
-        if spin.is_zero() {
-            return self.inner.block_on(fut);
-        }
+        let spin = self.spin;
         let rt = &self.inner;
         rt.enter(|| {
             let flag = Arc::new(WokenFlag {
@@ -150,6 +165,19 @@ impl LocalRuntime {
             let mut cx = Context::from_waker(&waker);
             let mut fut = std::pin::pin!(fut);
             let mut backoff = SpinBackoff::default();
+            // Reap what has completed, without waiting. Asked for with a zero
+            // timeout alone, the driver waits for one event, and the kernel
+            // serves that by putting the thread to sleep and waking it with a
+            // timer: 6 to 13 µs each time on an EPYC 7232P, about one and a
+            // half times per batch of the pipelined bench. A driver that has
+            // just been woken does not wait, and waking one that is awake
+            // only sets a flag. A REQ/REP round trip went from 16.9 to 14.4 µs
+            // there and from 6.8 to 5.7 µs on an i7-1355U.
+            let driver = rt.waker();
+            let poll_now = || {
+                driver.wake_by_ref();
+                rt.poll_with(Some(Duration::ZERO));
+            };
             loop {
                 if flag.woken.swap(false, Ordering::Acquire)
                     && let Poll::Ready(out) = fut.as_mut().poll(&mut cx)
@@ -158,10 +186,10 @@ impl LocalRuntime {
                     return out;
                 }
                 if rt.run() {
-                    rt.poll_with(Some(Duration::ZERO));
+                    poll_now();
                     continue;
                 }
-                if !backoff.should_spin() {
+                if spin.is_zero() || !backoff.should_spin() {
                     rt.poll();
                     continue;
                 }
@@ -171,7 +199,7 @@ impl LocalRuntime {
                 // Yielding lets a peer that shares this core run meanwhile.
                 let deadline = Instant::now() + spin;
                 loop {
-                    rt.poll_with(Some(Duration::ZERO));
+                    poll_now();
                     let more = rt.run();
                     if more || flag.woken.load(Ordering::Acquire) {
                         backoff.hit();

@@ -72,6 +72,18 @@ pub struct SocketOptions {
     /// so reach for a smaller buffer only to cut latency, not to "tune".
     pub read_buffer_size: usize,
 
+    /// How long a receive keeps looking for a message before it sleeps.
+    ///
+    /// - `None`: what `LocalRuntime::with_spin` gave the runtime the socket
+    ///   runs on, otherwise the backend's default (30 µs on tokio, 100 µs on
+    ///   smol), or no spin when the thread may run on one CPU only
+    /// - `Some(Duration::ZERO)`: sleep straight away
+    /// - `Some(duration)`: look for up to that long
+    ///
+    /// On compio the runtime does the looking, not the socket: set it with
+    /// `LocalRuntime::with_spin`, and this option has no effect.
+    pub recv_spin: Option<Duration>,
+
     /// Receive timeout (`ZMQ_RCVTIMEO`)
     ///
     /// Maximum time to wait for a receive operation.
@@ -541,6 +553,7 @@ impl fmt::Debug for SocketOptions {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SocketOptions")
             .field("read_buffer_size", &self.read_buffer_size())
+            .field("recv_spin", &self.recv_spin)
             .field("recv_timeout", &self.recv_timeout)
             .field("send_timeout", &self.send_timeout)
             .field("handshake_timeout", &self.handshake_timeout)
@@ -619,6 +632,7 @@ impl Default for SocketOptions {
             // 32 KiB -> 2104, 64 KiB -> 1037), but every peer keeps a buffer
             // this large, so the default stays at half the 64 KiB ceiling.
             read_buffer_size: 32768,
+            recv_spin: None,
             routing_id: None,
             connect_routing_id: None,
             metadata: Vec::new(),
@@ -845,6 +859,31 @@ impl SocketOptions {
     /// ```
     pub const fn with_read_buffer_size(mut self, size: usize) -> Self {
         self.read_buffer_size = clamp_read_buffer_size(size);
+        self
+    }
+
+    /// Set how long a receive keeps looking for a message before it sleeps.
+    ///
+    /// Sleeping and being woken costs more than a round trip on a local
+    /// socket, so a receive looks for a short while first, at the cost of
+    /// some CPU while traffic flows. `Duration::ZERO` turns that off, which
+    /// is the faster setting when the peer's thread shares no L3 cache with
+    /// this one, or when this thread is pinned to one CPU inside a process
+    /// that has several.
+    ///
+    /// `LocalRuntime::with_spin` sets it for a whole runtime on every backend,
+    /// and this option then overrides it for one socket on tokio and smol. On
+    /// compio the runtime does the looking, so only the runtime's setting
+    /// counts there.
+    ///
+    /// ```
+    /// use monocoque_core::options::SocketOptions;
+    /// use std::time::Duration;
+    ///
+    /// let opts = SocketOptions::new().with_recv_spin(Duration::ZERO);
+    /// ```
+    pub const fn with_recv_spin(mut self, spin: Duration) -> Self {
+        self.recv_spin = Some(spin);
         self
     }
 

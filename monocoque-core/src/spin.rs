@@ -6,39 +6,45 @@
 use std::task::Context;
 use std::time::{Duration, Instant};
 
-/// Default time to look before sleeping. On a Unix socket REQ/REP round trip
-/// (64 B, two cores) 5 µs and 20 µs measured alike, 7.0 µs against 10.0 without
-/// spinning; 20 µs leaves room for a slower peer.
-#[cfg(not(feature = "runtime-smol"))]
-const DEFAULT_SPIN: Duration = Duration::from_micros(20);
+/// Default time to look before sleeping. A REQ/REP round trip needs little:
+/// on a Unix socket (64 B, two cores) 5 µs and 20 µs measured alike, 7.0 µs
+/// against 10.0 without spinning. A peer answering a batch takes longer. A
+/// DEALER sending 100 messages of 256 B to a ROUTER that echoes them waits 22
+/// to 30 µs for the reply on an EPYC 7232P, so a 20 µs spin gave up just
+/// before it came and then paid for the sleep as well: 6.63 ms per 100
+/// batches at 20 µs, 6.02 ms at 30 µs and 5.80 ms at 40 µs and above. Latency
+/// and one-way throughput measured the same at 20 µs and 50 µs.
+#[cfg(not(any(feature = "runtime-smol", feature = "runtime-tokio")))]
+const DEFAULT_SPIN: Duration = Duration::from_micros(50);
+/// tokio has the whole gain at 30 µs (the same batches of 256 B on the
+/// efficiency cores of an i7-1355U: 4.76 ms at 20 µs, 4.19 ms at 30 µs,
+/// 4.15 ms at 50 µs), and its batches of 16 KiB measured better at 30 µs than
+/// at 50 µs there (72 to 75 ms against 83 ms).
+#[cfg(all(feature = "runtime-tokio", not(feature = "runtime-smol")))]
+const DEFAULT_SPIN: Duration = Duration::from_micros(30);
 /// smol wakes a sleeping thread through one reactor shared by the whole
 /// process, re-armed on every wait, so a sleep costs far more there. One
 /// sender feeding four workers gives each a batch every few dozen
 /// microseconds: at 20 µs each worker slept between them and the pool ran at
 /// half of 0.4's rate (5.4 M against 9.8 M msg/s at 64 B); at 100 µs it
-/// passed it (10.3 M). compio and tokio lose at large frames with a longer
-/// budget and keep 20 µs.
+/// passed it (10.3 M).
 #[cfg(feature = "runtime-smol")]
 const DEFAULT_SPIN: Duration = Duration::from_micros(100);
 
 /// The spin budget.
 ///
-/// `MONOCOQUE_SPIN_US` if set (0 disables), otherwise 20 µs on compio and
-/// tokio and 100 µs on smol, or none when this thread may run on one CPU
-/// only, where spinning only delays the peer it waits for.
+/// What the socket or its runtime was asked for (zero disables), otherwise 50 µs
+/// on compio, 30 µs on tokio and 100 µs on smol, or none when this thread may
+/// run on one CPU only, where spinning only delays the peer it waits for.
 #[must_use]
-pub fn spin_budget() -> Duration {
-    if let Some(us) = std::env::var("MONOCOQUE_SPIN_US")
-        .ok()
-        .and_then(|v| v.parse().ok())
-    {
-        return Duration::from_micros(us);
-    }
-    if single_cpu() {
-        Duration::ZERO
-    } else {
-        DEFAULT_SPIN
-    }
+pub fn spin_budget(asked: Option<Duration>) -> Duration {
+    asked.unwrap_or_else(|| {
+        if single_cpu() {
+            Duration::ZERO
+        } else {
+            DEFAULT_SPIN
+        }
+    })
 }
 
 /// `true` when this thread has one CPU to run on. On Linux the count honours
@@ -47,8 +53,8 @@ pub fn spin_budget() -> Duration {
 /// Asked once per process, by whichever thread makes the first socket.
 /// Finding the quota reads a file for each level of the cgroup tree, about
 /// thirty system calls, which every new socket paid. A thread pinned to one
-/// CPU inside a process that has several is not seen: `MONOCOQUE_SPIN_US=0`
-/// is for that.
+/// CPU inside a process that has several is not seen: a zero
+/// `SocketOptions::with_recv_spin` or `LocalRuntime::with_spin` is for that.
 fn single_cpu() -> bool {
     static SINGLE_CPU: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *SINGLE_CPU.get_or_init(|| std::thread::available_parallelism().map_or(true, |n| n.get() <= 1))
@@ -59,22 +65,59 @@ fn single_cpu() -> bool {
 /// The runtime turns over and polls its reactor meanwhile. For runtimes whose
 /// loop this crate does not drive; compio's `block_on` does the same itself.
 pub struct YieldSpin {
-    budget: Duration,
+    asked: Option<Duration>,
+    /// Settled by the first wait: a socket may be made before the runtime
+    /// that will run it is entered.
+    budget: Option<Duration>,
     deadline: Option<Instant>,
     backoff: SpinBackoff,
 }
 
-impl Default for YieldSpin {
-    fn default() -> Self {
+impl YieldSpin {
+    /// A spin of the budget the socket's options ask for. When they ask for
+    /// none it is the one given to the `LocalRuntime` the socket runs on, and
+    /// the default one when that has none either.
+    #[must_use]
+    pub fn new(asked: Option<Duration>) -> Self {
         Self {
+            asked,
             budget: if cfg!(feature = "runtime-compio") {
-                Duration::ZERO
+                Some(Duration::ZERO)
             } else {
-                spin_budget()
+                None
             },
             deadline: None,
             backoff: SpinBackoff::default(),
         }
+    }
+}
+
+thread_local! {
+    /// The budget given to the `LocalRuntime` this thread is running, if any.
+    static RUNTIME_SPIN: std::cell::Cell<Option<Duration>> = const { std::cell::Cell::new(None) };
+}
+
+/// Makes a runtime's budget the one its thread's sockets use, for as long as
+/// the runtime runs. Dropping it puts the earlier one back.
+#[cfg(not(feature = "runtime-compio"))]
+pub struct RuntimeSpin(Option<Duration>);
+
+#[cfg(not(feature = "runtime-compio"))]
+impl RuntimeSpin {
+    /// Enter a runtime given `spin`. A runtime given none keeps the budget of
+    /// the one it was entered from.
+    #[must_use]
+    pub fn enter(spin: Option<Duration>) -> Self {
+        let outer = RUNTIME_SPIN.get();
+        RUNTIME_SPIN.set(spin.or(outer));
+        Self(outer)
+    }
+}
+
+#[cfg(not(feature = "runtime-compio"))]
+impl Drop for RuntimeSpin {
+    fn drop(&mut self) {
+        RUNTIME_SPIN.set(self.0);
     }
 }
 
@@ -98,7 +141,13 @@ impl YieldSpin {
     /// messages on smol with the spin, against 207 µs without it. So the
     /// spin stops there and stays off for a good while.
     pub fn instead_of_park(&mut self, cx: &Context<'_>) -> bool {
-        if self.budget.is_zero() {
+        let budget = match self.budget {
+            Some(budget) => budget,
+            None => *self
+                .budget
+                .insert(spin_budget(self.asked.or_else(|| RUNTIME_SPIN.get()))),
+        };
+        if budget.is_zero() {
             return false;
         }
         let me = std::ptr::from_ref(self).addr();
@@ -110,7 +159,7 @@ impl YieldSpin {
         let now = Instant::now();
         let deadline = match self.deadline {
             Some(d) => d,
-            None if self.backoff.should_spin() => *self.deadline.insert(now + self.budget),
+            None if self.backoff.should_spin() => *self.deadline.insert(now + budget),
             None => return false,
         };
         if now < deadline {
@@ -188,10 +237,45 @@ mod tests {
 
     fn spinner() -> YieldSpin {
         YieldSpin {
-            budget: Duration::from_secs(60),
+            asked: None,
+            budget: Some(Duration::from_secs(60)),
             deadline: None,
             backoff: SpinBackoff::default(),
         }
+    }
+
+    #[test]
+    fn a_budget_that_was_asked_for_replaces_the_default() {
+        assert_eq!(spin_budget(Some(Duration::ZERO)), Duration::ZERO);
+        assert_eq!(
+            spin_budget(Some(Duration::from_micros(7))),
+            Duration::from_micros(7)
+        );
+        let cx = Context::from_waker(Waker::noop());
+        assert!(!YieldSpin::new(Some(Duration::ZERO)).instead_of_park(&cx));
+    }
+
+    #[cfg(not(feature = "runtime-compio"))]
+    #[test]
+    fn a_socket_takes_the_budget_of_the_runtime_it_first_waits_on() {
+        let cx = Context::from_waker(Waker::noop());
+        let minute = Duration::from_secs(60);
+        let mut made_outside = YieldSpin::new(None);
+        let mut own_budget = YieldSpin::new(Some(minute));
+        {
+            let _runtime = RuntimeSpin::enter(Some(Duration::ZERO));
+            assert!(!made_outside.instead_of_park(&cx), "the runtime's zero");
+            let _inner = RuntimeSpin::enter(None);
+            assert!(
+                !YieldSpin::new(None).instead_of_park(&cx),
+                "kept by a runtime given none"
+            );
+            assert!(
+                own_budget.instead_of_park(&cx),
+                "the socket's own comes first"
+            );
+        }
+        assert_eq!(RUNTIME_SPIN.get(), None, "put back on the way out");
     }
 
     #[test]

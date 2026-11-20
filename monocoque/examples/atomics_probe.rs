@@ -34,32 +34,35 @@ fn main() {
         Some(Ok(take)) => take,
         Some(Err(_)) => usage(),
     };
-    monocoque::rt::LocalRuntime::new()
+    // Spinning before sleeping adds polling loops that are not per-message
+    // work, so it is off here.
+    let rt = monocoque::rt::LocalRuntime::new()
         .unwrap()
-        .block_on(async move {
-            let mut pull = PullSocket::with_options(SocketOptions::default().with_recv_hwm(0));
-            let ep = pull.bind("tcp://127.0.0.1:0").await.unwrap();
-            let mut push = PushSocket::with_options(SocketOptions::default().with_send_hwm(0));
-            push.connect(&ep).await.unwrap();
-            let msg = Msg::from(vec![7u8; 64]);
-            push.send(msg.clone()).await.unwrap();
-            pull.recv().await.unwrap();
-            if mode == "roundtrip" {
-                for _ in 0..n {
-                    push.send(msg.clone()).await.unwrap();
-                    std::hint::black_box(pull.recv().await.unwrap().len());
-                }
-                return;
-            }
+        .with_spin(Duration::ZERO);
+    rt.block_on(async move {
+        let mut pull = PullSocket::with_options(SocketOptions::default().with_recv_hwm(0));
+        let ep = pull.bind("tcp://127.0.0.1:0").await.unwrap();
+        let mut push = PushSocket::with_options(SocketOptions::default().with_send_hwm(0));
+        push.connect(&ep).await.unwrap();
+        let msg = Msg::from(vec![7u8; 64]);
+        push.send(msg.clone()).await.unwrap();
+        pull.recv().await.unwrap();
+        if mode == "roundtrip" {
             for _ in 0..n {
                 push.send(msg.clone()).await.unwrap();
-            }
-            push.flush().await.unwrap();
-            // Generous even under valgrind: every message is in the receive
-            // queue before the measured receives start.
-            monocoque::rt::sleep(Duration::from_secs(4)).await;
-            for _ in 0..take {
                 std::hint::black_box(pull.recv().await.unwrap().len());
             }
-        });
+            return;
+        }
+        for _ in 0..n {
+            push.send(msg.clone()).await.unwrap();
+        }
+        push.flush().await.unwrap();
+        // Generous even under valgrind: every message is in the receive
+        // queue before the measured receives start.
+        monocoque::rt::sleep(Duration::from_secs(4)).await;
+        for _ in 0..take {
+            std::hint::black_box(pull.recv().await.unwrap().len());
+        }
+    });
 }

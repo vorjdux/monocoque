@@ -31,8 +31,6 @@ CARGO_PROFILE_RELEASE_STRIP=none CARGO_PROFILE_RELEASE_DEBUG=1 \
 bin="$dir/$triple/release/examples/atomics_probe"
 out="$(mktemp -d)"
 trap 'rm -r "$out"' EXIT
-# Spinning before sleeping adds polling loops that are not per-message work.
-export MONOCOQUE_SPIN_US=0
 cg() { valgrind --tool=callgrind --dump-instr=yes --dump-line=no --callgrind-out-file="$1" "${@:2}" >/dev/null 2>&1; }
 
 cg "$out/rt-a" "$bin" roundtrip 2000

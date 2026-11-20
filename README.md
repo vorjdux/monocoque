@@ -230,11 +230,13 @@ rt.block_on(async {
 })?;
 ```
 
-Before a receive sleeps, it keeps looking for up to 20 µs (100 µs on smol): on
-compio `LocalRuntime` polls for completions, and on tokio and smol the receive
-yields to the runtime. Sleeping and being woken costs more than a local round trip, so
-this cuts latency, at the cost of some CPU while traffic flows. Set
-`MONOCOQUE_SPIN_US` to change the budget in microseconds (0 disables it).
+Before a receive sleeps, it keeps looking for up to 50 µs (30 µs on tokio,
+100 µs on smol): on compio `LocalRuntime` polls for completions, and on tokio
+and smol the receive yields to the runtime. Sleeping and being woken costs more
+than a local round trip, so this cuts latency, at the cost of some CPU while
+traffic flows. `LocalRuntime::with_spin` changes the budget on any backend
+(`Duration::ZERO` disables it), and on tokio and smol
+`SocketOptions::with_recv_spin` changes it for one socket.
 
 The `runtime_backends` example is the same program run both ways:
 
