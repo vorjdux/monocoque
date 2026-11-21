@@ -1,3 +1,6 @@
+> A historical design note from before 1.0. It names types and functions that
+> no longer exist; see [00-overview.md](00-overview.md).
+
 # Phase 0: Memory Management and Direct I/O
 
 **Status**: ✅ **COMPLETE**

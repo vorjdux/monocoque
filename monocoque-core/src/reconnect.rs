@@ -13,6 +13,10 @@ use std::time::Duration;
 ///
 /// # Example
 ///
+/// An application imports these as `monocoque::ReconnectState` and
+/// `monocoque::zmq::SocketOptions`; the paths below are the ones this crate's
+/// own tests use.
+///
 /// ```rust
 /// use monocoque_core::reconnect::ReconnectState;
 /// use monocoque_core::options::SocketOptions;
@@ -128,6 +132,7 @@ impl ReconnectState {
 
 /// Error type for reconnection operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ReconnectError {
     /// Maximum reconnection attempts reached
     MaxAttemptsReached { attempts: u32 },

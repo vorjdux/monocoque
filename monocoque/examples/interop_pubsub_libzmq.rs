@@ -1,74 +1,83 @@
-//! Interoperability test: Monocoque PUB ↔ libzmq SUB
+//! Interoperability: Monocoque PUB <-> libzmq SUB
 //!
-//! This example demonstrates pub/sub compatibility with libzmq.
+//! A Monocoque PUB publishes to a libzmq SUB running on a background thread.
+//! Needs libzmq installed (the `zmq` crate links it).
 //!
 //! Run this example:
 //! ```bash
 //! cargo run --example interop_pubsub_libzmq --features zmq
 //! ```
 
-use bytes::Bytes;
 use monocoque::rt::{self, LocalRuntime};
 use monocoque::zmq::PubSocket;
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
-use tracing::info;
 
-fn main() {
-    info!("=== Monocoque PUB ↔ libzmq SUB Test ===\n");
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-    // Spawn libzmq SUB client in background thread
-    let subscriber_handle = thread::spawn(|| {
-        thread::sleep(Duration::from_millis(50)); // Let publisher start first
+const EVENTS: usize = 3;
 
-        let ctx = zmq::Context::new();
-        let sub = ctx.socket(zmq::SUB).unwrap();
-        sub.connect("tcp://127.0.0.1:5562").unwrap();
-        sub.set_subscribe(b"topic").unwrap();
-        info!("[libzmq SUB] Connected and subscribed to 'topic.*'");
+fn main() -> Result<()> {
+    println!("=== Monocoque PUB <-> libzmq SUB ===\n");
 
-        // Receive messages
-        for i in 1..=3 {
-            let msg = sub.recv_string(0).unwrap().unwrap();
-            info!("[libzmq SUB] Received message {}: {:?}", i, msg);
-        }
-    });
+    // The publisher binds a port the OS picks and tells the subscriber's
+    // thread where to connect.
+    let (bound_tx, bound_rx) = mpsc::channel();
+    let subscriber = thread::spawn(move || libzmq_sub(&bound_rx));
 
-    // Run Monocoque PUB server
-    LocalRuntime::new().unwrap().block_on(async {
-        let mut pub_socket = PubSocket::bind("127.0.0.1:5562")
-            .await
-            .expect("Failed to bind");
-        info!("[Monocoque PUB] Listening on tcp://127.0.0.1:5562");
+    LocalRuntime::new()?.block_on(monocoque_pub(bound_tx))?;
 
-        // Accept subscriber connection
-        pub_socket
-            .accept_subscriber()
-            .await
-            .expect("Failed to accept subscriber");
-        info!("[Monocoque PUB] Subscriber connected\n");
+    subscriber
+        .join()
+        .map_err(|_| "the libzmq thread panicked")??;
+    println!("\nInterop run completed.");
+    Ok(())
+}
 
-        // Give subscriber time to send subscription
-        rt::sleep(Duration::from_millis(100)).await;
+fn libzmq_sub(bound: &mpsc::Receiver<String>) -> zmq::Result<()> {
+    // If the publisher failed to bind, its end of the channel is gone and
+    // there is nothing to subscribe to; `main` reports the bind error.
+    let Ok(endpoint) = bound.recv() else {
+        return Ok(());
+    };
+    let ctx = zmq::Context::new();
+    let sub = ctx.socket(zmq::SUB)?;
+    sub.connect(&endpoint)?;
+    sub.set_subscribe(b"topic.event")?;
+    println!("[libzmq SUB] Subscribed to 'topic.event'");
 
-        // Publish messages
-        for i in 1..=3 {
-            let message = format!("topic.event.{i}");
-            pub_socket
-                .send(vec![Bytes::from(message.clone())])
-                .await
-                .expect("Failed to publish");
-            info!("[Monocoque PUB] Published: {:?}", message);
-            rt::sleep(Duration::from_millis(10)).await;
-        }
+    for _ in 0..EVENTS {
+        let msg = sub.recv_bytes(0)?;
+        println!("[libzmq SUB] Received: {:?}", String::from_utf8_lossy(&msg));
+    }
+    Ok(())
+}
 
-        // Give subscriber time to receive
-        rt::sleep(Duration::from_millis(100)).await;
+async fn monocoque_pub(bound: mpsc::Sender<String>) -> monocoque::zmq::Result<()> {
+    let mut publisher = PubSocket::new();
+    // Port 0: the OS picks a free port and `bind` reports it.
+    let endpoint = publisher.bind("tcp://127.0.0.1:0").await?;
+    println!("[Monocoque PUB] Listening on {endpoint}");
+    // The subscriber's thread waits on this; it only fails if that thread
+    // is gone.
+    let _ = bound.send(endpoint);
 
-        drop(pub_socket);
-    });
+    // A PUB drops messages nobody is subscribed to, and `send` returns how
+    // many subscribers a message went to. Publish a probe on a topic the
+    // subscriber matches until its subscription has arrived.
+    while publisher.send("topic.event.probe").await? == 0 {
+        rt::sleep(Duration::from_millis(10)).await;
+    }
+    println!("[Monocoque PUB] Subscriber is listening");
 
-    subscriber_handle.join().unwrap();
+    // The probe was the first event the subscriber received.
+    for i in 1..EVENTS {
+        let message = format!("topic.event.{i}");
+        println!("[Monocoque PUB] Publishing: {message:?}");
+        publisher.send(message).await?;
+    }
 
-    info!("\n✅ PUB/SUB interop test completed successfully!");
+    // `close` waits for the queued events to be written.
+    publisher.close().await
 }

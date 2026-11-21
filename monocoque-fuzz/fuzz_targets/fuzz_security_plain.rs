@@ -8,7 +8,7 @@ use monocoque_zmtp::security::zap::{ZapMechanism, ZapRequest, ZapResponse};
 
 fuzz_target!(|data: &[u8]| {
     // --- Fuzz ZapRequest::decode with arbitrary frame data ---
-    // Split the fuzz input into up to 8 frames using the first byte as a
+    // Split the fuzz input into up to 9 frames using the first byte as a
     // frame-count hint, then attempt to decode as a ZAP request.
     if data.len() >= 2 {
         let num_frames = (data[0] as usize % 9) + 1; // 1..=9 frames
@@ -80,8 +80,8 @@ fuzz_target!(|data: &[u8]| {
 
         let _creds = PlainCredentials::new(username.clone(), password.clone());
 
-        // StaticPlainHandler authentication path (synchronous path only,
-        // async path requires a runtime which fuzz targets do not use).
+        // The handler's authenticate path is async and needs a runtime, which
+        // fuzz targets do not use, so it is not exercised here.
         let _ = username.len();
         let _ = password.len();
     }

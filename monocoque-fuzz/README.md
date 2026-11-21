@@ -7,14 +7,15 @@ crate is excluded from the workspace and built with a nightly toolchain.
 
 | Target | Exercises |
 | --- | --- |
-| `fuzz_decoder` | ZMTP frame decoder (`ZmtpDecoder`) |
-| `fuzz_frame_codec` | frame encode/decode round-trip |
+| `fuzz_decoder` | streaming ZMTP frame decoder (`ZmtpCodec::decode` in `monocoque-zmtp/src/wire.rs`) fed in small chunks |
+| `fuzz_frame_codec` | one-shot decode plus an `encode_plain`/decode round-trip |
 | `fuzz_greeting` | 64-byte ZMTP greeting parser (`ZmtpGreeting::parse`) |
 | `fuzz_command` | READY command parser and its property lengths (`parse_ready_command`) |
-| `fuzz_curve_handshake` | CURVE handshake message parsing |
-| `fuzz_security_plain` | PLAIN / ZAP request handling |
+| `fuzz_curve_handshake` | CURVE key construction, X25519 agreement and the MESSAGE classifier (not the handshake commands) |
+| `fuzz_security_plain` | ZAP request/response decoding and PLAIN ZAP request encoding |
 | `fuzz_zap_request` | ZAP request/response frame decoders |
 | `fuzz_subscription_trie` | subscription prefix trie |
+| `fuzz_curve_decode` | CURVE MESSAGE decryption in the production codec, on raw and on corrupted encrypted frames |
 
 Every target must only ever return `Ok`/`Err` (never panic) on arbitrary input.
 
@@ -31,8 +32,8 @@ cargo +nightly fuzz run --fuzz-dir monocoque-fuzz fuzz_greeting -- -max_total_ti
 cargo +nightly fuzz cmin --fuzz-dir monocoque-fuzz fuzz_greeting
 ```
 
-`corpus/`, `artifacts/`, and `coverage/` are gitignored: the generated corpus is
-grown by CI and is not committed (standard cargo-fuzz convention).
+`corpus/` holds committed seed inputs for each target. `artifacts/` (crash
+reproducers) and `coverage/` are gitignored. See `docs/FUZZING.md` for triage.
 
 ## CI
 

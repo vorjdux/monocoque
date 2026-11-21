@@ -4,11 +4,13 @@ A five-minute guide to sending your first message with Monocoque.
 
 **Performance Highlights:**
 
-- **~5x lower latency** than libzmq (43-58 µs vs ~270 µs REQ/REP round-trip)
-- **Up to 18.0 M msg/sec throughput** with write coalescing
+- **About 2.7x lower latency** than libzmq on a TCP REQ/REP round trip
+  (13.83 µs against 37.70 µs at 64 B, zmq-arena run of 2026-08-21, which
+  measured monocoque 0.4; see the README's Performance section for the full
+  table)
 - **Three runtimes** - io_uring via compio (default), or epoll via tokio, or async-io via smol, same API
 - **Pure Rust** - no C dependencies, full async/await
-- **Memory safe** - unsafe is confined to the owned-buffer read helpers (`core::io`) and the raw-socket tuning facade
+- **Memory safe** - unsafe is confined to one owned-buffer read helper (`core::io::fill_read`) and the raw-socket calls in `core::tcp`
 
 ---
 
@@ -16,14 +18,18 @@ A five-minute guide to sending your first message with Monocoque.
 
 ```toml
 [dependencies]
-monocoque-rs = { version = "0.4", features = ["zmq"] }
+monocoque-rs = { version = "1.0", features = ["zmq"] }
 bytes    = "1"
-compio   = { version = "0.19", features = ["runtime", "macros"] }
 ```
 
-The examples below use the default backend (io_uring via compio) and its
-`#[compio::main]` entry point. See the next section if you want to run on tokio
-or smol.
+The examples below start from `monocoque::rt::LocalRuntime`, which builds the
+single-threaded runtime of whichever backend is enabled, so they need no
+runtime crate of their own and run unchanged on all three backends. On the
+default backend (io_uring via compio) `LocalRuntime` also polls for completions
+briefly before it sleeps, which lowers round-trip latency; see
+[Spinning before sleeping](performance.md#spinning-before-sleeping).
+`#[compio::main]` works as an entry point too, with `compio` added as a
+dependency, but a program started that way does not spin before sleeping.
 
 ---
 
@@ -48,39 +54,39 @@ runtime primitives differ.
 ```toml
 # tokio backend
 [dependencies]
-monocoque-rs = { version = "0.4", default-features = false, features = ["runtime-tokio", "zmq"] }
+monocoque-rs = { version = "1.0", default-features = false, features = ["runtime-tokio", "zmq"] }
 bytes = "1"
-tokio = { version = "1", features = ["rt", "macros"] }
 ```
 
 ```toml
 # smol backend
 [dependencies]
-monocoque-rs = { version = "0.4", default-features = false, features = ["runtime-smol", "zmq"] }
+monocoque-rs = { version = "1.0", default-features = false, features = ["runtime-smol", "zmq"] }
 bytes = "1"
 ```
 
-The tokio backend follows the same thread-per-core model as compio, so run it on
-a current-thread runtime inside a `LocalSet`:
+With `LocalRuntime` as the entry point nothing else changes. If you build the
+tokio runtime yourself (add `tokio = { version = "1", features = ["rt"] }`),
+note that the tokio backend follows the same thread-per-core model as compio,
+so run it on a current-thread runtime inside a `LocalSet`:
 
 ```rust,no_run
 # use monocoque::zmq::ReqSocket;
-# use bytes::Bytes;
-fn main() -> std::io::Result<()> {
+fn main() -> monocoque::zmq::Result<()> {
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     let local = tokio::task::LocalSet::new();
     local.block_on(&rt, async {
-        let mut socket = ReqSocket::connect("127.0.0.1:5555").await?;
-        socket.send(vec![Bytes::from("PING")]).await?;
-        let _reply = socket.recv().await;
-        Ok::<(), std::io::Error>(())
+        let mut socket = ReqSocket::new();
+        socket.connect("tcp://127.0.0.1:5555").await?;
+        socket.send("PING").await?;
+        let _reply = socket.recv().await?;
+        Ok(())
     })
 }
 ```
 
-To keep your own code free of any runtime name, use `monocoque::rt::LocalRuntime`,
-which builds the right single-threaded runtime for whichever feature is enabled.
-The `runtime_backends` example is one program that runs unchanged on all three:
+The `runtime_backends` example is one program, written against `LocalRuntime`,
+that runs unchanged on all three:
 
 ```bash
 cargo run --example runtime_backends --features zmq                                      # compio
@@ -97,22 +103,21 @@ The simplest pattern: one client sends a request, one server sends a reply.
 **Server** (`src/bin/rep_server.rs`):
 
 ```rust,no_run
-use compio::net::TcpListener;
-use monocoque::zmq::RepSocket;
-use bytes::Bytes;
+use monocoque::rt::LocalRuntime;
+use monocoque::zmq::{RepSocket, Result};
 
-#[compio::main]
-async fn main() -> std::io::Result<()> {
-    let listener = TcpListener::bind("127.0.0.1:5555").await?;
+fn main() -> Result<()> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
+    let mut socket = RepSocket::new();
+    socket.bind("tcp://127.0.0.1:5555").await?;
     println!("Server listening on :5555");
 
-    let (stream, _addr) = listener.accept().await?;
-    let mut socket = RepSocket::from_tcp(stream).await?;
-
-    if let Some(request) = socket.recv().await {
-        println!("Got: {:?}", request);
-        socket.send(vec![Bytes::from("PONG")]).await?;
-    }
+    let request = socket.recv().await?;
+    println!("Got: {:?}", request);
+    socket.send("PONG").await?;
     Ok(())
 }
 ```
@@ -120,18 +125,21 @@ async fn main() -> std::io::Result<()> {
 **Client** (`src/bin/req_client.rs`):
 
 ```rust,no_run
-use monocoque::zmq::ReqSocket;
-use bytes::Bytes;
+use monocoque::rt::LocalRuntime;
+use monocoque::zmq::{ReqSocket, Result};
 
-#[compio::main]
-async fn main() -> std::io::Result<()> {
-    let mut socket = ReqSocket::connect("127.0.0.1:5555").await?;
+fn main() -> Result<()> {
+    LocalRuntime::new()?.block_on(async_main())
+}
 
-    socket.send(vec![Bytes::from("PING")]).await?;
+async fn async_main() -> Result<()> {
+    let mut socket = ReqSocket::new();
+    socket.connect("tcp://127.0.0.1:5555").await?;
 
-    if let Some(reply) = socket.recv().await {
-        println!("Reply: {:?}", reply);  // [b"PONG"]
-    }
+    socket.send("PING").await?;
+
+    let reply = socket.recv().await?;
+    println!("Reply: {:?}", reply);  // one frame: b"PONG"
     Ok(())
 }
 ```
@@ -152,24 +160,28 @@ A publisher broadcasts events; subscribers filter by topic prefix.
 **Publisher** (`src/bin/publisher.rs`):
 
 ```rust,no_run
-use monocoque::zmq::PubSocket;
+use monocoque::rt::LocalRuntime;
+use monocoque::zmq::{Msg, PubSocket, Result};
 use bytes::Bytes;
 use std::time::Duration;
 
-#[compio::main]
-async fn main() -> std::io::Result<()> {
-    let mut socket = PubSocket::bind("127.0.0.1:5556").await?;
+fn main() -> Result<()> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
+    let mut socket = PubSocket::new();
+    socket.bind("tcp://127.0.0.1:5556").await?;
     println!("Publisher bound to :5556");
 
-    // Accept one subscriber before publishing.
-    socket.accept_subscriber().await?;
-
+    // Any number of subscribers may connect; messages sent before a
+    // subscriber has joined are not delivered to it.
     for i in 0u32.. {
-        socket.send(vec![
+        socket.send(Msg::from([
             Bytes::from("weather.london"),
             Bytes::from(format!("temp={}", 15 + i % 10)),
-        ]).await?;
-        compio::time::sleep(Duration::from_millis(500)).await;
+        ])).await?;
+        monocoque::rt::sleep(Duration::from_millis(500)).await;
     }
     Ok(())
 }
@@ -178,16 +190,21 @@ async fn main() -> std::io::Result<()> {
 **Subscriber** (`src/bin/subscriber.rs`):
 
 ```rust,no_run
-use monocoque::zmq::SubSocket;
+use monocoque::rt::LocalRuntime;
+use monocoque::zmq::{Result, SubSocket};
 
-#[compio::main]
-async fn main() -> std::io::Result<()> {
-    let mut socket = SubSocket::connect("127.0.0.1:5556").await?;
+fn main() -> Result<()> {
+    LocalRuntime::new()?.block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
+    let mut socket = SubSocket::new();
+    socket.connect("tcp://127.0.0.1:5556").await?;
     socket.subscribe(b"weather.london").await?;
 
-    while let Ok(Some(msg)) = socket.recv().await {
-        let topic = std::str::from_utf8(&msg[0]).unwrap_or("?");
-        let data  = std::str::from_utf8(&msg[1]).unwrap_or("?");
+    while let Ok(msg) = socket.recv().await {
+        let topic = std::str::from_utf8(msg.get(0).unwrap_or_default()).unwrap_or("?");
+        let data  = std::str::from_utf8(msg.get(1).unwrap_or_default()).unwrap_or("?");
         println!("{}: {}", topic, data);
     }
     Ok(())
@@ -204,13 +221,18 @@ async fn main() -> std::io::Result<()> {
 | `RepSocket` | Request-Reply | Sync server (must alternate recv/send) |
 | `DealerSocket` | Async Request-Reply | Async client with reconnect support |
 | `RouterSocket` | Identity Routing | Server with per-peer routing IDs |
-| `PubSocket` | Broadcast | Publisher (worker-pool, many subscribers) |
+| `PubSocket` | Broadcast | Publisher (many subscribers) |
 | `SubSocket` | Filtered recv | Subscriber with topic filters |
-| `PushSocket` | Pipeline | Task distributor (one connection) |
-| `PullSocket` | Pipeline | Task worker (one connection) |
-| `PushFanOut` | Pipeline pool | Ventilator that round-robins across N PULL workers |
-| `PullFanIn` | Pipeline pool | Sink that merges results from N PUSH workers |
+| `XPubSocket` / `XSubSocket` | Broadcast | Pub/sub with visible subscriptions, for brokers |
+| `PushSocket` | Pipeline | Task distributor, round-robins across connected PULL peers |
+| `PullSocket` | Pipeline | Task worker or sink, fair-queues from connected PUSH peers |
 | `PairSocket` | Exclusive Pair | One-to-one channel |
+| `StreamSocket` | Raw TCP | Plain TCP peers without ZMTP |
+
+Every socket is multi-peer and can bind and connect several `tcp://`, `ipc://`
+and `inproc://` endpoints. The draft types (`ClientSocket`, `ServerSocket`,
+`RadioSocket`, `DishSocket`, `ScatterSocket`, `GatherSocket`, `ChannelSocket`)
+live in `monocoque::zmq::draft` behind the `draft` feature.
 
 ---
 
@@ -218,22 +240,22 @@ async fn main() -> std::io::Result<()> {
 
 ```bash
 # Core protocol tests
-cargo test -p monocoque-zmtp
+cargo test -p monocoque-rs-zmtp
 
 # Full workspace
-cargo test --workspace
+cargo test --workspace --features zmq
 ```
 
 ---
 
 ## Next Steps
 
-- [Architecture Decision Records](ADR.md)  -  why io_uring, worker pools, and `Bytes`
-- [Performance Tuning Guide](PERFORMANCE_TUNING.md)  -  buffer sizes, worker counts, TCP options
-- [Security Guide](SECURITY_GUIDE.md)  -  PLAIN and CURVE authentication
-- [Migration Guide](MIGRATION.md)  -  coming from `zmq` (rust-zmq) or libzmq
-- API docs: `cargo doc --no-deps --open -p monocoque`
+- [Architecture Decision Records](ADR.md): the design decisions behind the library and how they changed
+- [Performance Guide](performance.md): backends, coalescing, buffer sizes, HWMs, TCP options
+- [Security Guide](SECURITY_GUIDE.md): PLAIN and CURVE authentication
+- [Migration Guide](MIGRATION.md): coming from `zmq` (rust-zmq) or libzmq
+- API docs: `cargo doc --no-deps --open -p monocoque-rs --features zmq`
 
 ---
 
-*License: MIT OR Apache-2.0*
+*License: MIT*

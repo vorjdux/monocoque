@@ -1,3 +1,6 @@
+> A historical design note from before 1.0. It names types and functions that
+> no longer exist; see [00-overview.md](00-overview.md).
+
 # 📄 File 7 - `07-benchmark-gap-remediation-plan.md`
 
 # Benchmark Gap Remediation Plan
@@ -47,7 +50,7 @@ buffer, then issues a single `write_all`:
 There is **no vectored write and no zero-copy send anywhere** in the original
 path: no `writev`, no `IORING_OP_SEND_ZC` / `MSG_ZEROCOPY`, no registered
 buffers. compio was pinned at **0.10** when this plan was written (since upgraded
-to 0.19; see the Unreleased changelog entry). Verified against the then-pinned
+to 0.19; see the 0.3.0 changelog entry). Verified against the then-pinned
 tree, `AsyncWriteExt` **does** expose `write_vectored` / `write_vectored_all`
 (compio-io 0.2.0) and `Bytes` implements `IoBuf`, so vectored writes were
 available on 0.10 after all; only `IORING_OP_SEND_ZC` is genuinely missing.
@@ -229,8 +232,7 @@ Fix 5 is deferred by request.
 
 Loopback, release build, **4-core cloud Xeon @ 2.8 GHz (shared/throttled)**,
 *not* the reference machine in `BENCHMARKS.md`, so treat these as relative, not
-absolute. Harness: `monocoque/examples/bench_changes.rs`
-(`cargo run --release --features zmq --example bench_changes`), best of 2 runs.
+absolute. One-off probe harness, best of 2 runs.
 
 **Fix 1: vectored vs copy (PUSH/PULL eager, one message per `send`):**
 

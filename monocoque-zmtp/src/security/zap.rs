@@ -53,6 +53,7 @@ pub const ZAP_ENDPOINT: &str = "inproc://zeromq.zap.01";
 
 /// Authentication mechanism
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ZapMechanism {
     /// No authentication (NULL mechanism).
     Null,
@@ -85,6 +86,7 @@ impl ZapMechanism {
 
 /// ZAP status codes
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ZapStatus {
     /// Success - connection accepted
     Success = 200,
@@ -128,7 +130,7 @@ pub struct ZapRequest {
     pub request_id: String,
     /// Security domain
     pub domain: String,
-    /// Peer address (IP:port)
+    /// Peer address: the peer's IP for TCP (no port), empty for IPC and inproc.
     pub address: String,
     /// Peer identity
     pub identity: Bytes,
@@ -247,9 +249,6 @@ impl ZapRequest {
         let domain = String::from_utf8(frames[2].to_vec()).map_err(|_| "Invalid domain string")?;
         let address =
             String::from_utf8(frames[3].to_vec()).map_err(|_| "Invalid address string")?;
-        if address.is_empty() {
-            return Err("ZAP address cannot be empty".to_string());
-        }
         let identity = frames[4].clone();
         if identity.len() > 255 {
             return Err("ZAP identity cannot exceed 255 bytes".to_string());
@@ -344,13 +343,16 @@ impl ZapResponse {
             let mut buf = Vec::new();
             for (key, value) in &self.metadata {
                 // RFC 35: key is 1-byte length-prefixed, so max 255 bytes.
+                // The value is 4-byte length-prefixed; clamp it the same way so
+                // the prefix always matches the bytes written.
                 let key_bytes = key.as_bytes();
-                let key_len = key_bytes.len().min(255);
-                buf.push(key_len as u8);
-                buf.extend_from_slice(&key_bytes[..key_len]);
-                let value_len = (value.len() as u32).to_be_bytes();
-                buf.extend_from_slice(&value_len);
-                buf.extend_from_slice(value.as_bytes());
+                let key_len = u8::try_from(key_bytes.len()).unwrap_or(u8::MAX);
+                buf.push(key_len);
+                buf.extend_from_slice(&key_bytes[..usize::from(key_len)]);
+                let value_bytes = value.as_bytes();
+                let value_len = u32::try_from(value_bytes.len()).unwrap_or(u32::MAX);
+                buf.extend_from_slice(&value_len.to_be_bytes());
+                buf.extend_from_slice(&value_bytes[..value_len as usize]);
             }
             Bytes::from(buf)
         };
@@ -538,7 +540,8 @@ mod tests {
     }
 
     #[test]
-    fn zap_request_decode_rejects_empty_address() {
+    fn zap_request_decode_accepts_empty_address() {
+        // A peer on a Unix socket has no address to report.
         let frames = vec![
             Bytes::from(ZAP_VERSION),
             Bytes::from("123"),
@@ -548,7 +551,8 @@ mod tests {
             Bytes::from("NULL"),
         ];
 
-        assert!(ZapRequest::decode(&frames).is_err());
+        let request = ZapRequest::decode(&frames).unwrap();
+        assert_eq!(request.address, "");
     }
 
     #[test]

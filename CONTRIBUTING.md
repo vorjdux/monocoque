@@ -19,16 +19,25 @@ If you are planning a larger change, open an issue first so we can agree on the 
 The workspace has three crates plus a separate fuzzing crate.
 
 - `monocoque` is the public crate. It is the only API surface users depend on, and where the examples, benches, and interop tests live.
-- `monocoque-core` is internal. It is the protocol-agnostic kernel: transports, buffers, backpressure, and the runtime facade (`rt`) that selects the io_uring, tokio, or smol I/O engine.
-- `monocoque-zmtp` is internal. It is the ZMTP 3.1 implementation. Do not depend on it directly, the public API goes through `monocoque`.
+- `monocoque-core` is internal. It is the protocol-agnostic kernel: the socket multiplexer (one per socket, over any number of peers), the `Msg` type, transports, backpressure, and the runtime facade (`rt`) that selects the io_uring, tokio, or smol I/O engine.
+- `monocoque-zmtp` is internal. It is the ZMTP implementation and the socket types built on the multiplexer. Do not depend on it directly, the public API goes through `monocoque`.
 - `monocoque-fuzz` holds the fuzz targets and is excluded from the workspace.
 
-The [documentation index](docs/README.md) links the guides for each area, and
-`docs/blueprints/00-overview.md` walks the architecture in depth.
+The [documentation index](docs/README.md) links the guides for each area. The
+current architecture is described in the crate documentation and in
+[docs/USER_GUIDE.md](docs/USER_GUIDE.md). The files under `docs/blueprints/`
+are historical design notes from before 1.0 and name things that no longer
+exist.
 
 ## Getting set up
 
-You need a Rust toolchain at 1.95 or newer, which is the MSRV.
+You need a Rust toolchain at 1.95 or newer, which is the MSRV. The repository's
+`rust-toolchain.toml` pins local builds to 1.98, the same toolchain CI runs clippy
+on (`CLIPPY_TOOLCHAIN` in `.github/workflows/ci.yml`). Clippy is pinned so a new
+Rust release cannot turn the lint job red without a code change, and the toolchain
+file keeps your local clippy output identical to CI's. The two pins move together.
+The other CI jobs override the file with `RUSTUP_TOOLCHAIN` and run on stable,
+beta, nightly or 1.95 as their purpose requires.
 
 ```
 git clone https://github.com/vorjdux/monocoque
@@ -36,11 +45,7 @@ cd monocoque
 cargo build --workspace
 ```
 
-The interop tests talk to a real libzmq, so to run those you also need the library installed. On Debian or Ubuntu:
-
-```
-sudo apt-get install -y libzmq3-dev
-```
+The interop tests talk to a real libzmq. The `zmq` crate they use builds it from source, so they need a C++ compiler and nothing else: a libzmq installed on the system is not used.
 
 ## Building and testing
 
@@ -54,7 +59,7 @@ cargo test --workspace --no-default-features --features runtime-tokio,zmq       
 cargo test --workspace --no-default-features --features runtime-smol,zmq         # smol
 ```
 
-Interop tests against libzmq, which need the library installed above:
+Interop tests against libzmq:
 
 ```
 scripts/run_interop_tests.sh
@@ -63,10 +68,14 @@ scripts/run_interop_tests.sh
 Benchmarks, built on criterion:
 
 ```
-scripts/bench_all.sh
+scripts/bench_all.sh                                # compio, every benchmark
+scripts/bench_all.sh --backend all --pin 0,2        # all three backends, pinned
+scripts/bench_pair.py --against main --pin 0,2      # working tree against a revision
 ```
 
-Fuzzing needs a nightly toolchain and cargo-fuzz. The targets cover the decoder, the frame codec, the greeting parser, command parsing, the CURVE handshake, PLAIN security, the subscription trie, and ZAP request decoding:
+`bench_pair.py` runs the two revisions in alternating rounds, which is the way to check a performance change: a saved baseline is measured at another time, so it also counts whatever changed on the machine since. Pin to two separate physical cores (`lscpu -e` shows which CPUs share one).
+
+Fuzzing needs a nightly toolchain and cargo-fuzz. The nine targets cover the decoder, the frame codec, the greeting parser, command parsing, the CURVE handshake, CURVE message decoding, PLAIN security, the subscription trie, and ZAP request decoding ([docs/FUZZING.md](docs/FUZZING.md) describes each):
 
 ```
 cargo install cargo-fuzz
@@ -95,7 +104,7 @@ The quick local check before pushing is fmt, clippy, and test.
 
 A few invariants hold the design together. Please keep to them, or open an issue if you think one should change.
 
-- Unsafe code is isolated to the allocator module in `monocoque-core`. Everything above it is safe Rust. Do not add `unsafe` elsewhere without a strong reason and a comment explaining why it is sound.
+- `unsafe` is limited to the places listed in the README's Safety section, which is the one authoritative inventory. Do not add `unsafe` elsewhere without a strong reason and a `SAFETY:` comment explaining why it is sound, and update that inventory in the same change.
 - The protocol codec is sans-io. The framing and greeting code parse bytes and produce frames without doing any I/O. Keep protocol logic and I/O separate, since that is what lets the core support more protocols later.
 - The public API lives only in `monocoque`. Keep `monocoque-core` and `monocoque-zmtp` internal.
 - Wire compatibility is the point of the project. Any change to protocol code must keep the libzmq interop tests passing. If you touch framing, run the interop suite before and after.

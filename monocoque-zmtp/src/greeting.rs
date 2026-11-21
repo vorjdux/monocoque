@@ -1,4 +1,4 @@
-use crate::codec::ZmtpError;
+use crate::error::ZmtpError;
 use bytes::Bytes;
 
 /// ZMTP Greeting is always exactly 64 bytes
@@ -40,7 +40,7 @@ impl ZmtpGreeting {
     /// - `ZeroMQ` 4.3+ (ZMTP 3.1)
     ///
     /// This provides backward and forward compatibility across all modern ZMQ versions.
-    pub fn parse(src: &Bytes) -> crate::codec::Result<Self> {
+    pub fn parse(src: &Bytes) -> crate::error::Result<Self> {
         if src.len() < GREETING_SIZE {
             return Err(ZmtpError::Incomplete);
         }

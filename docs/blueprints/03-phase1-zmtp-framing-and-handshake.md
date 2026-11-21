@@ -1,3 +1,6 @@
+> A historical design note from before 1.0. It names types and functions that
+> no longer exist; see [00-overview.md](00-overview.md).
+
 # 📄 File 4 - `03-phase1-zmtp-framing-and-handshake.md`
 
 # Phase 1 - ZMTP 3.1 Framing, Handshake, and Session Semantics

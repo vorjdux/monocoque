@@ -1,112 +1,76 @@
-//! Interoperability test: Monocoque REQ ↔ libzmq REP
+//! Interoperability: Monocoque REQ <-> libzmq REP
 //!
-//! This example demonstrates that Monocoque REQ can communicate with libzmq REP.
+//! A libzmq REP runs on a background thread and a Monocoque REQ makes two
+//! requests to it. Needs libzmq installed (the `zmq` crate links it).
 //!
 //! Run this example:
 //! ```bash
 //! cargo run --example interop_req_libzmq --features zmq
 //! ```
 
-use bytes::Bytes;
-use monocoque::rt::{LocalRuntime, TcpStream};
-use monocoque_zmtp::req::ReqSocket;
+use monocoque::rt::LocalRuntime;
+use monocoque::zmq::ReqSocket;
+use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
-use tracing::info;
 
-fn main() {
-    info!("=== Monocoque REQ ↔ libzmq REP Interop Test ===\n");
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-    // Spawn libzmq REP server in background thread
-    let server_handle = thread::spawn(|| {
-        let ctx = zmq::Context::new();
-        let rep = ctx.socket(zmq::REP).unwrap();
-        rep.bind("tcp://127.0.0.1:5561").unwrap();
-        info!("[libzmq REP] Listening on tcp://127.0.0.1:5561");
+const ROUNDS: usize = 2;
 
-        // Receive request
-        let request = rep.recv_bytes(0).unwrap();
-        info!(
+fn main() -> Result<()> {
+    println!("=== Monocoque REQ <-> libzmq REP ===\n");
+
+    let (bound_tx, bound_rx) = mpsc::channel();
+    let server = thread::spawn(move || libzmq_rep(&bound_tx));
+
+    // The server reports the endpoint it bound. If it failed before that,
+    // its end of the channel is gone and the join below reports why.
+    if let Ok(endpoint) = bound_rx.recv() {
+        LocalRuntime::new()?.block_on(monocoque_req(&endpoint))?;
+    }
+
+    server.join().map_err(|_| "the libzmq thread panicked")??;
+    println!("\nInterop run completed.");
+    Ok(())
+}
+
+fn libzmq_rep(bound: &mpsc::Sender<String>) -> zmq::Result<()> {
+    let ctx = zmq::Context::new();
+    let rep = ctx.socket(zmq::REP)?;
+    // A `*` port lets the OS pick a free one; the last endpoint says which.
+    rep.bind("tcp://127.0.0.1:*")?;
+    let endpoint = rep.get_last_endpoint()?.map_err(|_| zmq::Error::EINVAL)?;
+    println!("[libzmq REP] Listening on {endpoint}");
+    // The main thread waits on this; it only fails if that thread is gone.
+    let _ = bound.send(endpoint);
+
+    for round in 1..=ROUNDS {
+        let request = rep.recv_bytes(0)?;
+        println!(
             "[libzmq REP] Received request: {:?}",
             String::from_utf8_lossy(&request)
         );
+        rep.send(&format!("Reply {round} from libzmq REP"), 0)?;
+    }
+    // Dropping the context waits for the last reply to be written.
+    Ok(())
+}
 
-        // Send reply
-        rep.send("Reply from libzmq REP", 0).unwrap();
-        info!("[libzmq REP] Sent reply\n");
+async fn monocoque_req(endpoint: &str) -> monocoque::zmq::Result<()> {
+    let mut socket = ReqSocket::new();
+    socket.connect(endpoint).await?;
+    println!("[Monocoque REQ] Connecting to {endpoint}");
 
-        // Second round
-        let request = rep.recv_bytes(0).unwrap();
-        info!(
-            "[libzmq REP] Received second request: {:?}",
-            String::from_utf8_lossy(&request)
-        );
-
-        rep.send("Second reply from libzmq", 0).unwrap();
-        info!("[libzmq REP] Sent second reply\n");
-
-        // Keep server alive
-        thread::sleep(Duration::from_millis(100));
-    });
-
-    // Give server time to bind
-    thread::sleep(Duration::from_millis(50));
-
-    // Run Monocoque REQ client
-    LocalRuntime::new().unwrap().block_on(async {
-        info!("[Monocoque REQ] Connecting to tcp://127.0.0.1:5561");
-
-        let stream = TcpStream::connect("127.0.0.1:5561")
-            .await
-            .expect("Failed to connect");
-
-        let mut socket = ReqSocket::new(stream).await.unwrap();
-        info!("[Monocoque REQ] Connected\n");
-
-        // First request-reply cycle
-        info!("[Monocoque REQ] Sending first request");
+    for round in 1..=ROUNDS {
         socket
-            .send(vec![Bytes::from_static(b"Request from Monocoque REQ")])
-            .await
-            .expect("Failed to send");
-
-        let response = socket
-            .recv()
-            .await
-            .expect("Failed to receive")
-            .expect("Connection closed");
-        info!("[Monocoque REQ] Received response:");
-        {
-            let msg = response;
-            for (i, frame) in msg.iter().enumerate() {
-                info!("  Frame {}: {:?}", i, String::from_utf8_lossy(frame));
-            }
+            .send(format!("Request {round} from Monocoque REQ"))
+            .await?;
+        // The reply is only printed, so it stays borrowed from the socket.
+        let reply = socket.recv().await?;
+        println!("[Monocoque REQ] Received reply:");
+        for (i, frame) in reply.frames().enumerate() {
+            println!("  Frame {i}: {:?}", String::from_utf8_lossy(frame));
         }
-
-        // Second request-reply cycle
-        info!("\n[Monocoque REQ] Sending second request");
-        socket
-            .send(vec![Bytes::from_static(b"Second request")])
-            .await
-            .expect("Failed to send second request");
-
-        let response = socket
-            .recv()
-            .await
-            .expect("Failed to receive second reply")
-            .expect("Connection closed");
-        info!("[Monocoque REQ] Received second response:");
-        {
-            let msg = response;
-            for (i, frame) in msg.iter().enumerate() {
-                info!("  Frame {}: {:?}", i, String::from_utf8_lossy(frame));
-            }
-        }
-
-        drop(socket);
-    });
-
-    server_handle.join().unwrap();
-
-    info!("\n✅ REQ interop test completed successfully!");
+    }
+    socket.close().await
 }

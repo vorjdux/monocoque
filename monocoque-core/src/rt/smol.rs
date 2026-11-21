@@ -8,9 +8,11 @@ use compio_buf::{BufResult, IoBuf, IoBufMut, IoVectoredBuf};
 use compio_io::{AsyncRead, AsyncWrite};
 use smol::Async;
 use socket2::SockRef;
+use std::cell::RefCell;
 use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -41,11 +43,64 @@ where
     B: IoBufMut,
     for<'a> SockRef<'a>: From<&'a T>,
 {
+    read_into_noting(stream, buf, &std::cell::Cell::new(false)).await
+}
+
+/// [`read_into`], setting `dry` if the socket had nothing when first asked and
+/// the read had to wait.
+async fn read_into_noting<T, B>(
+    stream: &Async<T>,
+    buf: B,
+    dry: &std::cell::Cell<bool>,
+) -> BufResult<usize, B>
+where
+    B: IoBufMut,
+    for<'a> SockRef<'a>: From<&'a T>,
+{
     crate::io::fill_read(buf, async move |spare| {
         // Wait for readability and let the kernel `recv` straight into the
         // buffer's backing memory, reporting the count it wrote.
         stream
-            .read_with(|inner| SockRef::from(inner).recv(spare))
+            .read_with(|inner| {
+                let got = SockRef::from(inner).recv(spare);
+                if matches!(&got, Err(e) if e.kind() == io::ErrorKind::WouldBlock) {
+                    dry.set(true);
+                }
+                got
+            })
+            .await
+    })
+    .await
+}
+
+/// Read once into the room left in `first`, then at most `limit` bytes of
+/// `second`, setting `dry` as [`read_into_noting`] does. See
+/// [`crate::io::fill_read_two`].
+async fn read_two_into_noting<T>(
+    stream: &Async<T>,
+    first: bytes::BytesMut,
+    second: bytes::BytesMut,
+    limit: usize,
+    dry: &std::cell::Cell<bool>,
+) -> (io::Result<usize>, bytes::BytesMut, bytes::BytesMut)
+where
+    for<'a> SockRef<'a>: From<&'a T>,
+{
+    crate::io::fill_read_two(first, second, limit, async move |a, b| {
+        stream
+            .read_with(|inner| {
+                let mut bufs = [
+                    socket2::MaybeUninitSlice::new(&mut *a),
+                    socket2::MaybeUninitSlice::new(&mut *b),
+                ];
+                let got = SockRef::from(inner)
+                    .recv_vectored(&mut bufs)
+                    .map(|(n, _)| n);
+                if matches!(&got, Err(e) if e.kind() == io::ErrorKind::WouldBlock) {
+                    dry.set(true);
+                }
+                got
+            })
             .await
     })
     .await
@@ -93,20 +148,26 @@ where
 // ── Task spawning ─────────────────────────────────────────────────────────
 
 thread_local! {
-    // A per-thread executor matches compio's thread-per-core model and lets
-    // spawned `!Send` tasks run within `block_on`. `LocalExecutor::spawn`
-    // and `run` both take `&self`, so no interior mutability is needed.
-    static EXECUTOR: smol::LocalExecutor<'static> = const { smol::LocalExecutor::new() };
+    // Tasks spawned outside any `LocalRuntime::block_on` go here, as before.
+    static FALLBACK: Rc<smol::LocalExecutor<'static>> = Rc::new(smol::LocalExecutor::new());
+    // The executor of the `block_on` running on this thread, if any.
+    static CURRENT: RefCell<Option<Rc<smol::LocalExecutor<'static>>>> = const { RefCell::new(None) };
+}
+
+/// The executor `spawn` should use: the running runtime's, else the thread's.
+fn current_executor() -> Rc<smol::LocalExecutor<'static>> {
+    CURRENT
+        .with(|c| c.borrow().clone())
+        .unwrap_or_else(|| FALLBACK.with(Rc::clone))
 }
 
 /// Handle to a spawned task.
 ///
 /// Unlike compio and tokio, dropping a smol `Task` **cancels** it. All call
-/// sites either detach explicitly ([`spawn_detached`]) or await via [`join`];
-/// the one place that stores handles (`PullFanIn`) wants cancel-on-drop.
+/// sites either detach explicitly ([`spawn_detached`]) or await via [`join`].
 pub type JoinHandle<T> = smol::Task<T>;
 
-/// Spawn a task on the current thread's executor and return its handle.
+/// Spawn a task on the running runtime's executor and return its handle.
 ///
 /// The task runs only while this thread is inside [`LocalRuntime::block_on`]
 /// (which drives `executor.run`), matching tokio's `LocalSet` requirement.
@@ -116,7 +177,7 @@ where
     F: Future + 'static,
     F::Output: 'static,
 {
-    EXECUTOR.with(|ex| ex.spawn(fut))
+    current_executor().spawn(fut)
 }
 
 /// Spawn a task and let it run on its own, discarding the handle.
@@ -127,7 +188,7 @@ where
     F::Output: 'static,
 {
     // A smol `Task` cancels on drop, so `detach` is required to keep it alive.
-    EXECUTOR.with(|ex| ex.spawn(fut).detach());
+    current_executor().spawn(fut).detach();
 }
 
 /// Run a blocking closure off the async executor and await its result.
@@ -151,21 +212,59 @@ pub async fn join<T>(handle: JoinHandle<T>) -> T {
 
 /// A self-contained runtime owned by a single thread.
 ///
-/// Zero-sized: the executor lives in a thread-local. `block_on` drives that
-/// executor so tasks spawned via [`spawn`]/[`spawn_detached`] make progress.
-pub struct LocalRuntime;
+/// It owns an executor, and tasks spawned via [`spawn`]/[`spawn_detached`]
+/// inside its `block_on` run on it. Dropping the runtime drops those tasks, as
+/// on compio and tokio. With one executor per thread instead, a socket's driver
+/// outlived the runtime, never ran again and kept its connections open until
+/// the thread exited.
+pub struct LocalRuntime {
+    executor: Rc<smol::LocalExecutor<'static>>,
+    spin: Option<Duration>,
+}
 
 impl LocalRuntime {
-    /// Build a new single-threaded runtime handle.
+    /// Build a new single-threaded runtime.
     #[allow(clippy::unnecessary_wraps)] // signature parity with the other backends
     pub fn new() -> io::Result<Self> {
-        Ok(Self)
+        Ok(Self {
+            executor: Rc::new(smol::LocalExecutor::new()),
+            spin: None,
+        })
     }
 
-    /// Run a future to completion on this thread's executor, blocking the
+    /// Set how long a receive on this runtime keeps looking for a message
+    /// before it sleeps, for sockets whose options do not say
+    /// (`SocketOptions::with_recv_spin`).
+    ///
+    /// The default is 100 µs, or none when the thread may run on one CPU
+    /// only. `Duration::ZERO` turns the looking off, which is the faster
+    /// setting when the peer's thread shares no L3 cache with this one, or
+    /// when this thread is pinned to one CPU inside a process that has
+    /// several. A budget above one second is lowered to one second.
+    #[must_use]
+    pub const fn with_spin(mut self, spin: Duration) -> Self {
+        self.spin = Some(spin);
+        self
+    }
+
+    /// Run a future to completion on this runtime's executor, blocking the
     /// thread and driving any locally spawned tasks alongside it.
     pub fn block_on<F: Future>(&self, fut: F) -> F::Output {
-        EXECUTOR.with(|ex| smol::block_on(ex.run(fut)))
+        let outer = CURRENT.with(|c| c.replace(Some(Rc::clone(&self.executor))));
+        // Restored on unwind too, so a panic leaves no stale executor behind.
+        let _restore = Restore(outer);
+        let _spin = crate::spin::RuntimeSpin::enter(self.spin);
+        smol::block_on(self.executor.run(fut))
+    }
+}
+
+/// Puts back the executor that was current before a `block_on`.
+struct Restore(Option<Rc<smol::LocalExecutor<'static>>>);
+
+impl Drop for Restore {
+    fn drop(&mut self) {
+        let outer = self.0.take();
+        CURRENT.with(|c| *c.borrow_mut() = outer);
     }
 }
 
@@ -243,9 +342,8 @@ impl TcpStream {
 
     /// Adopt a `std::net::TcpStream`, attaching it to the async reactor.
     ///
-    /// Mirrors compio's `TcpStream::from_std`; used to re-attach a handed-off fd
-    /// to a worker's runtime (see the publisher fan-out). `Async::new` puts the
-    /// stream into non-blocking mode.
+    /// Mirrors compio's `TcpStream::from_std`. `Async::new` puts the stream
+    /// into non-blocking mode.
     pub fn from_std(stream: std::net::TcpStream) -> io::Result<Self> {
         Ok(Self {
             inner: Arc::new(Async::new(stream)?),
@@ -320,6 +418,13 @@ pub fn bind_reuseport(addr: SocketAddr) -> io::Result<TcpListener> {
     TcpListener::from_std(crate::tcp::reuseport_listener(addr)?)
 }
 
+impl TcpStream {
+    /// Wait until a read would find something.
+    pub async fn readable(&self) -> io::Result<()> {
+        self.inner.readable().await
+    }
+}
+
 impl AsyncRead for TcpStream {
     async fn read<B: IoBufMut>(&mut self, buf: B) -> BufResult<usize, B> {
         read_into(&self.inner, buf).await
@@ -343,6 +448,62 @@ impl AsyncWrite for TcpStream {
         SockRef::from(self.inner.get_ref()).shutdown(std::net::Shutdown::Write)
     }
 }
+
+/// Implement the `compio::io` traits for `&$ty`, so a read and a write can be
+/// in flight on one stream at once. Every helper already works on `&Async<T>`.
+macro_rules! impl_shared_io {
+    ($ty:ty) => {
+        impl $ty {
+            /// Read, setting `dry` if the socket had nothing when first asked
+            /// and the read had to wait.
+            pub async fn read_noting<B: IoBufMut>(
+                &self,
+                buf: B,
+                dry: &std::cell::Cell<bool>,
+            ) -> BufResult<usize, B> {
+                read_into_noting(&self.inner, buf, dry).await
+            }
+
+            /// Read once into the room left in `first`, then at most `limit`
+            /// bytes of `second`.
+            pub async fn read_two_noting(
+                &self,
+                first: bytes::BytesMut,
+                second: bytes::BytesMut,
+                limit: usize,
+                dry: &std::cell::Cell<bool>,
+            ) -> (io::Result<usize>, bytes::BytesMut, bytes::BytesMut) {
+                read_two_into_noting(&self.inner, first, second, limit, dry).await
+            }
+        }
+
+        impl AsyncRead for &$ty {
+            async fn read<B: IoBufMut>(&mut self, buf: B) -> BufResult<usize, B> {
+                read_into(&self.inner, buf).await
+            }
+        }
+
+        impl AsyncWrite for &$ty {
+            async fn write<B: IoBuf>(&mut self, buf: B) -> BufResult<usize, B> {
+                write_from(&self.inner, buf).await
+            }
+
+            async fn write_vectored<B: IoVectoredBuf>(&mut self, buf: B) -> BufResult<usize, B> {
+                write_vectored_from(&self.inner, buf).await
+            }
+
+            async fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+
+            async fn shutdown(&mut self) -> io::Result<()> {
+                SockRef::from(self.inner.get_ref()).shutdown(std::net::Shutdown::Write)
+            }
+        }
+    };
+}
+
+impl_shared_io!(TcpStream);
 
 impl AsyncRead for OwnedReadHalf {
     async fn read<B: IoBufMut>(&mut self, buf: B) -> BufResult<usize, B> {
@@ -384,7 +545,7 @@ pub use unix::{UnixListener, UnixStream};
 mod unix {
     use super::{
         Arc, AsyncRead, AsyncWrite, BufResult, IoBuf, IoBufMut, IoVectoredBuf, SockRef, io,
-        read_into, write_from, write_vectored_from,
+        read_into, read_into_noting, read_two_into_noting, write_from, write_vectored_from,
     };
     use smol::Async;
     use std::os::unix::io::AsRawFd;
@@ -459,6 +620,13 @@ mod unix {
         }
     }
 
+    impl UnixStream {
+        /// Wait until a read would find something.
+        pub async fn readable(&self) -> io::Result<()> {
+            self.inner.readable().await
+        }
+    }
+
     impl AsyncWrite for UnixStream {
         async fn write<B: IoBuf>(&mut self, buf: B) -> BufResult<usize, B> {
             write_from(&self.inner, buf).await
@@ -482,4 +650,6 @@ mod unix {
             self.inner.get_ref().as_raw_fd()
         }
     }
+
+    impl_shared_io!(UnixStream);
 }

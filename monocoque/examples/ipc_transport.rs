@@ -1,119 +1,86 @@
 //! Demonstrates IPC transport using Unix domain sockets.
 //!
-//! This example shows how to use IPC for inter-process communication
-//! with low latency and zero network overhead.
+//! This example shows how to use IPC for communication between processes on
+//! one host, with no port to allocate. Any socket binds or connects to an
+//! `ipc://` endpoint exactly as it would to a `tcp://` one.
 //!
 //! Note: This example only works on Unix-like systems (Linux, macOS, BSD).
 
 #[cfg(not(unix))]
 fn main() {
-    eprintln!("❌ IPC transport is only available on Unix-like systems");
-    eprintln!("   This example requires Linux, macOS, or BSD");
+    eprintln!("IPC transport is only available on Unix-like systems");
+    eprintln!("This example requires Linux, macOS, or BSD");
     std::process::exit(1);
 }
 
 #[cfg(unix)]
-fn main() -> std::io::Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     monocoque::rt::LocalRuntime::new()?.block_on(async_main())
 }
 
 #[cfg(unix)]
-async fn async_main() -> std::io::Result<()> {
-    use compio_buf::BufResult;
-    use compio_io::{AsyncRead, AsyncWriteExt};
+async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     use monocoque::rt;
-    use monocoque::zmq::ipc;
-    use std::time::Duration;
+    use monocoque::zmq::{RepSocket, ReqSocket};
 
-    let socket_path = "/tmp/monocoque_ipc_example.sock";
+    let socket_path = std::env::temp_dir().join("monocoque_ipc_example.sock");
+    let endpoint = format!("ipc://{}", socket_path.display());
 
     println!("IPC Transport Example");
     println!("=====================\n");
-    println!("Socket path: {socket_path}");
+    println!("Endpoint: {endpoint}");
 
     // Clean up any existing socket
-    let _ = std::fs::remove_file(socket_path);
+    let _ = std::fs::remove_file(&socket_path);
 
-    // Create listener
-    println!("\n1. Creating IPC listener...");
-    let listener = ipc::bind(socket_path).await?;
-    println!("   ✓ Listening on {socket_path}");
+    // Bind the server
+    println!("\n1. Binding REP socket...");
+    let mut server = RepSocket::new();
+    server.bind(&endpoint).await?;
+    println!("   Listening on {endpoint}");
 
-    // Spawn server task
+    // Spawn server task. It returns its result, so a failure on this side
+    // reaches `main` through the join below.
     let server_task = rt::spawn(async move {
-        println!("   [Server] Waiting for connection...");
-
-        match ipc::accept(&listener).await {
-            Ok(mut stream) => {
-                println!("   [Server] ✓ Client connected");
-
-                // Receive message
-                let buffer = vec![0u8; 1024];
-                match stream.read(buffer).await {
-                    BufResult(Ok(n), buffer) if n > 0 => {
-                        let message = String::from_utf8_lossy(&buffer[..n]);
-                        println!("   [Server] 📩 Received: {message}");
-
-                        // Send response
-                        let response = "Hello from server!";
-                        match stream.write_all(response.as_bytes()).await {
-                            BufResult(Ok(()), _) => {
-                                println!("   [Server] 📤 Sent response");
-                            }
-                            BufResult(Err(e), _) => {
-                                eprintln!("   [Server] ❌ Write error: {e}");
-                            }
-                        }
-                    }
-                    BufResult(Ok(_), _) => {
-                        println!("   [Server] ⚠ Empty message received");
-                    }
-                    BufResult(Err(e), _) => {
-                        eprintln!("   [Server] ❌ Read error: {e}");
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("   [Server] ❌ Accept error: {e}");
-            }
+        println!("   [Server] Waiting for a request...");
+        {
+            let request = server.recv().await?;
+            let message = String::from_utf8_lossy(request.first().unwrap_or_default());
+            println!("   [Server] Received: {message}");
         }
+        server.send("Hello from server!").await?;
+        println!("   [Server] Sent response");
+        server.close().await
     });
 
-    // Give server time to start
-    rt::sleep(Duration::from_millis(50)).await;
-
     // Connect client
-    println!("\n2. Connecting IPC client...");
-    let mut client = ipc::connect(socket_path).await?;
-    println!("   ✓ Connected to {socket_path}");
+    println!("\n2. Connecting REQ client...");
+    let mut client = ReqSocket::new();
+    client.connect(&endpoint).await?;
+    println!("   Connecting to {endpoint}");
 
     // Send message
     println!("\n3. Sending message from client...");
-    let message = "Hello from client!";
-    let BufResult(result, _) = client.write_all(message.as_bytes()).await;
-    result?;
-    println!("   ✓ Message sent");
+    client.send("Hello from client!").await?;
+    println!("   Message sent");
 
     // Receive response
     println!("\n4. Waiting for server response...");
-    let buffer = vec![0u8; 1024];
-    let BufResult(result, buffer) = client.read(buffer).await;
-    let n = result?;
-    let response = String::from_utf8_lossy(&buffer[..n]);
-    println!("   📩 Received: {response}");
+    {
+        let response = client.recv().await?;
+        println!(
+            "   Received: {}",
+            String::from_utf8_lossy(response.first().unwrap_or_default())
+        );
+    }
 
     // Wait for server to finish
-    rt::join(server_task).await;
+    rt::join(server_task).await?;
 
     // Cleanup
-    let _ = std::fs::remove_file(socket_path);
+    let _ = std::fs::remove_file(&socket_path);
 
-    println!("\n✅ IPC transport example completed successfully");
-    println!("\nPerformance characteristics:");
-    println!("  • Zero network overhead (in-kernel communication)");
-    println!("  • Lower latency than TCP loopback");
-    println!("  • No port allocation required");
-    println!("  • Automatic cleanup on process exit");
+    println!("\nIPC transport example completed successfully");
 
     Ok(())
 }

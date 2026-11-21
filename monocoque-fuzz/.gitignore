@@ -7,5 +7,4 @@ artifacts/
 
 # Note: corpus/ is intentionally NOT ignored. The committed inputs are seed
 # corpora that give every fuzz run (and a fresh CI job) a useful starting point.
-# The much larger machine-grown corpus is cached/uploaded between CI runs rather
-# than committed - see the fuzz job in .github/workflows/ci.yml.
+# Inputs a run adds are not committed unless they are worth keeping.

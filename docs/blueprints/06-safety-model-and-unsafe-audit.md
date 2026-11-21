@@ -1,3 +1,6 @@
+> A historical design note from before 1.0. It names types, functions and
+> files that no longer exist; see [00-overview.md](00-overview.md).
+
 # 📄 File 7 - `06-safety-model-and-unsafe-audit.md`
 
 # Safety Model & Unsafe Code Audit
@@ -39,19 +42,18 @@ This is the same model used by:
 
 ## 3. Where Unsafe Code Exists (Exact Inventory)
 
-Unsafe code appears **only** in Phase 0 components:
+The authoritative inventory is the README's Safety section. In summary:
 
 | Module                     | Purpose                        | Unsafe? |
 | -------------------------- | ------------------------------ | ------- |
 | `core::io::fill_read`      | owned-buffer `set_buf_init`    | ✅      |
 | `core::io::take_read_buffer` | carve read slab off the stash | ✅      |
-| `compio::IoBuf*` impls     | kernel IO                      | ✅      |
+| ZMTP socket read paths     | call `take_read_buffer`        | ✅      |
+| `core::tcp`, ZMTP PUSH/PUB/XPUB/XSUB | raw-fd socket tuning | ✅      |
+| `zmtp::inproc_stream`      | in-process stream adapter      | ✅      |
 | ZMTP codec                 | framing                        | ❌      |
 | Session logic              | state machine                  | ❌      |
-| Router hub                 | routing                        | ❌      |
 | PUB/SUB index              | matching                       | ❌      |
-
-Everything above Phase 0 is **100% safe Rust**.
 
 ---
 
@@ -219,7 +221,7 @@ This eliminates an entire class of bugs seen in:
 
 ## 10. What Monocoque Explicitly Does NOT Do
 
--   ❌ No `unsafe` in protocol logic
+-   ❌ No `unsafe` in the codec, handshake, or session state machines
 -   ❌ No `static mut`
 -   ❌ No shared mutable global state
 -   ❌ No raw pointer arithmetic outside `core::io`

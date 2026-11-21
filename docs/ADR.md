@@ -1,6 +1,7 @@
 # Architecture Decision Records
 
 Three one-page ADRs for the most consequential design choices in Monocoque.
+ADR-2 was reversed in 1.0 and ADR-3 was refined by it; both say how.
 
 ---
 
@@ -35,7 +36,7 @@ The socket stack is generic over the `compio::io` `AsyncRead`/`AsyncWrite` trait
 
 ## ADR-2: Worker-pool per PubSocket instead of single-threaded select
 
-**Status**: Accepted  
+**Status**: Superseded in 1.0 (see "What replaced it" below)  
 **Date**: 2025-Q4
 
 ### Context
@@ -60,7 +61,19 @@ Option B removes that bottleneck:
 - Workers write to their subscriber shards independently and in parallel.
 - The send-HWM is enforced per-worker with `try_send`; backpressure drops messages rather than blocking the publisher.
 
-**Trade-off accepted**: A fixed thread pool consumes N × (stack + runtime overhead) even with zero subscribers. For typical server deployments this is negligible; for embedded/constrained environments the worker count can be set to 1 via `PubSocket::bind_with_workers(addr, 1)`.
+**Trade-off accepted**: A fixed thread pool consumes N × (stack + runtime overhead) even with zero subscribers. For typical server deployments this is negligible; for embedded/constrained environments the worker count could be set to 1 via `PubSocket::bind_with_workers(addr, 1)`.
+
+### What replaced it
+
+1.0 has no worker threads and no `bind_with_workers`. A PUB socket is one
+multiplexer on the thread that owns it, like every other socket: `send` encodes
+the message once and hands the same bytes to each subscriber's writer. The pool
+bought parallel writes at the price of a channel hop and a thread wakeup per
+message, and of a socket that behaved unlike the rest. With write coalescing on,
+the single-threaded PUB passes the 0.4 pool on fan-out and topic filtering; an
+eager PUB pays one send per subscriber per message and is slower than the pool
+was (see [performance.md](performance.md)). To use more cores, run several PUB
+sockets on threads of their own.
 
 ---
 
@@ -80,14 +93,22 @@ Use **`bytes::Bytes`**  -  an atomically reference-counted, immutable byte slice
 ### Rationale
 
 ```
-send(vec![Bytes::from("topic"), payload.clone()])
-         ↑                       ↑
-         O(1) clone (ref bump)   O(1) clone (ref bump)
+send([Bytes::from("topic"), payload.clone()])
+      ↑                      ↑
+      O(1) clone (ref bump)  O(1) clone (ref bump)
 ```
 
-- **Fan-out is free**: The PUB worker pool clones `Arc<Bytes>` to N workers  -  no heap allocation per worker.
+- **Fan-out is free**: A PUB encodes a message once and every subscriber's writer shares those bytes  -  no heap allocation per subscriber.
 - **recv is zero-copy**: The TCP reader fills a `BytesMut`, then calls `.freeze()` to get a `Bytes` without any copy.
 - **No lifetime complexity**: `Bytes` is `'static`  -  it can cross thread and task boundaries without borrow-checker gymnastics.
 - **`BytesMut` for mutable staging**: Protocol framing (ZMTP length prefix, flags) builds into `BytesMut` then freezes once complete.
 
 **Trade-off accepted**: Reference counting adds a 1-2 ns atomic increment per clone. At our message rates this is unmeasurable next to the I/O cost. For single-subscriber paths where no fan-out occurs, a copy would be marginally cheaper per message but would require a different type throughout the API, increasing complexity.
+
+### Refined in 1.0
+
+Frames are still `Bytes`, but a message is a `Msg`, not a `Vec<Bytes>`. A
+single frame of at most 64 bytes is kept inline in the `Msg` and copied: at
+that size the copy costs less than the reference count, and a small message
+then needs no allocation at all. Larger frames and multipart messages share
+their bytes as described above.
