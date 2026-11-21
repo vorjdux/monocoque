@@ -508,6 +508,26 @@ draft = ["zmq", "monocoque-zmtp/draft"]
 name = "auth_backoff"
 required-features = ["zmq"]
 
+[[test]]
+name = "close_releases_connection"
+required-features = ["zmq"]
+
+[[test]]
+name = "coalesced_threshold_release"
+required-features = ["zmq"]
+
+[[test]]
+name = "command_ordering"
+required-features = ["zmq"]
+
+[[test]]
+name = "endpoint_wildcards"
+required-features = ["zmq"]
+
+[[test]]
+name = "peer_ttl"
+required-features = ["zmq"]
+
 [[example]]
 name = "atomics_probe"
 required-features = ["zmq"]

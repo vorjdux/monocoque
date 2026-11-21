@@ -27,7 +27,7 @@ const DEFAULT_SPIN: Duration = Duration::from_micros(30);
 /// sender feeding four workers gives each a batch every few dozen
 /// microseconds: at 20 µs each worker slept between them and the pool ran at
 /// half of 0.4's rate (5.4 M against 9.8 M msg/s at 64 B); at 100 µs it
-/// passed it (10.3 M).
+/// passed it (10.2 M).
 #[cfg(feature = "runtime-smol")]
 const DEFAULT_SPIN: Duration = Duration::from_micros(100);
 

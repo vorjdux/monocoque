@@ -45,11 +45,7 @@ cd monocoque
 cargo build --workspace
 ```
 
-The interop tests talk to a real libzmq, so to run those you also need the library installed. On Debian or Ubuntu:
-
-```
-sudo apt-get install -y libzmq3-dev
-```
+The interop tests talk to a real libzmq. The `zmq` crate they use builds it from source, so they need a C++ compiler and nothing else: a libzmq installed on the system is not used.
 
 ## Building and testing
 
@@ -63,7 +59,7 @@ cargo test --workspace --no-default-features --features runtime-tokio,zmq       
 cargo test --workspace --no-default-features --features runtime-smol,zmq         # smol
 ```
 
-Interop tests against libzmq, which need the library installed above:
+Interop tests against libzmq:
 
 ```
 scripts/run_interop_tests.sh

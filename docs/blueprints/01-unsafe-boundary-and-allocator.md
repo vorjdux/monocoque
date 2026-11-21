@@ -1,3 +1,6 @@
+> A historical design note from before 1.0. It names types and functions that
+> no longer exist; see [00-overview.md](00-overview.md).
+
 # 📄 File 2 - `01-unsafe-boundary-and-allocator.md`
 
 # Unsafe Boundary & Allocator

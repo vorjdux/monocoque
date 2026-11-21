@@ -457,7 +457,7 @@ Notes and limits:
   as their own iovec segments.
 - Skipped for **CURVE**-encrypted connections: the cipher rewrites each body into
   a fresh buffer regardless, so there is no copy to avoid.
-- Uses compio's `write_vectored_all` (`writev`). The further `IORING_OP_SEND_ZC`
+- Uses `write_vectored_all` (`writev`) on every backend. The further `IORING_OP_SEND_ZC`
   (kernel-buffer zero-copy) lever is not yet wired up.
 - One vectored write carries at most 128 KiB, or 32 KiB for an eager peer on
   tokio and smol. A write the socket buffer cannot take whole leaves the

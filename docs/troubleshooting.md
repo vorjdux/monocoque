@@ -142,11 +142,12 @@ mode) and no message is queued. Either:
 
 ## Runtime panics
 
-**Symptom**: A task panics with "BUG:" prefix.
+**Symptom**: A panic whose backtrace points into a `monocoque` crate.
 
-These are invariant violations in monocoque's internal state. Please file a bug
-report at https://github.com/vorjdux/monocoque/issues with:
-- The full panic message (including "BUG:" text)
+The library returns errors for anything a peer or the application can cause,
+so a panic from inside it is an invariant violation in its internal state.
+Please file a bug report at https://github.com/vorjdux/monocoque/issues with:
+- The full panic message and backtrace (`RUST_BACKTRACE=1`)
 - The socket type and configuration
 - A minimal reproducer if possible
 

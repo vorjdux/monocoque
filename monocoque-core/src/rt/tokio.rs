@@ -286,7 +286,7 @@ macro_rules! impl_shared_io {
         impl $ty {
             /// Read once into the room left in `first`, then at most `limit`
             /// bytes of `second`, setting `dry` as [`Self::read_noting`]
-            /// does. See [`crate::io::fill_read_two`].
+            /// does: all of `first` before any of `second`, as `readv` does.
             pub async fn read_two_noting(
                 &self,
                 first: bytes::BytesMut,

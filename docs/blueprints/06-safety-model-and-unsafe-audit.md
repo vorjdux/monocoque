@@ -1,3 +1,6 @@
+> A historical design note from before 1.0. It names types, functions and
+> files that no longer exist; see [00-overview.md](00-overview.md).
+
 # 📄 File 7 - `06-safety-model-and-unsafe-audit.md`
 
 # Safety Model & Unsafe Code Audit
