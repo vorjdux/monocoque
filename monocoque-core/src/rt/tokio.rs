@@ -106,7 +106,8 @@ impl LocalRuntime {
     /// The default is 30 µs, or none when the thread may run on one CPU only.
     /// `Duration::ZERO` turns the looking off, which is the faster setting
     /// when the peer's thread shares no L3 cache with this one, or when this
-    /// thread is pinned to one CPU inside a process that has several.
+    /// thread is pinned to one CPU inside a process that has several. A
+    /// budget above one second is lowered to one second.
     #[must_use]
     pub const fn with_spin(mut self, spin: Duration) -> Self {
         self.spin = Some(spin);

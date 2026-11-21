@@ -869,7 +869,7 @@ impl SocketOptions {
     /// some CPU while traffic flows. `Duration::ZERO` turns that off, which
     /// is the faster setting when the peer's thread shares no L3 cache with
     /// this one, or when this thread is pinned to one CPU inside a process
-    /// that has several.
+    /// that has several. A budget above one second is lowered to one second.
     ///
     /// `LocalRuntime::with_spin` sets it for a whole runtime on every backend,
     /// and this option then overrides it for one socket on tokio and smol. On

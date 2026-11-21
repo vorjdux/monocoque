@@ -36,16 +36,28 @@ const DEFAULT_SPIN: Duration = Duration::from_micros(100);
 /// What the socket or its runtime was asked for (zero disables), otherwise 50 µs
 /// on compio, 30 µs on tokio and 100 µs on smol, or none when this thread may
 /// run on one CPU only, where spinning only delays the peer it waits for.
+///
+/// A budget above [`MAX_SPIN`] is lowered to it.
 #[must_use]
 pub fn spin_budget(asked: Option<Duration>) -> Duration {
-    asked.unwrap_or_else(|| {
-        if single_cpu() {
-            Duration::ZERO
-        } else {
-            DEFAULT_SPIN
-        }
-    })
+    asked.map_or_else(
+        || {
+            if single_cpu() {
+                Duration::ZERO
+            } else {
+                DEFAULT_SPIN
+            }
+        },
+        |asked| asked.min(MAX_SPIN),
+    )
 }
+
+/// The longest spin.
+///
+/// Past this a thread is not looking before it sleeps, it is not sleeping,
+/// and the end of a spin is worked out by adding the budget to the clock,
+/// which a budget near `Duration::MAX` overflows.
+pub const MAX_SPIN: Duration = Duration::from_secs(1);
 
 /// `true` when this thread has one CPU to run on. On Linux the count honours
 /// the affinity mask and the cgroup CPU quota.
@@ -147,11 +159,13 @@ impl YieldSpin {
                 .budget
                 .insert(spin_budget(self.asked.or_else(|| RUNTIME_SPIN.get()))),
         };
+        // A socket that does not spin is recorded all the same: it is as
+        // much a sign that the thread is shared as one that does.
+        let me = std::ptr::from_ref(self).addr();
+        let another_waited = LAST_WAITER.replace(me) != me;
         if budget.is_zero() {
             return false;
         }
-        let me = std::ptr::from_ref(self).addr();
-        let another_waited = LAST_WAITER.replace(me) != me;
         if another_waited && self.deadline.take().is_some() {
             self.backoff.thread_is_shared();
             return false;
@@ -253,6 +267,37 @@ mod tests {
         );
         let cx = Context::from_waker(Waker::noop());
         assert!(!YieldSpin::new(Some(Duration::ZERO)).instead_of_park(&cx));
+    }
+
+    #[test]
+    fn a_budget_too_long_to_add_to_the_clock_is_lowered() {
+        assert_eq!(spin_budget(Some(Duration::MAX)), MAX_SPIN);
+        let cx = Context::from_waker(Waker::noop());
+        let mut forever = YieldSpin {
+            asked: Some(Duration::MAX),
+            budget: None,
+            deadline: None,
+            backoff: SpinBackoff::default(),
+        };
+        assert!(forever.instead_of_park(&cx), "spins, and does not overflow");
+    }
+
+    #[test]
+    fn a_socket_that_does_not_spin_still_ends_the_spin_of_another() {
+        let cx = Context::from_waker(Waker::noop());
+        let mut spinning = spinner();
+        let mut quiet = YieldSpin {
+            asked: None,
+            budget: Some(Duration::ZERO),
+            deadline: None,
+            backoff: SpinBackoff::default(),
+        };
+        assert!(spinning.instead_of_park(&cx), "begins to spin");
+        assert!(!quiet.instead_of_park(&cx), "never spins");
+        assert!(
+            !spinning.instead_of_park(&cx),
+            "saw the other wait and sleeps"
+        );
     }
 
     #[cfg(not(feature = "runtime-compio"))]

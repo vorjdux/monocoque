@@ -2,7 +2,7 @@
 //!
 //! See [`super`](crate::rt) for the facade contract this implements.
 
-use crate::spin::{SpinBackoff, spin_budget};
+use crate::spin::{MAX_SPIN, SpinBackoff, spin_budget};
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -132,10 +132,15 @@ impl LocalRuntime {
     /// The default is 50 µs, or none when the thread may run on one CPU only.
     /// `Duration::ZERO` turns the polling off, which is the faster setting
     /// when the peer's thread shares no L3 cache with this one, or when this
-    /// thread is pinned to one CPU inside a process that has several.
+    /// thread is pinned to one CPU inside a process that has several. A
+    /// budget above one second is lowered to one second.
     #[must_use]
     pub const fn with_spin(mut self, spin: Duration) -> Self {
-        self.spin = spin;
+        self.spin = if spin.as_nanos() > MAX_SPIN.as_nanos() {
+            MAX_SPIN
+        } else {
+            spin
+        };
         self
     }
 
