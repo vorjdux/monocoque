@@ -77,6 +77,12 @@ protocol behaviour RFC by RFC and where libzmq departs from the text.
 - `send_ref(&Msg)` on PUB, XPUB and RADIO publishes a message the caller
   keeps, without cloning it. Publishing only reads the message; for a
   two-frame topic message the clone cost more than the publish.
+- A peer whose READY names an incompatible socket type is sent an ERROR
+  command before the connection is closed, as RFC 23 recommends.
+- A routing ID that is empty or longer than 255 bytes is refused, as libzmq
+  refuses it: `bind`, `connect` and `attach` fail with `InvalidRoutingId`.
+  `SocketOptions::validate_routing_id` is that check;
+  `validate_router_identity` is gone.
 
 ### Fixed
 

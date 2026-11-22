@@ -528,6 +528,10 @@ required-features = ["zmq"]
 name = "peer_ttl"
 required-features = ["zmq"]
 
+[[test]]
+name = "socket_type_refused"
+required-features = ["zmq"]
+
 [[example]]
 name = "atomics_probe"
 required-features = ["zmq"]

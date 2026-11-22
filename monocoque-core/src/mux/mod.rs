@@ -54,6 +54,14 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
+/// Refuse a routing ID that libzmq would refuse, before it reaches a peer.
+fn check_routing_id(options: &SocketOptions) -> Result<()> {
+    options
+        .routing_id
+        .as_deref()
+        .map_or(Ok(()), SocketOptions::validate_routing_id)
+}
+
 /// The byte threshold below which a wire peer holds writes, if coalescing.
 fn coalesce_threshold(options: &SocketOptions) -> Option<usize> {
     options
@@ -1345,6 +1353,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
     pub async fn bind(this: &Shared<P, H>, endpoint: &str) -> Result<Endpoint> {
         let endpoint = Endpoint::parse(endpoint)?;
         let options = Rc::clone(&this.borrow().options);
+        check_routing_id(&options)?;
         if let Endpoint::Inproc(name) = &endpoint {
             let info = {
                 let core = this.borrow();
@@ -1401,6 +1410,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
     pub fn connect(this: &Shared<P, H>, endpoint: &str) -> Result<()> {
         let given = endpoint;
         let endpoint = Endpoint::parse(endpoint)?;
+        check_routing_id(&this.borrow().options)?;
         // `*` names every interface or a port the OS picks: somewhere to
         // listen, not somewhere to dial. libzmq turns it away too.
         if let (Endpoint::Tcp(addr), Some(text)) = (&endpoint, given.strip_prefix("tcp://"))
@@ -1516,6 +1526,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             let core = this.borrow();
             (Rc::clone(&core.cfg), Rc::clone(&core.options))
         };
+        check_routing_id(&options)?;
         stream.configure(&options)?;
         let stream = Rc::new(stream);
         let (codec, info) = P::handshake(cfg, options, Rc::clone(&stream), false).await?;
@@ -1532,6 +1543,7 @@ impl<P: Protocol, H: Hooks> SocketCore<P, H> {
             let core = this.borrow();
             (Rc::clone(&core.cfg), Rc::clone(&core.options))
         };
+        check_routing_id(&options)?;
         stream.configure(&options)?;
         let stream = Rc::new(stream);
         let (codec, info) = P::handshake(cfg, options, Rc::clone(&stream), true).await?;

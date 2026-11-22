@@ -43,8 +43,10 @@ CANCEL as commands (3.1), JOIN/LEAVE for RADIO/DISH.
 - **READY size.** The RFC sets no limit. monocoque refuses a READY larger than
   512 bytes during the handshake. Socket-Type, Identity and a few custom
   properties fit; a peer advertising many large properties is refused.
-- **Socket-type pairs.** Mismatched pairs are refused with an ERROR command, as
-  the RFC requires and as libzmq does.
+- **Socket-type pairs.** Mismatched pairs are refused once the peer's READY
+  shows its type: an ERROR command is sent, as the RFC recommends, and the
+  connection is closed. libzmq 4.3.5 closes without the ERROR. Under CURVE
+  and with a ZMTP 1.0 or 2.0 peer the connection is closed without one.
 - **Routing ids.** A ROUTER peer's Identity property of 1 to 255 bytes is used
   as its routing id; an empty one gets a generated 5-byte id starting with
   `0x00`, as in libzmq. An id from the peer that starts with `0x00` is
@@ -107,7 +109,7 @@ peer's IP address in the Address field for TCP connections, and 200/300/400/500
 status codes.
 
 - The handlers use native `async fn`, so a ZAP handler may do I/O.
-- **Beyond libzmq:** after two failed authentications in a row from one IP,
+- **Beyond libzmq:** from the third failed authentication in a row from one IP,
   each new connection from it waits before its handshake starts, from 100 ms
   doubling up to 10 s. A success clears the address, and one quiet for a
   minute is forgotten. libzmq has no such delay.

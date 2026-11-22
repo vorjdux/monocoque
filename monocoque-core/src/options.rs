@@ -889,6 +889,10 @@ impl SocketOptions {
 
     /// Set socket routing ID / identity.
     ///
+    /// It must be 1 to 255 bytes, as in libzmq. The value is stored as given
+    /// and checked when the socket is used: `bind`, `connect` and `attach`
+    /// fail with `InvalidRoutingId` otherwise.
+    ///
     /// # Examples
     ///
     /// ```
@@ -1234,45 +1238,22 @@ impl SocketOptions {
         matches!(self.send_timeout, Some(d) if d.is_zero())
     }
 
-    /// Validate routing ID for use with ROUTER sockets.
+    /// Check a routing ID the way libzmq's `ZMQ_ROUTING_ID` does: 1 to 255
+    /// bytes.
     ///
-    /// ROUTER socket identities must:
-    /// - Be 1-255 bytes long
-    /// - Not start with null byte (0x00) which is reserved for auto-generated IDs
-    pub fn validate_router_identity(id: &[u8]) -> std::io::Result<()> {
-        if id.is_empty() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "routing ID cannot be empty",
-            ));
-        }
-
-        if id.len() > 255 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("routing ID cannot exceed 255 bytes (got {})", id.len()),
-            ));
-        }
-
-        if id[0] == 0x00 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "routing ID cannot start with null byte (reserved for auto-generated IDs)",
-            ));
-        }
-
-        Ok(())
-    }
-
-    /// Validate general routing ID (for DEALER, REQ, REP).
+    /// `bind`, `connect` and `attach` apply this to
+    /// [`routing_id`](Self::routing_id) and fail with
+    /// `InvalidRoutingId`. A first byte of zero is accepted
+    /// here, but a ROUTER that receives such an identity replaces it with one
+    /// of its own.
     ///
-    /// Less strict than ROUTER identities - allows null prefix.
-    pub fn validate_routing_id(id: &[u8]) -> std::io::Result<()> {
-        if id.len() > 255 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("routing ID cannot exceed 255 bytes (got {})", id.len()),
-            ));
+    /// # Errors
+    ///
+    /// [`InvalidRoutingId`](crate::error::MonocoqueError::InvalidRoutingId) when `id` is empty or longer than
+    /// 255 bytes.
+    pub const fn validate_routing_id(id: &[u8]) -> Result<(), crate::error::MonocoqueError> {
+        if id.is_empty() || id.len() > 255 {
+            return Err(crate::error::MonocoqueError::InvalidRoutingId);
         }
         Ok(())
     }
@@ -1390,28 +1371,12 @@ mod tests {
 
     #[test]
     fn test_routing_id_validation() {
-        // Valid ROUTER identities
-        assert!(SocketOptions::validate_router_identity(b"client-001").is_ok());
-        assert!(SocketOptions::validate_router_identity(&[0x01; 255]).is_ok());
+        assert!(SocketOptions::validate_routing_id(b"client-001").is_ok());
+        assert!(SocketOptions::validate_routing_id(&[0x01; 255]).is_ok());
+        // libzmq accepts a leading zero byte too.
+        assert!(SocketOptions::validate_routing_id(b"\x00client").is_ok());
 
-        // Invalid: empty
-        assert!(SocketOptions::validate_router_identity(b"").is_err());
-
-        // Invalid: too long
-        assert!(SocketOptions::validate_router_identity(&[0x01; 256]).is_err());
-
-        // Invalid: starts with null byte
-        assert!(SocketOptions::validate_router_identity(b"\x00client").is_err());
-    }
-
-    #[test]
-    fn test_general_routing_id_validation() {
-        // Valid
-        assert!(SocketOptions::validate_routing_id(b"").is_ok()); // Empty allowed
-        assert!(SocketOptions::validate_routing_id(b"\x00client").is_ok()); // Null prefix allowed
-        assert!(SocketOptions::validate_routing_id(&[0x00; 255]).is_ok());
-
-        // Invalid: too long
+        assert!(SocketOptions::validate_routing_id(b"").is_err());
         assert!(SocketOptions::validate_routing_id(&[0x01; 256]).is_err());
     }
 

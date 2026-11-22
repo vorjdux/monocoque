@@ -423,7 +423,19 @@ where
     // Parse READY command
     let ready_bytes = Bytes::from(body_buf);
     let ready = parse_ready_metadata(&ready_bytes)?;
-    check_socket_type_compatibility(local_socket_type, ready.socket_type)?;
+    if let Err(refused) = check_socket_type_compatibility(local_socket_type, ready.socket_type) {
+        // RFC 23: a peer that refuses a socket type should say so with an
+        // ERROR command before it disconnects. The connection closes whether
+        // or not this write succeeds.
+        let _ = send(
+            stream,
+            encode_frame(FLAG_COMMAND, &Bytes::from_static(SOCKET_TYPE_REFUSED)),
+            timeout,
+            "ERROR command",
+        )
+        .await;
+        return Err(refused);
+    }
 
     debug!(
         "[HANDSHAKE] Handshake complete! Peer is {}",
@@ -659,6 +671,10 @@ fn build_greeting_with_mechanism(
 
     b.freeze()
 }
+
+/// The body of the ERROR command that refuses a peer's socket type: the
+/// command name, then the reason with its length (24) in one byte.
+const SOCKET_TYPE_REFUSED: &[u8] = b"\x05ERROR\x18Incompatible socket type";
 
 /// Longest identity a legacy peer may announce.
 const MAX_IDENTITY: usize = 255;

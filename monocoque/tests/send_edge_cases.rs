@@ -1,7 +1,7 @@
 //! Sends that put nothing on the wire.
 
 use monocoque::rt::LocalRuntime;
-use monocoque::zmq::{DealerSocket, Msg, RouterSocket, SocketOptions};
+use monocoque::zmq::{DealerSocket, MonocoqueError, Msg, RouterSocket, SocketOptions};
 use std::time::{Duration, Instant};
 
 fn opts() -> SocketOptions {
@@ -97,6 +97,32 @@ fn disconnect_during_a_handshake_closes_the_connection() {
         closed_after < Duration::from_millis(900),
         "the connection stayed open for {closed_after:?} after the disconnect"
     );
+}
+
+/// A routing ID libzmq would refuse (empty, or longer than 255 bytes) never
+/// reaches a peer: the socket refuses to bind or connect with it.
+#[test]
+fn a_routing_id_of_the_wrong_length_is_refused() {
+    LocalRuntime::new().unwrap().block_on(async {
+        for len in [0, 256] {
+            let options = opts().with_routing_id(vec![1u8; len].into());
+            let mut dealer = DealerSocket::with_options(options.clone());
+            let connected = dealer.connect("tcp://127.0.0.1:5555").await;
+            assert!(
+                matches!(connected, Err(MonocoqueError::InvalidRoutingId)),
+                "connect with a {len}-byte routing ID gave {connected:?}"
+            );
+            let mut dealer = DealerSocket::with_options(options);
+            let bound = dealer.bind("tcp://127.0.0.1:0").await;
+            assert!(
+                matches!(bound, Err(MonocoqueError::InvalidRoutingId)),
+                "bind with a {len}-byte routing ID gave {bound:?}"
+            );
+        }
+
+        let mut dealer = DealerSocket::with_options(opts().with_routing_id(vec![1u8; 255].into()));
+        dealer.bind("tcp://127.0.0.1:0").await.unwrap();
+    });
 }
 
 /// An endpoint written with a host name is disconnected by the same text.

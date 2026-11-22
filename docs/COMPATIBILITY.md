@@ -20,14 +20,14 @@ All standard socket types are implemented: DEALER, ROUTER, PUB, SUB, REQ, REP, P
 - Heartbeating - ZMTP 3.1 PING/PONG (RFC 37), opt-in with `heartbeat_ivl`
 - ROUTER fair-queuing and routing IDs
 - PUB/SUB topic filtering
-- Automatic reconnection, at a constant interval by default and with exponential backoff when `reconnect_ivl_max` is set
+- Automatic reconnection, at a constant, jittered interval by default and with exponential backoff when `reconnect_ivl_max` is set
 - Socket options through `SocketOptions`, covering most of what `zmq_setsockopt` offers. Some libzmq options are not implemented; [MIGRATION.md](MIGRATION.md) lists them
 
 ## Behavioral differences from libzmq
 
 Monocoque is async-first. There is no blocking `send`/`recv` API; all socket operations are `async fn`. This is a design choice, not a limitation - it eliminates the need for thread-per-connection and generally improves performance under load.
 
-Each socket type is its own Rust type, so only the operations valid for it exist (a PUB socket has no `recv`, for example). Pairing is checked during the handshake, as in libzmq: connecting PUB to PUB is refused with an ERROR command.
+Each socket type is its own Rust type, so only the operations valid for it exist (a PUB socket has no `recv`, for example). Pairing is checked during the handshake, as in libzmq: connecting PUB to PUB is refused with an ERROR command and the connection is closed.
 
 The wire protocol is byte-for-byte compatible. Framing, handshake, and READY command formats match RFC 23/ZMTP exactly, so Monocoque peers are indistinguishable from libzmq peers on the wire.
 

@@ -19,8 +19,8 @@ dealer.connect("tcp://127.0.0.1:5555").await?;
 The ROUTER then sees `"worker-001"` as the routing key for that peer.
 
 Identity constraints:
-- 1 to 255 bytes
-- Cannot start with a null byte (`0x00`), which is reserved for auto-generated identities
+- 1 to 255 bytes, as in libzmq. `with_routing_id` stores the value as given, and `bind`, `connect` and `attach` fail with `InvalidRoutingId` for an empty or longer one
+- Should not start with a null byte (`0x00`), which is reserved for auto-generated identities. It is accepted, as libzmq accepts it, but a ROUTER replaces an identity that starts with `0x00` with a generated one
 
 ---
 
