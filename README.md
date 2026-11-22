@@ -250,7 +250,7 @@ cargo run --example runtime_backends --no-default-features --features runtime-sm
 
 This section is the inventory of `unsafe` in the library code (the `src/` trees of the three published crates; tests and examples are not covered). `CONTRIBUTING.md` and the crate docs point here rather than restating it. It lives in two files of `monocoque-core`:
 
-- **Owned-buffer reads.** `monocoque-core/src/io.rs`: `fill_read` holds the one `set_len` call, declaring how many bytes a read initialized in the buffer it was handed. Miri checks it in CI.
+- **Owned-buffer reads.** `monocoque-core/src/io.rs`: `fill_read` and, on tokio and smol, `fill_read_two` hold the `set_len` calls, declaring how many bytes a read initialized in the buffers it was handed. Miri checks it in CI.
 - **Raw-fd socket calls.** `monocoque-core/src/tcp.rs` does two things with a stream's raw fd (or raw socket on Windows). The option setters (`enable_tcp_nodelay`, `configure_tos`, `configure_socket_buffers`, `configure_tcp_keepalive`) borrow it as a `socket2::Socket` to set the option and then forget the wrapper, so the fd is never closed. On Linux three functions call `libc` directly: `unacked_bytes` (`ioctl(TIOCOUTQ)`), `segment_size` (`getsockopt(TCP_MAXSEG)`) and `send_now` (a non-blocking `send`).
 
 The rest of `monocoque-core/src`, and all of `monocoque-zmtp/src` and `monocoque/src`, is safe Rust. `monocoque-core` denies `unsafe_code` at the crate root and opts back in per module, so a new `unsafe` block outside `io.rs` and `tcp.rs` fails to compile there.

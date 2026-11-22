@@ -59,11 +59,10 @@ cargo test --workspace --no-default-features --features runtime-tokio,zmq       
 cargo test --workspace --no-default-features --features runtime-smol,zmq         # smol
 ```
 
-Interop tests against libzmq:
-
-```
-scripts/run_interop_tests.sh
-```
+The interop tests against libzmq are part of the test runs above (the
+`interop_*` tests). `scripts/run_interop_tests.sh` runs three interop examples
+as a quick check, and `interop_tests/run_all_tests.sh` runs the pyzmq suite;
+see [docs/INTEROP_TESTING.md](docs/INTEROP_TESTING.md).
 
 Benchmarks, built on criterion:
 
@@ -92,7 +91,7 @@ A pull request needs to pass all of these, so it saves a round trip to run them 
   `cargo clippy --workspace --all-targets --no-default-features --features runtime-tokio,zmq -- -D warnings`, and
   `cargo clippy --workspace --all-targets --no-default-features --features runtime-smol,zmq -- -D warnings`
 - Tests on all three backends (see above)
-- A build on the MSRV (1.95): `cargo build --workspace`
+- A build on the MSRV (1.95), per backend: `cargo build --workspace --features zmq` and the tokio and smol equivalents
 - Docs build with no warnings: `cargo doc --no-deps --workspace --features zmq`
 - Supply-chain checks against the committed lock: `cargo audit` and `cargo deny check`
 - Fuzz targets build on nightly

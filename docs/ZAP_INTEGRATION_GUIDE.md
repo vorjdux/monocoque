@@ -51,7 +51,7 @@ Once it is running, every PLAIN client and every CURVE client is put to it, whet
 
 `ZapResponse::success` accepts the connection. The second argument is a user ID string that monocoque makes available to the application layer (useful for logging and per-connection authorization).
 
-`ZapResponse::failure` rejects the connection. The second argument is a reason string logged internally; it is not sent to the client. After two failures in a row from one IP, the server delays that address's next handshakes (see "Repeated failures" in [SECURITY_GUIDE.md](SECURITY_GUIDE.md)).
+`ZapResponse::failure` rejects the connection. The second argument is a reason string logged internally; it is not sent to the client. From the third failure in a row from one IP, the server delays that address's next handshakes (see "Repeated failures" in [SECURITY_GUIDE.md](SECURITY_GUIDE.md)).
 
 For CURVE, the client's 32-byte public key is in `req.credentials[0]`. A typical allowlist check:
 

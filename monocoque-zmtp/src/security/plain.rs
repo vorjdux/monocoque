@@ -155,7 +155,7 @@ pub trait PlainAuthHandler {
     /// * `username` - Plaintext username
     /// * `password` - Plaintext password
     /// * `domain` - ZAP security domain
-    /// * `address` - Peer address (IP:port)
+    /// * `address` - Peer IP address, without the port
     ///
     /// # Returns
     /// * `Ok(user_id)` - Authentication successful, returns user ID

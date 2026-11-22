@@ -4,14 +4,15 @@
 
 Monocoque is a high-performance, Rust-native ZeroMQ-compatible messaging runtime. It runs on `io_uring` (via `compio`) by default, with optional tokio and smol backends selected by the `runtime-tokio` and `runtime-smol` features.
 
-Blueprints covering design decisions live in `docs/blueprints/`. `docs/MIGRATION.md` lists every API that changed from 0.4.
+`docs/blueprints/` holds historical design notes from before 1.0; they name things that no longer exist. `docs/MIGRATION.md` lists every API that changed from 0.4.
 
 ## Core Architecture
 
 Start here:
 
-- `docs/blueprints/00-overview.md` - System architecture
-- `docs/blueprints/06-safety-model-and-unsafe-audit.md` - Safety model
+- `docs/USER_GUIDE.md` - The API and how the sockets behave
+- `monocoque-core/README.md` - The multiplexer every socket runs on
+- `README.md`, Safety section - Where the unsafe code is
 
 Every socket is one multiplexer (`SocketCore`, in `monocoque-core/src/mux/`) over any number of peers. A socket is `!Send` and runs on the thread that created it.
 
@@ -78,7 +79,7 @@ fn main() -> monocoque::zmq::Result<()> {
 ### Testing Strategy
 
 1. **Unit tests**: deterministic logic in each crate
-2. **Interop tests**: against real `libzmq` and pyzmq peers (`scripts/run_interop_tests.sh`)
+2. **Interop tests**: against real `libzmq` (`monocoque/tests/interop_*.rs`) and pyzmq peers (`interop_tests/run_all_tests.sh`)
 3. **Stress and bound tests**: reconnection churn, fan-out, memory and wakeup bounds (`monocoque/tests/`)
 4. **Fuzzing**: `monocoque-fuzz/`
 
@@ -137,4 +138,4 @@ monocoque-core/            # Protocol-agnostic kernel (internal)
 
 ## CHANGELOG Maintenance
 
-Update `CHANGELOG.md` when completing features, fixing bugs, making API changes, or improving performance. All entries go under `[Unreleased]` until publication. Use clear, user-facing language, not internal implementation details.
+Update `CHANGELOG.md` when completing features, fixing bugs, making API changes, or improving performance. All entries go under the top, unreleased version section until publication. Use clear, user-facing language, not internal implementation details.

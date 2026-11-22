@@ -20,7 +20,8 @@ echo "OK: libzmq $(python3 -c 'import zmq; print(zmq.zmq_version())'), CURVE $(p
 echo "[2/3] Building the Rust peers..."
 cd "$(dirname "$0")/.."
 cargo build -q -p monocoque-rs --features zmq \
-    --example simple_rep_server --example simple_req_client --example curve_echo
+    --example simple_rep_server --example simple_req_client \
+    --example sub_client --example pub_server --example curve_echo
 
 echo "[3/3] Running the suite..."
 cd interop_tests

@@ -246,7 +246,7 @@ whether the next one would return without waiting.
 
 ### Send does its work when called
 
-`send` on PUSH, DEALER and PAIR, and `send` and `send_ref` on PUB, XPUB and
+`send` on PUSH, DEALER, ROUTER and PAIR, and `send` and `send_ref` on PUB, XPUB and
 RADIO, do their work when called rather than when the returned future is first
 polled. A future that is dropped without being polled has still sent. Code
 that built a send future and dropped it to cancel the send, for example the

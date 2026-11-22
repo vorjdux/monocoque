@@ -23,7 +23,9 @@
 3. **Wrong port / firewall**: Verify the port with `ss -tlnp | grep <port>`.
 
 4. **HWM reached**: If the sender's send HWM is reached it waits (or fails with
-   `Again`/`TimedOut` under a send timeout). Increase HWM or add a receiver.
+   `Again`/`TimedOut` under a send timeout). PUB, XPUB and ROUTER do not wait:
+   they drop the message for the peer that is full (ROUTER fails with `Again`
+   instead when `router_mandatory` is set). Increase HWM or add a receiver.
 
 ---
 
@@ -63,9 +65,10 @@ becomes a connection, so `connect()` itself still returns `Ok`. On the
 connecting side the socket monitor reports each failed handshake as
 `SocketEvent::ConnectFailed`, with the reason as text, and the endpoint is
 redialed after the reconnect interval. There is no separate handshake event.
-The accepting side gets no monitor event for a handshake that fails; it only
-logs the failure at debug level (`RUST_LOG=monocoque_core=debug`, with a
-tracing subscriber installed).
+The accepting side gets no monitor event for a handshake that fails. With a
+tracing subscriber installed, `monocoque_zmtp` logs the reason at warn level
+on either side, and `monocoque_core` adds a `handshake failed` line at debug
+level.
 
 1. **CURVE key mismatch**: The client's `curve_serverkey` must exactly match the
    public key the server passes to `with_curve_keypair` (32 raw bytes, not
@@ -82,8 +85,8 @@ tracing subscriber installed).
 4. **Mechanism mismatch**: Both sides must agree on a mechanism. A CURVE client
    cannot connect to a PLAIN server.
 
-5. **Backoff after repeated failures**: After two failed authentications in a
-   row from one IP, the server delays each new handshake from that address
+5. **Backoff after repeated failures**: From the third failed authentication
+   in a row from one IP, the server delays each new handshake from that address
    (100 ms doubling up to 10 s). Fix the credentials and the delay clears on the
    next success. See "Repeated failures" in [SECURITY_GUIDE.md](SECURITY_GUIDE.md).
 

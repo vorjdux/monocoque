@@ -32,7 +32,7 @@ cargo +nightly fuzz run --fuzz-dir monocoque-fuzz fuzz_greeting -- -max_total_ti
 cargo +nightly fuzz cmin --fuzz-dir monocoque-fuzz fuzz_greeting
 ```
 
-`corpus/` holds committed seed inputs for each target. `artifacts/` (crash
+`corpus/` holds committed seed inputs for six of the nine targets (the two CURVE targets and `fuzz_security_plain` start empty). `artifacts/` (crash
 reproducers) and `coverage/` are gitignored. See `docs/FUZZING.md` for triage.
 
 ## CI

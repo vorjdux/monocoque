@@ -58,7 +58,7 @@ scripts/run_fuzzer.sh 30 fuzz_decoder fuzz_greeting
 
 ## Corpus and artifacts
 
-`monocoque-fuzz/corpus/<target>/` holds committed seed inputs, so a fresh run
+`monocoque-fuzz/corpus/<target>/` holds committed seed inputs for six of the nine targets, so a fresh run
 starts from useful cases. A run adds the inputs it finds there; commit only the
 ones worth keeping, after minimizing:
 

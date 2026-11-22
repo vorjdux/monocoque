@@ -15,7 +15,8 @@ their CURVE cases and CURVE interop is covered here.
 | `test_curve_interop.py` | CURVE both ways (client and server roles), multipart with an empty frame and a 70 KB frame, heartbeats inside the encrypted stream, custom handshake properties both ways |
 
 The Monocoque side of each test is one of the examples `simple_rep_server`,
-`simple_req_client` and `curve_echo`, run from `target/debug/examples`.
+`simple_req_client`, `sub_client`, `pub_server` and `curve_echo`, run from
+`target/debug/examples`.
 
 ## Running
 
@@ -24,12 +25,13 @@ pip install pyzmq pytest pytest-timeout
 interop_tests/run_all_tests.sh
 ```
 
-The script builds the three examples and runs the suite. To run one file by
+The script builds the five examples and runs the suite. To run one file by
 hand, build the examples first:
 
 ```bash
 cargo build -p monocoque-rs --features zmq \
-    --example simple_rep_server --example simple_req_client --example curve_echo
+    --example simple_rep_server --example simple_req_client \
+    --example sub_client --example pub_server --example curve_echo
 cd interop_tests && python3 -m pytest -v test_curve_interop.py
 ```
 

@@ -10,7 +10,7 @@ A five-minute guide to sending your first message with Monocoque.
   table)
 - **Three runtimes** - io_uring via compio (default), or epoll via tokio, or async-io via smol, same API
 - **Pure Rust** - no C dependencies, full async/await
-- **Memory safe** - unsafe is confined to one owned-buffer read helper (`core::io::fill_read`) and the raw-socket calls in `core::tcp`
+- **Memory safe** - unsafe is confined to the owned-buffer read helpers in `core::io` (`fill_read` and `fill_read_two`) and the raw-socket calls in `core::tcp`
 
 ---
 
@@ -71,7 +71,8 @@ note that the tokio backend follows the same thread-per-core model as compio,
 so run it on a current-thread runtime inside a `LocalSet`:
 
 ```rust,no_run
-# use monocoque::zmq::ReqSocket;
+use monocoque::zmq::ReqSocket;
+
 fn main() -> monocoque::zmq::Result<()> {
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     let local = tokio::task::LocalSet::new();

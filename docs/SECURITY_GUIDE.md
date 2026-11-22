@@ -175,7 +175,7 @@ See `examples/zap_server_demo.rs` for a ZAP handler and `examples/authenticated_
 
 ### Repeated failures
 
-A server slows down an address that keeps failing authentication. After two failures in a row from one IP, each new connection from it waits before its handshake starts: 100 ms, doubling with each further failure, up to 10 s. A successful login clears the address, and one that stays quiet for a minute is forgotten. IPC peers have no address and are not delayed. This bounds online password guessing per address; it is not a substitute for rate limiting at the network edge.
+A server slows down an address that keeps failing authentication. The first two failures in a row from one IP cost nothing. From the third on, each new connection from it waits before its handshake starts: 100 ms, doubling with each further failure, up to 10 s. A successful login clears the address, and one that stays quiet for a minute is forgotten. IPC peers have no address and are not delayed. This bounds online password guessing per address; it is not a substitute for rate limiting at the network edge.
 
 ## What each mechanism protects against
 
@@ -198,7 +198,7 @@ Suggested setups:
 
 ## Troubleshooting
 
-**Handshake timeout** - client and server are using different security mechanisms. Both sides must agree: if the server uses CURVE, the client must provide a keypair and the server's public key.
+**Handshake fails and sends time out** - client and server are using different security mechanisms. The mismatch is seen right after the greeting and the connection is closed, then redialed. Both sides must agree: if the server uses CURVE, the client must provide a keypair and the server's public key.
 
 **Authentication always fails with PLAIN** - credentials are case-sensitive. Check that the handler is configured before the server socket starts accepting.
 

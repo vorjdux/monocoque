@@ -8,7 +8,7 @@ Monocoque includes four mechanisms to keep sockets well-behaved under load and a
 
 Every socket keeps a bounded queue per peer in each direction. `send_hwm` caps the messages queued to a peer; `recv_hwm` caps the complete messages waiting to be received from it, and a peer whose receive queue is full stops being read, so a slow consumer backpressures its own peer through the kernel. Both default to 1000 messages; `0` means unbounded, as in libzmq. inproc peers are bounded the same way in each direction.
 
-When the send queue is full, `send` waits for room, bounded by `send_timeout`: with no timeout it waits, with `Duration::ZERO` it fails at once with `Again`, otherwise it fails with `TimedOut` when the timeout elapses. PUB and XPUB drop the message for a subscriber that is at its HWM instead of waiting.
+When the send queue is full, `send` waits for room, bounded by `send_timeout`: with no timeout it waits, with `Duration::ZERO` it fails at once with `Again`, otherwise it fails with `TimedOut` when the timeout elapses. PUB and XPUB drop the message for a subscriber that is at its HWM instead of waiting. ROUTER does not wait either: it drops the message for a peer at its HWM, or fails with `Again` when `router_mandatory` is set.
 
 ```rust
 let options = SocketOptions::default()
@@ -138,4 +138,4 @@ Every socket exposes a few methods for observing its state:
 - `last_endpoint()` - the endpoint most recently bound (`ZMQ_LAST_ENDPOINT`)
 - `has_message()` - whether a receive would complete without waiting
 - `can_send()` - whether a send would complete without waiting
-- `monitor()` - a stream of connection events: bound, connected, accepted, disconnected, a failed connect attempt, a stalled peer. A handshake that fails on the connecting side is reported as `ConnectFailed`; the accepting side reports nothing for it and logs it at debug level.
+- `monitor()` - a stream of connection events: bound, connected, accepted, disconnected, a failed connect attempt, a stalled peer. A handshake that fails on the connecting side is reported as `ConnectFailed`; the accepting side reports nothing for it; the reason is logged at warn level by `monocoque_zmtp`.

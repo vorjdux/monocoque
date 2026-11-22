@@ -34,10 +34,10 @@ pub const MAX_READ_SIZE: usize = 64 * 1024;
 /// (`IoBufMut::as_uninit` is the whole buffer); a caller that appends passes
 /// a slice past what it holds, `buf.slice(len..)`.
 ///
-/// This is the one place in the workspace that calls `set_len` (from compio's
-/// `SetLen`). Every runtime backend routes its read path through here, so the
-/// single owned-buffer `unsafe` block lives behind one documented contract
-/// instead of a copy per adapter.
+/// This and [`fill_read_two`] are the only places in the workspace that call
+/// `set_len` (from compio's `SetLen`). Every runtime backend routes its read
+/// path through them, so the owned-buffer `unsafe` lives behind one
+/// documented contract instead of a copy per adapter.
 ///
 /// `read` is an async closure handed the buffer's storage as
 /// `&mut [MaybeUninit<u8>]`; it performs the actual read into the front of

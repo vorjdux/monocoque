@@ -79,7 +79,7 @@ fuzz_target!(|data: &[u8]| {
     // CurveMessageCipher::is_curve_message must classify arbitrary bytes as
     // curve-or-not without panicking regardless of the input. The message
     // decrypt path (CurveMessageCipher::decrypt_frame) is reachable only after
-    // a completed handshake and is not fuzzed by any target yet.
+    // a completed handshake; `fuzz_curve_decode` covers it.
     // -----------------------------------------------------------------------
     {
         use monocoque_zmtp::security::curve::{CurveMessageCipher, CurveServer};
