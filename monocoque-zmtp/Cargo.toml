@@ -6,12 +6,16 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Internal ZMTP 3.1 protocol implementation for Monocoque (use 'monocoque-rs' crate for public API)"
+description = "Internal ZMTP protocol implementation for Monocoque (use 'monocoque-rs' crate for public API)"
 keywords = ["zmq", "zeromq", "zmtp", "messaging", "protocol"]
 categories = ["network-programming"]
 homepage = "https://github.com/vorjdux/monocoque"
-documentation = "https://docs.rs/monocoque-rs"
+documentation = "https://docs.rs/monocoque-rs-zmtp"
 readme = "README.md"
+
+# Document the draft socket types too; docs.rs builds default features only.
+[package.metadata.docs.rs]
+features = ["draft"]
 
 [lib]
 name = "monocoque_zmtp"
@@ -27,25 +31,21 @@ runtime-compio = ["dep:compio", "monocoque-core/runtime-compio"]
 runtime-tokio = ["dep:tokio", "monocoque-core/runtime-tokio"]
 # Drive the same socket stack on smol instead.
 runtime-smol = ["dep:smol", "monocoque-core/runtime-smol"]
+# The draft socket types: CLIENT/SERVER, RADIO/DISH, SCATTER/GATHER, CHANNEL.
+draft = []
 
 [dependencies]
 bytes.workspace = true
 thiserror.workspace = true
-flume.workspace = true
 futures.workspace = true
 compio-io.workspace = true
 compio-buf.workspace = true
 compio = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 smol = { workspace = true, optional = true }
-monocoque-core = { version = "0.4.2", path = "../monocoque-core", package = "monocoque-rs-core", default-features = false }
+monocoque-core = { version = "1.0.0", path = "../monocoque-core", package = "monocoque-rs-core", default-features = false }
 smallvec.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
-socket2.workspace = true
-parking_lot.workspace = true
-num_cpus.workspace = true
-async-trait.workspace = true
 
 # Security / Cryptography
 x25519-dalek.workspace = true

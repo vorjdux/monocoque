@@ -1,229 +1,155 @@
-//! Steerable Proxy Example - Controllable Message Broker
+//! Steerable proxy: a broker controlled through a PAIR socket.
 //!
-//! This demonstrates a proxy that can be controlled via a control socket.
-//! Commands: PAUSE, RESUME, TERMINATE, STATISTICS
-//!
-//! # Architecture
+//! Commands: PAUSE, RESUME, STATISTICS, TERMINATE.
 //!
 //! ```text
-//! Clients (REQ) → ROUTER (frontend) ⟷ DEALER (backend) → Workers (REP)
-//!                          ↕
-//!                    Control Socket (PAIR)
-//!                          ↕
-//!                   Controller (sends commands)
+//! Client (REQ) -> ROUTER (frontend) <-> DEALER (backend) -> Workers (REP)
+//!                          |
+//!                  control socket (PAIR)
+//!                          |
+//!                     controller
 //! ```
 //!
-//! Run this example and use another terminal to send control commands.
+//! Use it when a broker has to be paused, measured or shut down cleanly from
+//! elsewhere in the program. A plain `proxy` only stops on an error.
+//!
+//! Everything runs in one process on inproc endpoints:
+//! ```bash
+//! cargo run --example proxy_steerable --features zmq
+//! ```
 
-use bytes::Bytes;
 use monocoque::rt::{self, LocalRuntime};
-use monocoque::zmq::proxy::proxy_steerable;
-use monocoque::zmq::{DealerSocket, ReqSocket, RouterSocket};
-use monocoque_zmtp::pair::PairSocket;
+use monocoque::zmq::proxy::{NoCapture, ProxyCommand, proxy_steerable};
+use monocoque::zmq::{
+    DealerSocket, MonocoqueError, PairSocket, RepSocket, ReqSocket, Result, RouterSocket,
+    SocketOptions,
+};
 use std::time::Duration;
-use tracing::{error, info};
 
-/// Simple worker that processes requests
-#[allow(clippy::future_not_send)]
-async fn worker(id: u32) -> std::io::Result<()> {
-    info!("[Worker-{}] Starting", id);
+const FRONTEND: &str = "inproc://steerable-frontend";
+const BACKEND: &str = "inproc://steerable-backend";
+const CONTROL: &str = "inproc://steerable-control";
 
-    // Small delay to let broker start
-    rt::sleep(Duration::from_millis(500)).await;
-
-    let mut socket = DealerSocket::connect("127.0.0.1:5556").await?;
-
-    loop {
-        if let Ok(Some(mut msg)) = socket.recv().await {
-            // Skip empty delimiter
-            if !msg.is_empty() && msg[0].is_empty() {
-                msg.remove(0);
-            }
-
-            if let Some(request) = msg.last() {
-                info!(
-                    "[Worker-{}] Processing: {}",
-                    id,
-                    String::from_utf8_lossy(request)
-                );
-            }
-
-            // Simulate work
-            rt::sleep(Duration::from_millis(100)).await;
-
-            // Send reply
-            let reply = format!("Processed by worker-{id}");
-            let mut response = vec![Bytes::new()];
-            response.extend(msg[..msg.len().saturating_sub(1)].to_vec());
-            response.push(Bytes::from(reply));
-
-            socket.send(response).await?;
-        }
-
-        rt::sleep(Duration::from_millis(10)).await;
-    }
-}
-
-/// Client that sends requests
-#[allow(clippy::future_not_send)]
-async fn client(id: u32, requests: u32) -> std::io::Result<()> {
-    info!("[Client-{}] Starting", id);
-
-    // Wait for broker and workers
-    rt::sleep(Duration::from_secs(1)).await;
-
-    let mut socket = ReqSocket::connect("127.0.0.1:5555").await?;
-
-    for i in 1..=requests {
-        let request = format!("Request {i} from client-{id}");
-        info!("[Client-{}] Sending: {}", id, request);
-
-        socket.send(vec![Bytes::from(request)]).await?;
-
-        if let Ok(Some(reply)) = socket.recv().await
-            && let Some(data) = reply.first()
-        {
-            info!(
-                "[Client-{}] Received: {}",
-                id,
-                String::from_utf8_lossy(data)
-            );
-        }
-
-        rt::sleep(Duration::from_millis(500)).await;
-    }
-
-    info!("[Client-{}] Done", id);
-    Ok(())
-}
-
-/// Broker with steerable proxy
-#[allow(clippy::future_not_send)]
-async fn broker() -> std::io::Result<()> {
-    info!("🚀 Starting Steerable Broker");
-
-    // Frontend for clients
-    let (_, mut frontend) = RouterSocket::bind("127.0.0.1:5555").await?;
-    info!("📡 Frontend (clients): 127.0.0.1:5555");
-
-    // Backend for workers
-    let (_, mut backend) = DealerSocket::bind("127.0.0.1:5556").await?;
-    info!("📡 Backend (workers): 127.0.0.1:5556");
-
-    // Control socket
-    let (_, mut control) = PairSocket::bind("127.0.0.1:5557").await?;
-    info!("🎮 Control socket: 127.0.0.1:5557");
-    info!("   Send commands: PAUSE, RESUME, TERMINATE, STATISTICS\n");
-
-    // Run steerable proxy
-    proxy_steerable(
-        &mut frontend,
-        &mut backend,
-        Option::<&mut DealerSocket>::None,
-        &mut control,
-    )
-    .await?;
-
-    Ok(())
-}
-
-/// Controller that sends commands to proxy
-#[allow(clippy::future_not_send)]
-async fn controller() -> std::io::Result<()> {
-    info!("[Controller] Starting");
-
-    // Wait for broker to start
-    rt::sleep(Duration::from_millis(800)).await;
-
-    let mut control = PairSocket::connect("127.0.0.1:5557").await?;
-
-    // Let some messages flow
-    rt::sleep(Duration::from_secs(3)).await;
-
-    // Pause proxy
-    info!("\n[Controller] 🛑 Sending PAUSE command\n");
-    control.send(vec![Bytes::from("PAUSE")]).await?;
-
-    // Wait while paused
-    rt::sleep(Duration::from_secs(2)).await;
-
-    // Resume proxy
-    info!("\n[Controller] ▶️  Sending RESUME command\n");
-    control.send(vec![Bytes::from("RESUME")]).await?;
-
-    // Let more messages flow
-    rt::sleep(Duration::from_secs(3)).await;
-
-    // Get statistics
-    info!("\n[Controller] 📊 Sending STATISTICS command\n");
-    control.send(vec![Bytes::from("STATISTICS")]).await?;
-
-    rt::sleep(Duration::from_secs(1)).await;
-
-    // Terminate proxy
-    info!("\n[Controller] 🛑 Sending TERMINATE command\n");
-    control.send(vec![Bytes::from("TERMINATE")]).await?;
-
-    Ok(())
-}
-
-fn main() -> std::io::Result<()> {
+fn main() -> Result<()> {
     LocalRuntime::new()?.block_on(async_main())
 }
 
-async fn async_main() -> std::io::Result<()> {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .with_target(false)
-        .init();
+async fn async_main() -> Result<()> {
+    // An inproc endpoint has to be bound before anything connects to it, so
+    // the broker's sockets are bound here and then handed to its task.
+    let mut frontend = RouterSocket::new();
+    frontend.bind(FRONTEND).await?;
+    let mut backend = DealerSocket::new();
+    backend.bind(BACKEND).await?;
+    let mut broker_control = PairSocket::new();
+    broker_control.bind(CONTROL).await?;
 
-    info!("🎬 Steerable Proxy Demo");
-    info!("========================");
-    info!("Demonstrates:");
-    info!("  • Steerable proxy with control socket");
-    info!("  • PAUSE/RESUME/TERMINATE commands");
-    info!("  • STATISTICS reporting");
-    info!("========================\n");
-
-    // Start broker (steerable proxy)
-    rt::spawn_detached(async {
-        if let Err(e) = broker().await {
-            error!("Broker: {}", e);
-        }
+    let broker = rt::spawn(async move {
+        // Returns `Ok` once TERMINATE arrives on the control socket.
+        proxy_steerable(
+            &mut frontend,
+            &mut backend,
+            None::<&mut NoCapture>,
+            &mut broker_control,
+        )
+        .await
     });
 
-    rt::sleep(Duration::from_millis(500)).await;
+    for id in 1..=2 {
+        rt::spawn_detached(async move {
+            if let Err(e) = worker(id).await {
+                eprintln!("[worker-{id}] stopped: {e}");
+            }
+        });
+    }
 
-    // Start workers
-    rt::spawn_detached(async {
-        let _ = worker(1).await;
-    });
-    rt::spawn_detached(async {
-        let _ = worker(2).await;
-    });
+    let mut control = PairSocket::with_options(
+        SocketOptions::default().with_recv_timeout(Duration::from_secs(2)),
+    );
+    control.connect(CONTROL).await?;
+    // A relaxed REQ may send again without waiting for the reply it is owed,
+    // and correlation lets it discard a late reply to an abandoned request.
+    let mut req = ReqSocket::with_options(
+        SocketOptions::default()
+            .with_recv_timeout(Duration::from_millis(300))
+            .with_req_relaxed(true)
+            .with_req_correlate(true),
+    );
+    req.connect(FRONTEND).await?;
 
-    rt::sleep(Duration::from_millis(500)).await;
+    for i in 1..=3 {
+        let reply = request(&mut req, format!("request {i}")).await?;
+        println!("[client] reply: {reply:?}");
+    }
 
-    // Start client (sends 10 requests)
-    rt::spawn_detached(async {
-        let _ = client(1, 10).await;
-    });
+    println!("[controller] PAUSE");
+    control.send(ProxyCommand::Pause.as_bytes()).await?;
+    // Commands are handled in order, so once this reply is back the PAUSE
+    // has taken effect.
+    statistics(&mut control).await?;
+    let reply = request(&mut req, "request while paused".to_owned()).await?;
+    println!("[client] reply while paused: {reply:?} (the request waits in the frontend)");
 
-    // Start controller (sends commands to proxy)
-    let controller_task = rt::spawn(async { controller().await });
+    println!("[controller] RESUME");
+    control.send(ProxyCommand::Resume.as_bytes()).await?;
+    // The held request is forwarded now. The client already gave up on it,
+    // so it sends a fresh one and the stale reply is discarded.
+    let reply = request(&mut req, "request after resume".to_owned()).await?;
+    println!("[client] reply: {reply:?}");
 
-    // Wait for controller to finish
-    let _ = rt::join(controller_task).await;
+    println!("[controller] STATISTICS");
+    let stats = statistics(&mut control).await?;
+    // Messages in, bytes in, messages out, bytes out: frontend, then backend.
+    if let [front_in, _, front_out, _, back_in, _, back_out, _] = stats[..] {
+        println!(
+            "[controller] frontend: {front_in} msgs in, {front_out} msgs out; \
+             backend: {back_in} msgs in, {back_out} msgs out"
+        );
+    } else {
+        println!("[controller] unexpected statistics reply: {stats:?}");
+    }
 
-    rt::sleep(Duration::from_secs(1)).await;
-
-    info!("\n✅ Demo Complete!");
-    info!("\nKey Points:");
-    info!("  • Proxy can be controlled via control socket");
-    info!("  • PAUSE stops forwarding (messages dropped)");
-    info!("  • RESUME restarts forwarding");
-    info!("  • TERMINATE gracefully stops proxy");
-    info!("  • STATISTICS reports message count");
-
+    println!("[controller] TERMINATE");
+    control.send(ProxyCommand::Terminate.as_bytes()).await?;
+    rt::join(broker).await?;
+    println!("broker terminated");
     Ok(())
+}
+
+async fn worker(id: u32) -> Result<()> {
+    let mut rep = RepSocket::new();
+    rep.connect(BACKEND).await?;
+    loop {
+        // The request is only read, so it stays borrowed from the socket
+        // until the reply is built.
+        let reply = {
+            let request = rep.recv().await?;
+            let text = String::from_utf8_lossy(request.first().unwrap_or_default());
+            println!("[worker-{id}] processing: {text}");
+            format!("{text} done by worker-{id}")
+        };
+        rep.send(reply).await?;
+    }
+}
+
+/// One request; `None` if no reply came within the timeout.
+async fn request(req: &mut ReqSocket, text: String) -> Result<Option<String>> {
+    req.send(text).await?;
+    match req.recv().await {
+        Ok(reply) => Ok(Some(
+            String::from_utf8_lossy(reply.first().unwrap_or_default()).into_owned(),
+        )),
+        Err(MonocoqueError::TimedOut) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Ask the proxy for its counters: eight little-endian 64-bit frames.
+async fn statistics(control: &mut PairSocket) -> Result<Vec<u64>> {
+    control.send(ProxyCommand::Statistics.as_bytes()).await?;
+    let reply = control.recv().await?;
+    Ok(reply
+        .frames()
+        .map(|frame| frame.try_into().map_or(0, u64::from_le_bytes))
+        .collect())
 }

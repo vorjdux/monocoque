@@ -15,26 +15,32 @@
 
 ---
 
-Monocoque is a ZeroMQ-compatible messaging library written in Rust. It implements ZMTP 3.1 from scratch over a small runtime facade: io_uring by default (via `compio`), with optional tokio and smol backends for portability. Whichever you pick, it interoperates with any existing libzmq peer while staying entirely within Rust's memory model.
+Monocoque is a ZeroMQ-compatible messaging library written in Rust. It implements ZMTP 3 from scratch (it announces version 3.0 in its greeting and supports the 3.1 heartbeat commands and draft socket types, with ZMTP 1.0 and 2.0 framing for legacy peers) over a small runtime facade: io_uring by default (via `compio`), with optional tokio and smol backends for portability. Whichever you pick, it interoperates with any existing libzmq peer while staying entirely within Rust's memory model.
 
 The name comes from Formula 1 engineering, where the monocoque chassis achieves structural strength through form rather than bolt-on reinforcement. Same idea here: performance through correct architecture, not unsafe shortcuts.
 
 ## Features
 
-- All 11 ZeroMQ socket types: REQ, REP, DEALER, ROUTER, PUB, SUB, XPUB, XSUB, PUSH, PULL, PAIR
-- PLAIN and CURVE (CurveZMQ/X25519) authentication, ZAP support
-- TCP and IPC (Unix domain socket) transports
-- Automatic reconnection with exponential backoff on all socket types
-- ZMTP 3.1 heartbeating (PING/PONG) wired into all send/recv loops
+- All 11 ZeroMQ socket types: REQ, REP, DEALER, ROUTER, PUB, SUB, XPUB, XSUB, PUSH, PULL, PAIR,
+  plus STREAM; the draft types (CLIENT/SERVER, RADIO/DISH, SCATTER/GATHER, CHANNEL)
+  behind the `draft` feature
+- Every socket is multi-peer: bind and connect any number of endpoints
+- PLAIN and CURVE (RFC 26, interoperates with libzmq) authentication, ZAP support
+- TCP, IPC (Unix domain socket) and inproc transports (`tcp://`, `ipc://`, `inproc://`);
+  inproc is HWM-bounded and works across threads
+- `zmq_poll` equivalent in `monocoque::zmq::poll`
+- Automatic reconnection on all socket types: a jittered 100 ms interval by
+  default, exponential backoff when `reconnect_ivl_max` is set
+- Optional ZMTP heartbeating (PING/PONG with TTL), off by default and turned on
+  with `heartbeat_ivl`; the socket sends, answers and times out the heartbeats
+  itself
 - Socket monitoring via channel-based lifecycle events
-- Explicit batching API for maximum throughput, plus `recv_batch()` to drain a
-  burst of messages in one `.await`
-- Allocation-free receive via `recv_into` / `try_recv_into`: reuse one buffer
-  across a hot recv loop instead of allocating a `Vec` per message
+- Borrowed receive: `recv()` lends a `MsgRef` into the socket's reused message
+  slot, so a hot recv loop allocates nothing; `recv_owned()` keeps the message
 - Vectored (`writev`) sends for large frames: the body skips the userspace copy
-- PUB fan-out coalesces queued broadcasts into one vectored write per subscriber
-- PUSH/PULL worker pools via `PushFanOut` (round-robin ventilator) and
-  `PullFanIn` (fair-queued sink)
+- PUB encodes each message once and shares the bytes among its subscribers;
+  what is queued for one subscriber goes out in one write
+- PUSH load balances and PULL fair-queues across all connected peers
 - Zero-copy message passing via `Bytes` refcounting
 
 ## Performance
@@ -47,8 +53,9 @@ and peak RSS alongside throughput and latency. Keeping the comparison in its own
 harness means these figures are reproducible from published data rather than
 asserted here.
 
-Figures below are the run of **2026-08-21**, Intel Core i5-13400 (16 cores), Linux
-6.8.0-58, performance governor, turbo off. Every implementation, transport and
+Figures below are the run of **2026-08-21**, which measured monocoque 0.4, not
+1.0, on an Intel Core i5-13400 (16 threads), Linux 6.8.0-58, performance governor,
+turbo off. Every implementation, transport and
 payload size, plus the raw per-run JSON, is at
 **<https://vorjdux.github.io/zmq-arena/>**.
 
@@ -69,8 +76,9 @@ runner-up, at 0.016 syscalls per message and about 1.0 MB peak RSS.
 
 Where it does not lead: from 4 KiB upward the advantage inverts, and by 16 KiB
 monocoque is out of the top places on both throughput and CPU per message. The
-send path copies large bodies that a vectored write could hand to the kernel
-directly, which is the tuning knob discussed below.
+size at which a body stops being copied into the send buffer and goes to the
+kernel in a vectored write is tunable (`vectored_write_threshold`, discussed
+below).
 
 On single-flow loopback the epoll backends (tokio, smol) often edge out compio: a
 one-connection ping-pong does not exercise io_uring's strengths (batched
@@ -82,12 +90,13 @@ Default (eager) mode sends each message immediately, one syscall per `send()`, a
 is the mode for latency-sensitive work where you want each message on the wire now
 rather than batched. Turn on coalescing for small-message throughput. For **large** frames the send
 path automatically uses a vectored write (`writev`) so the body is never copied
-into the send buffer; the threshold (`vectored_write_threshold`, default 32 KB)
+into the send buffer; the threshold (`vectored_write_threshold`, default 16 KiB)
 is tunable per workload. This applies in both modes: with coalescing enabled, a
 body at or above the threshold flushes whatever is buffered and then goes
 straight to the kernel, so batching small frames does not cost you a copy on the
-large ones. IPC (Unix domain sockets) is ~3x faster than TCP loopback
-on every backend for same-host throughput.
+large ones. For same-host throughput, IPC (Unix domain sockets) is about 4x TCP
+loopback on every backend in the in-repo suite (3.6x to 4.5x; see the IPC vs
+TCP table in [docs/performance.md](docs/performance.md)).
 
 For the full picture across every implementation, transport, payload size and
 peer count, including the runs where monocoque does not win, see
@@ -100,60 +109,76 @@ allocation and instruction-count budgets CI holds each commit to.
 
 ```toml
 [dependencies]
-monocoque-rs = { version = "0.4", features = ["zmq"] }
-# Drives the default io_uring backend and provides the #[compio::main] macro.
-# To run on tokio or smol instead, see "Runtime backends" below.
-compio = { version = "0.19", features = ["runtime", "macros"] }
+monocoque-rs = { version = "1.0", features = ["zmq"] }
 ```
+
+That one dependency is enough on the default io_uring backend. To run on tokio
+or smol instead, see "Runtime backends" below.
 
 ```rust
-use monocoque::zmq::{DealerSocket, RouterSocket};
+use monocoque::rt::LocalRuntime;
+use monocoque::zmq::{DealerSocket, Msg, Result, RouterSocket};
 
-// Connect a DEALER
-let mut dealer = DealerSocket::connect("tcp://127.0.0.1:5555").await?;
-dealer.send(vec![b"Hello".into()]).await?;
-let reply = dealer.recv().await?;
+fn main() -> Result<()> {
+    LocalRuntime::new()?.block_on(async_main())
+}
 
-// Bind a ROUTER
-let mut router = RouterSocket::bind("tcp://127.0.0.1:5555").await?;
-let msg = router.recv().await?;  // msg[0] is the routing identity
+async fn async_main() -> Result<()> {
+    // Bind a ROUTER
+    let mut router = RouterSocket::new();
+    router.bind("tcp://127.0.0.1:5555").await?;
+
+    // Connect a DEALER
+    let mut dealer = DealerSocket::new();
+    dealer.connect("tcp://127.0.0.1:5555").await?;
+    dealer.send("Hello").await?;
+
+    let msg = router.recv_owned().await?;  // frame 0 is the routing identity
+    router.send(Msg::from([msg.frame_bytes(0).unwrap(), "World".into()])).await?;
+    let reply = dealer.recv().await?;      // a MsgRef borrowed from the socket
+    println!("{:?}", reply.first());
+    Ok(())
+}
 ```
+
+`LocalRuntime` builds the single-threaded runtime of whichever backend is
+enabled, and on compio it also polls for completions briefly before it sleeps,
+which the 1.0 latency figures in [docs/performance.md](docs/performance.md)
+were measured with. `#[compio::main]` works too (with
+`compio` as a dependency), but a program started that way does not spin before
+sleeping.
 
 ```rust
 // PUB/SUB
-let mut publisher = PubSocket::bind("tcp://127.0.0.1:5556").await?;
-publisher.send(vec![b"events".into(), b"payload".into()]).await?;
+let mut publisher = PubSocket::new();
+publisher.bind("tcp://127.0.0.1:5556").await?;
 
-let mut subscriber = SubSocket::connect("tcp://127.0.0.1:5556").await?;
+let mut subscriber = SubSocket::new();
+subscriber.connect("tcp://127.0.0.1:5556").await?;
 subscriber.subscribe(b"events").await?;
+
+publisher.send(Msg::from([Bytes::from("events"), Bytes::from("payload")])).await?;
 let msg = subscriber.recv().await?;
 ```
 
-For high throughput, enable write coalescing or use the explicit batch API.
+For high throughput, enable write coalescing.
 
 By default each `send()` issues one kernel write per message. Write coalescing batches
 those writes into a 64 KB buffer and flushes them in a single syscall, which is where
-the large throughput gains in the table above come from. Because messages may sit in
+the small-message throughput in the Performance section and in the coalesced rows
+of [docs/performance.md](docs/performance.md) comes from. Because messages may sit in
 userspace until `flush()` is called, coalescing is opt-in: you decide exactly when the
 data goes out. See [docs/performance.md](docs/performance.md) for the full explanation
 and tuning guide.
 
 ```rust
-// Write coalescing: opt-in, requires flush() after each burst (PUSH/PULL)
-let mut push = PushSocket::connect_with_options(
-    "127.0.0.1:5555",
-    SocketOptions::default().with_write_coalescing(true),
-).await?;
+// Write coalescing: opt-in, requires flush() after each burst
+let mut push = PushSocket::with_options(SocketOptions::default().with_write_coalescing(true));
+push.connect("tcp://127.0.0.1:5555").await?;
 for msg in &batch {
-    push.send(vec![msg.clone()]).await?;
+    push.send(msg.clone()).await?;
 }
 push.flush().await?;  // flush bytes that did not fill the 64 KB threshold
-
-// Explicit batch API: encode N messages then one write (DEALER/ROUTER)
-for msg in &batch {
-    dealer.send_buffered(msg.clone())?;
-}
-dealer.flush().await?;
 ```
 
 ## Runtime backends
@@ -164,13 +189,13 @@ or smol instead. Pick one backend at compile time:
 
 ```toml
 # Default: native io_uring via compio
-monocoque-rs = { version = "0.4", features = ["zmq"] }
+monocoque-rs = { version = "1.0", features = ["zmq"] }
 
 # Or run on tokio
-monocoque-rs = { version = "0.4", default-features = false, features = ["runtime-tokio", "zmq"] }
+monocoque-rs = { version = "1.0", default-features = false, features = ["runtime-tokio", "zmq"] }
 
 # Or run on smol
-monocoque-rs = { version = "0.4", default-features = false, features = ["runtime-smol", "zmq"] }
+monocoque-rs = { version = "1.0", default-features = false, features = ["runtime-smol", "zmq"] }
 ```
 
 The three backends are mutually exclusive. The protocol layer, frame codec and
@@ -184,24 +209,34 @@ up the right one for you).
 let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
 let local = tokio::task::LocalSet::new();
 local.block_on(&rt, async {
-    let mut push = PushSocket::connect("127.0.0.1:5555").await?;
-    push.send(vec![b"hello".into()]).await?;
-    Ok::<_, std::io::Error>(())
+    let mut push = PushSocket::new();
+    push.connect("tcp://127.0.0.1:5555").await?;
+    push.send("hello").await?;
+    Ok::<_, MonocoqueError>(())
 })?;
 ```
 
 If you would rather not name a runtime in your own code, `monocoque::rt::LocalRuntime`
 is a backend-agnostic entry point: it builds the right single-threaded runtime for
-whichever feature is enabled, so the same source runs on either.
+whichever feature is enabled, so the same source runs on all three.
 
 ```rust
 let rt = monocoque::rt::LocalRuntime::new()?;
 rt.block_on(async {
-    let mut push = PushSocket::connect("127.0.0.1:5555").await?;
-    push.send(vec![b"hello".into()]).await?;
-    Ok::<_, std::io::Error>(())
+    let mut push = PushSocket::new();
+    push.connect("tcp://127.0.0.1:5555").await?;
+    push.send("hello").await?;
+    Ok::<_, MonocoqueError>(())
 })?;
 ```
+
+Before a receive sleeps, it keeps looking for up to 50 µs (30 µs on tokio,
+100 µs on smol): on compio `LocalRuntime` polls for completions, and on tokio
+and smol the receive yields to the runtime. Sleeping and being woken costs more
+than a local round trip, so this cuts latency, at the cost of some CPU while
+traffic flows. `LocalRuntime::with_spin` changes the budget on any backend
+(`Duration::ZERO` disables it), and on tokio and smol
+`SocketOptions::with_recv_spin` changes it for one socket.
 
 The `runtime_backends` example is the same program run both ways:
 
@@ -213,19 +248,21 @@ cargo run --example runtime_backends --no-default-features --features runtime-sm
 
 ## Safety
 
-`unsafe` is confined to a handful of small, well-contained spots, each behind a documented contract:
+This section is the inventory of `unsafe` in the library code (the `src/` trees of the three published crates; tests and examples are not covered). `CONTRIBUTING.md` and the crate docs point here rather than restating it. It lives in two files of `monocoque-core`:
 
-- `monocoque-core/src/io.rs` - the owned-buffer read helpers shared by every backend. `fill_read` owns the workspace's single `set_buf_init` call (declaring how many bytes a read initialized in a buffer's spare capacity), and `take_read_buffer` hands out read-sized slabs from a reused `BytesMut`. The socket read paths call `take_read_buffer` in documented `unsafe` blocks.
-- `monocoque-core/src/tcp.rs` (and a few socket-tuning call sites) - TCP socket tuning (nodelay, keepalive) through the raw socket handle.
-- `monocoque-zmtp/src/inproc_stream.rs` - the in-process stream adapter that fills an owned buffer.
+- **Owned-buffer reads.** `monocoque-core/src/io.rs`: `fill_read` and, on tokio and smol, `fill_read_two` hold the `set_len` calls, declaring how many bytes a read initialized in the buffers it was handed. Miri checks it in CI.
+- **Raw-fd socket calls.** `monocoque-core/src/tcp.rs` does two things with a stream's raw fd (or raw socket on Windows). The option setters (`enable_tcp_nodelay`, `configure_tos`, `configure_socket_buffers`, `configure_tcp_keepalive`) borrow it as a `socket2::Socket` to set the option and then forget the wrapper, so the fd is never closed. On Linux three functions call `libc` directly: `unacked_bytes` (`ioctl(TIOCOUTQ)`), `segment_size` (`getsockopt(TCP_MAXSEG)`) and `send_now` (a non-blocking `send`).
 
-Everything else is safe Rust.
+The rest of `monocoque-core/src`, and all of `monocoque-zmtp/src` and `monocoque/src`, is safe Rust. `monocoque-core` denies `unsafe_code` at the crate root and opts back in per module, so a new `unsafe` block outside `io.rs` and `tcp.rs` fails to compile there.
 
 Memory invariants:
 - Buffers are never reused while referenced (tracked via `Bytes` refcounts)
-- A read slab is frozen to `Bytes` in a one-way transition; no mutation after freeze
-- The read slab is allocated lazily on the first read, so an idle socket holds none
-- PUB fanout is refcount-based (`Bytes::clone()`), never copies payloads
+- Received bytes are split off a connection's read buffer and frozen to `Bytes`
+  in a one-way transition; no mutation after freeze
+- A connection's read buffer is allocated on its first read, so an idle
+  connection holds none
+- PUB encodes a message once and shares the bytes among subscribers by refcount;
+  payloads are never copied per subscriber
 
 ## Development
 
@@ -242,16 +279,6 @@ cargo bench --no-default-features --features runtime-smol,zmq
 ```
 
 Interop testing against libzmq: see [docs/INTEROP_TESTING.md](docs/INTEROP_TESTING.md).
-
-## Roadmap
-
-Core features are complete. Possible future work:
-
-- io_uring fixed buffers (`IORING_OP_READ_FIXED`) - removes the last kernel-boundary copy per read; ~5-15% latency improvement at an already low baseline. (Large *writes* already use vectored `writev`.)
-- Prefix trie for topic matching - the publisher-side prefilter and per-subscriber matching use a linear prefix scan, which is fast for the handful of distinct prefixes a PUB typically holds; a trie would only help when a single PUB accumulates 100+ *distinct* subscription prefixes or deep hierarchies
-- Per-subscriber concurrent writes - PUB fan-out throughput now exceeds libzmq and is sharded across worker threads (each write has a fault-isolation timeout), but writes *within* a worker are sequential, so one slow subscriber can still delay the others on its worker
-
-Long term: high-performance RPC, additional transports (QUIC, shared memory), custom protocol framework.
 
 ## License
 

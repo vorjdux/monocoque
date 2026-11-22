@@ -54,8 +54,8 @@ cargo publish -p monocoque-rs
 Tag the release and push:
 
 ```bash
-git tag -a v0.1.0 -m "Release v0.1.0"
-git push origin v0.1.0
+git tag -a v1.0.0 -m "Release v1.0.0"
+git push origin v1.0.0
 ```
 
 Create a GitHub release from the tag and paste the relevant CHANGELOG section as the description. Docs.rs will pick up the new version automatically; check https://docs.rs/monocoque-rs once indexing finishes.
@@ -66,15 +66,20 @@ Follow semver. Update the shared version in the workspace `Cargo.toml`:
 
 ```toml
 [workspace.package]
-version = "0.2.0"
+version = "1.0.1"
 ```
 
-Patch (0.1.x) for bug fixes, minor (0.x.0) for backward-compatible additions, major (x.0.0) for breaking changes.
+and the versions the crates pin on each other, which do not follow the
+workspace version: `monocoque-core` in `monocoque-zmtp/Cargo.toml`, and
+`monocoque-core` and `monocoque-zmtp` in `monocoque/Cargo.toml`.
+
+Patch (1.0.x) for bug fixes, minor (1.x.0) for backward-compatible additions,
+major (x.0.0) for breaking changes.
 
 ## Yanking a broken release
 
 ```bash
-cargo yank --version 0.1.0 monocoque-rs
+cargo yank --version 1.0.1 monocoque-rs
 # Then fix the bug and publish a patch release
 cargo publish -p monocoque-rs
 ```

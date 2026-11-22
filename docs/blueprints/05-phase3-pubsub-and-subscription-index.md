@@ -1,3 +1,6 @@
+> A historical design note from before 1.0. It names types and functions that
+> no longer exist; see [00-overview.md](00-overview.md).
+
 # 📄 File 6 - `05-phase3-pubsub-and-subscription-index.md`
 
 # Phase 3 - PUB / SUB & the Sorted Prefix Engine

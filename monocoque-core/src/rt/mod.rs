@@ -73,3 +73,34 @@ mod backend;
 mod backend;
 
 pub use backend::*;
+
+/// The remote address of a connected stream, in the form ZAP reports it.
+///
+/// RFC 27 puts the peer address in the `Address` frame of every ZAP request so a
+/// handler can apply IP allow/deny policy. libzmq fills it with the peer's IP
+/// (no port) for TCP and leaves it empty for IPC and inproc; this follows suit.
+pub trait PeerAddress {
+    /// The peer address for a ZAP request: the IP for TCP, empty otherwise.
+    fn zap_address(&self) -> String;
+}
+
+impl PeerAddress for TcpStream {
+    fn zap_address(&self) -> String {
+        self.peer_addr()
+            .map(|addr| addr.ip().to_string())
+            .unwrap_or_default()
+    }
+}
+
+#[cfg(unix)]
+impl PeerAddress for UnixStream {
+    fn zap_address(&self) -> String {
+        String::new()
+    }
+}
+
+impl<T: PeerAddress + ?Sized> PeerAddress for &mut T {
+    fn zap_address(&self) -> String {
+        (**self).zap_address()
+    }
+}

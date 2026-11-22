@@ -1,6 +1,11 @@
 //! Endpoint abstraction for transport-agnostic socket addressing.
 //!
 //! Provides unified addressing for TCP and IPC transports with parsing support.
+//!
+//! Applications import these types from the `monocoque` crate, as
+//! `monocoque::zmq::Endpoint` and `monocoque::zmq::EndpointError`. The
+//! examples here name `monocoque_core` only because they are tested inside
+//! this crate.
 
 use std::fmt;
 use std::net::SocketAddr;
@@ -9,6 +14,7 @@ use std::str::FromStr;
 
 /// Transport endpoint address.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Endpoint {
     /// TCP transport: `tcp://host:port`
     Tcp(SocketAddr),
@@ -25,10 +31,20 @@ impl Endpoint {
     /// Supported formats:
     /// - `tcp://127.0.0.1:5555`
     /// - `tcp://[::1]:5555` (IPv6)
+    /// - `tcp://*:5555` (every IPv4 interface) and `tcp://127.0.0.1:*` (a
+    ///   port the OS picks), for binding
+    /// - `tcp://localhost:5555` or any other host name. The name is looked up
+    ///   once, when the endpoint is parsed, with the system resolver, which
+    ///   blocks the calling thread for as long as the lookup takes. A
+    ///   reconnect dials the address found then; it does not look the name up
+    ///   again.
     /// - `ipc:///tmp/socket.sock` (Unix only)
     /// - `inproc://name`
     ///
     /// # Examples
+    ///
+    /// An application imports the type as `monocoque::zmq::Endpoint`; the
+    /// path below is the one this crate's own tests use.
     ///
     /// ```
     /// use monocoque_core::endpoint::Endpoint;
@@ -74,10 +90,9 @@ impl FromStr for Endpoint {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if let Some(addr) = s.strip_prefix("tcp://") {
-            let socket_addr = addr
-                .parse::<SocketAddr>()
-                .map_err(|_| EndpointError::InvalidTcpAddress(addr.to_string()))?;
-            Ok(Self::Tcp(socket_addr))
+            resolve_tcp(addr)
+                .map(Self::Tcp)
+                .ok_or_else(|| EndpointError::InvalidTcpAddress(addr.to_string()))
         } else if let Some(path) = s.strip_prefix("ipc://") {
             #[cfg(unix)]
             {
@@ -112,6 +127,37 @@ impl FromStr for Endpoint {
     }
 }
 
+/// The address a `tcp://` endpoint names: an IP address and port, `*` for
+/// every interface or for a port the OS picks, or a host name, which is
+/// looked up here and now.
+fn resolve_tcp(addr: &str) -> Option<SocketAddr> {
+    use std::net::{Ipv4Addr, ToSocketAddrs};
+
+    if let Ok(literal) = addr.parse() {
+        return Some(literal);
+    }
+    let (host, port) = addr.rsplit_once(':')?;
+    let port = if port == "*" { 0 } else { port.parse().ok()? };
+    if host == "*" {
+        return Some(SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)));
+    }
+    if host.is_empty() {
+        return None;
+    }
+    // `[::1]:*`: an IPv6 literal that the parse above turned away only for
+    // its `*` port. The brackets are URL syntax, not part of the address.
+    if let Some(literal) = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+        let ip: std::net::Ipv6Addr = literal.parse().ok()?;
+        return Some(SocketAddr::from((ip, port)));
+    }
+    // A name can have several addresses. IPv4 first: a server bound to
+    // `127.0.0.1` is not reachable through the `::1` that `localhost` may
+    // list ahead of it.
+    let mut found: Vec<SocketAddr> = (host, port).to_socket_addrs().ok()?.collect();
+    found.sort_by_key(SocketAddr::is_ipv6);
+    found.into_iter().next()
+}
+
 impl fmt::Display for Endpoint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -125,6 +171,7 @@ impl fmt::Display for Endpoint {
 
 /// Errors that can occur when parsing or using endpoints.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum EndpointError {
     #[error("Invalid scheme in endpoint: {0} (expected tcp://, ipc://, or inproc://)")]
     InvalidScheme(String),
@@ -151,6 +198,68 @@ mod tests {
         let endpoint = Endpoint::parse("tcp://127.0.0.1:5555").unwrap();
         assert!(matches!(endpoint, Endpoint::Tcp(_)));
         assert_eq!(endpoint.to_string(), "tcp://127.0.0.1:5555");
+    }
+
+    #[test]
+    fn test_parse_tcp_wildcards() {
+        assert_eq!(
+            Endpoint::parse("tcp://*:5555").unwrap().to_string(),
+            "tcp://0.0.0.0:5555"
+        );
+        assert_eq!(
+            Endpoint::parse("tcp://127.0.0.1:*").unwrap().to_string(),
+            "tcp://127.0.0.1:0"
+        );
+        assert_eq!(
+            Endpoint::parse("tcp://*:*").unwrap().to_string(),
+            "tcp://0.0.0.0:0"
+        );
+    }
+
+    #[test]
+    fn test_parse_tcp_ipv6_port_wildcard() {
+        assert_eq!(
+            Endpoint::parse("tcp://[::1]:*").unwrap().to_string(),
+            "tcp://[::1]:0"
+        );
+        assert_eq!(
+            Endpoint::parse("tcp://[::]:*").unwrap().to_string(),
+            "tcp://[::]:0"
+        );
+        assert_eq!(
+            Endpoint::parse("tcp://[::1]:5555").unwrap().to_string(),
+            "tcp://[::1]:5555"
+        );
+        for bad in ["tcp://[::1:*", "tcp://[localhost]:*", "tcp://[]:*"] {
+            assert!(Endpoint::parse(bad).is_err(), "{bad} parsed");
+        }
+    }
+
+    #[test]
+    fn test_parse_tcp_host_name() {
+        // `localhost` resolves without a network. IPv4 is preferred when the
+        // name has both.
+        let Endpoint::Tcp(addr) = Endpoint::parse("tcp://localhost:5555").unwrap() else {
+            panic!("not a TCP endpoint");
+        };
+        assert!(addr.ip().is_loopback());
+        assert_eq!(addr.port(), 5555);
+
+        for bad in [
+            "tcp://localhost",
+            "tcp://:5555",
+            "tcp://localhost:port",
+            "tcp://localhost:70000",
+            "tcp://no-such-host.invalid:5555",
+        ] {
+            assert!(
+                matches!(
+                    Endpoint::parse(bad),
+                    Err(EndpointError::InvalidTcpAddress(_))
+                ),
+                "{bad} should not parse"
+            );
+        }
     }
 
     #[test]

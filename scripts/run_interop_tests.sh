@@ -8,20 +8,6 @@ echo "Monocoque ↔ libzmq Interop Test Suite"
 echo "========================================"
 echo ""
 
-# Check if libzmq is installed
-if ! ldconfig -p | grep -q libzmq; then
-    echo "❌ Error: libzmq not found"
-    echo ""
-    echo "Please install libzmq:"
-    echo "  Ubuntu/Debian: sudo apt install libzmq3-dev"
-    echo "  macOS:         brew install zeromq"
-    echo "  Arch:          sudo pacman -S zeromq"
-    exit 1
-fi
-
-echo "✅ libzmq detected"
-echo ""
-
 # Run each interop example
 examples=(
     "interop_dealer_libzmq"

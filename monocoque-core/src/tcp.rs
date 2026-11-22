@@ -19,6 +19,83 @@
 
 use std::io;
 
+/// Bytes in the socket's send queue the peer has not acknowledged (`TIOCOUTQ`).
+/// 0 if the call fails.
+#[cfg(target_os = "linux")]
+pub fn unacked_bytes<S: std::os::unix::io::AsRawFd>(stream: &S) -> u32 {
+    let mut queued: libc::c_int = 0;
+    // SAFETY: the fd is valid for as long as `stream` is borrowed, and
+    // TIOCOUTQ writes one c_int through the pointer, which outlives the call.
+    let rc = unsafe { libc::ioctl(stream.as_raw_fd(), libc::TIOCOUTQ, &raw mut queued) };
+    if rc == 0 {
+        u32::try_from(queued).unwrap_or(0)
+    } else {
+        0
+    }
+}
+
+/// Payload bytes the connection carries per TCP segment (`TCP_MAXSEG`), as
+/// negotiated and net of the options each segment carries. 0 if the call fails
+/// or the socket is not TCP.
+#[cfg(target_os = "linux")]
+pub fn segment_size<S: std::os::unix::io::AsRawFd>(stream: &S) -> usize {
+    let mut mss: libc::c_int = 0;
+    let mut len = libc::socklen_t::try_from(size_of::<libc::c_int>()).unwrap_or(0);
+    // SAFETY: the fd is valid while `stream` is borrowed; the kernel writes at
+    // most `len` bytes, one c_int, through pointers that outlive the call.
+    let rc = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::IPPROTO_TCP,
+            libc::TCP_MAXSEG,
+            (&raw mut mss).cast(),
+            &raw mut len,
+        )
+    };
+    if rc == 0 {
+        usize::try_from(mss).unwrap_or(0)
+    } else {
+        0
+    }
+}
+
+/// Elsewhere writes are not cut to segments.
+#[cfg(not(target_os = "linux"))]
+pub const fn segment_size<S>(_stream: &S) -> usize {
+    0
+}
+
+/// Write what the socket takes right now, without blocking or the runtime.
+///
+/// `None` if it took nothing, for whatever reason: the caller's writer retries
+/// through the runtime and reports any real error.
+#[cfg(target_os = "linux")]
+pub fn send_now<S: std::os::unix::io::AsRawFd>(stream: &S, buf: &[u8]) -> Option<usize> {
+    // SAFETY: the fd is valid while `stream` is borrowed, and the kernel only
+    // reads `buf.len()` bytes from `buf`, which outlives the call.
+    let sent = unsafe {
+        libc::send(
+            stream.as_raw_fd(),
+            buf.as_ptr().cast(),
+            buf.len(),
+            libc::MSG_DONTWAIT | libc::MSG_NOSIGNAL,
+        )
+    };
+    usize::try_from(sent).ok().filter(|&n| n > 0)
+}
+
+/// Elsewhere the writer does all the writing.
+#[cfg(not(target_os = "linux"))]
+pub const fn send_now<S>(_stream: &S, _buf: &[u8]) -> Option<usize> {
+    None
+}
+
+/// Elsewhere there is no such count: progress then comes from writes alone.
+#[cfg(not(target_os = "linux"))]
+pub const fn unacked_bytes<S>(_stream: &S) -> u32 {
+    0
+}
+
 /// Enable `TCP_NODELAY` on a TCP stream for minimal latency.
 ///
 /// This disables Nagle's algorithm, trading bandwidth efficiency for lower latency.
@@ -125,6 +202,67 @@ pub fn reuseport_listener(_addr: std::net::SocketAddr) -> io::Result<std::net::T
         io::ErrorKind::Unsupported,
         "SO_REUSEPORT is only supported on Unix",
     ))
+}
+
+/// Set the IPv4 `TOS` byte, or the IPv6 traffic class when `v6`, of a
+/// connected TCP socket. Zero leaves it as the OS has it.
+///
+/// # Errors
+///
+/// Returns an error if the socket option cannot be set.
+#[cfg(unix)]
+pub fn configure_tos<S: std::os::unix::io::AsRawFd>(
+    stream: &S,
+    tos: u8,
+    v6: bool,
+) -> io::Result<()> {
+    use std::os::unix::io::FromRawFd;
+
+    if tos == 0 {
+        return Ok(());
+    }
+    // SAFETY: the fd is open for as long as `stream` is borrowed, and the
+    // `Socket` built over it is forgotten below, so it is never closed here.
+    let sock = unsafe { socket2::Socket::from_raw_fd(stream.as_raw_fd()) };
+    let result = if v6 {
+        sock.set_tclass_v6(u32::from(tos))
+    } else {
+        sock.set_tos_v4(u32::from(tos))
+    };
+    std::mem::forget(sock);
+    result
+}
+
+/// Set the IPv4 `TOS` byte of a connected TCP socket. Zero leaves it as the
+/// OS has it.
+///
+/// # Errors
+///
+/// Returns an error if the socket option cannot be set, and for an IPv6
+/// socket, whose traffic class this platform's socket API does not expose.
+#[cfg(windows)]
+pub fn configure_tos<S: std::os::windows::io::AsRawSocket>(
+    stream: &S,
+    tos: u8,
+    v6: bool,
+) -> io::Result<()> {
+    use std::os::windows::io::FromRawSocket;
+
+    if tos == 0 {
+        return Ok(());
+    }
+    if v6 {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "tos is not supported on IPv6 sockets on this platform",
+        ));
+    }
+    // SAFETY: the socket is open for as long as `stream` is borrowed, and the
+    // `Socket` built over it is forgotten below, so it is never closed here.
+    let sock = unsafe { socket2::Socket::from_raw_socket(stream.as_raw_socket()) };
+    let result = sock.set_tos_v4(u32::from(tos));
+    std::mem::forget(sock);
+    result
 }
 
 /// Configure the OS-level socket send/receive buffer sizes (`SO_SNDBUF` /
@@ -401,6 +539,37 @@ mod tests {
             rcv >= requested as usize,
             "SO_RCVBUF not applied: got {rcv}, requested {requested}"
         );
+    }
+
+    #[test]
+    fn configure_tos_sets_the_byte_on_ipv4_and_ipv6() {
+        use socket2::Socket;
+        use std::os::unix::io::{AsRawFd, FromRawFd};
+
+        // DSCP EF (46) in the upper six bits.
+        let tos = 46 << 2;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        configure_tos(&client, tos, false).unwrap();
+        let sock = unsafe { Socket::from_raw_fd(client.as_raw_fd()) };
+        let read_back = sock.tos_v4();
+        std::mem::forget(sock);
+        assert_eq!(read_back.unwrap(), u32::from(tos));
+
+        // A host without IPv6 loopback has nothing to check the other half on.
+        if let Ok(listener) = TcpListener::bind("[::1]:0") {
+            let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            configure_tos(&client, tos, true).unwrap();
+            let sock = unsafe { Socket::from_raw_fd(client.as_raw_fd()) };
+            let read_back = sock.tclass_v6();
+            std::mem::forget(sock);
+            assert_eq!(read_back.unwrap(), u32::from(tos));
+        }
+
+        // Zero leaves the socket alone.
+        let untouched = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        configure_tos(&untouched, 0, false).unwrap();
     }
 
     #[test]

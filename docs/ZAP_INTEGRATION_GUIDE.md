@@ -6,20 +6,20 @@ This guide covers implementing and wiring up a ZAP handler. For how PLAIN and CU
 
 ## Setting Up a Handler
 
-Implement the `ZapHandler` trait and spawn it before binding your server socket:
+Implement the `ZapHandler` trait and spawn it before binding your server socket. The trait uses native `async fn`, so it cannot be used as a `dyn` object; `spawn_zap_server` takes an `Arc` of the concrete type:
 
 ```rust
-use monocoque_zmtp::security::zap_handler::{ZapHandler, spawn_zap_server};
-use monocoque_zmtp::security::zap::{ZapRequest, ZapResponse};
+use monocoque::zmq::security::zap_handler::{ZapHandler, spawn_zap_server};
+use monocoque::zmq::security::zap::{ZapRequest, ZapResponse};
 use std::sync::Arc;
 
 struct MyHandler;
 
-#[async_trait::async_trait(?Send)]
 impl ZapHandler for MyHandler {
     async fn authenticate(&self, req: &ZapRequest) -> ZapResponse {
-        // req.mechanism is "PLAIN" or "CURVE"
-        // req.address  is the client's IP address
+        // req.mechanism is ZapMechanism::Plain or Curve (a NULL socket never
+        //               asks the handler)
+        // req.address  is the client's IP address, empty for an ipc:// peer
         // req.domain   is the ZAP domain set on the server socket
         //
         // For PLAIN: req.credentials = [username_bytes, password_bytes]
@@ -39,13 +39,19 @@ impl ZapHandler for MyHandler {
 spawn_zap_server(Arc::new(MyHandler))?;
 ```
 
-`spawn_zap_server` binds to `inproc://zeromq.zap.01` and runs the handler in a background task. The handler must be running before any authenticated connections arrive - if the ZAP socket isn't bound, the server will time out waiting for a response.
+`spawn_zap_server` binds to `inproc://zeromq.zap.01` and runs the handler in a background task. Start it before any authenticated connection arrives. While it is not running:
+
+- a PLAIN server refuses every client;
+- a CURVE server with a ZAP domain refuses every client;
+- a CURVE server without a ZAP domain admits any client key and logs a warning.
+
+Once it is running, every PLAIN client and every CURVE client is put to it, whether or not the server socket set a domain.
 
 ## Accepting and Rejecting Connections
 
 `ZapResponse::success` accepts the connection. The second argument is a user ID string that monocoque makes available to the application layer (useful for logging and per-connection authorization).
 
-`ZapResponse::failure` rejects the connection. The second argument is a reason string logged internally; it is not sent to the client.
+`ZapResponse::failure` rejects the connection. The second argument is a reason string logged internally; it is not sent to the client. From the third failure in a row from one IP, the server delays that address's next handshakes (see "Repeated failures" in [SECURITY_GUIDE.md](SECURITY_GUIDE.md)).
 
 For CURVE, the client's 32-byte public key is in `req.credentials[0]`. A typical allowlist check:
 
@@ -72,11 +78,12 @@ let password = std::str::from_utf8(&req.credentials[1]).unwrap_or("");
 
 ## Domains
 
-Set a ZAP domain on the server socket to pass context to the handler:
+Set a ZAP domain on the server socket to pass context to the handler. On a CURVE server it also means that clients are refused, not admitted, while no handler is running:
 
 ```rust
 let options = SocketOptions::new()
     .with_curve_server(true)
+    .with_curve_keypair(server_public, server_secret)
     .with_zap_domain("payments");
 ```
 
@@ -92,4 +99,4 @@ let policy = match req.domain.as_str() {
 
 ## Examples
 
-See `examples/zap_server_demo.rs` for a standalone ZAP handler, and `examples/authenticated_req_rep.rs` for a complete client/server pair using CURVE + ZAP together.
+See `examples/zap_server_demo.rs` for a standalone ZAP handler, and `examples/authenticated_req_rep.rs` for a complete client/server pair using PLAIN with ZAP.

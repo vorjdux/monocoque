@@ -1,3 +1,6 @@
+> A historical design note from before 1.0. It names types and functions that
+> no longer exist; see [00-overview.md](00-overview.md).
+
 # 📄 File 5 - `04-phase2-router-dealer-and-load-balancing.md`
 
 # Phase 2 - ROUTER / DEALER Semantics & Load Balancing

@@ -5,6 +5,319 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.0.0 - 2026-11-22
+
+The first stable release, and one deliberate break: every socket is rebuilt
+on a single per-socket multiplexer with one message type. `docs/MIGRATION.md`
+lists every source change from 0.4; `docs/rfc-compliance.md` describes
+protocol behaviour RFC by RFC and where libzmq departs from the text.
+
+### Breaking
+
+- `Msg` replaces `Vec<Bytes>` everywhere. `recv()` returns a borrowed
+  `MsgRef`; `recv_owned()` keeps the message. `recv_into`, `try_recv_into`,
+  `send_one`, `send_buffered`, `recv_batch`, `PushFanOut`, `PullFanIn`, the
+  `small()`/`large()` presets and the write-buffer-size options are gone.
+- Every socket binds and connects endpoints (`tcp://`, `ipc://`, `inproc://`)
+  and serves any number of peers. Every public method returns
+  `Result<_, MonocoqueError>`; a receive timeout is an error, not `Ok(None)`.
+- `ZapHandler` and `PlainAuthHandler` use native `async fn` and cannot be used
+  as `dyn` trait objects; `async-trait` is no longer a dependency.
+- CURVE now implements RFC 26 and interoperates with libzmq; it does not talk
+  to the 0.4 CURVE implementation.
+- inproc is bounded by the HWM and works across threads. `vectored_write_threshold`
+  defaults to 16 KiB.
+- `send` on PUSH, DEALER and PAIR, and `send`/`send_ref` on PUB, XPUB and
+  RADIO, do their work when called rather than when the returned future is
+  first polled: a future dropped without being polled has still sent.
+- `monocoque_core::io::READ_SLAB_SIZE` is `MAX_READ_SIZE`, and
+  `io::take_read_buffer` is removed.
+- The public enums that will grow are `#[non_exhaustive]`, so a `match` on
+  one needs a wildcard arm: `MonocoqueError`, `ReconnectError`, `SocketEvent`, `SocketType`, `Endpoint`,
+  `EndpointError`, `SubscriptionEvent`, `ProxyCommand`, `ZapMechanism`,
+  `ZapStatus`, `ZmtpError`, `CurveError` and `CloseReason`.
+- `SocketOptions` is `#[non_exhaustive]`: build it from
+  `SocketOptions::default()` and the `with_*` methods, not a struct literal.
+  Options that were stored and never read are gone: `immediate`,
+  `probe_router`, `router_raw`, `xpub_nodrop`, `ipv6`, `bind_to_device`,
+  `rate`, `recovery_ivl`, `multicast_hops`, `multicast_maxtpdu` and
+  `with_unsubscribe`. `tos` is now a `u8`.
+- A CURVE server asks the ZAP handler about every client whenever a handler
+  is running, whether or not it set a ZAP domain. It used to skip ZAP without
+  a domain, so an allowlist handler beside such a server was never asked.
+  With no handler and no domain it still admits any client key.
+- `with_curve_keypair` refuses a public key that does not belong to the
+  secret key; the handshake fails instead of ignoring the public key.
+
+### Added
+
+- `monocoque::zmq::security` exports the PLAIN and CURVE key and credential
+  types and the ZAP handler, so an application needs only `monocoque-rs`.
+- `connect_timeout` and `tos` take effect: a dial that takes longer than
+  `connect_timeout` counts as a failed attempt, and `tos` sets the IPv4 TOS
+  byte or IPv6 traffic class of each TCP connection.
+- `tcp://*:5555` (every interface), `tcp://host:*` (a port the OS picks) and
+  host names such as `tcp://localhost:5555` are accepted. A name is looked up
+  once, when the endpoint is parsed.
+- `CurveSecretKey::to_bytes`, so a key pair from `CurveKeyPair::generate()`
+  can be stored and given to `with_curve_keypair`.
+- `zmq_poll` (`monocoque::zmq::poll`) and per-message connection metadata
+  (`gets`), including custom handshake properties, over NULL, PLAIN and CURVE.
+- ZMTP 1.0 and 2.0 legacy peers; secured sockets refuse to downgrade.
+- Conflate, and CLIENT/SERVER, RADIO/DISH, SCATTER/GATHER and CHANNEL behind
+  the `draft` feature.
+- `xpub_manual`, `xpub_welcome_msg`, `connect_routing_id` and
+  `max_reconnect_attempts` take effect.
+- STREAM messages and notifications carry `Peer-Address`.
+- `StreamSocket` has the methods the other sockets have for managing and
+  looking at themselves: `disconnect`, `unbind`, `attach`, `monitor`,
+  `options`, `set_options`, `update_options`, `peer_ids`, `last_endpoint`,
+  `peer_property`, `last_metadata`, `last_peer`, `has_message` and `can_send`.
+- Failed authentications slow the offending address down (per-IP backoff).
+- `send_ref(&Msg)` on PUB, XPUB and RADIO publishes a message the caller
+  keeps, without cloning it. Publishing only reads the message; for a
+  two-frame topic message the clone cost more than the publish.
+- A peer whose READY names an incompatible socket type is sent an ERROR
+  command before the connection is closed, as RFC 23 recommends.
+- A routing ID that is empty or longer than 255 bytes is refused, as libzmq
+  refuses it: `bind`, `connect` and `attach` fail with `InvalidRoutingId`.
+  `SocketOptions::validate_routing_id` is that check;
+  `validate_router_identity` is gone.
+
+### Fixed
+
+- A PLAIN client with a 255-byte username and a 255-byte password, the
+  longest RFC 27 allows, was refused: the HELLO is 518 bytes and the limit
+  was 512.
+- `tcp://[::1]:*` did not parse. `connect` now refuses a wildcard host or
+  port (`tcp://*:5555`, `tcp://127.0.0.1:*`), as libzmq does.
+- A peer that names a TTL in its PING is held to it on a socket with no
+  heartbeat interval too, as in libzmq: it is closed after sending nothing
+  for that long.
+- An inproc peer's custom metadata can no longer replace `Socket-Type`,
+  `Identity`, `User-Id` or `Peer-Address`, the same rule as for a peer on the
+  wire.
+- ZAP authentication over `ipc://` refused every client: a Unix socket peer
+  has no address, and the ZAP server dropped a request with an empty one.
+- `handshake_timeout` of zero means no limit, as documented; it failed every
+  handshake.
+- A peer could crash a socket whose `max_msg_size` was near `usize::MAX` by
+  announcing a frame length that overflowed. A frame above 256 MiB is now
+  refused at its header whatever the option says.
+- The documentation of `linger`, `max_msg_size`, `recv_timeout` and
+  `send_timeout` now says what they do: `linger: None` waits until everything
+  is written, `max_msg_size: None` is 64 MiB per frame, and a zero timeout
+  fails with `Again`.
+- The crates no longer enable `tracing`'s `release_max_level_info`, which
+  capped the log level of the whole application in release builds, and
+  `monocoque-rs` no longer depends on `tracing-subscriber`.
+- Sending a message with no frames, or a ROUTER message that was only its
+  identity, left the socket waiting on bytes that were never written: later
+  sends waited out the stall window and `close()` its whole linger.
+- `disconnect` while the connection's handshake was running left a peer that
+  nothing could remove. It now cancels the handshake as well, instead of
+  leaving the connection open until it finished or timed out.
+- `disconnect` matches the endpoint text given to `connect` before it parses
+  and compares addresses, so an endpoint connected by host name still
+  disconnects when the name has come to resolve elsewhere.
+- With heartbeats on, an idle ZMTP 1.0 or 2.0 peer, which has no PING to
+  answer, was dropped for not answering.
+- Heartbeat PINGs carried `heartbeat_ivl` as their TTL when no
+  `heartbeat_ttl` was set, and an idle peer was pinged only every second
+  interval, so an idle libzmq peer dropped the connection over and over. With
+  no `heartbeat_ttl` a PING now carries no TTL, as in libzmq. With one, a PING
+  is sent every `heartbeat_ivl` whether or not the connection is idle; set
+  the TTL comfortably above the interval.
+- Write coalescing held back protocol traffic along with messages: a PING or
+  PONG waiting for a batch to fill could time the connection out, a
+  subscription sent nothing until a `flush()`, and a STREAM close could drop
+  what was queued before it. Heartbeats, subscriptions and other control
+  messages, the messages a new peer is greeted with and a STREAM close are
+  now written at once, and take any held messages with them.
+- The last message of a peer that had already gone was delivered without its
+  connection metadata. It keeps it, `User-Id` included, in `peer_property`,
+  `last_metadata` and `gets`.
+- A connection whose options could not be applied (`tos`, the buffer sizes,
+  keepalive) was used anyway. On a connecting socket it is now a failed
+  attempt: `ConnectFailed` is reported, it counts toward
+  `max_reconnect_attempts`, and the endpoint is redialed after the backoff.
+  An accepted connection in that state is dropped with a warning in the log.
+- On smol, a ZMTP 1.0 frame too long for the read buffer and split across two
+  reads corrupted the stream.
+- A message could be attributed to a peer that had gone, once its slot was
+  reused by a new one.
+- A REQ socket kept the slot and unread messages of every peer that had gone,
+  for as long as the socket lived, and kept each one's entry in its fair
+  queue after the slot was freed.
+- `StreamSocket::flush` honours `send_timeout`.
+- Coalesced large messages could be lost on `close()` and bypass the HWM.
+- Lost wakeups between sockets on different threads; a cross-thread inproc
+  `flush()` could wait forever.
+- A STREAM peer's last data before it closed could be dropped on tokio and smol.
+- A smol receiver with an unbounded HWM was starved by streaming peers.
+- compio runtime creation retries with smaller rings on `ENOMEM`.
+- An eager send stops waiting on a peer that took under 16 KiB during a
+  `write_stall` window (50 ms by default, `with_write_stall` to change or
+  disable), so one peer that stopped reading cannot block sends to the others.
+  A slow peer that keeps reading is waited for. The monitor reports
+  `SocketEvent::PeerStalled`.
+- A PING flood from a peer that never reads cannot grow its PONG queue past
+  64 KB. A manual-mode XPUB holds at most its receive HWM of subscriptions for
+  `recv`; past the HWM a default XPUB cancels opposite reports for a prefix and
+  drops repeats and data frames, so a subscriber toggling a topic cannot grow
+  its inbox.
+- A cancelled REQ send leaves the request outstanding; a REP reply that times
+  out or is cancelled stays owed and can be retried.
+- Reconnect backoff resets only after a peer came up, and a failed handshake
+  counts toward `max_reconnect_attempts` like a refused connect.
+- On smol, closing a socket and dropping its `LocalRuntime` left its TCP
+  connections open until the thread exited: every task ran on one executor
+  per thread, which only runs inside `block_on`. Each `LocalRuntime` now owns
+  its executor, and dropping it drops its tasks, as on compio and tokio.
+- On compio, two-frame messages were received at a sixth of the rate of
+  single-frame ones (3.3 M against 19.5 M msg/s): reads shrank to a few
+  hundred bytes as frames were split off the read buffer. They now run at
+  12.2 M msg/s.
+- A send writing straight to the kernel could split or overtake a write of
+  protocol commands still in flight (PONGs answering a PING flood, a
+  heartbeat PING), corrupting the stream, or breaking CURVE's frame order.
+  Commands count as no message, so the writer looked idle while it wrote
+  them.
+- With a `send_timeout` of two `write_stall` windows or less, a peer that
+  stopped reading was never marked stalled, so every send to it waited out
+  the whole timeout until its HWM filled (100 s for 20 000 sends at 100 ms).
+  The peer's progress is now watched across sends rather than within each
+  one.
+- An XPUB past its receive HWM scanned every queued report for each new one,
+  so a subscriber holding many unread prefixes and toggling a topic cost
+  quadratic CPU (21.6 µs a report at 9 000 prefixes). Reports past the HWM
+  are now indexed by prefix. A data frame from an XSUB arriving while reports
+  wait waits behind them, up to the receive HWM of them, instead of being
+  dropped while the inbox has room.
+- A peer is judged stalled over a whole `write_stall` window of waiting,
+  counted across sends. Judged within each send, a `send_timeout` below the
+  window either reported a reader taking a steady 6 MB/s in bursts as stalled
+  (a 2 ms wait could fall between its reads) or never marked a peer that had
+  stopped (each send then waited out its timeout: 5.2 s for 20 000 sends at
+  5 ms).
+- A socket whose runtime was dropped never got a driver again when used from
+  another runtime: the flag saying one was running was cleared only when the
+  driver finished, not when it was dropped.
+
+### Security
+
+- A peer could announce `User-Id` or `Peer-Address` in its handshake and have
+  them reach the application as message metadata, where they stand for the
+  ZAP handler's answer and the connection's real address. Those names, and
+  `Socket-Type`, `Identity` and `Routing-Id` (which is read as an alias of
+  `Identity`), are now set only by this side.
+- tokio is at 1.54.1, past RUSTSEC-2026-0386 (unsound `AsyncFd`
+  constructors). monocoque never called them; the lockfile pinned the
+  affected version through its dev dependencies.
+
+### Performance
+
+- On tokio and smol, a receive stops spinning before it sleeps once another
+  socket on the same thread comes to wait. The spin kept the thread from its
+  reactor, so two sockets talking to each other on one thread were each kept
+  from seeing the other's bytes: a DEALER and ROUTER echoing on one thread
+  took 611 µs per thousand messages on smol and 237 µs on tokio, against
+  219 µs and 185 µs now. Sockets on threads of their own are unchanged.
+- Against 0.4.2 on the same machine, every PUSH/PULL throughput cell, eager and
+  coalesced, 64 B to 16 KiB, is level or ahead on all three backends, and
+  REQ/REP round trips are about 30% faster on tokio and smol. PUB fan-out and
+  topic filtering with coalescing pass 0.4, whose PUB batched on worker
+  threads; an eager PUB pays one send per subscriber per message.
+- A receive about to sleep keeps looking first, for up to 50 µs on compio,
+  30 µs on tokio and 100 µs on smol, where a wakeup costs more: compio's
+  `LocalRuntime` polls for completions, and on tokio and smol the receive
+  yields to the runtime. It costs some CPU while traffic flows.
+  `LocalRuntime::with_spin` sets the budget for a runtime on any backend, and
+  `SocketOptions::with_recv_spin` for one socket on tokio and smol; zero
+  turns it off.
+- A ROUTER routes a small message without allocating or copying it: the body
+  stays inline when the identity is added or removed, and the routing table
+  finds a received message's identity by the peer's slot and a sent one's peer
+  by the counter in a generated identity, hashing only identities that peers
+  chose. Pipelined DEALER/ROUTER at 64 B is 24 to 28% faster than before on
+  all three backends (EPYC 7232P, both threads under one L3 cache).
+- An eager send with the writer idle writes to the kernel from `send` itself
+  on every backend, with no task woken.
+- A send to a peer with room, and a receive of a queued message, run without
+  building a future, timer or park. `send` returns a 32-byte future (the
+  waiting path is boxed; it was over 500 bytes, copied on every `.await`), and
+  on PUSH, DEALER, PAIR, PUB, XPUB and RADIO it returns a finished future
+  rather than being an `async fn`. A `Msg` is no longer copied through each
+  layer of a send or out of the decoder: a wire peer with room encodes it
+  from where the caller's future holds it.
+- A coalescing peer released by its threshold writes whole TCP segments and
+  sends what is left over, less than one segment, with the next batch while
+  the sender keeps sending. A 64 KiB threshold on loopback wrote 65 720
+  bytes, one segment and a few hundred bytes the kernel sent as a segment of
+  their own; writing 65 483 took a PUSH/PULL pair of 256 B frames from 15.1 to
+  15.9 M msg/s. What is left over never waits for a `flush()`: the socket's
+  driver writes it, with anything queued since, as soon as the sending task
+  yields to the runtime. A flush, a close and a queue at its HWM write
+  everything.
+- A reader keeps the buffers its undelivered messages still point into and
+  takes one back when they are gone, up to two on a busy stream, and lets
+  them go when a read comes back under half full. Each read used to take a
+  new 64 KiB buffer and free the old
+  one, which the allocator could return to the system: a tokio receiver in a
+  plain program took 217 000 page faults over six million 256 B messages and
+  ran at 13.7 M msg/s, against about 500 faults and 15.6 M now.
+- `Msg` is 112 bytes, keeping three frames inline instead of four (a message
+  of four or more frames allocates), and `Msg::from(Vec<u8>)` of 64 bytes or
+  less is stored inline.
+- A socket's driver is woken once per batch of pending work, not on every
+  operation, and a lone peer keeps its place in the fair queue.
+- Reads grow from `read_buffer_size` up to 64 KiB while they keep filling, and
+  the read buffer is reused in place once the last message is released. On
+  compio a frame under 64 KiB that does not fit gets room for several; tokio
+  and smol read in full while a stream keeps filling their reads (on tokio, a
+  read given a whole `read_buffer_size`). A vectored
+  write carries at most 128 KiB, or 32 KiB for an eager peer on tokio and
+  smol. The bytes queued for a peer are counted as they are queued: summing
+  the segments on every coalesced send walked some 2 000 of them per send
+  with 16 KiB frames queued to the HWM.
+- tokio waits through `poll_read_ready`/`poll_write_ready` rather than a
+  readiness future per wait, and only a read under 1 KiB counts as draining
+  the socket on tokio and smol.
+- PUB, XPUB and RADIO stop before any fan-out work when no subscriber wants the
+  topic or group.
+- Small writes go out directly on io_uring; timers are armed only when an
+  operation waits; long frames are read into a buffer of their own (one
+  allocation instead of three); CURVE encrypts in place; a single-frame
+  message is encoded without walking its frames twice; a wakeup no longer
+  clones the thread's `Arc` to check which thread it is on.
+- A borrowed receive of a queued message executes no atomic instruction on
+  any backend, measured under callgrind.
+
+### Testing and tooling
+
+- New gates: allocations per message on every socket type, instruction counts
+  for CURVE, fragmented frames and envelopes, type sizes and estimated cycles,
+  and atomics per message (`scripts/count_atomics.sh`).
+- CURVE interop against libzmq in both roles (`interop_tests/`), loom models
+  of the cross-thread wakeup protocols, a fuzz target for CURVE MESSAGE
+  decryption, and Miri over the owned-buffer unsafe in CI.
+- `flume`, `compio-io` and `compio-buf` are no longer dependencies of
+  `monocoque-rs`.
+- The PUB benches run each case with an eager and a coalescing publisher
+  (`_coalesced`), so 0.4 comparisons are like for like, and publish with
+  `send_ref` as 0.4's did with `send_frames`. `BENCH_SECS` shortens the
+  throughput bench while iterating.
+- A test checks that a closed socket's peer sees end of stream on every
+  backend.
+- `scripts/bench_pair.py` exits non-zero, after an `INCOMPLETE` list, when a
+  benchmark did not build, a run failed or a case has fewer rounds than were
+  asked for.
+- `scripts/scaleway_bench.sh`: each server carries its own deadline as a tag,
+  so the hourly reaper no longer deletes a run that was given more than four
+  hours; a create call whose answer is lost is followed up by name; a remote
+  run that dies without an exit code, or a server that stops answering, ends
+  the run. Both scripts are tested in CI against stand-ins.
+
 ## 0.4.2 - 2026-09-22
 
 A maintenance release. No API, wire-format or behaviour change: the library code

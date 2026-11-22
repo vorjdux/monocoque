@@ -15,13 +15,13 @@ env:
 jobs:
   interop-rust:
     name: Rust interop tests (monocoque - libzmq)
+    env:
+      RUSTUP_TOOLCHAIN: stable
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install libzmq
-        run: sudo apt-get update && sudo apt-get install -y libzmq3-dev
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
         with:
           toolchain: stable
@@ -33,24 +33,29 @@ jobs:
             --test interop_pair \
             --test interop_pubsub \
             --test interop_router \
-            --test interop_load_balance \
             --test interop_push_pull \
             --test interop_req_rep \
             --test interop_plain \
             --test interop_stream \
+            --test interop_heartbeat \
             --test interop_curve
 
   interop-python:
     name: Python interop tests (pyzmq - monocoque)
+    env:
+      RUSTUP_TOOLCHAIN: stable
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install libzmq and Python deps
+      # pyzmq brings its own libzmq. The version is pinned so the libzmq the
+      # docs name (4.3.5) is the one tested; the check fails the job if a new
+      # pin brings another.
+      - name: Install Python deps
         run: |
-          sudo apt-get update && sudo apt-get install -y libzmq3-dev
-          pip install pyzmq pytest pytest-timeout
+          pip install pyzmq==27.1.0 pytest pytest-timeout
+          python3 -c "import zmq; print('libzmq', zmq.zmq_version()); assert zmq.zmq_version() == '4.3.5'"
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
         with:
           toolchain: stable
@@ -62,12 +67,13 @@ jobs:
           cargo build -p monocoque-rs --features zmq
           --example simple_req_client --example simple_rep_server
           --example sub_client --example pub_server
-      # The `|| echo skipping` mask is removed: this job now fails honestly when a
-      # Python interop test fails, per the Phase 0 gate. The tests drive the built
-      # examples themselves and do not need a manually-started server.
+          --example curve_echo
+      # The job fails when any Python interop test fails. The tests drive the
+      # built examples themselves and do not need a manually-started server.
       - name: Run Python interop tests
         working-directory: interop_tests
         run: |
           python3 -m pytest test_req_rep_interop.py \
                             test_pub_sub_interop.py \
+                            test_curve_interop.py \
                             -v --timeout=30

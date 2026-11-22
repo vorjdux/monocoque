@@ -1,89 +1,86 @@
-//! Interoperability test: Monocoque ROUTER ↔ libzmq DEALER
+//! Interoperability: Monocoque ROUTER <-> libzmq DEALER
 //!
-//! This example demonstrates bidirectional compatibility with libzmq.
+//! A Monocoque ROUTER runs on a background thread and a libzmq DEALER talks
+//! to it. Needs libzmq installed (the `zmq` crate links it).
 //!
 //! Run this example:
 //! ```bash
 //! cargo run --example interop_router_libzmq --features zmq
 //! ```
 
-use bytes::Bytes;
-use monocoque::rt::{self, LocalRuntime, TcpListener};
-use monocoque::zmq::RouterSocket;
+use monocoque::Bytes;
+use monocoque::rt::LocalRuntime;
+use monocoque::zmq::{Msg, RouterSocket};
+use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
-use tracing::info;
 
-fn main() {
-    info!("=== Monocoque ROUTER ↔ libzmq DEALER Test ===\n");
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-    // Spawn Monocoque ROUTER server in background thread
-    let server_handle = thread::spawn(|| {
-        LocalRuntime::new().unwrap().block_on(async {
-            let listener = TcpListener::bind("127.0.0.1:5561")
-                .await
-                .expect("Failed to bind");
-            info!("[Monocoque ROUTER] Listening on tcp://127.0.0.1:5561");
+fn main() -> Result<()> {
+    println!("=== Monocoque ROUTER <-> libzmq DEALER ===\n");
 
-            let (stream, _) = listener.accept().await.expect("Failed to accept");
-            info!("[Monocoque ROUTER] Client connected");
-
-            let mut router = RouterSocket::from_tcp(stream).await.unwrap();
-
-            // Receive request with identity envelope
-            let msg = router
-                .recv()
-                .await
-                .expect("Connection closed")
-                .expect("Connection closed");
-            info!("[Monocoque ROUTER] Received message:");
-            info!("  Identity (frame 0): {} bytes", msg[0].len());
-            if msg.len() > 1 {
-                info!("  Delimiter (frame 1): {} bytes", msg[1].len());
-            }
-            if msg.len() > 2 {
-                info!("  Body (frame 2): {:?}", String::from_utf8_lossy(&msg[2]));
-            }
-
-            // Send reply to client (identity + empty delimiter + body)
-            // ROUTER must preserve the full envelope structure
-            router
-                .send(vec![
-                    msg[0].clone(), // Echo back identity
-                    Bytes::new(),   // Empty delimiter
-                    Bytes::from_static(b"Reply from Monocoque ROUTER"),
-                ])
-                .await
-                .expect("Failed to send");
-            info!("[Monocoque ROUTER] Sent reply\n");
-
-            // Give time for the message to be picked up by the task and written to network
-            rt::sleep(Duration::from_millis(200)).await;
-
-            drop(router);
-        });
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let server = thread::spawn(move || -> monocoque::zmq::Result<()> {
+        LocalRuntime::new()?.block_on(monocoque_router(ready_tx))
     });
 
-    // Give server time to start
-    thread::sleep(Duration::from_millis(50));
+    // Wait until the server is bound and has reported where. If it failed to
+    // bind, the sender is dropped and the join below reports why.
+    if let Ok(endpoint) = ready_rx.recv() {
+        libzmq_dealer(&endpoint)?;
+    }
 
-    // Run libzmq DEALER client
-    info!("[libzmq DEALER] Connecting to tcp://127.0.0.1:5561");
+    server.join().map_err(|_| "the server thread panicked")??;
+    println!("\nInterop run completed.");
+    Ok(())
+}
+
+async fn monocoque_router(ready: mpsc::Sender<String>) -> monocoque::zmq::Result<()> {
+    let mut router = RouterSocket::new();
+    // Port 0: the OS picks a free port and `bind` reports it.
+    let endpoint = router.bind("tcp://127.0.0.1:0").await?;
+    println!("[Monocoque ROUTER] Listening on {endpoint}");
+    // The main thread waits on this; it only fails if that thread is gone.
+    let _ = ready.send(endpoint);
+
+    // A ROUTER receives the sender's identity as the first frame. The message
+    // is only read, so it stays borrowed and just the identity is kept.
+    let identity = {
+        let msg = router.recv().await?;
+        println!("[Monocoque ROUTER] Received message:");
+        println!(
+            "  Identity (frame 0): {:?}",
+            String::from_utf8_lossy(msg.first().unwrap_or_default())
+        );
+        for (i, frame) in msg.frames().enumerate().skip(1) {
+            println!("  Frame {i}: {:?}", String::from_utf8_lossy(frame));
+        }
+        msg.frame_bytes(0).unwrap_or_default()
+    };
+
+    // The reply's first frame is the identity to route to.
+    let reply = Msg::from([identity, Bytes::from_static(b"Reply from Monocoque ROUTER")]);
+    router.send(reply).await?;
+    println!("[Monocoque ROUTER] Sent reply");
+
+    // `close` waits for the reply to be written before the runtime exits.
+    router.close().await
+}
+
+fn libzmq_dealer(endpoint: &str) -> zmq::Result<()> {
     let ctx = zmq::Context::new();
-    let dealer = ctx.socket(zmq::DEALER).unwrap();
-    dealer.set_identity(b"CLIENT_123").unwrap();
-    dealer.connect("tcp://127.0.0.1:5561").unwrap();
-    info!("[libzmq DEALER] Connected with identity 'CLIENT_123'");
+    let dealer = ctx.socket(zmq::DEALER)?;
+    dealer.set_identity(b"CLIENT_123")?;
+    dealer.connect(endpoint)?;
+    println!("[libzmq DEALER] Connecting to {endpoint} with identity 'CLIENT_123'");
 
-    // Send request
-    dealer.send("Request from libzmq", 0).unwrap();
-    info!("[libzmq DEALER] Sent request\n");
+    dealer.send("Request from libzmq", 0)?;
+    println!("[libzmq DEALER] Sent request");
 
-    // Receive reply
-    let reply = dealer.recv_string(0).unwrap().unwrap();
-    info!("[libzmq DEALER] Received reply: {:?}", reply);
-
-    server_handle.join().unwrap();
-
-    info!("\n✅ Interop test completed successfully!");
+    let reply = dealer.recv_bytes(0)?;
+    println!(
+        "[libzmq DEALER] Received reply: {:?}",
+        String::from_utf8_lossy(&reply)
+    );
+    Ok(())
 }

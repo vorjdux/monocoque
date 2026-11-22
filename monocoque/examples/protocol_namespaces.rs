@@ -1,70 +1,73 @@
-//! Example showing explicit protocol imports with feature flags
+//! Two ways to import the socket API.
+//!
+//! Everything ZeroMQ lives under `monocoque::zmq`, behind the `zmq` Cargo
+//! feature. Name the types you use from that module, or glob-import
+//! `monocoque::zmq::prelude` for the socket types, `Msg`, `SocketOptions`,
+//! `Result` and `Bytes` at once. Less common parts stay in their own modules:
+//! `zmq::proxy`, `zmq::poll`, `zmq::security`, and `zmq::draft` with the
+//! `draft` feature.
 //!
 //! Run with: `cargo run --example protocol_namespaces --features zmq`
-//!
-//! This demonstrates how feature-gated protocols keep dependencies minimal.
 
-// ============================================================================
-// Style 1: Explicit protocol namespace (recommended)
-// ============================================================================
+use monocoque::rt::LocalRuntime;
 
-#[allow(clippy::future_not_send)]
-async fn _explicit_style() -> Result<(), Box<dyn std::error::Error>> {
-    use monocoque::zmq::{DealerSocket, RouterSocket};
+/// Explicit imports: each name says where it comes from.
+async fn explicit_style() -> monocoque::zmq::Result<()> {
+    use monocoque::zmq::{RepSocket, ReqSocket};
 
-    let dealer = DealerSocket::connect("127.0.0.1:5555").await?;
-    let (listener, router) = RouterSocket::bind("127.0.0.1:6666").await?;
+    let mut rep = RepSocket::new();
+    let endpoint = rep.bind("tcp://127.0.0.1:0").await?;
+    let mut req = ReqSocket::new();
+    req.connect(&endpoint).await?;
 
-    // Clear what protocol each socket uses
-    tracing::info!("Created ZMQ DEALER and ROUTER sockets");
+    req.send("explicit imports").await?;
+    {
+        let request = rep.recv().await?;
+        println!(
+            "use monocoque::zmq::{{RepSocket, ReqSocket}}: REP got {:?}",
+            String::from_utf8_lossy(request.first().unwrap_or_default())
+        );
+    }
+    rep.send("ok").await?;
+    req.recv().await?;
 
-    drop((dealer, router, listener));
-    Ok(())
+    req.close().await?;
+    rep.close().await
 }
 
-// ============================================================================
-// Style 2: Protocol prelude (for convenience)
-// ============================================================================
-
-#[allow(clippy::future_not_send)]
-async fn _prelude_style() -> Result<(), Box<dyn std::error::Error>> {
+/// The prelude: one import for a program that uses several socket types.
+async fn prelude_style() -> monocoque::zmq::Result<()> {
     use monocoque::zmq::prelude::*;
 
-    let dealer = DealerSocket::connect("127.0.0.1:5555").await?;
-    let (listener, router) = RouterSocket::bind("127.0.0.1:6666").await?;
+    let mut router = RouterSocket::new();
+    let endpoint = router.bind("tcp://127.0.0.1:0").await?;
+    let mut dealer = DealerSocket::with_options(
+        SocketOptions::default().with_routing_id(Bytes::from_static(b"dealer-1")),
+    );
+    dealer.connect(&endpoint).await?;
 
-    tracing::info!("Created ZMQ sockets (imported via prelude)");
+    dealer
+        .send(Msg::from([
+            Bytes::from_static(b"prelude"),
+            Bytes::from_static(b"imports"),
+        ]))
+        .await?;
+    {
+        let msg: MsgRef<'_> = router.recv().await?;
+        println!(
+            "use monocoque::zmq::prelude::*: ROUTER got {} frames from {:?}",
+            msg.len(),
+            String::from_utf8_lossy(msg.first().unwrap_or_default())
+        );
+    }
 
-    drop((dealer, router, listener));
-    Ok(())
+    dealer.close().await?;
+    router.close().await
 }
 
-// ============================================================================
-// Future: Multi-protocol mixing (when other protocols are added)
-// ============================================================================
-
-#[allow(clippy::future_not_send)]
-async fn _future_multi_protocol() -> Result<(), Box<dyn std::error::Error>> {
-    // Explicit namespaces prevent conflicts
-    use monocoque::zmq::DealerSocket as ZmqDealer;
-    // use monocoque::mqtt::Client as MqttClient;  // Future: features = ["mqtt"]
-    // use monocoque::amqp::Connection as AmqpConn; // Future: features = ["amqp"]
-
-    let zmq_socket = ZmqDealer::connect("127.0.0.1:5555").await?;
-    // let mqtt_client = MqttClient::connect("mqtt://broker:1883").await?;
-    // let amqp_conn = AmqpConn::connect("amqp://localhost:5672").await?;
-
-    tracing::info!("Multiple protocols coexist cleanly!");
-
-    drop(zmq_socket);
-    Ok(())
-}
-
-fn main() {
-    tracing::info!("Example requires 'zmq' feature:");
-    tracing::info!("  cargo run --example protocol_namespaces --features zmq");
-    tracing::info!("");
-    tracing::info!("Import patterns:");
-    tracing::info!("  - Explicit: use monocoque::zmq::DealerSocket;");
-    tracing::info!("  - Prelude:  use monocoque::zmq::prelude::*;");
+fn main() -> monocoque::zmq::Result<()> {
+    LocalRuntime::new()?.block_on(async {
+        explicit_style().await?;
+        prelude_style().await
+    })
 }

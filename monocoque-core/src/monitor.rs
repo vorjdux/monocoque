@@ -8,6 +8,7 @@ use std::fmt;
 
 /// Socket lifecycle events.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum SocketEvent {
     /// Socket successfully connected to a peer.
     Connected(Endpoint),
@@ -29,6 +30,11 @@ pub enum SocketEvent {
 
     /// Socket accepted a new incoming connection.
     Accepted(Endpoint),
+
+    /// A peer stopped taking bytes, so eager sends stopped waiting on it. What
+    /// is queued for it now depends on the socket staying alive; `close()`
+    /// still waits for it, up to `linger`.
+    PeerStalled(Endpoint),
 }
 
 impl fmt::Display for SocketEvent {
@@ -45,6 +51,7 @@ impl fmt::Display for SocketEvent {
             }
             Self::Listening(ep) => write!(f, "Listening on {ep}"),
             Self::Accepted(ep) => write!(f, "Accepted connection from {ep}"),
+            Self::PeerStalled(ep) => write!(f, "Peer stalled on {ep}"),
         }
     }
 }

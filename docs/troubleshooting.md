@@ -22,8 +22,10 @@
 
 3. **Wrong port / firewall**: Verify the port with `ss -tlnp | grep <port>`.
 
-4. **HWM reached**: If the sender's send HWM is reached it blocks. Increase HWM
-   or add a receiver.
+4. **HWM reached**: If the sender's send HWM is reached it waits (or fails with
+   `Again`/`TimedOut` under a send timeout). PUB, XPUB and ROUTER do not wait:
+   they drop the message for the peer that is full (ROUTER fails with `Again`
+   instead when `router_mandatory` is set). Increase HWM or add a receiver.
 
 ---
 
@@ -34,8 +36,8 @@
 **Causes**:
 
 1. **PUB drops at HWM**: PUB sockets drop messages silently when the subscriber
-   queue is full. Use `with_xpub_nodrop(true)` on XPUB to get an error instead,
-   or increase `send_hwm`.
+   queue is full. Increase `send_hwm`, or turn on write coalescing so each
+   subscriber's queue drains in larger writes.
 
 2. **ROUTER drops unknown peer**: ROUTER silently drops messages to unknown peers
    by default. Set `with_router_mandatory(true)` to get an error.
@@ -47,39 +49,58 @@
    subscription:  "sensor.temp"         ← does NOT match (prefix must be exact)
    ```
 
-4. **`req_relaxed` with rapid reconnects**: Correlation ID mismatch can cause
-   replies to be silently discarded. Enable `with_req_correlate(true)` to get
-   explicit errors.
+4. **`req_relaxed` without `req_correlate`**: After a relaxed REQ abandons a
+   request, a late reply to it can be returned as the reply to the next one.
+   Set `with_req_correlate(true)` as well: each request then carries an id,
+   and a reply whose id does not match the outstanding request is skipped.
+   The skip is silent. No error is returned, and `recv()` goes on waiting for
+   the matching reply, or until `recv_timeout`.
 
 ---
 
 ## Handshake fails / authentication rejected
 
-**Symptom**: `connect()` or `accept()` returns an authentication error.
+**Symptom**: Sends or receives on the client time out. A rejected peer never
+becomes a connection, so `connect()` itself still returns `Ok`. On the
+connecting side the socket monitor reports each failed handshake as
+`SocketEvent::ConnectFailed`, with the reason as text, and the endpoint is
+redialed after the reconnect interval. There is no separate handshake event.
+The accepting side gets no monitor event for a handshake that fails. With a
+tracing subscriber installed, `monocoque_zmtp` logs the reason at warn level
+on either side, and `monocoque_core` adds a `handshake failed` line at debug
+level.
 
 1. **CURVE key mismatch**: The client's `curve_serverkey` must exactly match the
-   server's `curve_publickey` (32 raw bytes, not Z85-encoded).
+   public key the server passes to `with_curve_keypair` (32 raw bytes, not
+   Z85-encoded).
 
 2. **PLAIN credentials wrong**: Verify the username/password on both sides match
    exactly (case-sensitive).
 
-3. **No ZAP handler**: If a ZAP domain is set but no handler is running on
-   `inproc://zeromq.zap.01`, all PLAIN/CURVE connections are rejected. Start the
-   handler before binding the server socket.
+3. **No ZAP handler**: A PLAIN server refuses every client when no handler is
+   running on `inproc://zeromq.zap.01`, whether or not a ZAP domain is set. A
+   CURVE server with a ZAP domain does the same; without a domain it admits
+   any client key. Start the handler before binding the server socket.
 
 4. **Mechanism mismatch**: Both sides must agree on a mechanism. A CURVE client
    cannot connect to a PLAIN server.
 
+5. **Backoff after repeated failures**: From the third failed authentication
+   in a row from one IP, the server delays each new handshake from that address
+   (100 ms doubling up to 10 s). Fix the credentials and the delay clears on the
+   next success. See "Repeated failures" in [SECURITY_GUIDE.md](SECURITY_GUIDE.md).
+
 ---
 
-## `WouldBlock` errors
+## `Again` errors
 
-**Symptom**: `recv()` returns `ErrorKind::WouldBlock` immediately.
+**Symptom**: `recv()` returns `MonocoqueError::Again` immediately.
 
 This is expected behaviour when `recv_timeout` is set to `Duration::ZERO` (non-blocking
 mode) and no message is queued. Either:
 - Wait and retry, or
-- Remove the timeout: `.with_recv_timeout(Duration::from_secs(5))`.
+- Use a non-zero timeout: `.with_recv_timeout(Duration::from_secs(5))`, in which
+  case an empty wait ends in `MonocoqueError::TimedOut`.
 
 ---
 
@@ -107,26 +128,29 @@ mode) and no message is queued. Either:
 1. **Buffer too small**: Read buffer smaller than your message causes fragmented
    reads. Increase with `.with_read_buffer_size(n)`.
 
-2. **io_uring not active** (default compio backend): On kernels < 5.11, compio
-   falls back to thread-pool I/O. Check `uname -r` and update the kernel if
-   possible, or build with a portable backend on platforms without io_uring:
-   the tokio backend (`runtime-tokio`) or the smol backend (`runtime-smol`) are
-   equally valid choices.
+2. **io_uring not available** (default compio backend): The default backend
+   is built for io_uring on Linux. On an old kernel (check `uname -r`), or in a
+   container or sandbox that blocks io_uring, update the kernel or lift the
+   restriction if possible, or build with a portable backend: the tokio backend
+   (`runtime-tokio`) and the smol backend (`runtime-smol`) are equally valid
+   choices.
 
 3. **HWM too low**: If HWM is small, sends block frequently. Increase or set to 0.
 
-4. **Lock contention**: Under many peers, the router/pubsub hub lock may contend.
-   Profile with `perf lock record` or `tokio-console`.
+4. **One socket per core**: Each socket runs all its peers on the runtime thread
+   that owns it. If one socket saturates a core, split the load across several
+   sockets on separate threads.
 
 ---
 
 ## Runtime panics
 
-**Symptom**: A task panics with "BUG:" prefix.
+**Symptom**: A panic whose backtrace points into a `monocoque` crate.
 
-These are invariant violations in monocoque's internal state. Please file a bug
-report at https://github.com/vorjdux/monocoque/issues with:
-- The full panic message (including "BUG:" text)
+The library returns errors for anything a peer or the application can cause,
+so a panic from inside it is an invariant violation in its internal state.
+Please file a bug report at https://github.com/vorjdux/monocoque/issues with:
+- The full panic message and backtrace (`RUST_BACKTRACE=1`)
 - The socket type and configuration
 - A minimal reproducer if possible
 
