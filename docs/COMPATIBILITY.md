@@ -27,7 +27,7 @@ All standard socket types are implemented: DEALER, ROUTER, PUB, SUB, REQ, REP, P
 
 Monocoque is async-first. There is no blocking `send`/`recv` API; all socket operations are `async fn`. This is a design choice, not a limitation - it eliminates the need for thread-per-connection and generally improves performance under load.
 
-Each socket type is its own Rust type, so only the operations valid for it exist (a PUB socket has no `recv`, for example). Pairing is checked during the handshake, as in libzmq: connecting PUB to PUB is refused with an ERROR command and the connection is closed.
+Each socket type is its own Rust type, so only the operations valid for it exist (a PUB socket has no `recv`, for example). Pairing is checked during the handshake, as in libzmq: connecting PUB to PUB is refused and the connection is closed. monocoque sends an ERROR command first; libzmq 4.3.5 closes without one.
 
 The wire protocol is byte-for-byte compatible. Framing, handshake, and READY command formats match RFC 23/ZMTP exactly, so Monocoque peers are indistinguishable from libzmq peers on the wire.
 
