@@ -138,7 +138,7 @@ criterion = { version = "0.8", features = ["async_tokio", "html_reports"] }
 # instr-bench workflow derives GUNGRAUN_VERSION from Cargo.lock rather than
 # hand-syncing a second copy here - so a caret range is safe and cannot drift the
 # runner out of step with the library.
-gungraun = "0.19"
+gungraun = "0.20"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
 portpicker = "0.1"
 hex = "0.4"
